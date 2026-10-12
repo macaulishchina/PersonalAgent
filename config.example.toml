@@ -1,0 +1,19 @@
+backend = "native"
+workspace = "/home/macaulish/workspace"
+codex_binary = "/home/macaulish/.local/bin/codex"
+# Same normal-user execution scope as the authorized setup session; no sudo.
+codex_sandbox = "danger-full-access"
+approval_policy = "never"
+assistant_name = "嘟嘟"
+wake_word = "嘟嘟"
+idle_seconds = 60
+source_match = "UGREEN_Camera_2K"
+default_room = "living"
+minimum_volume = 80
+realtime_voice = "juniper"
+echo_cancel = true
+
+[speakers]
+living = "4C:C6:4C:97:78:4A"
+study = "8C:53:C3:7F:18:7C"
+

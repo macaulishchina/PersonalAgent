@@ -1,0 +1,163 @@
+"""Bounded PCM output; PipeWire owns the playback clock, WebRTC supplies audio."""
+import asyncio
+import math
+import time
+
+import numpy as np
+
+from .audio import audio_env
+
+
+class StreamPlayer:
+    rate = 24000
+    frame_bytes = 960  # 20 ms, mono PCM16
+
+    def __init__(self, route):
+        self.route = route
+        self.queue = asyncio.Queue(maxsize=75)  # at most 1.5 seconds of local audio
+        self.epoch = 0
+        self.process = None
+        self.remainder = b""
+        self.lock = asyncio.Lock()
+        self.last_error = None
+        self.last_started_at = None
+        self.last_write = 0.0
+        self.last_voice_write = 0.0
+        self.pending_voice_frames = 0
+        self.stream_started = False
+        self.last_queue_ms = self.max_queue_ms = 0.0
+        self.written_bytes = 0
+        self.discarded_bytes = 0
+        self.last_stop_seconds = None
+        self.suppressed = False
+        self.input_speaking = False
+        self.silence_bytes = 0
+        self.last_received = 0.0
+        self.manual_muted = False
+
+    @property
+    def playing(self):
+        return self.pending_voice_frames > 0 or time.monotonic() - self.last_voice_write < .18
+
+    def feed(self, pcm):
+        if self.manual_muted:
+            self.discarded_bytes += len(pcm)
+            return
+        now = time.monotonic()
+        gap = now - self.last_received
+        self.last_received = now
+        if self.suppressed:
+            samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+            quiet = len(samples) and np.sqrt(np.mean(samples*samples)) < 150
+            self.silence_bytes = self.silence_bytes + len(pcm) if quiet else 0
+            # Live has no response ID / audio-done event. Resume after a quiet
+            # output boundary, never just after an instruction acknowledgement.
+            if not self.input_speaking and (self.silence_bytes >= self.rate * 2 * .2 or gap > .5):
+                self.suppressed = False
+            else:
+                self.discarded_bytes += len(pcm)
+                return
+        data = self.remainder + pcm
+        complete = len(data) // self.frame_bytes * self.frame_bytes
+        self.remainder = data[complete:]
+        for offset in range(0, complete, self.frame_bytes):
+            frame = data[offset:offset+self.frame_bytes]
+            voiced = np.max(np.abs(np.frombuffer(frame,dtype='<i2').astype(np.int32))) >= 80
+            # Ignore idle silence before playback, but preserve EVERY subsequent
+            # frame. Removing inter-word silence starves pacat and alters timing.
+            # Playback activity is measured from voice, not silent PCM writes.
+            if not self.stream_started and not voiced:
+                continue
+            self.stream_started = True
+            try:
+                self.queue.put_nowait((self.epoch, frame, voiced, now))
+                self.pending_voice_frames += int(voiced)
+            except asyncio.QueueFull:
+                self.last_error = "Audio output stalled; queued audio discarded"
+                self.epoch += 1
+                self._clear()
+                self.suppressed = True
+                self.silence_bytes = 0
+                return
+
+    def _clear(self):
+        self.discarded_bytes += len(self.remainder)
+        self.remainder = b""
+        while not self.queue.empty():
+            _, pcm, voiced, _ = self.queue.get_nowait()
+            self.discarded_bytes += len(pcm)
+            self.pending_voice_frames -= int(voiced)
+            self.queue.task_done()
+        self.stream_started = False
+
+    async def stop(self, suppress=True):
+        start = time.monotonic()
+        self.epoch += 1
+        self._clear()
+        self.suppressed = suppress
+        self.silence_bytes = 0
+        async with self.lock:
+            await self._kill()
+            self.last_write = self.last_voice_write = 0
+        self.last_stop_seconds = time.monotonic() - start
+
+    async def _kill(self):
+        if self.process and self.process.returncode is None:
+            self.process.kill()
+            await self.process.wait()
+        self.process = None
+
+    async def cue(self, error=False):
+        # Local feedback stays available when network/authentication fails.
+        await self.stop(suppress=False)
+        t = np.arange(int(self.rate * .12)) / self.rate
+        envelope = np.sin(np.linspace(0, math.pi, len(t))) ** 2
+        pcm = (np.sin(2*math.pi*(400 if error else 880)*t)*envelope*5500).astype("<i2")
+        # Include enough silence to start pacat's prebuffer even when a short
+        # local cue is the only audio available.
+        self.feed(pcm.tobytes() + bytes(self.frame_bytes*6))
+
+    async def run(self):
+        try:
+            while True:
+                epoch, pcm, voiced, received = await self.queue.get()
+                try:
+                    if epoch != self.epoch:
+                        continue
+                    async with self.lock:
+                        if not self.process or self.process.returncode is not None:
+                            await self.route.ensure(check_volume=True)
+                            if epoch != self.epoch:
+                                continue
+                            self.process = await asyncio.create_subprocess_exec(
+                                "pacat", "--playback", "--raw", "--format=s16le", "--rate=24000",
+                                "--channels=1", "--latency-msec=120", "--process-time-msec=20",
+                                "--volume=65536", "--client-name=dudu-live-output",
+                                f"--device={self.route.sink}", env=audio_env(),
+                                stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                        if epoch != self.epoch:
+                            continue
+                        self.last_queue_ms = (time.monotonic() - received) * 1000
+                        self.max_queue_ms = max(self.max_queue_ms, self.last_queue_ms)
+                        self.process.stdin.write(pcm)
+                        await asyncio.wait_for(self.process.stdin.drain(), .2)
+                        self.last_write = time.monotonic()
+                        if voiced:
+                            self.last_voice_write = self.last_write
+                        if self.last_started_at is None:
+                            self.last_started_at = self.last_write
+                        self.written_bytes += len(pcm)
+                        self.last_error = None
+                    # Input already has a WebRTC clock. Writing immediately lets
+                    # pacat's small prebuffer absorb jitter; sleeping here adds
+                    # scheduling drift and repeatedly underruns the device.
+                    await asyncio.sleep(0)
+                except (OSError, RuntimeError, TimeoutError) as exc:
+                    self.last_error = "Audio output unavailable: " + type(exc).__name__
+                    await self.stop()
+                finally:
+                    self.pending_voice_frames -= int(voiced)
+                    self.queue.task_done()
+        finally:
+            async with self.lock:
+                await self._kill()

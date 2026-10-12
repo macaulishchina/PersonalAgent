@@ -1,0 +1,2 @@
+"""DELL personal voice assistant."""
+
