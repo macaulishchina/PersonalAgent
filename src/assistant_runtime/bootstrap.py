@@ -1,0 +1,85 @@
+"""Composition root. This is the only module that chooses concrete plugins."""
+
+from .kernel.runtime import Runtime
+from .kernel.contracts import Control, Trigger
+
+
+def compose(service):
+    from .plugins.pipewire.plugin import PipeWirePlugin
+    from .plugins.keyword.plugin import KeywordPlugin
+    from .plugins.codex.plugin import CodexPlugin
+    from .plugins.gesture import GesturePlugin
+    from .memory.service import MemoryPlugin
+    from .memory.basic import BasicMemory
+
+    config, store = service.config, service.store
+    runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
+    factories = {
+        "pipewire": lambda: PipeWirePlugin(config, store),
+        "keyword": lambda: KeywordPlugin(config),
+        "codex": lambda: CodexPlugin(
+            config, store, service.audio_received, service.events.put, service.speak, service.tool_control
+        ),
+        "gesture": GesturePlugin,
+        "memory": lambda: MemoryPlugin(
+            config,
+            store,
+            BasicMemory(config.state_dir / "memory"),
+            lambda: service.active or service.backend.busy,
+            lambda sources, existing: service.backend.reflect(sources, existing),
+        ),
+    }
+    from importlib import import_module
+
+    for name, path in config.local_plugins.items():
+        if name in factories:
+            raise ValueError(f"Cannot override bundled plugin name: {name}")
+        module, separator, attribute = path.partition(":")
+        if not separator:
+            raise ValueError("Local plugin factory must be module:attribute")
+        factory = getattr(import_module(module), attribute)
+        factories[name] = lambda factory=factory: factory(service)
+    for name in config.plugins:
+        if name not in factories:
+            raise ValueError(f"Unknown trusted plugin: {name}")
+        if name != "memory" or config.memory_enabled:
+            plugin = factories[name]()
+            if plugin.manifest.name != name:
+                raise ValueError("Plugin manifest name must match its registry name")
+            runtime.add(plugin)
+    runtime.bindings = {k: v for k, v in runtime.bindings.items() if v in runtime.plugins}
+    runtime.add(
+        AssistantPlugin(service, tuple(config.bindings[key] for key in ("audio", "trigger", "brain")))
+    )
+    service.audio_plugin, service.brain_plugin = runtime.resolve("audio"), runtime.resolve("brain")
+    service.route, service.player = runtime.resolve("audio").route, runtime.resolve("audio").player
+    service.recognizer = runtime.resolve("trigger").recognizer
+    service.backend, service.voice = runtime.resolve("brain").backend, runtime.resolve("brain").voice
+    service.memory = runtime.plugins.get(config.bindings.get("memory"))
+    service.backend.on_task_done = service.memory.enqueue if service.memory else None
+    return runtime
+
+
+class AssistantPlugin:
+    from .kernel.runtime import Manifest
+
+    manifest = Manifest("assistant", ("pipewire", "keyword", "codex"), critical=True)
+
+    def __init__(self, service, dependencies):
+        self.manifest = self.Manifest("assistant", dependencies, critical=True)
+        self.service = service
+
+    async def start(self, context):
+        self.service.context = context
+        context.register(Control, self.service.control)
+
+        async def trigger(request):
+            await self.service.wake()
+            context.publish("assistant.triggered", source=request.source)
+            return {"accepted": True}
+
+        context.register(Trigger, trigger)
+        context.spawn(self.service._events(), "voice-events")
+        context.spawn(self.service._maintenance(), "idle-and-devices")
+        if not self.service.no_mic:
+            context.spawn(self.service._capture(), "capture")

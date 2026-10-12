@@ -1,0 +1,243 @@
+"""Memory policy and durable capture, separate from retrieval and task execution."""
+
+import asyncio
+import hashlib
+import time
+import uuid
+
+from ..kernel.contracts import MemoryRequest
+from ..kernel.runtime import Manifest
+
+
+class MemoryPlugin:
+    manifest = Manifest("memory")
+
+    def __init__(self, config, store, provider, foreground, curator):
+        self.config, self.store, self.provider = config, store, provider
+        self.foreground, self.curator = foreground, curator
+        self.lock = asyncio.Lock()
+        self.context = None
+        self.current = None
+        self.ready = False
+        self.cache = []
+
+    async def start(self, context):
+        self.context = context
+        context.own(self.provider.close)
+        context.register(MemoryRequest, self.handle)
+        context.spawn(self.run(), "memory-worker")
+
+    def enqueue(self):
+        if self.config.memory_auto_capture:
+            self.store.enqueue_memory()
+
+    def preempt(self):
+        if self.current and not self.current.done():
+            self.current.cancel()
+
+    async def handle(self, request):
+        a = request.arguments
+        async with self.lock:
+            if request.action == "search":
+                records = await self.provider.search(a["query"], a.get("scope", "user"))
+                return {"records": [r for r in records if self.visible(r)]}
+            if request.action == "read":
+                return {"record": None if self.deleted(a["id"]) else await self.provider.read(a["id"])}
+            if request.action == "export":
+                return {"records": [r for r in await self.provider.export() if self.visible(r)]}
+            if request.action == "import":
+                for record in a["records"]:
+                    # Revisions and tombstones belong to this installation. Never revive a deletion.
+                    if not self.deleted(record["id"]):
+                        await self._save(record, self.store.get("memory.epoch", 0), imported=True)
+                await self.refresh()
+                return {"ok": True}
+            if request.action == "forget":
+                ident = a["id"]
+                self.invalidate()
+                with self.store.db:
+                    self.store.db.execute(
+                        "INSERT INTO memory_items VALUES(?,1,1,?,?) ON CONFLICT(id) DO UPDATE SET revision=revision+1,deleted=1,updated=excluded.updated",
+                        (ident, self.store.max_transcript(), time.time()),
+                    )
+                # Tombstone first: even a failed upstream delete must disappear from recall.
+                await self.refresh()
+                await self.provider.delete(ident)
+                return {"ok": True, "id": ident, "history_erased": False}
+            if request.action == "remember":
+                self.invalidate()
+                record = dict(a)
+                record.setdefault("id", uuid.uuid4().hex)
+                record.setdefault("scope", "user")
+                record["source"] = {
+                    "kind": "explicit",
+                    "session": self.store.get("session_id"),
+                    "transcript_id": self.store.max_transcript(),
+                    "time": time.time(),
+                }
+                saved = await self._save(record, self.store.get("memory.epoch", 0))
+                await self.refresh()
+                return {"ok": True, "record": saved}
+            raise ValueError("Unknown memory action")
+
+    def deleted(self, ident):
+        row = self.store.db.execute("SELECT deleted FROM memory_items WHERE id=?", (ident,)).fetchone()
+        return bool(row and row[0])
+
+    def invalidate(self):
+        # Conservatively invalidate every older queued batch. A new fact may be learned
+        # from later input, but forgetting cannot resurrect it from an old source range.
+        self.store.set("memory.epoch", self.store.get("memory.epoch", 0) + 1)
+        self.store.set("memory.cursor", self.store.max_transcript())
+
+    async def _save(self, record, epoch, imported=False):
+        if epoch != self.store.get("memory.epoch", 0):
+            raise ValueError("Stale memory source")
+        ident = record["id"]
+        if (
+            record.get("scope") not in {"user", "project"}
+            or not record.get("title")
+            or not record.get("text")
+        ):
+            raise ValueError("Invalid memory content/scope")
+        if len(record["text"]) > 4000 or len(record["title"]) > 200:
+            raise ValueError("Memory must be a bounded fact, not a transcript")
+        row = self.store.db.execute(
+            "SELECT revision,deleted FROM memory_items WHERE id=?", (ident,)
+        ).fetchone()
+        if row and row[1]:
+            raise ValueError("Deleted memory cannot be revived; use a new fact from new input")
+        revision = row[0] if row else 0
+        existing = await self.provider.read(ident)
+        if (
+            existing
+            and existing.get("text") == record["text"]
+            and existing.get("source") == record.get("source")
+        ):
+            return existing  # Retry after write or process crash, without duplicate facts.
+        if row and not imported and record.get("revision") != revision:
+            raise ValueError("Memory revision conflict; read current record before updating")
+        record = {**record, "revision": revision + 1, "updated": time.time()}
+        if record["scope"] == "project":
+            record.setdefault("project", getattr(self.config, "workspace", ""))
+        await self.provider.upsert(record)
+        with self.store.db:
+            self.store.db.execute(
+                "INSERT OR REPLACE INTO memory_items VALUES(?,?,0,?,?)",
+                (ident, revision + 1, self.store.max_transcript(), time.time()),
+            )
+        return record
+
+    def visible(self, record):
+        return not self.deleted(record["id"]) and (
+            record.get("scope") != "project" or record.get("project") == getattr(self.config, "workspace", "")
+        )
+
+    async def refresh(self):
+        self.cache = [r for r in await self.provider.export() if self.visible(r)]
+
+    def context_text(self):
+        # Read from a ready snapshot; network/index startup never delays wake feedback.
+        records = sorted(self.cache, key=lambda r: r.get("updated", 0), reverse=True)[:8]
+        return "\n".join(f"[{r['scope']}:{r['id']}] {r['text']}" for r in records)[:3500]
+
+    async def process_job(self, job):
+        ident, start, end, epoch = job
+        if epoch != self.store.get("memory.epoch", 0):
+            self.store.db.execute("UPDATE memory_jobs SET status='stale' WHERE id=?", (ident,))
+            self.store.db.commit()
+            return
+        sources = self.store.memory_sources(start, end)
+        candidates = await self.curator(sources, self.cache[-30:])
+        if self.foreground():
+            raise asyncio.CancelledError
+        by_id = {s["id"]: s for s in sources if s["role"] in {"user", "verified"}}
+        async with self.lock:
+            for candidate in candidates[:12]:
+                source = by_id.get(candidate.get("source_id"))
+                evidence = candidate.get("evidence", "")
+                if not source or not evidence.strip() or evidence not in source["text"]:
+                    raise ValueError("Memory candidate lacks exact source evidence")
+                cid = (
+                    candidate.get("id")
+                    or hashlib.sha256(f"{source['id']}:{candidate['text']}".encode()).hexdigest()[:32]
+                )
+                evidence_hash = hashlib.sha256((candidate["scope"] + ":" + evidence).encode()).hexdigest()
+                claim = self.store.db.execute(
+                    "SELECT memory_id FROM memory_claims WHERE source_id=? AND evidence_hash=?",
+                    (source["id"], evidence_hash),
+                ).fetchone()
+                if claim:
+                    cid = claim[0]
+                else:
+                    with self.store.db:
+                        self.store.db.execute(
+                            "INSERT INTO memory_claims VALUES(?,?,?)", (source["id"], evidence_hash, cid)
+                        )
+                record = {k: candidate[k] for k in ["title", "text", "scope", "revision"]}
+                record.update(
+                    id=cid,
+                    source={
+                        "kind": "automatic",
+                        "id": source["id"],
+                        "time": source["time"],
+                        "evidence": evidence,
+                        "session": self.store.get("session_id"),
+                    },
+                )
+                await self._save(record, epoch)
+            await self.refresh()
+            self.store.db.execute("UPDATE memory_jobs SET status='done',error=NULL WHERE id=?", (ident,))
+            self.store.db.commit()
+
+    async def run(self):
+        while True:
+            try:
+                if not self.ready:
+                    await self.provider.start()
+                    await self.refresh()
+                    self.ready = True
+                # Retry failed physical deletes; tombstones already exclude recall.
+                for (ident,) in self.store.db.execute(
+                    "SELECT id FROM memory_items WHERE deleted=1"
+                ).fetchall():
+                    await self.provider.delete(ident)
+                self.context.error = None
+                self.context.state = "ready"
+                if not self.foreground() and self.config.memory_auto_capture:
+                    row = self.store.db.execute(
+                        "SELECT id,start_id,end_id,epoch FROM memory_jobs WHERE status='pending' AND attempts<5 ORDER BY id LIMIT 1"
+                    ).fetchone()
+                    if row:
+                        self.store.db.execute(
+                            "UPDATE memory_jobs SET status='running',attempts=attempts+1 WHERE id=?",
+                            (row[0],),
+                        )
+                        self.store.db.commit()
+                        self.current = asyncio.create_task(self.process_job(row))
+                        try:
+                            await self.current
+                        except asyncio.CancelledError:
+                            if asyncio.current_task().cancelling():
+                                raise
+                            self.store.db.execute(
+                                "UPDATE memory_jobs SET status='pending',attempts=max(0,attempts-1) WHERE id=?",
+                                (row[0],),
+                            )
+                            self.store.db.commit()
+                        except Exception as exc:
+                            self.store.db.execute(
+                                "UPDATE memory_jobs SET status='pending',error=? WHERE id=?",
+                                (str(exc)[:200], row[0]),
+                            )
+                            self.store.db.commit()
+                            self.context.error = str(exc)[:200]
+                        finally:
+                            self.current = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.ready = False
+                self.context.state = "degraded"
+                self.context.error = str(exc)[:200]
+            await asyncio.sleep(5)

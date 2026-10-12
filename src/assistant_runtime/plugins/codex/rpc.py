@@ -1,4 +1,5 @@
 """An isolated stdio connection to Codex, with no changes to the desktop daemon."""
+
 import asyncio
 import json
 import logging
@@ -25,16 +26,25 @@ class CodexClient:
         # The Live project key must never switch Codex away from its existing login.
         env.pop("OPENAI_API_KEY", None)
         self.process = await asyncio.create_subprocess_exec(
-            self.binary, "app-server", "--listen", "stdio://",
-            cwd=self.cwd, env=env,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
+            self.binary,
+            "app-server",
+            "--listen",
+            "stdio://",
+            cwd=self.cwd,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=16 * 1024 * 1024,
         )
         self.readers = [asyncio.create_task(self._read()), asyncio.create_task(self._stderr())]
-        await self.request("initialize", {
-            "clientInfo": {"name": "dell_voice_assistant", "title": "DELL Voice Assistant", "version": "0.1.0"},
-            "capabilities": {"experimentalApi": True},
-        })
+        await self.request(
+            "initialize",
+            {
+                "clientInfo": {"name": "personal_agent", "title": "Personal Agent", "version": "0.2.0"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
         await self.send({"method": "initialized"})
 
     async def send(self, message):
@@ -94,4 +104,3 @@ class CodexClient:
         for task in self.readers:
             task.cancel()
         await asyncio.gather(*self.readers, return_exceptions=True)
-

@@ -12,13 +12,15 @@ log = logging.getLogger(__name__)
 
 def audio_env():
     env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
-    env["PULSE_SERVER"] = f"unix:/run/user/{os.getuid()}/pulse/native"
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env.setdefault("PULSE_SERVER", f"unix:{env['XDG_RUNTIME_DIR']}/pulse/native")
     return env
 
 
 async def command(*args, timeout=12):
-    p = await asyncio.create_subprocess_exec(*args, env=audio_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    p = await asyncio.create_subprocess_exec(
+        *args, env=audio_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
     try:
         out, err = await asyncio.wait_for(p.communicate(), timeout)
     except BaseException:
@@ -57,17 +59,35 @@ class AudioRoute:
     async def ensure(self, force=False, check_volume=False):
         async with self.lock:
             sources, sinks = await self.devices()
-            mac = self.config.speakers[self.room].replace(":", "_")
-            physical_source = next((x["name"] for x in sources if self.config.source_match in x["name"] and not x["name"].endswith(".monitor")), None)
-            physical_sink = next((x["name"] for x in sinks if f"bluez_output.{mac}." in x["name"]), None)
+            target = self.config.speakers[self.room]
+            bluetooth = bool(__import__("re").fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", target))
+            mac = target.replace(":", "_")
+            physical_source = next(
+                (
+                    x["name"]
+                    for x in sources
+                    if self.config.source_match in x["name"] and not x["name"].endswith(".monitor")
+                ),
+                None,
+            )
+            physical_sink = next(
+                (
+                    x["name"]
+                    for x in sinks
+                    if (f"bluez_output.{mac}." in x["name"] if bluetooth else target == x["name"])
+                ),
+                None,
+            )
             if not physical_source or not physical_sink:
                 self.ready.clear()
                 if self.module:
                     await self._unload()
                 self.source = physical_source
                 self.sink = self.physical_sink = physical_sink
-                self.last_error = "microphone unavailable" if not physical_source else f"{self.room} speaker unavailable"
-                if not physical_sink and time.monotonic() - self.last_connect > 20:
+                self.last_error = (
+                    "microphone unavailable" if not physical_source else f"{self.room} speaker unavailable"
+                )
+                if bluetooth and not physical_sink and time.monotonic() - self.last_connect > 20:
                     self.last_connect = time.monotonic()
                     try:
                         await command("bluetoothctl", "connect", self.config.speakers[self.room], timeout=8)
@@ -87,18 +107,31 @@ class AudioRoute:
                 # A private playback bus supplies only the assistant's sound to
                 # AEC3. Other applications are not treated as our echo reference.
                 await self._clean_stale_modules()
-                self.module = await command("pactl", "load-module", "module-null-sink",
-                    "sink_name=dell_voice_echo_output", "rate=48000", "channels=1",
-                    "sink_properties=device.description=Dudu_Playback")
+                self.module = await command(
+                    "pactl",
+                    "load-module",
+                    "module-null-sink",
+                    "sink_name=personal_agent_echo_output",
+                    "rate=48000",
+                    "channels=1",
+                    "sink_properties=device.description=PersonalAgent_Playback",
+                )
                 try:
-                    self.bridge = await command("pactl", "load-module", "module-loopback",
-                        "source=dell_voice_echo_output.monitor", f"sink={physical_sink}",
-                        "latency_msec=30", "source_dont_move=true", "sink_dont_move=true")
+                    self.bridge = await command(
+                        "pactl",
+                        "load-module",
+                        "module-loopback",
+                        "source=personal_agent_echo_output.monitor",
+                        f"sink={physical_sink}",
+                        "latency_msec=30",
+                        "source_dont_move=true",
+                        "sink_dont_move=true",
+                    )
                 except BaseException:
                     await self._unload()
                     raise
-                self.sink = "dell_voice_echo_output"
-                await asyncio.sleep(.3)
+                self.sink = "personal_agent_echo_output"
+                await asyncio.sleep(0.3)
             await self.ensure_minimum_volume()
             self.ready.set()
             self.last_error = None
@@ -149,8 +182,12 @@ class AudioRoute:
         modules = await command("pactl", "list", "short", "modules")
         for line in reversed(modules.splitlines()):
             fields = line.split("\t")
-            if len(fields) >= 3 and fields[0].isdigit() and fields[1] in {
-                    "module-echo-cancel", "module-null-sink", "module-loopback"} and "dell_voice_echo_" in fields[2]:
+            if (
+                len(fields) >= 3
+                and fields[0].isdigit()
+                and fields[1] in {"module-echo-cancel", "module-null-sink", "module-loopback"}
+                and "personal_agent_echo_" in fields[2]
+            ):
                 await command("pactl", "unload-module", fields[0])
 
     async def _unload(self):
@@ -172,9 +209,19 @@ class AudioRoute:
 
     async def _record(self, source, name):
         return await asyncio.create_subprocess_exec(
-            "pacat", "--record", "--raw", "--format=s16le", "--rate=16000", "--channels=1",
-            "--latency-msec=20", f"--client-name={name}", f"--device={source}",
-            env=audio_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            "pacat",
+            "--record",
+            "--raw",
+            "--format=s16le",
+            "--rate=16000",
+            "--channels=1",
+            "--latency-msec=20",
+            f"--client-name={name}",
+            f"--device={source}",
+            env=audio_env(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
     async def frames(self):
         while True:
@@ -186,21 +233,31 @@ class AudioRoute:
                     # Listen without redirecting to another room while offline.
                     if not self.source:
                         raise
-                capture = self.capture = await self._record(self.source, "dudu-microphone")
+                capture = self.capture = await self._record(self.source, "personal-agent-microphone")
                 processor = None
                 if self.module:
                     reference = self.reference_capture = await self._record(
-                        self.sink + ".monitor", "dudu-echo-reference")
-                    processor = AudioProcessor(sample_rate=16000, echo_cancellation=True,
-                        noise_suppression=True, auto_gain_control=False)
+                        self.sink + ".monitor", "personal-agent-echo-reference"
+                    )
+                    processor = AudioProcessor(
+                        sample_rate=16000,
+                        echo_cancellation=True,
+                        noise_suppression=True,
+                        auto_gain_control=False,
+                    )
                 while True:
                     # Equal clocked 20 ms blocks: AEC3 estimates acoustic delay.
                     # Keep unprocessed speech for local keyword detection only.
                     if reference:
-                        near, far = await asyncio.wait_for(asyncio.gather(
-                            capture.stdout.readexactly(640), reference.stdout.readexactly(640)), 3)
-                        data = processor.process(np.frombuffer(near, dtype='<i2').copy(),
-                            np.frombuffer(far, dtype='<i2').copy()).tobytes()
+                        near, far = await asyncio.wait_for(
+                            asyncio.gather(
+                                capture.stdout.readexactly(640), reference.stdout.readexactly(640)
+                            ),
+                            3,
+                        )
+                        data = processor.process(
+                            np.frombuffer(near, dtype="<i2").copy(), np.frombuffer(far, dtype="<i2").copy()
+                        ).tobytes()
                     else:
                         near = data = await asyncio.wait_for(capture.stdout.readexactly(640), 3)
                     self.raw_frame = near

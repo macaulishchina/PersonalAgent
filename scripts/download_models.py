@@ -1,4 +1,5 @@
 """Download pinned upstream model assets; existing complete models are reused."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -7,7 +8,12 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1] / "models"
 ASSETS = [
-    ("kws", "kws-models", "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2", "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx"),
+    (
+        "kws",
+        "kws-models",
+        "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2",
+        "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+    ),
     ("", "asr-models", "silero_vad.onnx", "silero_vad.onnx"),
 ]
 
@@ -34,5 +40,5 @@ def main():
         (ROOT / (name + ".metadata.json")).write_text(json.dumps({"url": url, "sha256": digest}, indent=2))
 
 
-if __name__ == "__main__": main()
-
+if __name__ == "__main__":
+    main()

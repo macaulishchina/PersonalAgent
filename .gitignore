@@ -6,4 +6,8 @@ models/
 state/
 .env
 config.toml
-
+.ruff_cache/
+.mypy_cache/
+.env.*
+*.pem
+memory-export*.json

@@ -44,10 +44,10 @@ async function startVoice() {
       return true;
     }
   }
-  registerProcessor('dudu-input',Input);registerProcessor('dudu-output',Output);`;
+  registerProcessor('personal-agent-input',Input);registerProcessor('personal-agent-output',Output);`;
   const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
   await context.audioWorklet.addModule(url);URL.revokeObjectURL(url);
-  const microphone=new AudioWorkletNode(context,'dudu-input',{numberOfInputs:0,outputChannelCount:[1]});
+  const microphone=new AudioWorkletNode(context,'personal-agent-input',{numberOfInputs:0,outputChannelCount:[1]});
   socket.onmessage=e=>{if(e.data instanceof ArrayBuffer)microphone.port.postMessage(e.data,[e.data]);};
   const stream=context.createMediaStreamDestination();microphone.connect(stream);
   peer=new RTCPeerConnection({iceServers:[]});
@@ -66,7 +66,7 @@ async function startVoice() {
     element.srcObject=remote;element.autoplay=true;element.volume=0;
     document.body.append(element);element.play().catch(()=>{});
     const source=context.createMediaStreamSource(remote);
-    const output=new AudioWorkletNode(context,'dudu-output',{channelCount:1,channelCountMode:'explicit',outputChannelCount:[1]});
+    const output=new AudioWorkletNode(context,'personal-agent-output',{channelCount:1,channelCountMode:'explicit',outputChannelCount:[1]});
     output.port.onmessage=e=>{if(socket.readyState===WebSocket.OPEN)socket.send(e.data);};
     source.connect(output);output.connect(context.destination);
   };

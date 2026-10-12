@@ -1,60 +1,56 @@
-"""Install/enable this user's service. Requires no root and does not start it."""
+"""Install one user unit. Does not alter host audio settings or start the service."""
+
+import argparse
 import os
 from pathlib import Path
-import shutil
-import subprocess
-
-ROOT = Path(__file__).resolve().parents[1]
+import sys
 
 
-def main():
-    if not (ROOT / "config.toml").exists():
-        shutil.copyfile(ROOT / "config.example.toml", ROOT / "config.toml")
-    version = subprocess.check_output(["wireplumber", "--version"], text=True)
-    if "0.4." in version:
-        compatibility = Path.home()/".config/wireplumber/bluetooth.lua.d/90-dudu-audio-compat.lua"
-        compatibility.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT/"deploy/wireplumber/90-dudu-audio-compat.lua", compatibility)
-        print("Installed Bluetooth SBC/44.1 kHz compatibility; takes effect on next WirePlumber restart.")
-    else:
-        print("WirePlumber is not 0.4; Bluetooth compatibility settings need migration before room testing.")
-    node = shutil.which("node")
-    paths = [str(ROOT / ".venv/bin"), str(Path.home()/".local/bin"), str(Path.home()/"miniforge3/bin")]
-    if node:
-        paths.append(str(Path(node).resolve().parent))
-    paths.extend(["/usr/local/bin", "/usr/bin", "/bin"])
-    unit = Path.home() / ".config/systemd/user/dell-voice-assistant.service"
-    unit.parent.mkdir(parents=True, exist_ok=True)
-    unit.write_text(f'''[Unit]
-Description=DELL personal voice assistant
-After=pipewire.service pipewire-pulse.service wireplumber.service
-Wants=pipewire.service pipewire-pulse.service wireplumber.service
+def unit_text(python, config, workspace):
+    def quote(value):
+        return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+    return f"""[Unit]
+Description=Personal Agent
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory={ROOT}
-ExecStart={ROOT}/.venv/bin/dell-voice run
-Environment="PATH={':'.join(paths)}"
-Environment="XDG_RUNTIME_DIR=%t"
-Environment="PULSE_SERVER=unix:%t/pulse/native"
-Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
+WorkingDirectory={str(workspace).replace("%", "%%")}
+ExecStart={quote(python)} -m assistant_runtime.cli --config {quote(config)} run
 Environment=PYTHONUNBUFFERED=1
+Environment="PATH={os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}"
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=15
+TimeoutStopSec=30
 KillMode=control-group
 UMask=0077
 
 [Install]
 WantedBy=default.target
-''')
-    env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
-    env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{os.getuid()}/bus"
-    for args in [["daemon-reload"], ["enable", unit.name]]:
-        subprocess.run(["systemctl", "--user", *args], env=env, check=True)
-    print(f"Installed and enabled {unit.name}; start with dell-voice start")
+"""
 
 
-if __name__ == "__main__": main()
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--config", required=True)
+    p.add_argument("--output", help="Render unit only; do not install or enable")
+    a = p.parse_args()
+    from assistant_runtime.config import Config
+
+    path = Path(a.config).expanduser().resolve()
+    config = Config.load(path)
+    content = unit_text(sys.executable, path, config.workspace)
+    unit = Path(a.output) if a.output else Path.home() / ".config/systemd/user" / config.unit_name
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(content)
+    if not a.output:
+        from assistant_runtime.cli import systemctl
+
+        systemctl("daemon-reload")
+        systemctl("enable", unit.name)
+    print(unit)
+
+
+if __name__ == "__main__":
+    main()

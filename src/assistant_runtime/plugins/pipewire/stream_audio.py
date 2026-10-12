@@ -1,4 +1,5 @@
 """Bounded PCM output; PipeWire owns the playback clock, WebRTC supplies audio."""
+
 import asyncio
 import math
 import time
@@ -37,7 +38,7 @@ class StreamPlayer:
 
     @property
     def playing(self):
-        return self.pending_voice_frames > 0 or time.monotonic() - self.last_voice_write < .18
+        return self.pending_voice_frames > 0 or time.monotonic() - self.last_voice_write < 0.18
 
     def feed(self, pcm):
         if self.manual_muted:
@@ -48,11 +49,11 @@ class StreamPlayer:
         self.last_received = now
         if self.suppressed:
             samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
-            quiet = len(samples) and np.sqrt(np.mean(samples*samples)) < 150
+            quiet = len(samples) and np.sqrt(np.mean(samples * samples)) < 150
             self.silence_bytes = self.silence_bytes + len(pcm) if quiet else 0
             # Live has no response ID / audio-done event. Resume after a quiet
             # output boundary, never just after an instruction acknowledgement.
-            if not self.input_speaking and (self.silence_bytes >= self.rate * 2 * .2 or gap > .5):
+            if not self.input_speaking and (self.silence_bytes >= self.rate * 2 * 0.2 or gap > 0.5):
                 self.suppressed = False
             else:
                 self.discarded_bytes += len(pcm)
@@ -61,8 +62,8 @@ class StreamPlayer:
         complete = len(data) // self.frame_bytes * self.frame_bytes
         self.remainder = data[complete:]
         for offset in range(0, complete, self.frame_bytes):
-            frame = data[offset:offset+self.frame_bytes]
-            voiced = np.max(np.abs(np.frombuffer(frame,dtype='<i2').astype(np.int32))) >= 80
+            frame = data[offset : offset + self.frame_bytes]
+            voiced = np.max(np.abs(np.frombuffer(frame, dtype="<i2").astype(np.int32))) >= 80
             # Ignore idle silence before playback, but preserve EVERY subsequent
             # frame. Removing inter-word silence starves pacat and alters timing.
             # Playback activity is measured from voice, not silent PCM writes.
@@ -110,12 +111,12 @@ class StreamPlayer:
     async def cue(self, error=False):
         # Local feedback stays available when network/authentication fails.
         await self.stop(suppress=False)
-        t = np.arange(int(self.rate * .12)) / self.rate
+        t = np.arange(int(self.rate * 0.12)) / self.rate
         envelope = np.sin(np.linspace(0, math.pi, len(t))) ** 2
-        pcm = (np.sin(2*math.pi*(400 if error else 880)*t)*envelope*5500).astype("<i2")
+        pcm = (np.sin(2 * math.pi * (400 if error else 880) * t) * envelope * 5500).astype("<i2")
         # Include enough silence to start pacat's prebuffer even when a short
         # local cue is the only audio available.
-        self.feed(pcm.tobytes() + bytes(self.frame_bytes*6))
+        self.feed(pcm.tobytes() + bytes(self.frame_bytes * 6))
 
     async def run(self):
         try:
@@ -124,23 +125,34 @@ class StreamPlayer:
                 try:
                     if epoch != self.epoch:
                         continue
+                    if not self.process or self.process.returncode is not None:
+                        await self.route.ensure(check_volume=True)
+                    if epoch != self.epoch:
+                        continue
                     async with self.lock:
                         if not self.process or self.process.returncode is not None:
-                            await self.route.ensure(check_volume=True)
-                            if epoch != self.epoch:
-                                continue
                             self.process = await asyncio.create_subprocess_exec(
-                                "pacat", "--playback", "--raw", "--format=s16le", "--rate=24000",
-                                "--channels=1", "--latency-msec=120", "--process-time-msec=20",
-                                "--volume=65536", "--client-name=dudu-live-output",
-                                f"--device={self.route.sink}", env=audio_env(),
-                                stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                                "pacat",
+                                "--playback",
+                                "--raw",
+                                "--format=s16le",
+                                "--rate=24000",
+                                "--channels=1",
+                                "--latency-msec=120",
+                                "--process-time-msec=20",
+                                "--volume=65536",
+                                "--client-name=personal-agent-output",
+                                f"--device={self.route.sink}",
+                                env=audio_env(),
+                                stdin=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.DEVNULL,
+                            )
                         if epoch != self.epoch:
                             continue
                         self.last_queue_ms = (time.monotonic() - received) * 1000
                         self.max_queue_ms = max(self.max_queue_ms, self.last_queue_ms)
                         self.process.stdin.write(pcm)
-                        await asyncio.wait_for(self.process.stdin.drain(), .2)
+                        await asyncio.wait_for(self.process.stdin.drain(), 0.2)
                         self.last_write = time.monotonic()
                         if voiced:
                             self.last_voice_write = self.last_write
