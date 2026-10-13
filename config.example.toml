@@ -1,8 +1,13 @@
+# Project-specific Codex task model; does not change ~/.codex/config.toml.
+codex_model = "gpt-6.1-sol"
+codex_reasoning_effort = "high"
 # Hardware-free starting point. For actual voice set profile="voice", source_match,
 # speakers, default_room, and install the voice/memory extras and wake models.
 profile = "headless"
 assistant_name = "个人助理"
-wake_word = "嘟嘟"
+realtime_voice = "cove"
+# FSMN V2 bundle supports these phrases; arbitrary new phrases need a trained bundle.
+wake_words = ["嘟嘟", "你好嘟嘟"]
 idle_seconds = 60
 minimum_volume = 80
 memory_enabled = true

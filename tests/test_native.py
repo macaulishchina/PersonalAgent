@@ -14,6 +14,21 @@ from assistant_runtime.plugins.pipewire.stream_audio import StreamPlayer
 
 
 class StreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_long_wake_feedback_replaces_old_audio_and_fits_bounded_queue(self):
+        p = StreamPlayer(None)
+        p.feed(np.full(480 * 4, 1000, dtype="<i2").tobytes())
+        old_epoch = p.epoch
+        await p.cue()
+        frames = list(p.queue._queue)
+        self.assertTrue(all(epoch > old_epoch for epoch, _, _, _ in frames))
+        self.assertLess(len(frames), p.queue.maxsize)
+        self.assertGreater(len(frames) * 0.02, 1.0)
+        self.assertFalse(p.suppressed)
+        self.assertIsNone(p.last_error)
+        await p.stop()
+        self.assertTrue(p.queue.empty())
+        self.assertFalse(p.playing)
+
     async def test_pause_and_quiet_consonants_keep_their_original_timing(self):
         p = StreamPlayer(None)
         loud = np.full(480, 1000, dtype="<i2").tobytes()
@@ -107,6 +122,37 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_equivalent_keyword_results_activate_once_and_then_stream_audio(self):
+        for phrase in ["嘟嘟", "你好嘟嘟"]:
+            with self.subTest(phrase=phrase):
+                s = AssistantService.__new__(AssistantService)
+                s.active = False
+                s.preroll = deque(maxlen=50)
+                pcm = bytes(640)
+                s.recognizer = SimpleNamespace(
+                    detect=AsyncMock(return_value=phrase),
+                    vad=SimpleNamespace(
+                        accept_waveform=Mock(), is_speech_detected=lambda: False, empty=lambda: True
+                    ),
+                )
+                s.player = SimpleNamespace(input_speaking=False)
+                s.voice = SimpleNamespace(feed=Mock())
+
+                async def activate(preroll):
+                    s.active = True
+
+                s.wake = AsyncMock(side_effect=activate)
+
+                async def frames():
+                    yield pcm
+                    yield pcm
+
+                s.route = SimpleNamespace(frames=frames, raw_frame=pcm)
+                await s._capture()
+                s.wake.assert_awaited_once_with((pcm,))
+                s.recognizer.detect.assert_awaited_once()
+                s.voice.feed.assert_called_once_with(pcm)
+
     async def test_delayed_native_turn_does_not_cut_new_audio(self):
         s = AssistantService.__new__(AssistantService)
         s.events = asyncio.Queue()
@@ -154,7 +200,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
         s.preroll = deque(maxlen=50)
         raw = np.full(320, 1500, dtype="<i2").tobytes()
         s.recognizer = SimpleNamespace(
-            keyword=Mock(return_value="嘟嘟"),
+            detect=AsyncMock(return_value="嘟嘟"),
             vad=SimpleNamespace(accept_waveform=Mock(), is_speech_detected=lambda: False, empty=lambda: True),
         )
         s.player = SimpleNamespace(input_speaking=False)
@@ -166,7 +212,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
 
         s.route = SimpleNamespace(frames=frames, raw_frame=raw)
         await s._capture()
-        np.testing.assert_allclose(s.recognizer.keyword.call_args.args[0], 1500 / 32768)
+        np.testing.assert_allclose(s.recognizer.detect.call_args.args[0], 1500 / 32768)
         s.wake.assert_awaited_once()
         s.voice.feed.assert_not_called()
 
@@ -209,7 +255,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
         s.active = False
         s.preroll = deque(maxlen=32)
         s.recognizer = SimpleNamespace(
-            keyword=lambda x: False,
+            detect=AsyncMock(return_value=None),
             vad=SimpleNamespace(accept_waveform=Mock(), is_speech_detected=lambda: True, empty=lambda: True),
         )
         s.player = SimpleNamespace(input_speaking=False)

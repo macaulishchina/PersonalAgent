@@ -7,6 +7,7 @@ import time
 import numpy as np
 
 from .audio import audio_env
+from .cues import wake_chime
 
 
 class StreamPlayer:
@@ -111,12 +112,15 @@ class StreamPlayer:
     async def cue(self, error=False):
         # Local feedback stays available when network/authentication fails.
         await self.stop(suppress=False)
-        t = np.arange(int(self.rate * 0.12)) / self.rate
-        envelope = np.sin(np.linspace(0, math.pi, len(t))) ** 2
-        pcm = (np.sin(2 * math.pi * (400 if error else 880) * t) * envelope * 5500).astype("<i2")
+        if error:
+            t = np.arange(int(self.rate * 0.12)) / self.rate
+            envelope = np.sin(np.linspace(0, math.pi, len(t))) ** 2
+            pcm = (np.sin(2 * math.pi * 400 * t) * envelope * 5500).astype("<i2").tobytes()
+        else:
+            pcm = wake_chime(self.rate)
         # Include enough silence to start pacat's prebuffer even when a short
         # local cue is the only audio available.
-        self.feed(pcm.tobytes() + bytes(self.frame_bytes * 6))
+        self.feed(pcm + bytes(self.frame_bytes * 6))
 
     async def run(self):
         try:

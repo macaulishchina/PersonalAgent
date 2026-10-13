@@ -20,10 +20,12 @@ class Config:
     realtime_voice: str = "juniper"
     workspace: str = field(default_factory=lambda: str(Path.cwd()))
     codex_binary: str = "codex"
+    codex_model: str = "gpt-6.1-sol"
+    codex_reasoning_effort: str = "high"
     codex_sandbox: str = "workspace-write"
     approval_policy: str = "never"
     assistant_name: str = "个人助理"
-    wake_word: str = "嘟嘟"
+    wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
     source_match: str = ""
     default_room: str = "default"
@@ -45,6 +47,23 @@ class Config:
     local_plugins: dict[str, str] = field(default_factory=dict)
     memory_enabled: bool = True
     memory_auto_capture: bool = True
+
+    def __post_init__(self):
+        for name in ("codex_model", "codex_reasoning_effort", "realtime_voice"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a nonempty string")
+            setattr(self, name, value.strip())
+
+        if (
+            not isinstance(self.wake_words, list)
+            or not self.wake_words
+            or any(not isinstance(word, str) or not word.strip() for word in self.wake_words)
+        ):
+            raise ValueError("wake_words must be a nonempty list of nonempty strings")
+        self.wake_words = [word.strip() for word in self.wake_words]
+        if len(set(self.wake_words)) != len(self.wake_words):
+            raise ValueError("wake_words must not contain duplicates")
 
     @property
     def state_dir(self):
@@ -78,7 +97,7 @@ class Config:
         c = cls(root=root, **data)
         if c.profile not in {"voice", "headless"} or c.backend != "native":
             raise ValueError("Unsupported profile or backend")
-        if not 0 <= c.minimum_volume <= 100 or c.idle_seconds < 1 or not c.wake_word.strip():
+        if not 0 <= c.minimum_volume <= 100 or c.idle_seconds < 1:
             raise ValueError("Invalid volume, wake word or idle timeout")
         if c.profile == "voice" and (c.default_room not in c.speakers or not c.source_match):
             raise ValueError(

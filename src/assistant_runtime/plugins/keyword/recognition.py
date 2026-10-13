@@ -1,34 +1,20 @@
-"""Local wake detection and voice activity only; Codex handles speech understanding."""
+"""Local FSMN V2 wake detection and voice activity; Codex handles speech."""
+
+import asyncio
+import threading
 
 import sherpa_onnx
+
+from .fsmn import Fsmn
 
 
 class Recognizer:
     def __init__(self, config):
         models = config.models
-        kws = models / "kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
-        # Keyword text is user-configurable; turn it into the model's phonetic tokens.
-        from pypinyin import pinyin, Style
-
-        text = config.wake_word
-        parts = []
-        for char in text:
-            initial = pinyin(char, style=Style.INITIALS, strict=False)[0][0]
-            final = pinyin(char, style=Style.FINALS_TONE, strict=False)[0][0]
-            if initial:
-                parts.append(initial)
-            parts.append(final)
-        keywords = config.state_dir / "keywords.txt"
-        keywords.write_text(" ".join(parts) + " @" + text + "\n")
-        self.spotter = sherpa_onnx.KeywordSpotter(
-            tokens=str(kws / "tokens.txt"),
-            encoder=str(kws / "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx"),
-            decoder=str(kws / "decoder-epoch-13-avg-2-chunk-16-left-64.onnx"),
-            joiner=str(kws / "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx"),
-            keywords_file=str(keywords),
-            num_threads=2,
-        )
-        self.keyword_stream = self.spotter.create_stream()
+        self.detector = Fsmn(models / "fsmn-v2", config.wake_words)
+        self.generation = 0
+        self.stream_generation = 0
+        self.lock = threading.Lock()
         cfg = sherpa_onnx.VadModelConfig()
         cfg.silero_vad.model = str(models / "silero_vad.onnx")
         cfg.silero_vad.min_silence_duration = 0.55
@@ -38,15 +24,25 @@ class Recognizer:
         self.vad = sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
 
     def keyword(self, samples):
-        self.keyword_stream.accept_waveform(16000, samples)
-        while self.spotter.is_ready(self.keyword_stream):
-            self.spotter.decode_stream(self.keyword_stream)
-            word = self.spotter.get_result(self.keyword_stream)
-            if word:
-                self.spotter.reset_stream(self.keyword_stream)
-                return word
-        return None
+        generation = self.generation
+        with self.lock:
+            if self.stream_generation != generation:
+                self.detector.reset()
+                self.stream_generation = generation
+            events = self.detector.feed(samples)
+        if generation != self.generation:
+            return None
+        return events[0][1] if events else None
+
+    async def detect(self, samples):
+        generation = self.generation
+        word = await asyncio.to_thread(self.keyword, samples)
+        return word if generation == self.generation else None
 
     def reset_keyword(self):
-        # Do not carry a partial keyword from the previous conversation into standby.
-        self.keyword_stream = self.spotter.create_stream()
+        # Reset on the inference worker, avoiding a race or blocking the event
+        # loop while an in-flight frame finishes. Its result is invalidated.
+        self.generation += 1
+
+    def diagnostics(self):
+        return self.detector.diagnostics()

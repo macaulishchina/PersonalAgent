@@ -52,6 +52,8 @@ class CodexBackend:
         self.on_speech, self.on_control = on_speech, on_control
         self.client = CodexClient(config.codex_binary, config.workspace)
         self.thread_id = None
+        self.resolved_model = None
+        self.resolved_reasoning_effort = None
         self.active_turn = self.active_task = None
         self.progress = ""
         self.muted_turns = set()
@@ -80,6 +82,7 @@ class CodexBackend:
         await self.client.start()
         saved = self.store.get("thread_id")
         params = {
+            "model": self.config.codex_model,
             "cwd": self.config.workspace,
             "sandbox": self.config.codex_sandbox,
             "approvalPolicy": self.config.approval_policy,
@@ -88,6 +91,7 @@ class CodexBackend:
             + "\n输出端点："
             + json.dumps(self.config.room_labels or self.config.speakers, ensure_ascii=False),
             "config": {
+                "model_reasoning_effort": self.config.codex_reasoning_effort,
                 "mcp_servers.personal_agent": {
                     "command": sys.executable,
                     "args": [str(Path(__file__).with_name("tools.py")), str(self.config.socket)],
@@ -96,7 +100,7 @@ class CodexBackend:
                     "default_tools_approval_mode": "approve",
                     "startup_timeout_sec": 30,
                     "tool_timeout_sec": 90,
-                }
+                },
             },
         }
         if saved:
@@ -130,6 +134,8 @@ class CodexBackend:
                 timeout=60,
             )
         self.thread_id = result["thread"]["id"]
+        self.resolved_model = result.get("model")
+        self.resolved_reasoning_effort = result.get("reasoningEffort")
         self.store.set("thread_id", self.thread_id)
         self.session_id = self.store.logical_session("codex", self.thread_id)
         self.store.set("session_id", self.session_id)
@@ -150,7 +156,12 @@ class CodexBackend:
                 status = "unknown"
             self.store.update_task(ident, status)
         self.events_task = asyncio.create_task(self._events())
-        log.info("codex_ready resumed=%s", bool(saved))
+        log.info(
+            "codex_ready resumed=%s model=%s reasoning_effort=%s",
+            bool(saved),
+            self.resolved_model,
+            self.resolved_reasoning_effort,
+        )
 
     async def submit(self, text):
         async with self.submit_lock:
@@ -174,7 +185,14 @@ class CodexBackend:
             self.store.create_task(ident, text)
             try:
                 result = await self.client.request(
-                    "turn/start", {"threadId": self.thread_id, "input": inputs}, timeout=60
+                    "turn/start",
+                    {
+                        "threadId": self.thread_id,
+                        "input": inputs,
+                        "model": self.config.codex_model,
+                        "effort": self.config.codex_reasoning_effort,
+                    },
+                    timeout=60,
                 )
                 turn = result["turn"]["id"]
                 # The notification reader may have already observed completion.
@@ -386,11 +404,13 @@ class CodexBackend:
         result = await self.client.request(
             "thread/start",
             {
+                "model": self.config.codex_model,
                 "cwd": self.config.workspace,
                 "sandbox": "read-only",
                 "approvalPolicy": "never",
                 "ephemeral": True,
                 "config": {
+                    "model_reasoning_effort": self.config.codex_reasoning_effort,
                     "mcp_servers.personal_agent": {
                         "command": sys.executable,
                         "args": [str(Path(__file__).with_name("tools.py")), str(self.config.socket)],
@@ -434,6 +454,8 @@ class CodexBackend:
                 "turn/start",
                 {
                     "threadId": self.maintenance_thread,
+                    "model": self.config.codex_model,
+                    "effort": self.config.codex_reasoning_effort,
                     "input": [
                         {
                             "type": "text",

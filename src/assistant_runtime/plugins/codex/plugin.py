@@ -31,6 +31,11 @@ class CodexPlugin:
     def diagnostics(self):
         return {
             "backend": "native",
+            "codex_model": self.backend.resolved_model,
+            "codex_reasoning_effort": self.backend.resolved_reasoning_effort,
+            "codex_requested_model": self.backend.config.codex_model,
+            "codex_requested_reasoning_effort": self.backend.config.codex_reasoning_effort,
+            "realtime_voice": self.voice.config.realtime_voice,
             "voice_auth": "chatgpt",
             "transport": "webrtc",
             "webrtc_engine": "chromium",

@@ -11,3 +11,10 @@ config.toml
 .env.*
 *.pem
 memory-export*.json
+
+# Generated local reports; sources and templates remain versioned.
+/reports/
+
+# Local packaging output
+/build/
+/dist/

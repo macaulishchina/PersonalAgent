@@ -20,8 +20,12 @@ def chinese_number(text):
     return digits.get(text)
 
 
-def parse_command(text, room_labels=None):
+def parse_command(text, room_labels=None, wake_words=()):
     s = normalize(text)
+    for word in sorted((normalize(word) for word in wake_words), key=len, reverse=True):
+        if word and s.startswith(word):
+            s = s[len(word) :]
+            break
     s = re.sub(r"^(请|麻烦)", "", s)
     if s in {"停", "停止", "停一下", "别说了", "停止播放", "暂停播报", "停止播报", "暂停播放"}:
         return Control("stop")

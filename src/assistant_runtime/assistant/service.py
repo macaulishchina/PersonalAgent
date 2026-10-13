@@ -12,7 +12,7 @@ import time
 import miniaudio
 import numpy as np
 
-from assistant_runtime.assistant.commands import normalize, parse_command
+from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.store import Store
 from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame
 
@@ -133,7 +133,9 @@ class AssistantService:
                 self.preroll.append(pcm)
                 raw = getattr(self.route, "raw_frame", None) or pcm
                 wake_samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
-                if self.recognizer.keyword(wake_samples):
+                keyword = await self.recognizer.detect(wake_samples)
+                if keyword and not self.active:
+                    log.info("keyword_detected phrase=%s", keyword)
                     await self.wake(tuple(self.preroll))
                     self.preroll.clear()
             else:
@@ -162,10 +164,7 @@ class AssistantService:
                         self.backend.last_user_text = text
                         self.input_count += 1
                         self.last_activity = time.monotonic()
-                        clean = normalize(text)
-                        if clean.startswith(normalize(self.config.wake_word)):
-                            clean = clean[len(normalize(self.config.wake_word)) :]
-                        cmd = parse_command(clean, self.config.room_labels)
+                        cmd = parse_command(text, self.config.room_labels, self.config.wake_words)
                         if cmd:
                             await self.control(cmd)
                 elif event["kind"] == "user_turn":
@@ -249,7 +248,8 @@ class AssistantService:
     def status(self):
         return {
             "assistant_name": self.config.assistant_name,
-            "wake_word": self.config.wake_word,
+            "wake_words": self.config.wake_words,
+            "wake_detector": self.recognizer.diagnostics(),
             "service": "running",
             "plugins": self.runtime.health(),
             "memory": {
