@@ -10,7 +10,7 @@ from assistant_runtime.assistant.service import AssistantService
 from assistant_runtime.config import Config
 
 
-SETTINGS = {"start": "23:00", "end": "07:00", "timezone": "Asia/Shanghai"}
+SETTINGS = {"enable": True, "start": "23:00", "end": "07:00", "timezone": "Asia/Shanghai"}
 
 
 class QuietHoursTest(unittest.TestCase):
@@ -42,10 +42,27 @@ class QuietHoursTest(unittest.TestCase):
             {**SETTINGS, "end": "7:00"},
             {**SETTINGS, "end": "23:00"},
             {**SETTINGS, "timezone": "not-a-zone"},
+            {**SETTINGS, "enable": "false"},
+            {**SETTINGS, "enable": 0},
+            {**SETTINGS, "enable": None},
+            {key: value for key, value in SETTINGS.items() if key != "enable"},
+            {**SETTINGS, "enable": False, "start": "24:00"},
             {**SETTINGS, "enabled": True},
         ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 Config(quiet_hours=settings)
+
+    def test_switch_preserves_schedule_and_can_be_reenabled(self):
+        settings = {**SETTINGS, "enable": False}
+        config = Config(quiet_hours=settings)
+        policy = QuietHours.from_settings(config.quiet_hours)
+        night = datetime.fromisoformat("2026-10-13T23:30:00+08:00")
+        self.assertFalse(policy.active(night))
+        self.assertEqual(config.quiet_hours, settings)
+        self.assertEqual(policy.start.isoformat(), "23:00:00")
+        self.assertEqual(policy.end.isoformat(), "07:00:00")
+        self.assertEqual(policy.timezone.key, "Asia/Shanghai")
+        self.assertTrue(QuietHours.from_settings({**settings, "enable": True}).active(night))
 
 
 class QuietSessionTest(unittest.IsolatedAsyncioTestCase):

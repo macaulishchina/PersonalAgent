@@ -13,7 +13,8 @@ idle_seconds = 60
 minimum_volume = 80
 # Optional daily silence: suppress keyword/gesture wake and all voice feedback.
 # Background tasks keep running. At end, standby resumes; it does not speak.
-# quiet_hours = {start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}
+# quiet_hours = {enable = true, start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}
+# Set enable = false to disable silence while retaining the schedule.
 memory_enabled = true
 memory_auto_capture = true
 # root = "/absolute/path/to/instance"

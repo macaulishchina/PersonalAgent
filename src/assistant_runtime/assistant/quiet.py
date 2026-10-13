@@ -11,6 +11,7 @@ class QuietHours:
     start: time
     end: time
     timezone: ZoneInfo
+    enable: bool
 
     @classmethod
     def from_settings(cls, settings):
@@ -18,8 +19,10 @@ class QuietHours:
             raise ValueError("quiet_hours must be a table")
         if not settings:
             return None
-        if set(settings) != {"start", "end", "timezone"}:
-            raise ValueError("quiet_hours requires exactly start, end and timezone")
+        if set(settings) != {"enable", "start", "end", "timezone"}:
+            raise ValueError("quiet_hours requires exactly enable, start, end and timezone")
+        if type(settings["enable"]) is not bool:
+            raise ValueError("quiet_hours.enable must be boolean")
         values = []
         for name in ("start", "end"):
             value = settings[name]
@@ -34,9 +37,11 @@ class QuietHours:
             zone = ZoneInfo(settings["timezone"])
         except (KeyError, ValueError) as exc:
             raise ValueError("quiet_hours.timezone must be an IANA timezone") from exc
-        return cls(values[0], values[1], zone)
+        return cls(values[0], values[1], zone, settings["enable"])
 
     def active(self, now=None):
+        if not self.enable:
+            return False
         now = now or datetime.now(self.timezone)
         if now.tzinfo is None:
             raise ValueError("Quiet-hours clock must include a timezone")

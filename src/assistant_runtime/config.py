@@ -32,7 +32,7 @@ class Config:
     assistant_name: str = "个人助理"
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
-    quiet_hours: dict[str, str] = field(default_factory=dict)
+    quiet_hours: dict[str, str | bool] = field(default_factory=dict)
     input_device: str = ""
     default_output: str = ""
     minimum_volume: int = 80
