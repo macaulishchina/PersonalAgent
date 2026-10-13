@@ -118,3 +118,14 @@ The microphone and existing speakers now use `devices.<logical_id>` configuratio
 - Evidence: `state/acceptance/device-onboarding/{real-devices,production-restart}.json`, generated `reports/DEVICE_ONBOARDING.html`. Live USB unplug/replug, machine reboot and 24-hour stability are not part of this acceptance.
 
 - Post-deployment resource/query smoke: 10.17 seconds, host-main CPU 5.03% of six-core machine capacity, RSS 139.53 → 139.73 MiB. Repeated directory inspections leave wake count at 0 and mode at standby. This includes local voice/audio processing, excludes provider/memory children and is not a long-duration stability result. Evidence: `resource-smoke.json` and `final-status.json` in the onboarding acceptance folder.
+
+
+## HomePod standard output integration — 2026-10-13
+
+- Added the optional AirPlay family under the existing device directory and PCM output provider registry, using public pyatv 0.18.0 APIs plus project-local imageio-ffmpeg 0.6.0. The protocol/receiver/UDP settings were taken from the earlier homepod-assistant verification; no firewall or receiver name changes were made.
+- Receiver discovery confirms the configured stable RAOP identity and the original network name “家庭影院”. AI list/inspect exposes HomePod's playback/select/volume/stop abilities without exposing private connection data.
+- The real standard onboarding script selected HomePod in isolated state, played the authored chime and the previous short Chinese “这是一条语音测试” fixture through the shared player. Actual write count 183360 bytes; physical mic chime correlation 0.701. Speech fixture length 2.659 seconds. Mic capture and audio reference remained local; raw PCM was not saved.
+- A real Codex task completed list, microphone inspect and HomePod inspect via MCP/socket/shared capability routing. Closing playback left no FFmpeg process and the subsequent tool report showed the receiver stream closed.
+- Initial integration attempts found the encoder executable missing; this was fixed by a declared project dependency rather than installing a second environment or modifying the host. The online receiver alone was not counted as success.
+- 94 development tests pass, including provider ownership, external routing with the same microphone, unknown volume preservation, reference cleanup, queue bounds/old audio discard and specific output labels sharing a room.
+- Evidence: `state/acceptance/airplay-homepod/real-devices.json`, `state/homepod-onboarding-run.log`. The measured chime location is 7.22 seconds from mic capture start, including preroll/stream setup/receiver buffering; it is not word-end assistant response latency. Fast acoustic interruption, long-duration stability and HomePod echo cancellation experience have not been separately established.

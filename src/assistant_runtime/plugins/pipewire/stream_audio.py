@@ -2,11 +2,11 @@
 
 import asyncio
 import math
+import logging
 import time
 
 import numpy as np
 
-from .audio import audio_env
 from .cues import wake_chime
 
 
@@ -18,7 +18,7 @@ class StreamPlayer:
         self.route = route
         self.queue = asyncio.Queue(maxsize=75)  # at most 1.5 seconds of local audio
         self.epoch = 0
-        self.process = None
+        self.transport = None
         self.remainder = b""
         self.lock = asyncio.Lock()
         self.last_error = None
@@ -104,10 +104,9 @@ class StreamPlayer:
         self.last_stop_seconds = time.monotonic() - start
 
     async def _kill(self):
-        if self.process and self.process.returncode is None:
-            self.process.kill()
-            await self.process.wait()
-        self.process = None
+        if self.transport and self.transport.healthy:
+            await self.transport.close()
+        self.transport = None
 
     async def cue(self, error=False):
         # Local feedback stays available when network/authentication fails.
@@ -129,34 +128,18 @@ class StreamPlayer:
                 try:
                     if epoch != self.epoch:
                         continue
-                    if not self.process or self.process.returncode is not None:
+                    if not self.transport or not self.transport.healthy:
                         await self.route.ensure(check_volume=True)
                     if epoch != self.epoch:
                         continue
                     async with self.lock:
-                        if not self.process or self.process.returncode is not None:
-                            self.process = await asyncio.create_subprocess_exec(
-                                "pacat",
-                                "--playback",
-                                "--raw",
-                                "--format=s16le",
-                                "--rate=24000",
-                                "--channels=1",
-                                "--latency-msec=120",
-                                "--process-time-msec=20",
-                                "--volume=65536",
-                                "--client-name=personal-agent-output",
-                                f"--device={self.route.sink}",
-                                env=audio_env(),
-                                stdin=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.DEVNULL,
-                            )
+                        if not self.transport or not self.transport.healthy:
+                            self.transport = await self.route.open_output(self.rate)
                         if epoch != self.epoch:
                             continue
                         self.last_queue_ms = (time.monotonic() - received) * 1000
                         self.max_queue_ms = max(self.max_queue_ms, self.last_queue_ms)
-                        self.process.stdin.write(pcm)
-                        await asyncio.wait_for(self.process.stdin.drain(), 0.2)
+                        await self.transport.write(pcm)
                         self.last_write = time.monotonic()
                         if voiced:
                             self.last_voice_write = self.last_write
@@ -169,6 +152,7 @@ class StreamPlayer:
                     # scheduling drift and repeatedly underruns the device.
                     await asyncio.sleep(0)
                 except (OSError, RuntimeError, TimeoutError) as exc:
+                    logging.getLogger(__name__).warning("audio_output_failed", exc_info=True)
                     self.last_error = "Audio output unavailable: " + type(exc).__name__
                     await self.stop()
                 finally:

@@ -14,6 +14,7 @@ import tempfile
 import time
 
 import numpy as np
+import miniaudio
 import soxr
 
 from assistant_runtime.assistant.service import AssistantService
@@ -37,11 +38,14 @@ def correlate(recorded, reference):
     return float(values[offset]), offset / 16000
 
 
-async def verify(config, folder, disconnect):
+async def verify(config, folder, disconnect, output_device=None, tail_seconds=3, speech_sample=None):
     before = await request(config, {"command": "status"})
     if before["task_running"] or before["mode"] != "standby":
         raise RuntimeError("Wait until the assistant is idle before explicit hardware acceptance")
-    report = {"started_at": time.time(), "input_device": config.input_device, "output_device": before["room"]}
+    target = output_device or before["room"]
+    if target not in config.output_devices:
+        raise ValueError("Unknown output device")
+    report = {"started_at": time.time(), "input_device": config.input_device, "output_device": target}
     folder.mkdir(parents=True, exist_ok=True)
     systemctl("stop", config.unit_name)
     try:
@@ -74,13 +78,13 @@ async def verify(config, folder, disconnect):
                 await wait(
                     lambda: getattr(service, "context", None) is not None and service.context.state == "ready"
                 )
-                await service.route.select(before["room"])
+                await service.route.select(target)
                 inventory = await request(isolated, {"command": "devices", "action": "list"})
                 mic = await request(
                     isolated, {"command": "devices", "action": "inspect", "device_id": config.input_device}
                 )
                 output = await request(
-                    isolated, {"command": "devices", "action": "inspect", "device_id": before["room"]}
+                    isolated, {"command": "devices", "action": "inspect", "device_id": target}
                 )
                 assert mic["device"]["state"] == output["device"]["state"] == "available"
                 report["inventory"] = inventory
@@ -99,7 +103,27 @@ async def verify(config, folder, disconnect):
                 assert report["active_capture"]["device"]["data"]["capturing"]
                 await service.player.cue()
                 await asyncio.wait_for(service.player.queue.join(), 12)
-                await asyncio.sleep(3)
+                await asyncio.sleep(tail_seconds)
+                if speech_sample:
+                    decoded = miniaudio.decode_file(
+                        str(speech_sample),
+                        output_format=miniaudio.SampleFormat.SIGNED16,
+                        nchannels=1,
+                        sample_rate=24000,
+                    )
+                    speech = decoded.samples.tobytes()
+                    if len(speech) > 15 * 48000:
+                        raise ValueError("Explicit speech sample must be no more than 15 seconds")
+                    start = time.monotonic()
+                    for index, offset in enumerate(range(0, len(speech), 960)):
+                        await asyncio.sleep(max(0, start + index * 0.02 - time.monotonic()))
+                        service.player.feed(speech[offset : offset + 960].ljust(960, b"\0"))
+                    await service.player.queue.join()
+                    await asyncio.sleep(3)
+                    report["speech_test"] = {
+                        "sample": str(speech_sample),
+                        "audio_seconds": len(speech) / 48000,
+                    }
                 capture.cancel()
                 await asyncio.gather(capture, return_exceptions=True)
                 capture = None
@@ -116,24 +140,26 @@ async def verify(config, folder, disconnect):
                     "written_bytes": service.player.written_bytes,
                     "raw_audio_saved": False,
                 }
+                report["player_error"] = service.player.last_error
+                report["output_after_play"] = await service.runtime.invoke(DeviceQuery("inspect", target))
                 assert coefficient >= 0.10, "Chime was not independently confirmed in the physical microphone"
                 assert service.player.written_bytes > len(wake_chime())
                 await service.player.stop(suppress=False)
                 if disconnect:
-                    address = config.devices[before["room"]]["connection"].get("address")
+                    address = config.devices[target]["connection"].get("address")
                     if not address:
                         raise ValueError("Disconnect acceptance requires a Bluetooth output")
                     service.route.last_connect = time.monotonic()
                     await command("bluetoothctl", "disconnect", address)
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:
-                        missing = await service.runtime.invoke(DeviceQuery("inspect", before["room"]))
+                        missing = await service.runtime.invoke(DeviceQuery("inspect", target))
                         if missing["device"]["state"] == "unavailable":
                             break
                         await asyncio.sleep(0.2)
                     assert missing["device"]["state"] == "unavailable"
                     report["disconnected_output"] = missing
-                    assert service.route.room == before["room"]
+                    assert service.route.room == target
                     assert (await service.runtime.invoke(DeviceQuery("inspect", config.input_device)))[
                         "device"
                     ]["state"] == "available"
@@ -148,7 +174,7 @@ async def verify(config, folder, disconnect):
                                 await asyncio.sleep(0.5)
 
                     await asyncio.wait_for(recover(), 30)
-                    restored = await service.runtime.invoke(DeviceQuery("inspect", before["room"]))
+                    restored = await service.runtime.invoke(DeviceQuery("inspect", target))
                     assert restored["device"]["state"] == "available"
                     report["restored_output"] = restored
                 # Clear earlier direct query observations; subsequent evidence is
@@ -157,7 +183,7 @@ async def verify(config, folder, disconnect):
                     events.get_nowait()
                     events.task_done()
                 await service.backend.submit(
-                    f"本次只进行只读设备验收。先使用 personal_agent 的 device 工具 action=list；再分别使用 action=inspect，value={config.input_device} 和 value={before['room']}。必须实际调用这三项查询，不用 shell，不调用 memory，不改设备，不执行其他任务。最后简述两台设备的名称、能力和在线状态。"
+                    f"本次只进行只读设备验收。先使用 personal_agent 的 device 工具 action=list；再分别使用 action=inspect，value={config.input_device} 和 value={target}。必须实际调用这三项查询，不用 shell，不调用 memory，不改设备，不执行其他任务。最后简述两台设备的名称、能力和在线状态。"
                 )
                 await wait(lambda: not service.backend.busy, 120)
                 queries = []
@@ -167,7 +193,7 @@ async def verify(config, folder, disconnect):
                     if event.kind == "device.queried":
                         queries.append(event.data)
                 assert any(q["action"] == "list" for q in queries), "Codex did not list devices"
-                for ident in (config.input_device, before["room"]):
+                for ident in (config.input_device, target):
                     assert any(q["action"] == "inspect" and q["device_id"] == ident for q in queries), (
                         f"Codex did not inspect {ident}"
                     )
@@ -195,9 +221,23 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default="config.toml")
     p.add_argument("--disconnect", action="store_true")
+    p.add_argument("--output-device")
+    p.add_argument("--tail-seconds", type=float, default=3)
+    p.add_argument("--speech-sample", type=Path)
     args = p.parse_args()
     config = Config.load(args.config)
-    asyncio.run(verify(config, config.state_dir / "acceptance/device-onboarding", args.disconnect))
+    asyncio.run(
+        verify(
+            config,
+            config.state_dir
+            / "acceptance"
+            / ("airplay-homepod" if args.output_device else "device-onboarding"),
+            args.disconnect,
+            args.output_device,
+            args.tail_seconds,
+            args.speech_sample,
+        )
+    )
 
 
 if __name__ == "__main__":

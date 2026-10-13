@@ -29,3 +29,16 @@ memory_auto_capture = true
 # location = "书房"
 # [devices.office_speaker.connection]
 # address = "AA:BB:CC:DD:EE:FF"  # or sink = "exact PipeWire sink name"
+
+# Optional AirPlay receiver: install the airplay extra and add airplay to plugins.
+# [devices.homepod]
+# adapter = "airplay"
+# kind = "speaker"
+# label = "HomePod"
+# location = "客厅"
+# max_age_seconds = 45
+# [devices.homepod.connection]
+# host = "192.168.1.50"
+# identifier = "discovered-raop-identifier"
+# timing_port = 49160
+# control_port = 49161

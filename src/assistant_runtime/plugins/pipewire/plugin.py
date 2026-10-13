@@ -7,8 +7,8 @@ from .devices import PipeWireDevices
 class PipeWirePlugin:
     manifest = Manifest("pipewire")
 
-    def __init__(self, config, store, directory):
-        self.route = AudioRoute(config, store)
+    def __init__(self, config, store, directory, outputs):
+        self.route = AudioRoute(config, store, outputs)
         self.player = StreamPlayer(self.route)
         self.devices = PipeWireDevices(config, self.route, directory)
 

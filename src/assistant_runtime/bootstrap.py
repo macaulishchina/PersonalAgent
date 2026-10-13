@@ -16,10 +16,20 @@ def compose(service):
 
     config, store = service.config, service.store
     service.devices = DeviceDirectory(config.devices)
+    from .devices.outputs import AudioOutputs
+
+    service.audio_outputs = AudioOutputs(config.devices)
+
+    def airplay():
+        from .plugins.airplay.plugin import AirPlayPlugin
+
+        return AirPlayPlugin(config, service.devices, service.audio_outputs, lambda: service.route.room)
+
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
     factories = {
-        "pipewire": lambda: PipeWirePlugin(config, store, service.devices),
+        "pipewire": lambda: PipeWirePlugin(config, store, service.devices, service.audio_outputs),
         "keyword": lambda: KeywordPlugin(config),
+        "airplay": airplay,
         "codex": lambda: CodexPlugin(
             config, store, service.audio_received, service.events.put, service.speak, service.tool_control
         ),

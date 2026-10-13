@@ -31,12 +31,12 @@ async def command(*args, timeout=12):
             await p.wait()
         raise
     if p.returncode:
-        raise RuntimeError(f"{args[0]} failed: {err.decode(errors='replace').strip()[:250]}")
+        raise RuntimeError(f"{args[0]} failed: {(err or out).decode(errors='replace').strip()[:250]}")
     return out.decode().strip()
 
 
 class AudioRoute:
-    def __init__(self, config, store):
+    def __init__(self, config, store, outputs=None):
         self.config, self.store = config, store
         self.room = store.get("room", config.default_output)
         for spec in config.devices.values():
@@ -44,9 +44,10 @@ class AudioRoute:
                 validate_device(spec)
         if self.room not in config.output_devices:
             raise ValueError("Previously selected output removed; choose an explicit configured output")
-        for ident in (config.input_device, self.room):
-            if config.devices[ident]["adapter"] != "pipewire":
-                raise ValueError("Selected audio endpoint requires its configured adapter")
+        if config.devices[config.input_device]["adapter"] != "pipewire":
+            raise ValueError("Selected microphone requires its configured adapter")
+        self.outputs = outputs
+        self.external_output = None
         # Observe the device, never restore an old service volume over its setting.
         self.volume = None
         self.source = self.sink = None
@@ -70,13 +71,21 @@ class AudioRoute:
         async with self.lock:
             sources, sinks = await self.devices()
             spec = self.config.devices[self.room]
-            target = spec["connection"].get("address")
+            external = self.outputs.get(self.room) if spec["adapter"] != "pipewire" else None
+            if external:
+                try:
+                    await external.ensure_ready()
+                except (RuntimeError, TimeoutError, OSError):
+                    self.ready.clear()
+                    self.last_error = f"{self.room} output unavailable"
+                    raise
+            target = spec["connection"].get("address") if not external else None
             bluetooth = target is not None
             source_node = resolve(self.config.devices[self.config.input_device], sources, sinks)
-            sink_node = resolve(spec, sources, sinks)
+            sink_node = resolve(spec, sources, sinks) if not external else None
             physical_source = source_node["name"] if source_node else None
             physical_sink = sink_node["name"] if sink_node else None
-            if not physical_source or not physical_sink:
+            if not physical_source or (not physical_sink and not external):
                 self.ready.clear()
                 if self.module:
                     await self._unload()
@@ -92,13 +101,27 @@ class AudioRoute:
                     except (RuntimeError, TimeoutError):
                         pass
                 raise RuntimeError(self.last_error)
-            if self.ready.is_set() and not force and physical_sink == self.physical_sink:
+            if (
+                self.ready.is_set()
+                and not force
+                and external is self.external_output
+                and physical_sink == self.physical_sink
+            ):
+                if (
+                    external
+                    and self.source in {s["name"] for s in sources}
+                    and (not self.module or self.sink in {s["name"] for s in sinks})
+                ):
+                    if check_volume:
+                        await self.ensure_minimum_volume()
+                    return
                 if self.source in {s["name"] for s in sources} and self.sink in {s["name"] for s in sinks}:
                     if check_volume:
                         await self.ensure_minimum_volume()
                     return
             self.ready.clear()
             await self._unload()
+            self.external_output = external
             self.physical_sink = physical_sink
             self.source, self.sink = physical_source, physical_sink
             if self.config.echo_cancel:
@@ -115,16 +138,17 @@ class AudioRoute:
                     "sink_properties=device.description=PersonalAgent_Playback",
                 )
                 try:
-                    self.bridge = await command(
-                        "pactl",
-                        "load-module",
-                        "module-loopback",
-                        "source=personal_agent_echo_output.monitor",
-                        f"sink={physical_sink}",
-                        "latency_msec=30",
-                        "source_dont_move=true",
-                        "sink_dont_move=true",
-                    )
+                    if physical_sink:
+                        self.bridge = await command(
+                            "pactl",
+                            "load-module",
+                            "module-loopback",
+                            "source=personal_agent_echo_output.monitor",
+                            f"sink={physical_sink}",
+                            "latency_msec=30",
+                            "source_dont_move=true",
+                            "sink_dont_move=true",
+                        )
                 except BaseException:
                     await self._unload()
                     raise
@@ -137,6 +161,12 @@ class AudioRoute:
 
     async def ensure_minimum_volume(self):
         self.volume = None
+        if self.external_output:
+            known = self.external_output.volume
+            if known is not None and 0 < known < self.config.minimum_volume:
+                await self.external_output.set_volume(self.config.minimum_volume)
+            self.volume = self.external_output.volume
+            return
         if not self.physical_sink:
             return
         try:
@@ -161,7 +191,10 @@ class AudioRoute:
             raise ValueError("volume must be an integer from 0 to 100")
         self.volume = value
         self.store.set("volume", value)
-        if self.physical_sink:
+        if self.external_output:
+            await self.external_output.set_volume(max(value, self.config.minimum_volume) if value else 0)
+            self.volume = self.external_output.volume
+        elif self.physical_sink:
             await command("pactl", "set-sink-mute", self.physical_sink, "1" if value == 0 else "0")
             await command("pactl", "set-sink-volume", self.physical_sink, f"{value}%")
             if value:
@@ -171,11 +204,26 @@ class AudioRoute:
         if room not in self.config.output_devices:
             raise ValueError("unknown speaker")
         if self.config.devices[room]["adapter"] != "pipewire":
-            raise ValueError("Output is owned by another adapter; an audio routing adapter is required")
+            self.outputs.get(room)  # Reject a missing provider before changing the selection.
         self.room = room
         self.store.set("room", room)
         self.ready.clear()
         await self.ensure(force=True)
+
+    async def open_output(self, rate):
+        from .playback import PipeWirePlayback, MirroredPlayback
+
+        if self.external_output:
+            transport = await self.external_output.open(rate)
+            if self.module:
+                try:
+                    reference = await PipeWirePlayback.open(self.sink, rate)
+                    return MirroredPlayback(transport, reference)
+                except BaseException:
+                    await transport.close()
+                    raise
+            return transport
+        return await PipeWirePlayback.open(self.sink, rate)
 
     async def _clean_stale_modules(self):
         # This pactl build omits module IDs in JSON; the short table has them.
@@ -205,6 +253,8 @@ class AudioRoute:
 
     async def close(self):
         self.ready.clear()
+        if self.external_output:
+            await self.external_output.close()
         await self._unload()
 
     async def _record(self, source, name):

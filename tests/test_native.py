@@ -48,9 +48,15 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
             kill=Mock(),
             wait=AsyncMock(),
         )
+        from assistant_runtime.plugins.pipewire.playback import PipeWirePlayback
+
+        async def open_output(rate):
+            return await PipeWirePlayback.open(route.sink, rate)
+
+        route.open_output = open_output
         p = StreamPlayer(route)
         with patch(
-            "assistant_runtime.plugins.pipewire.stream_audio.asyncio.create_subprocess_exec",
+            "assistant_runtime.plugins.pipewire.playback.asyncio.create_subprocess_exec",
             AsyncMock(return_value=proc),
         ):
             run = asyncio.create_task(p.run())

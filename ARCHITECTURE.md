@@ -22,8 +22,9 @@ flowchart LR
 | `kernel/` | API v1 contracts, dependency order, handler dispatch, task/resource tracking, event fan-out, generations | Devices, Codex protocols, assistant policy |
 | `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
 | `plugins/codex/` | One foreground provider thread, its voice transport and native task delegation; separate maintenance context | Device drivers, long-term memory storage |
-| `devices/` | Shared inventory, adapter-owned registration, timestamped state and read-only query routing | Hardware protocol code, conversation activation |
+| `devices/` | Shared inventory, adapter-owned registration, timestamped state, read-only query routing and external audio provider registration | Hardware protocol code, conversation activation |
 | `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
+| `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
 | `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
 | `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
@@ -86,7 +87,7 @@ Use stable logical IDs such as `living_temperature` and `living_homepod` in assi
 
 An adapter reports measurements with device ID, metric, value, unit, sample time, reception time and validity/freshness. State distinguishes unavailable, stale and current readings. Historical values may be returned only when explicitly labeled; a missing device must not silently become another device. Keep sensor snapshots separate from long-term memory. Persist history only when an actual feature requires it, with retention defined for that feature.
 
-A media output implements bounded playback, explicit format/rate, stop/flush, availability and connection-generation handling. A transport that cannot discard buffered audio reports that limitation; accepting a playback command does not prove audible playback. HomePod adds an output adapter under the audio routing owner, not a replacement microphone or an alternate implementation of assistant conversation policy.
+A media output implements the stdlib-only AudioOutputProvider / PlaybackTransport protocols: prepare availability, open a rate-specific PCM writer, bounded write, health, volume and close/flush. External providers register through host.audio_outputs; the existing audio owner opens them and mirrors their input into its reference bus without another physical output. A media output preserves explicit format/rate, availability and connection-generation handling. A transport that cannot discard buffered audio reports that limitation; accepting a playback command does not prove audible playback. HomePod uses the optional AirPlay adapter registered under the existing audio routing owner; its microphone is not an input capability. No alternate assistant conversation policy is installed.
 
 ### Capability ownership and AI access
 
