@@ -42,3 +42,17 @@ memory_auto_capture = true
 # identifier = "discovered-raop-identifier"
 # timing_port = 49160
 # control_port = 49161
+
+# Optional Linux camera: install camera extra, add v4l2 to plugins. Audio is separate.
+# [devices.office_camera]
+# adapter = "v4l2"
+# kind = "camera"
+# label = "书房摄像头"
+# location = "书房"
+# [devices.office_camera.connection]
+# path = "/dev/v4l/by-id/usb-YOUR_CAMERA_SERIAL-video-index0"
+# width = 1280
+# height = 720
+# framerate = 15
+# input_format = "mjpeg"
+# timeout_seconds = 8

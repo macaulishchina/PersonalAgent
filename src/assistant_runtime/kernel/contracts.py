@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 import time
 import uuid
+import math
 
 API_VERSION = 1
 
@@ -30,6 +31,41 @@ class MemoryRequest:
 class DeviceQuery:
     action: str = "list"
     device_id: str | None = None
+
+
+@dataclass(frozen=True)
+class VideoCapture:
+    device_id: str
+
+
+@dataclass(frozen=True)
+class VideoFrame:
+    """One bounded, fresh JPEG; pixels never belong on the event bus."""
+
+    device_id: str
+    data: bytes
+    width: int
+    height: int
+    captured_at: float
+    generation: int
+    mime_type: str = "image/jpeg"
+
+    def __post_init__(self):
+        if (
+            not self.device_id
+            or self.mime_type != "image/jpeg"
+            or not 0 < len(self.data) <= 1024 * 1024
+            or not 0 < self.width <= 1920
+            or not 0 < self.height <= 1080
+            or not math.isfinite(self.captured_at)
+            or self.generation < 1
+        ):
+            raise ValueError("Invalid or oversized video frame")
+
+
+class VideoInputProvider(Protocol):
+    async def capture(self) -> VideoFrame: ...
+    async def close(self) -> None: ...
 
 
 @dataclass(frozen=True)

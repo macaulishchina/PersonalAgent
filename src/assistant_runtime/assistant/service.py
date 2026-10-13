@@ -8,13 +8,15 @@ import logging
 import os
 import signal
 import time
+import base64
+from dataclasses import asdict
 
 import miniaudio
 import numpy as np
 
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.store import Store
-from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame, DeviceQuery
+from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame, DeviceQuery, VideoCapture
 
 log = logging.getLogger(__name__)
 
@@ -312,7 +314,15 @@ class AssistantService:
             elif action == "gesture":
                 await self.runtime.plugins["gesture"].simulate(d.get("value", "wave"))
             elif action == "devices":
-                result = await self.runtime.invoke(DeviceQuery(d.get("action", "list"), d.get("device_id")))
+                if d.get("action") == "snapshot":
+                    frame = await self.runtime.invoke(VideoCapture(d.get("device_id")))
+                    metadata = asdict(frame)
+                    metadata.pop("data")
+                    result = {"frame": {**metadata, "data_base64": base64.b64encode(frame.data).decode()}}
+                else:
+                    result = await self.runtime.invoke(
+                        DeviceQuery(d.get("action", "list"), d.get("device_id"))
+                    )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
                 writer.close()

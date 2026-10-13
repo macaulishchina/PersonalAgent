@@ -4,7 +4,7 @@ This report describes the current plugin-runtime implementation. The original pr
 
 ## Automated gate
 
-`.venv/bin/python scripts/check.py` passes formatting, Ruff, kernel type checks and **55 unit tests**. It includes all 24 original behaviors plus plugin lifecycle/cleanup, bounded subscribers, request deadlines, stale generation rejection, explicit gesture dispatch, reconnect responsiveness, stable session mapping, and memory provenance/revision/tombstone/retry tests, and wake-benchmark accounting for missed/duplicate/late detections.
+`.venv/bin/python scripts/check.py` passes formatting, Ruff, kernel type checks and **83 unit tests**. It includes all 24 original behaviors plus plugin lifecycle/cleanup, bounded subscribers, request deadlines, stale generation rejection, explicit gesture dispatch, reconnect responsiveness, stable session mapping, and memory provenance/revision/tombstone/retry tests, and current wake, audio output and camera contracts.
 
 The exact dependencies are in `uv.lock`; `uv sync --locked --extra voice --extra memory --extra dev` was exercised on this machine. Sherpa's native core is explicitly pinned because its wheel metadata and the universal dependency resolution differed. There is one `.venv`; the temporary second environment was removed.
 
@@ -101,7 +101,7 @@ The keyword plugin now runs only FSMN V2 (model SHA256 `2840475733854f8a751256c3
 ## Pre-commit review — project configuration and packaging
 
 - Project TOML explicitly controls Codex model and reasoning effort for new/resumed threads, direct task turns and memory maintenance. Deployed App Server returned `gpt-6.1-sol` / `high`; configured realtime voice is `cove`. Evidence: `state/acceptance/project-config/deployment.json`.
-- Review fixed pure benchmark accounting imports that previously required optional `pypinyin`/`psutil` packages. A subprocess test blocks benchmark-only packages and confirms the accounting helpers still import and work.
+- At that review, experimental benchmark accounting imports were corrected and covered by a subprocess test. Those experiment helpers and their tests were later removed during one-off script cleanup.
 - Full gate: 76 tests pass, Ruff formatting/lint and kernel Mypy pass; `uv lock --check --offline` passes. `uv build --offline --wheel` succeeds and includes the FSMN runtime, authored cue, and upstream MIT license.
 - Model weights, recordings, generated reports, local TOML, runtime state and build outputs remain ignored by Git.
 
@@ -129,3 +129,18 @@ The microphone and existing speakers now use `devices.<logical_id>` configuratio
 - Initial integration attempts found the encoder executable missing; this was fixed by a declared project dependency rather than installing a second environment or modifying the host. The online receiver alone was not counted as success.
 - 94 development tests pass, including provider ownership, external routing with the same microphone, unknown volume preservation, reference cleanup, queue bounds/old audio discard and specific output labels sharing a room.
 - Evidence: `state/acceptance/airplay-homepod/real-devices.json`, `state/homepod-onboarding-run.log`. The measured chime location is 7.22 seconds from mic capture start, including preroll/stream setup/receiver buffering; it is not word-end assistant response latency. Fast acoustic interruption, long-duration stability and HomePod echo cancellation experience have not been separately established.
+
+## V4L2 camera onboarding
+
+- The UGREEN USB video endpoint is registered as `living_camera`, separate from its PipeWire microphone, using an instance-configured stable by-id path.
+- Installed `devices snapshot` returned fresh, independently decoded 1280×720 JPEGs in roughly 0.34–0.50 seconds. Microphone capture remained recent and the selected output stayed unchanged.
+- Explicitly authorized Codex acceptance actually called `device list`, `inspect` and `snapshot`; its completed MCP result contained image content, and its scene description matched the camera preview. No background visual trigger or recorder is enabled.
+- Service restart preserved the foreground logical session and output choice; real capture still worked afterward. Physical USB unplug/replug and whole-machine restart were not performed.
+- Full development gate passed 104 tests. Ten camera contracts cover identity/role/configuration, explicit acquisition, unknown/unavailable devices, malformed images, concurrent requests, node/generation changes, bounded output, timeout/cancellation cleanup and MCP image content.
+- Local acceptance data and one explicitly saved test JPEG remain ignored under `state/acceptance/v4l2-camera/`; no HTML report is generated. Camera-only 5-second idle sample used 0.014% of one core; this is a short sample, not a whole-host power measurement.
+
+## One-off script cleanup
+
+- Removed 37 experiment/probe/report Python scripts, four report templates and six tests that exclusively exercised those removed experiments. No runtime module imported these scripts.
+- Retained the six reusable installation/preparation/check/hardware-acceptance entries listed in README. Removed the orphaned benchmark dependency extra and old edge-tts fixture dependency; existing installed packages and the running service were not altered.
+- Existing private reports, recordings, acceptance evidence and trained/deployed models were preserved. Historical test counts above describe their original runs; the current runtime contract suite has 83 tests.

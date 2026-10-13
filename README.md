@@ -15,7 +15,7 @@ uv sync --locked --extra voice --extra memory --extra dev
 cp config.example.toml config.toml
 ```
 
-The example starts a hardware-free management host. For speech configure `profile="voice"`, an absolute instance `root`, `workspace`, model location, input identity and output map. Configure Codex's existing subscription login normally. No separate paid API key is used. Linux voice also needs `pactl` and `pacat`; Bluetooth outputs need BlueZ. The camera is not activated by the application.
+The example starts a hardware-free management host. For speech configure `profile="voice"`, an absolute instance `root`, `workspace`, model location, input identity and output map. Configure Codex's existing subscription login normally. No separate paid API key is used. Linux voice also needs `pactl` and `pacat`; Bluetooth outputs need BlueZ. Optional camera capture occurs only on explicit requests.
 
 ```toml
 profile = "voice"
@@ -99,6 +99,8 @@ For another protocol, add one trusted adapter factory via `local_plugins`/`plugi
 
 Read-only state integrations (including future sensor snapshots) reuse this directory/query/tool path. A new actuator action still needs a narrowly defined capability and tool contract. AirPlay/RAOP is now implemented by the optional [AirPlay adapter](src/assistant_runtime/plugins/airplay/README.md). Enable the airplay extra/plugin and configure the receiver identity and UDP ports; then select its logical ID through the existing room/device tool. Other media transports register an AudioOutputProvider and reuse the same routing/player contracts.
 
+Linux USB video uses the optional [V4L2 adapter](src/assistant_runtime/plugins/v4l2/README.md). Enable the camera extra and v4l2 plugin, then configure a camera endpoint with a stable USB video path and supported format/dimensions. `devices snapshot <id>` captures one fresh JPEG through the shared `VideoCapture` capability; `--output state/preview.jpg` explicitly saves it. Codex's existing `device snapshot` tool receives native image content for user-requested visual questions. Video stays separate from microphone selection, generic events and long-term memory. No continuous capture or automatic visual trigger is enabled.
+
 ## Memory
 
 Basic Memory runs locally in a child process using the same environment. First use downloads its multilingual embedding model; prepare it before daily use with `scripts/prepare_memory.py --config config.toml`. It stores Markdown and local indexes below `state/memory/`. Default automatic capture proposes sourced facts/preferences after dialogue or completed tasks, only while idle. It can fail or be interrupted without interrupting speech.
@@ -119,24 +121,28 @@ A correction uses the returned `id` and current `revision` with `remember`. Impo
 .venv/bin/python scripts/check.py
 ```
 
-This runs formatting, lint, kernel typing and unit contracts, without changing the installed service. Real backend/device tests are explicit scripts and store private reports under ignored `state/acceptance/`. Never run two voice instances against the same audio devices. See `ARCHITECTURE.md` for module boundaries and `AGENTS.md` for editing rules.
+This runs formatting, lint, kernel typing and unit contracts, without changing the installed service. Reusable real-device tests are explicit scripts and store necessary private evidence under ignored `state/acceptance/`. Never run two voice instances against the same audio devices. See `ARCHITECTURE.md` for module boundaries and `AGENTS.md` for editing rules.
 
 The pre-refactor Git tag is `baseline-before-refactor`. Code rollback must preserve the newest task records: stop the service, check out the desired commit, restore its dependencies/service definition and restart against the existing database. Do not restore an old task database after executed actions. New tables are additive. The private pre-cutover config/unit snapshots are under `state/backups/`; they are not in Git.
 
 
-## Lightweight wake-model research
+## Maintenance scripts and local artifacts
 
-The [lightweight wake report](reports/LIGHT_WAKE_COMPARISON.html) compares official FSMN weights, a synthetic-only trained WeKWS MDTC-small, and a fine-tuned FSMN using the existing confirmed human recordings. It includes native ONNX CPU/RSS measurements, streaming threshold calibration, false wakes, chunk sizes, and reproducible evidence under `state/light-kws-20261013/`. Historical comparison scripts stay offline; the running keyword plugin now loads FSMN V2 exclusively.
+`scripts/` contains six reusable entries:
 
-Open the report through the workspace Docker static server at `http://110.0.0.82:8045/dell-voice-assistant/reports/LIGHT_WAKE_COMPARISON.html`. Training dependencies belong to the optional `benchmark` extra in the same project environment. No additional environment, audio playback, or paid service is used.
+- `check.py`: formatting, lint, kernel typing and runtime contract tests.
+- `install_service.py`: render/install the user systemd unit.
+- `download_models.py`: validate/install the current FSMN bundle and prepare VAD.
+- `prepare_memory.py`: initialize the local memory service/model.
+- `verify_device_onboarding.py`: explicit microphone/speaker acoustic and Codex capability acceptance.
+- `verify_video_onboarding.py`: explicit camera capture, restart and optionally authorized Codex image acceptance.
 
-## Local generated artifacts
+One-off protocol probes, old model-comparison/training experiments, fixture-specific room tests and report generators have been removed. Their source remains available in Git history. Runtime and reusable hardware tests do not depend on them. Reports are produced only on an explicit user request.
 
-- `reports/`: generated HTML/Markdown evaluation reports (ignored by Git). Browse `http://110.0.0.82:8045/dell-voice-assistant/reports/` using the workspace static server on fixed port 8045.
-- `state/`: private runtime state and experiment results; each benchmark keeps recordings, manifests, CSV/JSON, logs and screenshots in its existing experiment directory. Temporary correspondence belongs in `state/notes/`.
-- `models/`: downloaded checkpoints, trained models and training feature caches (ignored by Git).
-- `scripts/` and `scripts/templates/`: reproducible benchmark/report source code, kept in version control. Report commands default to `reports/`; `--output` can override where supported.
+Generated artifacts remain outside version control:
 
-The workspace static container serves the workspace root on port 8045; project reports retain their `dell-voice-assistant/reports/` URL prefix. Generated artifacts are not part of the source repository.
+- `reports/`: existing HTML/Markdown reports; available through the workspace static server on fixed port 8045.
+- `state/`: private runtime state, necessary acceptance evidence, old experiment results and explicit recordings/screenshots.
+- `models/`: deployed model bundles and existing checkpoints.
 
-The [second FSMN refinement report](reports/FSMN_REFINEMENT.html) compares three synthetic-only training recipes, including a keyword-focused CTC objective, against the previous FSMN at 80 ms. Run `.venv/bin/python -m scripts.run_fsmn_refinement --resume` to resume the recorded local experiment, then generate the report with `.venv/bin/python -m scripts.report_fsmn_refinement`. The input recipe, frozen selection and matched evidence are under ignored `state/fsmn-v2-20261013/`; trained checkpoints stay in `models/fsmn-v2-20261013/`. The selected focused V2 model is now the production keyword plugin. Run `.venv/bin/python -m scripts.verify_fsmn_runtime` for actual model replay/parity/bounded-buffer acceptance. Evidence is saved under `state/acceptance/fsmn-v2/`.
+The selected FSMN V2 bundle and its production keyword adapter remain the current wake detector. Removing experiment code does not alter the deployed model or its checksum.

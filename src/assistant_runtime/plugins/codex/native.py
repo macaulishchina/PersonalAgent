@@ -101,7 +101,7 @@ class NativeVoice:
                     + getattr(self, "memory_context", "")
                     + "\n"
                     + getattr(self, "device_context", "")
-                    + "\n需要最新设备状态时委派 Codex 调用 device list / inspect；不要猜测设备是否在线。",
+                    + "\n需要最新设备状态时委派 Codex 调用 device list / inspect；用户明确要求看当前画面时，委派 Codex 用 device snapshot 抓取已配置摄像头的一帧并分析，等待实际结果。你没有持续视频输入，不要猜测画面或主动打开摄像头。",
                     "realtimeEndInstructions": "用户语音会话结束。已开始的任务继续，保存真实工作结果，不重复执行。",
                 },
                 timeout=20,

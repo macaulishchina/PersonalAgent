@@ -5,6 +5,8 @@ import json
 import sys
 from typing import Literal
 from fastmcp import FastMCP
+from fastmcp.tools.base import ToolResult
+from mcp.types import ImageContent, TextContent
 
 mcp = FastMCP("Personal Agent local capabilities")
 
@@ -37,17 +39,30 @@ async def memory(
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False})
 async def device(
-    action: Literal["room", "volume", "stop", "sleep", "progress", "cancel", "list", "inspect"],
+    action: Literal["room", "volume", "stop", "sleep", "progress", "cancel", "list", "inspect", "snapshot"],
     value: str | int | None = None,
-) -> dict:
+) -> ToolResult:
     """Device inventory: list (no value), inspect (value=device id); read-only, timestamped availability.
     Audio controls: room(endpoint id), volume(0..100), stop, sleep, progress, cancel.
+    snapshot(value=camera id): acquire one fresh JPEG and return its actual image content.
+    Only capture on an explicit user request to see the current scene. No continuous video or local recording.
     stop silences speech but keeps work; sleep ends conversation but keeps work; cancel stops work.
     Only act on user requests. Never use shell to control audio or terminate the assistant.
     """
     if action in {"list", "inspect"}:
-        return await invoke("devices", action=action, device_id=value)
-    return await invoke(action, value=value)
+        return ToolResult(structured_content=await invoke("devices", action=action, device_id=value))
+    if action == "snapshot":
+        result = await invoke("devices", action=action, device_id=value)
+        frame = result["frame"]
+        image = frame.pop("data_base64")
+        return ToolResult(
+            content=[
+                TextContent(type="text", text=json.dumps(result, ensure_ascii=False)),
+                ImageContent(type="image", data=image, mime_type=frame["mime_type"]),
+            ],
+            structured_content=result,
+        )
+    return ToolResult(structured_content=await invoke(action, value=value))
 
 
 if __name__ == "__main__":

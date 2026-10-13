@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import base64
 from .config import Config
 
 
@@ -61,8 +62,9 @@ def main():
         sub.add_parser(name).add_argument("value")
     sub.add_parser("volume").add_argument("value", type=int, choices=range(101), metavar="0..100")
     devices = sub.add_parser("devices")
-    devices.add_argument("action", choices=["list", "inspect"], nargs="?", default="list")
+    devices.add_argument("action", choices=["list", "inspect", "snapshot"], nargs="?", default="list")
     devices.add_argument("device_id", nargs="?")
+    devices.add_argument("--output", help="Explicitly save a requested snapshot to this JPEG path")
     memory = sub.add_parser("memory")
     memory.add_argument("action", choices=["search", "read", "remember", "forget", "export", "import"])
     memory.add_argument(
@@ -107,11 +109,28 @@ def main():
             )
         else:
             payload = {k: v for k, v in vars(args).items() if k != "config"}
+            output = payload.pop("output", None)
+            if args.command == "devices" and (args.action != "list" and not args.device_id):
+                raise ValueError("inspect / snapshot requires a device ID")
+            if output and (args.command != "devices" or args.action != "snapshot"):
+                raise ValueError("--output is only valid for devices snapshot")
             if "arguments" in payload:
                 payload["arguments"] = json.loads(payload["arguments"])
             if "path" in payload:
                 payload["path"] = str(Path(payload["path"]).resolve())
-            print(json.dumps(asyncio.run(request(config, payload)), ensure_ascii=False, indent=2))
+            result = asyncio.run(request(config, payload))
+            if args.command == "devices" and args.action == "snapshot":
+                image = base64.b64decode(result["frame"].pop("data_base64"), validate=True)
+                result["frame"]["bytes"] = len(image)
+                if output:
+                    path = Path(output).expanduser().resolve()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(image)
+                    path.chmod(0o600)
+                    result["saved_to"] = str(path)
+                else:
+                    result["saved_to"] = None
+            print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, RuntimeError, ValueError, TimeoutError, KeyError) as exc:
         print(f"personal-agent: {exc}", file=sys.stderr)
         sys.exit(1)

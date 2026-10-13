@@ -19,17 +19,26 @@ def compose(service):
     from .devices.outputs import AudioOutputs
 
     service.audio_outputs = AudioOutputs(config.devices)
+    from .devices.video import VideoInputs
+
+    service.video_inputs = VideoInputs(config.devices)
 
     def airplay():
         from .plugins.airplay.plugin import AirPlayPlugin
 
         return AirPlayPlugin(config, service.devices, service.audio_outputs, lambda: service.route.room)
 
+    def v4l2():
+        from .plugins.v4l2.plugin import V4L2Plugin
+
+        return V4L2Plugin(config, service.devices, service.video_inputs)
+
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
     factories = {
         "pipewire": lambda: PipeWirePlugin(config, store, service.devices, service.audio_outputs),
         "keyword": lambda: KeywordPlugin(config),
         "airplay": airplay,
+        "v4l2": v4l2,
         "codex": lambda: CodexPlugin(
             config, store, service.audio_received, service.events.put, service.speak, service.tool_control
         ),
@@ -61,7 +70,7 @@ def compose(service):
                 raise ValueError("Plugin manifest name must match its registry name")
             runtime.add(plugin)
     runtime.bindings = {k: v for k, v in runtime.bindings.items() if v in runtime.plugins}
-    runtime.add(DevicesPlugin(service.devices))
+    runtime.add(DevicesPlugin(service.devices, service.video_inputs))
     runtime.add(
         AssistantPlugin(service, tuple(config.bindings[key] for key in ("audio", "trigger", "brain")))
     )

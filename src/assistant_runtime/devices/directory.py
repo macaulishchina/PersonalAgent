@@ -8,7 +8,7 @@ import math
 import json
 import time
 
-from ..kernel.contracts import DeviceQuery
+from ..kernel.contracts import DeviceQuery, VideoCapture
 from ..kernel.runtime import Manifest
 
 
@@ -106,8 +106,9 @@ class DeviceDirectory:
 
 
 class DevicesPlugin:
-    def __init__(self, directory):
+    def __init__(self, directory, video=None):
         self.directory = directory
+        self.video = video
         owners = tuple(
             dict.fromkeys(d["adapter"] for d in directory.config.values() if d.get("enabled", True))
         )
@@ -129,3 +130,26 @@ class DevicesPlugin:
             return result
 
         context.register(DeviceQuery, query)
+        if self.video is not None:
+
+            async def capture(request):
+                frame = await self.video.capture(request)
+                logging.getLogger(__name__).info(
+                    "device_capture id=%s bytes=%s dimensions=%sx%s",
+                    frame.device_id,
+                    len(frame.data),
+                    frame.width,
+                    frame.height,
+                )
+                # Only metadata is observable; do not publish image bytes.
+                context.publish(
+                    "device.captured",
+                    device_id=frame.device_id,
+                    captured_at=frame.captured_at,
+                    width=frame.width,
+                    height=frame.height,
+                    bytes=len(frame.data),
+                )
+                return frame
+
+            context.register(VideoCapture, capture)
