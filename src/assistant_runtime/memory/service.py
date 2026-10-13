@@ -1,7 +1,6 @@
 """Memory policy and durable capture, separate from retrieval and task execution."""
 
 import asyncio
-import hashlib
 import time
 import uuid
 
@@ -12,14 +11,15 @@ from ..kernel.runtime import Manifest
 class MemoryPlugin:
     manifest = Manifest("memory")
 
-    def __init__(self, config, store, provider, foreground, curator):
+    def __init__(self, config, store, provider, foreground):
         self.config, self.store, self.provider = config, store, provider
-        self.foreground, self.curator = foreground, curator
+        self.foreground = foreground
         self.lock = asyncio.Lock()
         self.context = None
         self.current = None
         self.ready = False
         self.cache = []
+        self.retry_after = 0.0
 
     async def start(self, context):
         self.context = context
@@ -37,6 +37,8 @@ class MemoryPlugin:
 
     async def handle(self, request):
         a = request.arguments
+        if request.action in {"remember", "forget", "import"}:
+            self.preempt()
         async with self.lock:
             if request.action == "search":
                 records = await self.provider.search(a["query"], a.get("scope", "user"))
@@ -109,6 +111,15 @@ class MemoryPlugin:
             raise ValueError("Deleted memory cannot be revived; use a new fact from new input")
         revision = row[0] if row else 0
         existing = await self.provider.read(ident)
+        if existing and (
+            existing["scope"] != record["scope"]
+            or (
+                record["scope"] == "project"
+                and existing.get("project", "")
+                != record.get("project", getattr(self.config, "workspace", ""))
+            )
+        ):
+            raise ValueError("Memory scope is immutable; create a new scoped record")
         if (
             existing
             and existing.get("text") == record["text"]
@@ -143,49 +154,45 @@ class MemoryPlugin:
 
     async def process_job(self, job):
         ident, start, end, epoch = job
+        status = self.store.db.execute("SELECT status FROM memory_jobs WHERE id=?", (ident,)).fetchone()
+        if status and status[0] == "done":
+            return
         if epoch != self.store.get("memory.epoch", 0):
             self.store.db.execute("UPDATE memory_jobs SET status='stale' WHERE id=?", (ident,))
             self.store.db.commit()
             return
-        sources = self.store.memory_sources(start, end)
-        candidates = await self.curator(sources, self.cache[-30:])
-        if self.foreground():
-            raise asyncio.CancelledError
-        by_id = {s["id"]: s for s in sources if s["role"] in {"user", "verified"}}
+        # A provider task completion is a model report, not independent evidence.
+        sources = [s for s in self.store.memory_sources(start, end) if s["role"] == "user"]
+        if len(sources) > 64 or sum(len(s["text"]) for s in sources) > 32000:
+            raise ValueError("Memory source batch exceeds its bounded input limit")
         async with self.lock:
-            for candidate in candidates[:12]:
-                source = by_id.get(candidate.get("source_id"))
-                evidence = candidate.get("evidence", "")
-                if not source or not evidence.strip() or evidence not in source["text"]:
-                    raise ValueError("Memory candidate lacks exact source evidence")
-                cid = (
-                    candidate.get("id")
-                    or hashlib.sha256(f"{source['id']}:{candidate['text']}".encode()).hexdigest()[:32]
+            for scope in ("user", "project"):
+                if self.foreground() or epoch != self.store.get("memory.epoch", 0):
+                    raise asyncio.CancelledError
+                outcome = (
+                    await self.provider.capture(
+                        sources,
+                        scope,
+                        getattr(self.config, "workspace", ""),
+                        f"{epoch}:{start}:{end}:{scope}",
+                    )
+                    if sources
+                    else {"records": [], "deleted": []}
                 )
-                evidence_hash = hashlib.sha256((candidate["scope"] + ":" + evidence).encode()).hexdigest()
-                claim = self.store.db.execute(
-                    "SELECT memory_id FROM memory_claims WHERE source_id=? AND evidence_hash=?",
-                    (source["id"], evidence_hash),
-                ).fetchone()
-                if claim:
-                    cid = claim[0]
-                else:
-                    with self.store.db:
+                if self.foreground() or epoch != self.store.get("memory.epoch", 0):
+                    raise asyncio.CancelledError
+                with self.store.db:
+                    for record in outcome["records"]:
+                        if not self.deleted(record["id"]):
+                            self.store.db.execute(
+                                "INSERT OR REPLACE INTO memory_items VALUES(?,?,0,?,?)",
+                                (record["id"], record["revision"], end, record["updated"]),
+                            )
+                    for deleted in outcome.get("deleted", []):
                         self.store.db.execute(
-                            "INSERT INTO memory_claims VALUES(?,?,?)", (source["id"], evidence_hash, cid)
+                            "INSERT INTO memory_items VALUES(?,1,1,?,?) ON CONFLICT(id) DO UPDATE SET deleted=1,revision=revision+1,updated=excluded.updated",
+                            (deleted, end, time.time()),
                         )
-                record = {k: candidate[k] for k in ["title", "text", "scope", "revision"]}
-                record.update(
-                    id=cid,
-                    source={
-                        "kind": "automatic",
-                        "id": source["id"],
-                        "time": source["time"],
-                        "evidence": evidence,
-                        "session": self.store.get("session_id"),
-                    },
-                )
-                await self._save(record, epoch)
             await self.refresh()
             self.store.db.execute("UPDATE memory_jobs SET status='done',error=NULL WHERE id=?", (ident,))
             self.store.db.commit()
@@ -204,7 +211,11 @@ class MemoryPlugin:
                     await self.provider.delete(ident)
                 self.context.error = None
                 self.context.state = "ready"
-                if not self.foreground() and self.config.memory_auto_capture:
+                if (
+                    not self.foreground()
+                    and self.config.memory_auto_capture
+                    and time.monotonic() >= self.retry_after
+                ):
                     row = self.store.db.execute(
                         "SELECT id,start_id,end_id,epoch FROM memory_jobs WHERE status='pending' AND attempts<5 ORDER BY id LIMIT 1"
                     ).fetchone()
@@ -232,6 +243,10 @@ class MemoryPlugin:
                             )
                             self.store.db.commit()
                             self.context.error = str(exc)[:200]
+                            attempts = self.store.db.execute(
+                                "SELECT attempts FROM memory_jobs WHERE id=?", (row[0],)
+                            ).fetchone()[0]
+                            self.retry_after = time.monotonic() + min(300, 30 * 2 ** max(0, attempts - 1))
                         finally:
                             self.current = None
             except asyncio.CancelledError:

@@ -1,6 +1,9 @@
 # Project-specific Codex task model; does not change ~/.codex/config.toml.
 codex_model = "gpt-6.1-sol"
 codex_reasoning_effort = "high"
+# Independent silent Mem0 inference, using the same ChatGPT subscription login.
+memory_model = "gpt-6-luna"
+memory_reasoning_effort = "low"
 # Hardware-free starting point; change to voice after configuring real devices.
 profile = "headless"
 assistant_name = "个人助理"
@@ -8,6 +11,9 @@ realtime_voice = "cove"
 wake_words = ["嘟嘟", "你好嘟嘟"]
 idle_seconds = 60
 minimum_volume = 80
+# Optional daily silence: suppress keyword/gesture wake and all voice feedback.
+# Background tasks keep running. At end, standby resumes; it does not speak.
+# quiet_hours = {start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}
 memory_enabled = true
 memory_auto_capture = true
 # root = "/absolute/path/to/instance"

@@ -10,7 +10,7 @@ def compose(service):
     from .plugins.codex.plugin import CodexPlugin
     from .plugins.gesture import GesturePlugin
     from .memory.service import MemoryPlugin
-    from .memory.basic import BasicMemory
+    from .memory.mem0 import Mem0Memory
 
     from .devices.directory import DeviceDirectory, DevicesPlugin
 
@@ -46,9 +46,13 @@ def compose(service):
         "memory": lambda: MemoryPlugin(
             config,
             store,
-            BasicMemory(config.state_dir / "memory"),
+            Mem0Memory(
+                config.state_dir / "mem0",
+                config.models / "memory-embedding",
+                lambda messages, schema: service.backend.memory_complete(messages, schema),
+                config.workspace,
+            ),
             lambda: service.active or service.backend.busy,
-            lambda sources, existing: service.backend.reflect(sources, existing),
         ),
     }
     from importlib import import_module

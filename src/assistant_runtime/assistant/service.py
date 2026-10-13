@@ -15,6 +15,7 @@ import miniaudio
 import numpy as np
 
 from assistant_runtime.assistant.commands import parse_command
+from assistant_runtime.assistant.quiet import QuietHours
 from assistant_runtime.store import Store
 from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame, DeviceQuery, VideoCapture
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 class AssistantService:
     def __init__(self, config, no_mic=False):
         self.config, self.no_mic = config, no_mic
+        self.quiet_hours = QuietHours.from_settings(config.quiet_hours)
         config.state_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(config.state_dir, 0o700)
         self.lock_file = (config.state_dir / "service.lock").open("w")
@@ -54,12 +56,24 @@ class AssistantService:
 
         self.runtime = compose(self)
 
+    def quiet_active(self):
+        policy = getattr(self, "quiet_hours", None)
+        return bool(policy and policy.active())
+
+    async def _cue(self, error=False):
+        if not self.quiet_active():
+            await self.player.cue(error=error)
+
+    async def _enforce_quiet(self):
+        if self.quiet_active() and self.active:
+            await self.sleep()
+
     def audio_received(self, pcm):
         if isinstance(pcm, AudioFrame):
             if pcm.generation != self.voice.epoch:
                 return
             pcm = pcm.pcm
-        if not self.active:
+        if not self.active or self.quiet_active():
             return
         self.player.feed(pcm)
         if np.max(np.abs(np.frombuffer(pcm, dtype="<i2").astype(np.int32)), initial=0) > 150:
@@ -67,11 +81,11 @@ class AssistantService:
             self.last_activity = self.last_output
 
     async def speak(self, text):
-        if self.active:
+        if self.active and not self.quiet_active():
             await self.voice.say(text)
 
     async def wake(self, preroll=()):
-        if self.active:
+        if self.active or self.quiet_active():
             return
         if getattr(self, "memory", None):
             self.memory.preempt()
@@ -81,7 +95,7 @@ class AssistantService:
         self.last_error = None
         self.wake_count += 1
         self.player.manual_muted = False
-        await self.player.cue()
+        await self._cue()
         self.connect_task = self.context.spawn(self._connect(tuple(preroll)), "voice-connect")
         log.info("wake_detected connecting_native_voice")
 
@@ -91,7 +105,7 @@ class AssistantService:
                 self.voice.device_context = self.devices.context_text()
                 self.voice.memory_context = self.memory.context_text() if self.memory else ""
                 await self.voice.open(preroll)
-                if not self.active:
+                if not self.active or self.quiet_active():
                     await self.voice.close()
                     return
                 self.mode = "active"
@@ -105,7 +119,7 @@ class AssistantService:
                 self.active = False
                 self.mode = "standby"
                 self.recognizer.reset_keyword()
-                await self.player.cue(error=True)
+                await self._cue(error=True)
 
     async def sleep(self):
         self.active = False
@@ -130,6 +144,9 @@ class AssistantService:
     async def _capture(self):
         async for pcm in self.route.frames():
             self.last_frame = time.monotonic()
+            if self.quiet_active():
+                self.preroll.clear()
+                continue
             samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
             self.input_rms = round(float(np.sqrt(np.mean(samples * samples))), 5)
             if not self.active:
@@ -157,7 +174,7 @@ class AssistantService:
         while True:
             event = await self.events.get()
             try:
-                if event["epoch"] != self.voice.epoch or not self.active:
+                if event["epoch"] != self.voice.epoch or not self.active or self.quiet_active():
                     continue
                 if event["kind"] == "transcript":
                     role, text = event["role"], event["text"]
@@ -191,12 +208,12 @@ class AssistantService:
             await self.player.stop()
             for delay in (1, 3, 8):
                 await asyncio.sleep(delay)
-                if not self.active:
+                if not self.active or self.quiet_active():
                     return
                 try:
                     async with self.transition:
                         await self.voice.open()
-                    if not self.active:
+                    if not self.active or self.quiet_active():
                         return
                     self.mode = "active"
                     self.last_error = None
@@ -204,7 +221,7 @@ class AssistantService:
                 except Exception as exc:
                     self.last_error = "Native reconnect failed: " + type(exc).__name__
             await self.sleep()
-            await self.player.cue(error=True)
+            await self._cue(error=True)
         finally:
             self.recovering = False
 
@@ -252,12 +269,17 @@ class AssistantService:
         return {
             "assistant_name": self.config.assistant_name,
             "wake_words": self.config.wake_words,
+            "quiet_hours": {"settings": self.config.quiet_hours, "active": self.quiet_active()},
             "wake_detector": self.recognizer.diagnostics(),
             "service": "running",
             "plugins": self.runtime.health(),
             "devices": self.devices.list(),
             "memory": {
                 "ready": bool(self.memory and self.memory.ready),
+                "requested_model": self.config.memory_model,
+                "requested_reasoning_effort": self.config.memory_reasoning_effort,
+                "model": self.backend.resolved_memory_model,
+                "reasoning_effort": self.backend.resolved_memory_reasoning_effort,
                 "pending_jobs": self.store.db.execute(
                     "SELECT count(*) FROM memory_jobs WHERE status IN ('pending','running')"
                 ).fetchone()[0],
@@ -290,6 +312,7 @@ class AssistantService:
     async def _maintenance(self):
         while True:
             await asyncio.sleep(1)
+            await self._enforce_quiet()
             if (
                 self.active
                 and not self.backend.busy

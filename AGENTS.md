@@ -8,7 +8,7 @@
 - Wake word, assistant display name, output names and hardware identities are instance configuration.
 - Event notifications must not wait for device reconnect, model inference, or memory retrieval.
 - Track background work and resource cleanup through plugin contexts. Never replay uncertain user tasks.
-- Memory uses the upstream Basic Memory adapter. Do not create a second vector database or custom ranking algorithm.
+- Memory uses upstream Mem0, driven by the official Codex subscription task interface with local embeddings. Do not create a second live vector database, HTTP model proxy, or custom extraction/dedup/ranking algorithm.
 - Before changing memory capture, test source validation, corrections, deletion, stale jobs and retries.
 - A passing fake test does not establish real-device success. Record integration evidence separately.
 - Run `.venv/bin/python scripts/check.py` before deployment. All code uses one `.venv`.

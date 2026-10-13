@@ -13,8 +13,8 @@ flowchart LR
   Brain --> MCP[Local MCP capability facade]
   MCP --> Kernel
   Kernel --> Memory[Memory policy / durable capture jobs]
-  Memory --> BM[Basic Memory stdio process]
-  Memory --> Curator[Separate silent Codex context]
+  Memory --> BM[Mem0 worker: local vectors and history]
+  BM --> Curator[Official Codex subscription task callback]
 ```
 
 | Location | Owns | Must not own |
@@ -39,6 +39,7 @@ Audio uses a separate bounded path. Format/rate/time/connection generation are e
 
 - `wake_words` selects equivalent phrases supported by the installed FSMN V2 bundle, handled by one KWS stream and one activation path. The keyword plugin owns 80ms batching, bounded native features/CTC history, one ONNX inference thread and checksum validation. Inference runs off the event loop; generation changes invalidate results across sleep/session resets. The inference-only upstream FunASR decoder is vendored with its MIT license, without a Torch/FunASR runtime dependency. Local commands strip any configured leading phrase before parsing.
 - Assistant owns standby → connecting → active → reconnecting → standby. Only explicit wake/trigger activates it. Background work never activates voice.
+- Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
 - Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation remains the sole task dispatcher; transcripts are not dispatched a second time.
 - The audio adapter owns selected output and device availability. It reconnects that output and never silently changes rooms.
 - The player owns queue/epoch/mute state. Stop, cancel-task and end-session are distinct operations.
@@ -48,13 +49,17 @@ Disconnect recovery runs as a tracked task, leaving the event consumer available
 
 ## Long-term memory
 
-The default backend is Basic Memory 0.23.0, via the official MCP SDK and stdio, in a child process using the **same `.venv`**. Its auto-update and cloud routing are disabled. FastEmbed runs the multilingual MiniLM model locally, with 384-dimensional embeddings and no reranker/API key. Upstream Markdown and indexes are the source of retrieval; host SQLite only stores capture jobs, revisions and tombstones. A provider protocol supports `search/read/upsert/delete/export/import`; unit tests run it with a second in-memory implementation.
+The default backend is Mem0 1.0.11, using its original ADD/UPDATE/DELETE/NONE workflow. Version 2.2.1 uses additive automatic ingestion and was not selected for this application’s correction/merge contract. A trusted worker in the **same `.venv`** owns one embedded local Qdrant store and Mem0’s SQLite history. Telemetry and remote provider defaults are disabled. A thin FastEmbed provider uses the existing multilingual MiniLM model, 384 dimensions, two threads and an explicit local-only cache under `models/memory-embedding/`.
 
-Explicit memory operations run through the capability handler. Automatic capture batches new transcripts on end-session/task-completion. A separate, ephemeral, read-only Codex context proposes structured facts while the foreground is idle. It has no local capability tools; waking preempts its task. The host checks source IDs and verbatim evidence, bounds size/scope, requires revision matches for corrections and applies idempotent writes. Source checks verify provenance, not semantic truth; model selection of stable facts remains subject to evaluation.
+The worker's registered LLM provider sends a bounded internal callback to the host. The host submits a silent, tool-free, ephemeral JSON task to the existing official Codex App Server over stdio and checks that the account is ChatGPT before inference. This is application-internal IPC, not an OpenAI-compatible HTTP server, credential exporter or public model service. Memory inference uses independent project `memory_model` / `memory_reasoning_effort` settings, separate from foreground task settings; no API key fallback is implemented. Calls are serialized. Failed automatic jobs have bounded retries with exponential backoff and foreground wake preempts work.
 
-Memory metadata includes logical ID, scope, time, source and revision and is stored in Markdown frontmatter. Metadata is excluded from embedding text. Explicit corrections invalidate older capture batches. Forget records a tombstone **before** upstream deletion; reads, recall and export hide it even when deletion fails. Old batches and imports cannot revive tombstoned IDs. Pending physical deletes are retried. Chat transcripts and provider history are not erased by forgetting long-term memory.
+Mem0 owns fact extraction, related-memory retrieval, deduplication and change decisions. Application policy supplies scope/persistence instructions and validates that each proposed fact has an exact quote from an actual user transcript. Assistant responses and provider-reported task completion are excluded from automatic evidence. Explicit remember/correct/forget remains an authorized capability; a current revision is required when correcting a record, and scope cannot silently change. These provenance checks do not prove semantic truth.
 
-A bounded ready snapshot is supplied at wake without waiting on retrieval. Additional relevant recall is available through the memory tool. Export transfers portable facts and provenance, not embeddings; another backend or embedding model must rebuild its own index. Memory failure must be reported as unavailable/pending, never as a successful save.
+The application keeps logical IDs, revisions and tombstones in host SQLite and portable metadata in Mem0. Native write results are checked by readback. Bounded receipts make completed automatic source batches idempotent across worker restart; uncertain partial writes remain visible for reconciliation rather than being claimed as a completed batch. Canceling an operation closes the owned worker before its lock is released, preventing late canceled writes from racing an explicit correction/forget. A committed native fact whose application metadata attachment was interrupted is recovered from its bounded original source batch.
+
+Forget writes a tombstone before physical deletion; reads, recall and export exclude it even if deletion fails. Old jobs/imports cannot revive its logical ID, and cleanup retries deletions. Foreground wake context still uses at most eight cached facts, without waiting for embedding/model startup. User and per-workspace project namespaces are isolated by upstream entity filters. The provider contract retains search/read/upsert/delete/export/import and adds automatic capture. Export moves facts/provenance, not embeddings; another backend must rebuild its index.
+
+One-off migration is performed from a private backup: explicit records are retained; automatic records are copied locally only when their original user evidence is verified. Historical content is not sent to the model for re-extraction. Legacy model reports are kept in the backup, not promoted to verified facts. Old code and its dependency are removed after verification; no parallel Basic Memory index or compatibility layer is used at runtime.
 
 ## Extension and deployment
 

@@ -25,6 +25,8 @@ model_dir = "/path/to/wake-models"
 codex_binary = "/path/to/codex"
 codex_model = "gpt-6.1-sol"
 codex_reasoning_effort = "high"
+memory_model = "gpt-6-luna"
+memory_reasoning_effort = "low"
 realtime_voice = "cove"
 assistant_name = "个人助理"
 wake_words = ["嘟嘟", "你好嘟嘟"]
@@ -47,9 +49,11 @@ location = "书房"
 address = "AA:BB:CC:DD:EE:FF" # or sink = "exact PipeWire sink name"
 ```
 
-`codex_model` and `codex_reasoning_effort` explicitly select this project's background task model and reasoning effort. They apply to new/resumed foreground threads, task turns and silent memory maintenance; they do not edit the user's global Codex settings. Use model/effort values supported by the installed Codex and account. `realtime_voice` selects the native voice timbre; these task settings do not select the separate realtime voice model. After editing `config.toml`, run `personal-agent --config config.toml restart`. `status` includes provider-returned model/effort, requested model/effort and configured voice; an unavailable returned field is null rather than guessed.
+`codex_model` and `codex_reasoning_effort` select the foreground task model and effort. Mem0 extraction and ADD/UPDATE/DELETE/NONE decisions independently use `memory_model` and `memory_reasoning_effort` (default `gpt-6-luna` / `low`), through the same official ChatGPT subscription login. Changing one pair does not change the other; global Codex settings are untouched. Use values supported by the installed Codex and account. There is no paid API or automatic model fallback; a lighter model does not imply a specific subscription quota saving or measured latency. Local embeddings remain independent. `realtime_voice` selects the voice timbre, not its model. After editing `config.toml`, run `personal-agent --config config.toml restart`. `status` reports task settings and voice, while its `memory` section reports requested and last provider-returned memory model/effort; unavailable returned fields are null rather than guessed.
 
 `minimum_volume` raises readable channels below the floor, preserves louder channels and skips unknown volume. There is no extra gain/limiter. Output loss does not route audio to another room. Native audio uses Chromium WebRTC and optional WebRTC AEC3; the wake model receives the original mic stream.
+
+Optional `quiet_hours = {start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}` suppresses keyword/gesture activation, speech PCM, confirmations and wake/error chimes in that local-time interval. Start is inclusive and end exclusive; overnight intervals cross midnight. The one-second maintenance loop clears queued playback and closes an active voice session, preserving background tasks. At the end the assistant stays in standby until explicitly awakened. This does not change device volume or wake sensitivity. Omit the setting or use an empty table to disable it. Configuration changes require a service reload/restart; this setting currently has no voice-command override.
 
 For a core-only, hardware-free installation use `uv sync --locked`; `profile="headless"` runs management/explicit-trigger validation without voice, models, Codex or memory. Missing capabilities are reported rather than simulated as completed tasks.
 
@@ -103,7 +107,7 @@ Linux USB video uses the optional [V4L2 adapter](src/assistant_runtime/plugins/v
 
 ## Memory
 
-Basic Memory runs locally in a child process using the same environment. First use downloads its multilingual embedding model; prepare it before daily use with `scripts/prepare_memory.py --config config.toml`. It stores Markdown and local indexes below `state/memory/`. Default automatic capture proposes sourced facts/preferences after dialogue or completed tasks, only while idle. It can fail or be interrupted without interrupting speech.
+Mem0 1.0.11 runs locally in a worker using the same environment. Prepare its multilingual embedding cache with `scripts/prepare_memory.py --config config.toml`. Embeddings stay under `models/memory-embedding/`; local vectors and Mem0 history live under `state/mem0/`. Mem0 owns automatic extraction and dedup/update decisions. Its model provider calls the existing official Codex App Server through internal stdio callbacks using ChatGPT login; no API key, HTTP model proxy or hosted Mem0 account is required. Automatic jobs use original user evidence, run while idle and are preempted by wake. Failures are retried with bounded backoff.
 
 ```sh
 .venv/bin/personal-agent memory search '{"query":"饮品偏好","scope":"user"}'
@@ -128,12 +132,13 @@ The pre-refactor Git tag is `baseline-before-refactor`. Code rollback must prese
 
 ## Maintenance scripts and local artifacts
 
-`scripts/` contains six reusable entries:
+`scripts/` contains reusable installation, preparation and acceptance entries:
 
 - `check.py`: formatting, lint, kernel typing and runtime contract tests.
 - `install_service.py`: render/install the user systemd unit.
 - `download_models.py`: validate/install the current FSMN bundle and prepare VAD.
-- `prepare_memory.py`: initialize the local memory service/model.
+- `prepare_memory.py`: initialize local Mem0 and its embedding model, without inference or user facts.
+- `verify_memory.py`: repeat real Mem0/ChatGPT-subscription acceptance with isolated synthetic facts and actual MCP queries.
 - `verify_device_onboarding.py`: explicit microphone/speaker acoustic and Codex capability acceptance.
 - `verify_video_onboarding.py`: explicit camera capture, restart and optionally authorized Codex image acceptance.
 

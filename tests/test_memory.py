@@ -12,11 +12,13 @@ from assistant_runtime.store import Store
 
 
 class FakeMemory:
-    """Contract test backend: proves policy does not depend on Basic Memory or vectors."""
+    """Contract test backend: policy is independent of Mem0 and its vector store."""
 
     def __init__(self):
         self.records = {}
         self.fail_delete = False
+        self.inference = AsyncMock(return_value=[])
+        self.capture_calls = 0
 
     async def start(self):
         pass
@@ -41,6 +43,26 @@ class FakeMemory:
     async def search(self, query, scope):
         return [r for r in await self.export() if query in r["text"] and r["scope"] == scope]
 
+    async def capture(self, sources, scope, project, job_id):
+        from assistant_runtime.memory.policy import validate_facts
+
+        self.capture_calls += 1
+        if scope == "project":
+            return {"records": await self.export(), "deleted": []}
+        candidates = await self.inference(sources, [])
+        response = {
+            "facts": [c["text"] for c in candidates],
+            "provenance": [
+                {"fact": c["text"], "source_id": c["source_id"], "evidence": c["evidence"]}
+                for c in candidates
+            ],
+        }
+        evidence = validate_facts(response, sources)
+        for candidate in candidates:
+            self.records[candidate["id"]] = {k: candidate[k] for k in ("id", "title", "text", "scope")}
+            self.records[candidate["id"]].update(revision=1, updated=1, source=evidence[candidate["text"]])
+        return {"records": await self.export(), "deleted": []}
+
     async def import_records(self, records):
         for r in records:
             await self.upsert(r)
@@ -52,9 +74,9 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.path = Path(self.tmp.name) / "state.db"
         self.store = Store(self.path)
         self.provider = FakeMemory()
-        self.curator = AsyncMock(return_value=[])
+        self.curator = self.provider.inference
         self.plugin = MemoryPlugin(
-            SimpleNamespace(memory_auto_capture=True), self.store, self.provider, lambda: False, self.curator
+            SimpleNamespace(memory_auto_capture=True), self.store, self.provider, lambda: False
         )
 
     def tearDown(self):
@@ -92,9 +114,7 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.provider.read("tea"))["revision"], 1)
         self.store.db.close()
         self.store = Store(self.path)
-        p = MemoryPlugin(
-            SimpleNamespace(memory_auto_capture=True), self.store, self.provider, lambda: False, self.curator
-        )
+        p = MemoryPlugin(SimpleNamespace(memory_auto_capture=True), self.store, self.provider, lambda: False)
         await p.refresh()
         self.assertIn("乌龙茶", p.context_text())
 
@@ -142,8 +162,9 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.enqueue()
         job = self.store.db.execute("SELECT id,start_id,end_id,epoch FROM memory_jobs").fetchone()
         self.curator.return_value = [self.candidate()]
-        with self.assertRaises(ValueError):
-            await self.plugin.process_job(job)
+        await self.plugin.process_job(job)
+        self.curator.assert_not_awaited()
+        self.assertEqual(await self.provider.export(), [])
 
     async def test_export_import_uses_provider_contract(self):
         await self.call("remember", id="tea", title="偏好", text="乌龙茶", scope="user")

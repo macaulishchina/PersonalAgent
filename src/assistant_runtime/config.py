@@ -6,6 +6,8 @@ import os
 import re
 import tomllib
 
+from assistant_runtime.assistant.quiet import QuietHours
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -23,11 +25,14 @@ class Config:
     codex_binary: str = "codex"
     codex_model: str = "gpt-6.1-sol"
     codex_reasoning_effort: str = "high"
+    memory_model: str = "gpt-6-luna"
+    memory_reasoning_effort: str = "low"
     codex_sandbox: str = "workspace-write"
     approval_policy: str = "never"
     assistant_name: str = "个人助理"
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
+    quiet_hours: dict[str, str] = field(default_factory=dict)
     input_device: str = ""
     default_output: str = ""
     minimum_volume: int = 80
@@ -49,7 +54,14 @@ class Config:
     memory_auto_capture: bool = True
 
     def __post_init__(self):
-        for name in ("codex_model", "codex_reasoning_effort", "realtime_voice"):
+        QuietHours.from_settings(self.quiet_hours)
+        for name in (
+            "codex_model",
+            "codex_reasoning_effort",
+            "memory_model",
+            "memory_reasoning_effort",
+            "realtime_voice",
+        ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a nonempty string")

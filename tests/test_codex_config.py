@@ -17,12 +17,21 @@ class ProjectModelConfigTest(unittest.IsolatedAsyncioTestCase):
             path.write_text(
                 'profile="headless"\ncodex_model="chosen-model"\n'
                 'codex_reasoning_effort="low"\nrealtime_voice="cove"\n'
+                'memory_model="memory-model"\nmemory_reasoning_effort="medium"\n'
             )
             config = Config.load(path)
             self.assertEqual(config.codex_model, "chosen-model")
             self.assertEqual(config.codex_reasoning_effort, "low")
             self.assertEqual(config.realtime_voice, "cove")
-        for key in ("codex_model", "codex_reasoning_effort", "realtime_voice"):
+            self.assertEqual(config.memory_model, "memory-model")
+            self.assertEqual(config.memory_reasoning_effort, "medium")
+        for key in (
+            "codex_model",
+            "codex_reasoning_effort",
+            "realtime_voice",
+            "memory_model",
+            "memory_reasoning_effort",
+        ):
             for value in ("", " ", None, 1):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     Config(**{key: value})
@@ -61,21 +70,39 @@ class ProjectModelConfigTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(params["threadId"], saved or "new-thread")
                 store.db.close()
 
-    async def test_memory_maintenance_uses_same_settings(self):
-        config = Config(codex_model="chosen-model", codex_reasoning_effort="low")
+    async def test_memory_maintenance_uses_independent_settings(self):
+        config = Config(
+            codex_model="task-model",
+            codex_reasoning_effort="high",
+            memory_model="memory-model",
+            memory_reasoning_effort="low",
+        )
         backend = CodexBackend(config, None, AsyncMock(), AsyncMock())
 
         async def request(method, params, **kwargs):
+            if method == "account/read":
+                return {"account": {"type": "chatgpt"}}
             if method == "thread/start":
-                self.assertEqual(params["model"], "chosen-model")
+                self.assertEqual(params["model"], "memory-model")
                 self.assertEqual(params["config"]["model_reasoning_effort"], "low")
                 self.assertEqual(params["sandbox"], "read-only")
-                return {"thread": {"id": "maintenance"}}
+                return {
+                    "thread": {"id": "maintenance"},
+                    "model": "resolved-memory-model",
+                    "reasoningEffort": "low",
+                }
             if method == "turn/start":
-                self.assertEqual((params["model"], params["effort"]), ("chosen-model", "low"))
-                backend.maintenance_result.set_result('{"memories": []}')
+                self.assertEqual((params["model"], params["effort"]), ("memory-model", "low"))
+                backend.maintenance_result.set_result('{"facts": []}')
                 return {"turn": {"id": "maintenance-turn"}}
             return {}
 
         backend.client.request = AsyncMock(side_effect=request)
-        self.assertEqual(await backend.reflect([], []), [])
+        self.assertEqual(await backend.memory_complete([], {"type": "object"}), {"facts": []})
+        self.assertEqual(backend.resolved_memory_model, "resolved-memory-model")
+        self.assertEqual(backend.resolved_memory_reasoning_effort, "low")
+        self.assertIsNone(backend.resolved_model)
+
+    def test_memory_defaults_do_not_follow_task_settings(self):
+        config = Config(codex_model="task-only-model", codex_reasoning_effort="ultra")
+        self.assertEqual((config.memory_model, config.memory_reasoning_effort), ("gpt-6-luna", "low"))
