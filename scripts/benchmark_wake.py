@@ -326,9 +326,9 @@ async def live_probe(config, output, seconds):
     sources = [
         s["name"]
         for s in json.loads(stdout)
-        if config.source_match in s["name"] and not s["name"].endswith(".monitor")
+        if config.microphone_match in s["name"] and not s["name"].endswith(".monitor")
     ]
-    if not config.source_match or len(sources) != 1:
+    if not config.microphone_match or len(sources) != 1:
         raise RuntimeError("Configure one unambiguous raw microphone identity")
     with tempfile.TemporaryDirectory(prefix="wake-live-", dir=config.state_dir) as temporary:
         isolated = replace(config, root=Path(temporary), model_dir=str(config.models))

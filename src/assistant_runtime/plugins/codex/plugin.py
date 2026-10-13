@@ -7,7 +7,7 @@ from .native import NativeVoice
 
 
 class CodexPlugin:
-    manifest = Manifest("codex", critical=True)
+    manifest = Manifest("codex", ("devices",), critical=True)
 
     def __init__(self, config, store, on_audio, on_event, speak, control):
         self.backend = CodexBackend(config, store, speak, control)

@@ -211,13 +211,13 @@ async def record_rooms(config, folder, rooms=None):
         raw = [
             s["name"]
             for s in sources
-            if config.source_match in s["name"] and not s["name"].endswith(".monitor")
+            if config.microphone_match in s["name"] and not s["name"].endswith(".monitor")
         ]
         if len(raw) != 1:
             raise RuntimeError("Ambiguous microphone identity")
         sinks = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
-        for room in rooms or config.speakers:
-            target = config.speakers[room]
+        for room in rooms or config.output_connections:
+            target = config.output_connections[room]
             sink = next(
                 (
                     s
@@ -230,7 +230,7 @@ async def record_rooms(config, folder, rooms=None):
                 print(f"room unavailable: {room}", flush=True)
                 continue
             volume = {k: v.get("value") for k, v in sink.get("volume", {}).items()}
-            levels = (0.75, 0.35) if room == config.default_room else (0.75,)
+            levels = (0.75, 0.35) if room == config.default_output else (0.75,)
             for level in levels:
                 for item in chosen:
                     samples = load_wav(item["path"]) * level
@@ -358,7 +358,7 @@ def main():
             parser.error("prepare requires --tts-dir")
         prepare(config, args.folder, args.tts_dir)
     else:
-        if args.rooms and set(args.rooms) - config.speakers.keys():
+        if args.rooms and set(args.rooms) - config.output_connections.keys():
             parser.error("--rooms must name configured outputs")
         asyncio.run(record_rooms(config, args.folder, args.rooms))
 

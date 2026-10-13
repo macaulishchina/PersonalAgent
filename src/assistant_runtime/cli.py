@@ -60,6 +60,9 @@ def main():
     for name in ["room", "gesture"]:
         sub.add_parser(name).add_argument("value")
     sub.add_parser("volume").add_argument("value", type=int, choices=range(101), metavar="0..100")
+    devices = sub.add_parser("devices")
+    devices.add_argument("action", choices=["list", "inspect"], nargs="?", default="list")
+    devices.add_argument("device_id", nargs="?")
     memory = sub.add_parser("memory")
     memory.add_argument("action", choices=["search", "read", "remember", "forget", "export", "import"])
     memory.add_argument(

@@ -27,6 +27,20 @@ class MemoryRequest:
 
 
 @dataclass(frozen=True)
+class DeviceQuery:
+    action: str = "list"
+    device_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DeviceObservation:
+    state: str
+    data: dict[str, Any] = field(default_factory=dict)
+    observed_at: float = field(default_factory=time.time)
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class Event:
     kind: str
     source: str

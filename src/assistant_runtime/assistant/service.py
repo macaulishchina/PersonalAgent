@@ -14,7 +14,7 @@ import numpy as np
 
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.store import Store
-from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame
+from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame, DeviceQuery
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ class AssistantService:
     async def _connect(self, preroll):
         async with self.transition:
             try:
+                self.voice.device_context = self.devices.context_text()
                 self.voice.memory_context = self.memory.context_text() if self.memory else ""
                 await self.voice.open(preroll)
                 if not self.active:
@@ -164,7 +165,7 @@ class AssistantService:
                         self.backend.last_user_text = text
                         self.input_count += 1
                         self.last_activity = time.monotonic()
-                        cmd = parse_command(text, self.config.room_labels, self.config.wake_words)
+                        cmd = parse_command(text, self.config.output_aliases, self.config.wake_words)
                         if cmd:
                             await self.control(cmd)
                 elif event["kind"] == "user_turn":
@@ -229,7 +230,7 @@ class AssistantService:
         elif cmd.kind == "room":
             await self.player.stop(suppress=False)
             await self.route.select(cmd.value)
-            await self.speak("已切换到" + self.config.room_labels.get(cmd.value, cmd.value) + "。")
+            await self.speak("已切换到" + self.config.output_labels.get(cmd.value, cmd.value) + "。")
         elif cmd.kind == "volume":
             await self.route.set_volume(cmd.value)
             await self.speak("音量已调整。")
@@ -252,6 +253,7 @@ class AssistantService:
             "wake_detector": self.recognizer.diagnostics(),
             "service": "running",
             "plugins": self.runtime.health(),
+            "devices": self.devices.list(),
             "memory": {
                 "ready": bool(self.memory and self.memory.ready),
                 "pending_jobs": self.store.db.execute(
@@ -309,6 +311,13 @@ class AssistantService:
                 await self.runtime.invoke(Control(action, d.get("value")))
             elif action == "gesture":
                 await self.runtime.plugins["gesture"].simulate(d.get("value", "wave"))
+            elif action == "devices":
+                result = await self.runtime.invoke(DeviceQuery(d.get("action", "list"), d.get("device_id")))
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
             elif action == "memory":
                 result = await self.runtime.invoke(
                     MemoryRequest(d["action"], d.get("arguments", {})), timeout=90

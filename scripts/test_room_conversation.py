@@ -96,7 +96,7 @@ async def main():
         physical = next(
             x["name"]
             for x in sources
-            if config.source_match in x["name"] and not x["name"].endswith(".monitor")
+            if config.microphone_match in x["name"] and not x["name"].endswith(".monitor")
         )
         tasks.append(asyncio.create_task(record(physical, raw, raw_times)))
         p = await asyncio.create_subprocess_exec(

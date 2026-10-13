@@ -37,7 +37,7 @@ async def main():
     assert initial["mode"] == "standby" and not initial["task_running"]
     count = task_count()
     started = time.monotonic()
-    disconnected = await command("bluetoothctl", "disconnect", c.speakers[initial["room"]])
+    disconnected = await command("bluetoothctl", "disconnect", c.output_connections[initial["room"]])
     samples = []
     # Let the service observe disappearing audio nodes and reconnect itself.
     for _ in range(20):

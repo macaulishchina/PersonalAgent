@@ -1,16 +1,20 @@
 from ...kernel.runtime import Manifest
 from .audio import AudioRoute
 from .stream_audio import StreamPlayer
+from .devices import PipeWireDevices
 
 
 class PipeWirePlugin:
     manifest = Manifest("pipewire")
 
-    def __init__(self, config, store):
+    def __init__(self, config, store, directory):
         self.route = AudioRoute(config, store)
         self.player = StreamPlayer(self.route)
+        self.devices = PipeWireDevices(config, self.route, directory)
 
     async def start(self, context):
+        self.devices.register()
+        context.spawn(self.devices.run(context), "device-observer")
         context.own(self.route.close)
         context.own(self.player.stop)
         context.spawn(self.player.run(), "playback")

@@ -89,9 +89,28 @@ class TaskTest(unittest.IsolatedAsyncioTestCase):
 
 def device_config(**kw):
     return Config(
-        source_match="UGREEN_Camera_2K",
-        default_room="living",
-        speakers={"living": "4C:C6:4C:97:78:4A", "study": "8C:53:C3:7F:18:7C"},
+        input_device="living_microphone",
+        default_output="living",
+        devices={
+            "living_microphone": {
+                "adapter": "pipewire",
+                "kind": "microphone",
+                "label": "客厅麦克风",
+                "connection": {"match": "UGREEN_Camera_2K"},
+            },
+            "living": {
+                "adapter": "pipewire",
+                "kind": "speaker",
+                "label": "客厅音箱",
+                "connection": {"address": "4C:C6:4C:97:78:4A"},
+            },
+            "study": {
+                "adapter": "pipewire",
+                "kind": "speaker",
+                "label": "书房音箱",
+                "connection": {"address": "8C:53:C3:7F:18:7C"},
+            },
+        },
         **kw,
     )
 

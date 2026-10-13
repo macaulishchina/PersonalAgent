@@ -41,12 +41,18 @@ def parse_command(text, room_labels=None, wake_words=()):
         return Control("sleep")
     if s in {"现在进度", "进度怎么样", "做完了吗", "任务进度", "现在做到哪了"}:
         return Control("progress")
-    for ident, label in (room_labels or {}).items():
-        room = re.escape(label)
-        if re.fullmatch(rf"(?:切换到?|换到?|使用|用)({room})(?:音箱|播放|播报)?", s) or re.fullmatch(
-            rf"(?:在)?({room})(?:音箱)?(?:播放|播报|回答)", s
-        ):
-            return Control("room", ident)
+    matching_outputs = set()
+    for ident, labels in (room_labels or {}).items():
+        for label in [labels] if isinstance(labels, str) else labels:
+            room = re.escape(normalize(label))
+            if re.fullmatch(rf"(?:切换到?|换到?|使用|用)({room})(?:音箱|播放|播报)?", s) or re.fullmatch(
+                rf"(?:在)?({room})(?:音箱)?(?:播放|播报|回答)", s
+            ):
+                matching_outputs.add(ident)
+    if len(matching_outputs) == 1:
+        return Control("room", matching_outputs.pop())
+    if matching_outputs:
+        return None  # Delegate ambiguous room names; never choose the first device.
     if s in {"音量最大", "声音调到最大", "音量调到最大"}:
         return Control("volume", 100)
     if s in {"静音", "音量最小", "关闭声音"}:

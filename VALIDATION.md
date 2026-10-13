@@ -104,3 +104,17 @@ The keyword plugin now runs only FSMN V2 (model SHA256 `2840475733854f8a751256c3
 - Review fixed pure benchmark accounting imports that previously required optional `pypinyin`/`psutil` packages. A subprocess test blocks benchmark-only packages and confirms the accounting helpers still import and work.
 - Full gate: 76 tests pass, Ruff formatting/lint and kernel Mypy pass; `uv lock --check --offline` passes. `uv build --offline --wheel` succeeds and includes the FSMN runtime, authored cue, and upstream MIT license.
 - Model weights, recordings, generated reports, local TOML, runtime state and build outputs remain ignored by Git.
+
+
+## Standard hardware onboarding — 2026-10-13
+
+The microphone and existing speakers now use `devices.<logical_id>` configuration, adapter registration into `DeviceDirectory`, typed `DeviceQuery` calls and timestamped `DeviceObservation` snapshots. Old top-level source/speaker configuration maps are removed. PipeWire validates its own connections; CLI and Codex's read-only device list/inspect share the same capability owner. Passive probes do not send audio or activate voice.
+
+- 88 development tests pass, including duplicate/foreign/disabled registration, missing registration, stale/unknown/error observations, detached snapshots, blocked probes, ambiguous physical identities and multiple outputs sharing one room name.
+- Real integration passes: mic registration and actual capture; authored speaker chime independently detected in the physical microphone (normalized correlation 0.777, 3.62-second capture). No raw audio was saved.
+- Deliberate Bluetooth disconnection yields unavailable; microphone stays present; reconnection restores the intended output without room substitution.
+- An actual isolated Codex thread completes all three MCP calls: list devices, inspect living_microphone, inspect living. Queries traverse the real management socket, shared runtime capability handler and adapter. Temporary state/provider context prevents test conversation/memory contamination.
+- The installed service is restored and explicitly restarted. Devices register again, mic capture is recent, audio is ready, FSMN V2 remains selected, provider session is unchanged and existing task rows are unchanged.
+- Evidence: `state/acceptance/device-onboarding/{real-devices,production-restart}.json`, generated `reports/DEVICE_ONBOARDING.html`. Live USB unplug/replug, machine reboot and 24-hour stability are not part of this acceptance.
+
+- Post-deployment resource/query smoke: 10.17 seconds, host-main CPU 5.03% of six-core machine capacity, RSS 139.53 → 139.73 MiB. Repeated directory inspections leave wake count at 0 and mode at standby. This includes local voice/audio processing, excludes provider/memory children and is not a long-duration stability result. Evidence: `resource-smoke.json` and `final-status.json` in the onboarding acceptance folder.

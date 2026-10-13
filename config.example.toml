@@ -1,12 +1,10 @@
 # Project-specific Codex task model; does not change ~/.codex/config.toml.
 codex_model = "gpt-6.1-sol"
 codex_reasoning_effort = "high"
-# Hardware-free starting point. For actual voice set profile="voice", source_match,
-# speakers, default_room, and install the voice/memory extras and wake models.
+# Hardware-free starting point; change to voice after configuring real devices.
 profile = "headless"
 assistant_name = "个人助理"
 realtime_voice = "cove"
-# FSMN V2 bundle supports these phrases; arbitrary new phrases need a trained bundle.
 wake_words = ["嘟嘟", "你好嘟嘟"]
 idle_seconds = 60
 minimum_volume = 80
@@ -14,11 +12,20 @@ memory_enabled = true
 memory_auto_capture = true
 # root = "/absolute/path/to/instance"
 # workspace = "/absolute/path/to/your/workspace"
-# codex_binary = "/absolute/path/to/codex"
 # model_dir = "/absolute/path/to/wake-models"
-# source_match = "stable USB microphone identity"
-# default_room = "office"
-# [speakers]
-# office = "AA:BB:CC:DD:EE:FF"  # Bluetooth MAC or exact PipeWire sink name
-# [room_labels]
-# office = "书房"
+# input_device = "office_microphone"
+# default_output = "office_speaker"
+# [devices.office_microphone]
+# adapter = "pipewire"
+# kind = "microphone"
+# label = "书房麦克风"
+# location = "书房"
+# [devices.office_microphone.connection]
+# match = "stable USB microphone identity"
+# [devices.office_speaker]
+# adapter = "pipewire"
+# kind = "speaker"
+# label = "书房音箱"
+# location = "书房"
+# [devices.office_speaker.connection]
+# address = "AA:BB:CC:DD:EE:FF"  # or sink = "exact PipeWire sink name"

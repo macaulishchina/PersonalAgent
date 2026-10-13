@@ -12,10 +12,13 @@ def compose(service):
     from .memory.service import MemoryPlugin
     from .memory.basic import BasicMemory
 
+    from .devices.directory import DeviceDirectory, DevicesPlugin
+
     config, store = service.config, service.store
+    service.devices = DeviceDirectory(config.devices)
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
     factories = {
-        "pipewire": lambda: PipeWirePlugin(config, store),
+        "pipewire": lambda: PipeWirePlugin(config, store, service.devices),
         "keyword": lambda: KeywordPlugin(config),
         "codex": lambda: CodexPlugin(
             config, store, service.audio_received, service.events.put, service.speak, service.tool_control
@@ -48,6 +51,7 @@ def compose(service):
                 raise ValueError("Plugin manifest name must match its registry name")
             runtime.add(plugin)
     runtime.bindings = {k: v for k, v in runtime.bindings.items() if v in runtime.plugins}
+    runtime.add(DevicesPlugin(service.devices))
     runtime.add(
         AssistantPlugin(service, tuple(config.bindings[key] for key in ("audio", "trigger", "brain")))
     )

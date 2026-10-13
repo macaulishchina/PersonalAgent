@@ -73,12 +73,14 @@ async def record(config, folder, prompts, seconds, lead_in, groups):
         raise RuntimeError("Assistant is busy; wait until idle")
     sources = json.loads(await command("pactl", "-f", "json", "list", "sources"))
     raw = [
-        s["name"] for s in sources if config.source_match in s["name"] and not s["name"].endswith(".monitor")
+        s["name"]
+        for s in sources
+        if config.microphone_match in s["name"] and not s["name"].endswith(".monitor")
     ]
     if len(raw) != 1:
         raise RuntimeError("Ambiguous microphone")
     sinks = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
-    identity = config.speakers[before["room"]]
+    identity = config.output_connections[before["room"]]
     sink = next(
         (
             s["name"]

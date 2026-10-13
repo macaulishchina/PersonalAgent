@@ -2,7 +2,7 @@
 
 A local, reactive personal assistant for Linux. The current brain is Codex with the existing ChatGPT subscription: native voice, task execution and persistent task context. Local plugins supply microphones, speakers, wake detection and long-term memory. The application is not named after its wake word or deployment machine.
 
-See [architecture](ARCHITECTURE.md), [requirements](REQUIREMENTS.md), [validation](VALIDATION.md), [wake-word evaluation](reports/WAKE_EVALUATION.md), the [ASR candidate CPU comparison](reports/ASR_CANDIDATE_COMPARISON.html) ([full text](reports/ASR_CANDIDATE_COMPARISON.md)), the [human-voice comparison](reports/WAKE_HUMAN_COMPARISON.html) ([full text](reports/WAKE_HUMAN_COMPARISON.md)), and the [synthetic-voice comparison](reports/WAKE_MODEL_COMPARISON.html) ([full text](reports/WAKE_MODEL_COMPARISON.md)).
+See [architecture](ARCHITECTURE.md), the [hardware onboarding standard](ARCHITECTURE.md#hardware-onboarding-standard), [requirements](REQUIREMENTS.md), [validation](VALIDATION.md), [wake-word evaluation](reports/WAKE_EVALUATION.md), the [ASR candidate CPU comparison](reports/ASR_CANDIDATE_COMPARISON.html) ([full text](reports/ASR_CANDIDATE_COMPARISON.md)), the [human-voice comparison](reports/WAKE_HUMAN_COMPARISON.html) ([full text](reports/WAKE_HUMAN_COMPARISON.md)), and the [synthetic-voice comparison](reports/WAKE_MODEL_COMPARISON.html) ([full text](reports/WAKE_MODEL_COMPARISON.md)).
 
 ## Install
 
@@ -28,13 +28,23 @@ codex_reasoning_effort = "high"
 realtime_voice = "cove"
 assistant_name = "个人助理"
 wake_words = ["嘟嘟", "你好嘟嘟"]
-source_match = "stable microphone identity"
-default_room = "office"
+input_device = "office_microphone"
+default_output = "office"
 minimum_volume = 80
-[speakers]
-office = "AA:BB:CC:DD:EE:FF" # or an exact PipeWire sink name
-[room_labels]
-office = "书房"
+[devices.office_microphone]
+adapter = "pipewire"
+kind = "microphone"
+label = "书房麦克风"
+location = "书房"
+[devices.office_microphone.connection]
+match = "stable microphone identity"
+[devices.office]
+adapter = "pipewire"
+kind = "speaker"
+label = "书房音箱"
+location = "书房"
+[devices.office.connection]
+address = "AA:BB:CC:DD:EE:FF" # or sink = "exact PipeWire sink name"
 ```
 
 `codex_model` and `codex_reasoning_effort` explicitly select this project's background task model and reasoning effort. They apply to new/resumed foreground threads, task turns and silent memory maintenance; they do not edit the user's global Codex settings. Use model/effort values supported by the installed Codex and account. `realtime_voice` selects the native voice timbre; these task settings do not select the separate realtime voice model. After editing `config.toml`, run `personal-agent --config config.toml restart`. `status` includes provider-returned model/effort, requested model/effort and configured voice; an unavailable returned field is null rather than guessed.
@@ -50,6 +60,8 @@ export PERSONAL_AGENT_CONFIG="$PWD/config.toml"
 .venv/bin/personal-agent run
 .venv/bin/personal-agent status
 .venv/bin/personal-agent doctor
+.venv/bin/personal-agent devices list
+.venv/bin/personal-agent devices inspect office_microphone
 .venv/bin/personal-agent gesture wave
 .venv/bin/personal-agent stop
 .venv/bin/personal-agent sleep
@@ -74,6 +86,18 @@ Install a user service after validating the foreground run:
 ```
 
 The unit is `personal-agent.service`. `--output /tmp/personal-agent.service` renders without changing the host. The installer does not configure Bluetooth codecs or enable user lingering. A headless boot requires the host to keep that user's services running; the current DELL deployment already has this enabled. Wake keyword, display name and unit identity are separate settings.
+
+## Add hardware
+
+The [hardware onboarding acceptance report](reports/DEVICE_ONBOARDING.html) records the actual microphone/speaker, acoustic, Codex tool and service-restart checks.
+
+All physical endpoints use `devices.<logical_id>`, with `adapter`, `kind`, `label`, optional `location`/`enabled`/`max_age_seconds`, and an adapter-owned `connection` table. Old top-level microphone/speaker maps are removed. The default voice input/output are explicit logical IDs (`input_device` and `default_output`). At most 32 devices are allowed. The shared directory reports capabilities, timestamped availability and freshness; it never substitutes another device or exposes connection secrets to AI. `available` means the hardware node is present; it does not by itself prove physical sound/capture. `capturing` and `route_ready` describe active audio use separately.
+
+For another PipeWire microphone/speaker, add its device table and stable identity, choose input/output if needed, restart, then inspect it. Unknown/duplicate/ambiguous identities fail rather than select the first device. The [PipeWire integration guide](src/assistant_runtime/plugins/pipewire/README.md) contains the supported connection schema and repeatable real-device acceptance command.
+
+For another protocol, add one trusted adapter factory via `local_plugins`/`plugins`. Its startup registers each configured device with `host.devices.register(owner, id, capabilities, async_probe)`; updates use `DeviceObservation` and `host.devices.observe`. The shared `DevicesPlugin` owns `DeviceQuery` dispatch by logical ID. Do not register another `DeviceQuery` handler in an individual adapter. Codex's existing `device` tool supports read-only `list` and `inspect` in addition to audio controls; it and CLI use the same runtime handler. Native voice receives the enabled inventory on session startup and delegates current-state queries to Codex. No observation activates a conversation or becomes long-term memory automatically.
+
+Read-only state integrations (including future sensor snapshots) reuse this directory/query/tool path. A new actuator action still needs a narrowly defined capability and tool contract. A different audio transport still needs a media adapter/routing implementation; declaring a HomePod entry alone does not make PipeWire play through it.
 
 ## Memory
 

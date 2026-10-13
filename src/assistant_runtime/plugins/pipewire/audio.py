@@ -4,6 +4,8 @@ import logging
 import os
 import time
 
+from .devices import resolve, validate_device
+
 import numpy as np
 from pywebrtc_audio import AudioProcessor
 
@@ -36,7 +38,15 @@ async def command(*args, timeout=12):
 class AudioRoute:
     def __init__(self, config, store):
         self.config, self.store = config, store
-        self.room = store.get("room", config.default_room)
+        self.room = store.get("room", config.default_output)
+        for spec in config.devices.values():
+            if spec["adapter"] == "pipewire" and spec.get("enabled", True):
+                validate_device(spec)
+        if self.room not in config.output_devices:
+            raise ValueError("Previously selected output removed; choose an explicit configured output")
+        for ident in (config.input_device, self.room):
+            if config.devices[ident]["adapter"] != "pipewire":
+                raise ValueError("Selected audio endpoint requires its configured adapter")
         # Observe the device, never restore an old service volume over its setting.
         self.volume = None
         self.source = self.sink = None
@@ -52,32 +62,20 @@ class AudioRoute:
         self.last_connect = 0
 
     async def devices(self):
-        sources = json.loads(await command("pactl", "-f", "json", "list", "short", "sources"))
-        sinks = json.loads(await command("pactl", "-f", "json", "list", "short", "sinks"))
+        sources = json.loads(await command("pactl", "-f", "json", "list", "sources"))
+        sinks = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
         return sources, sinks
 
     async def ensure(self, force=False, check_volume=False):
         async with self.lock:
             sources, sinks = await self.devices()
-            target = self.config.speakers[self.room]
-            bluetooth = bool(__import__("re").fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", target))
-            mac = target.replace(":", "_")
-            physical_source = next(
-                (
-                    x["name"]
-                    for x in sources
-                    if self.config.source_match in x["name"] and not x["name"].endswith(".monitor")
-                ),
-                None,
-            )
-            physical_sink = next(
-                (
-                    x["name"]
-                    for x in sinks
-                    if (f"bluez_output.{mac}." in x["name"] if bluetooth else target == x["name"])
-                ),
-                None,
-            )
+            spec = self.config.devices[self.room]
+            target = spec["connection"].get("address")
+            bluetooth = target is not None
+            source_node = resolve(self.config.devices[self.config.input_device], sources, sinks)
+            sink_node = resolve(spec, sources, sinks)
+            physical_source = source_node["name"] if source_node else None
+            physical_sink = sink_node["name"] if sink_node else None
             if not physical_source or not physical_sink:
                 self.ready.clear()
                 if self.module:
@@ -90,7 +88,7 @@ class AudioRoute:
                 if bluetooth and not physical_sink and time.monotonic() - self.last_connect > 20:
                     self.last_connect = time.monotonic()
                     try:
-                        await command("bluetoothctl", "connect", self.config.speakers[self.room], timeout=8)
+                        await command("bluetoothctl", "connect", target, timeout=8)
                     except (RuntimeError, TimeoutError):
                         pass
                 raise RuntimeError(self.last_error)
@@ -170,8 +168,10 @@ class AudioRoute:
                 await self.ensure_minimum_volume()
 
     async def select(self, room):
-        if room not in self.config.speakers:
+        if room not in self.config.output_devices:
             raise ValueError("unknown speaker")
+        if self.config.devices[room]["adapter"] != "pipewire":
+            raise ValueError("Output is owned by another adapter; an audio routing adapter is required")
         self.room = room
         self.store.set("room", room)
         self.ready.clear()

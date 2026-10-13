@@ -37,13 +37,16 @@ async def memory(
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False})
 async def device(
-    action: Literal["room", "volume", "stop", "sleep", "progress", "cancel"],
+    action: Literal["room", "volume", "stop", "sleep", "progress", "cancel", "list", "inspect"],
     value: str | int | None = None,
 ) -> dict:
-    """Local controls: room(endpoint id), volume(0..100), stop, sleep, progress, cancel.
+    """Device inventory: list (no value), inspect (value=device id); read-only, timestamped availability.
+    Audio controls: room(endpoint id), volume(0..100), stop, sleep, progress, cancel.
     stop silences speech but keeps work; sleep ends conversation but keeps work; cancel stops work.
     Only act on user requests. Never use shell to control audio or terminate the assistant.
     """
+    if action in {"list", "inspect"}:
+        return await invoke("devices", action=action, device_id=value)
     return await invoke(action, value=value)
 
 

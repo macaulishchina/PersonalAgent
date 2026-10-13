@@ -82,7 +82,7 @@ async def main(args):
         raw = next(
             x["name"]
             for x in sources
-            if config.source_match in x["name"] and not x["name"].endswith(".monitor")
+            if config.microphone_match in x["name"] and not x["name"].endswith(".monitor")
         )
         devices = {"raw": raw, "monitor": route.sink + ".monitor"}
         recordings = {name: bytearray() for name in devices}

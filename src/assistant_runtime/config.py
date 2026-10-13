@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import re
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,12 +28,11 @@ class Config:
     assistant_name: str = "个人助理"
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
-    source_match: str = ""
-    default_room: str = "default"
+    input_device: str = ""
+    default_output: str = ""
     minimum_volume: int = 80
     echo_cancel: bool = True
-    speakers: dict[str, str] = field(default_factory=dict)
-    room_labels: dict[str, str] = field(default_factory=dict)
+    devices: dict[str, dict] = field(default_factory=dict)
     model_dir: str = ""
     unit_name: str = "personal-agent.service"
     plugins: list[str] = field(default_factory=lambda: ["pipewire", "keyword", "codex", "memory", "gesture"])
@@ -55,6 +55,28 @@ class Config:
                 raise ValueError(f"{name} must be a nonempty string")
             setattr(self, name, value.strip())
 
+        if not isinstance(self.devices, dict) or len(self.devices) > 32:
+            raise ValueError("devices must be a table with at most 32 entries")
+        for ident, spec in self.devices.items():
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", ident) or not isinstance(spec, dict):
+                raise ValueError("Invalid device ID or definition")
+            allowed = {"adapter", "kind", "label", "location", "connection", "enabled", "max_age_seconds"}
+            if set(spec) - allowed:
+                raise ValueError(f"Unknown device settings: {ident}")
+            for name in ("adapter", "kind", "label"):
+                if not isinstance(spec.get(name), str) or not spec[name].strip() or len(spec[name]) > 120:
+                    raise ValueError(f"Invalid device {name}: {ident}")
+            if not isinstance(spec.get("connection"), dict):
+                raise ValueError(f"Device connection must be a table: {ident}")
+            if not isinstance(spec.get("location", ""), str) or len(spec.get("location", "")) > 120:
+                raise ValueError("Invalid device location")
+            if type(spec.get("enabled", True)) is not bool:
+                raise ValueError("Device enabled must be boolean")
+            age = spec.get("max_age_seconds", 15)
+            if type(age) not in (int, float) or not 0 < age <= 3600:
+                raise ValueError("Invalid device freshness period")
+            if spec.get("enabled", True) and spec["adapter"] not in self.plugins:
+                raise ValueError(f"Enabled device adapter not in plugins: {ident}")
         if (
             not isinstance(self.wake_words, list)
             or not self.wake_words
@@ -64,6 +86,32 @@ class Config:
         self.wake_words = [word.strip() for word in self.wake_words]
         if len(set(self.wake_words)) != len(self.wake_words):
             raise ValueError("wake_words must not contain duplicates")
+
+    @property
+    def output_devices(self):
+        return {i: s for i, s in self.devices.items() if s["kind"] == "speaker" and s.get("enabled", True)}
+
+    @property
+    def output_labels(self):
+        return {i: s["label"] for i, s in self.output_devices.items()}
+
+    @property
+    def output_aliases(self):
+        return {
+            i: list(dict.fromkeys([s["label"], s.get("location") or s["label"]]))
+            for i, s in self.output_devices.items()
+        }
+
+    @property
+    def microphone_match(self):
+        return self.devices[self.input_device]["connection"]["match"]
+
+    @property
+    def output_connections(self):
+        return {
+            i: s["connection"].get("address", s["connection"].get("sink"))
+            for i, s in self.output_devices.items()
+        }
 
     @property
     def state_dir(self):
@@ -99,8 +147,9 @@ class Config:
             raise ValueError("Unsupported profile or backend")
         if not 0 <= c.minimum_volume <= 100 or c.idle_seconds < 1:
             raise ValueError("Invalid volume, wake word or idle timeout")
-        if c.profile == "voice" and (c.default_room not in c.speakers or not c.source_match):
-            raise ValueError(
-                'Configure source_match and a default output in speakers, or use profile="headless"'
-            )
+        if c.profile == "voice":
+            for ident, kind in ((c.input_device, "microphone"), (c.default_output, "speaker")):
+                spec = c.devices.get(ident, {})
+                if spec.get("kind") != kind or not spec.get("enabled", True):
+                    raise ValueError(f"Configure an enabled {kind} device: {ident}")
         return c
