@@ -1263,7 +1263,7 @@ apple-home = [
     { name = "hap-python" },
 ]
 camera = [
-    { name = "imageio-ffmpeg" },
+    { name = "aiohttp" },
     { name = "pillow" },
 ]
 dev = [
@@ -1296,13 +1296,13 @@ web = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'apple-home'", specifier = ">=3.14,<4" },
+    { name = "aiohttp", marker = "extra == 'camera'", specifier = ">=3.14,<4" },
     { name = "aiohttp", marker = "extra == 'voice'", specifier = ">=3.14,<4" },
     { name = "aiohttp", marker = "extra == 'web'", specifier = ">=3.14,<4" },
     { name = "fastembed", marker = "extra == 'memory'", specifier = "==0.9.0" },
     { name = "fastmcp", marker = "extra == 'memory'", specifier = "==4.0.0b1" },
     { name = "hap-python", marker = "extra == 'apple-home'", specifier = "==5.0.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'airplay'", specifier = "==0.6.0" },
-    { name = "imageio-ffmpeg", marker = "extra == 'camera'", specifier = "==0.6.0" },
     { name = "kaldi-native-fbank", marker = "extra == 'voice'", specifier = "==1.22.3" },
     { name = "mcp", marker = "extra == 'memory'", specifier = "==2.3.0" },
     { name = "mem0ai", marker = "extra == 'memory'", specifier = "==1.0.11" },

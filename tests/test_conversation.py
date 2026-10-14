@@ -11,6 +11,7 @@ import uuid
 from assistant_runtime.config import Config
 from assistant_runtime.conversation.service import Conversation
 from assistant_runtime.conversation.store import ConversationStore
+from assistant_runtime.plugins.codex.conversation import task_event
 from assistant_runtime.store import Store
 
 
@@ -153,6 +154,81 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         messages = self.host.backend.import_voice_messages.await_args.args[0]
         self.assertEqual(messages[0]["text"], "请记录")
         self.assertEqual(messages[0]["role"], "user")
+
+    async def test_provider_prose_is_a_message_for_both_voice_and_web_tasks(self):
+        c = self.host.conversation
+        c.web_turns.add("web")
+        for turn in ("voice", "web"):
+            c.provider_event({"kind": "message_delta", "message_id": turn, "turn_id": turn, "delta": "检查"})
+            self.assertEqual(c.store.get(f"task:session:{turn}")["kind"], "message")
+            c.provider_event(
+                task_event(
+                    "item/completed",
+                    {"turnId": turn, "item": {"type": "agentMessage", "id": turn, "text": "检查完成。"}},
+                )
+            )
+        rows = c.store.history(c.session)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(m["kind"] == "message" and m["text"] == "检查完成。" for m in rows))
+
+    async def test_restore_repairs_display_without_reordering_or_task_dispatch(self):
+        c = self.host.conversation
+        events = [
+            task_event(
+                "item/completed",
+                {"turnId": "voice", "item": {"type": "agentMessage", "id": "prose", "text": "我检查一下。"}},
+            ),
+            task_event(
+                "item/completed",
+                {
+                    "turnId": "voice",
+                    "item": {
+                        "type": "mcpToolCall",
+                        "id": "tool",
+                        "tool": "device",
+                        "arguments": {"action": "room", "value": "living"},
+                    },
+                },
+            ),
+        ]
+        for ident, text in (("prose", "我检查一下。"), ("tool", "调用工具\ndevice")):
+            c.store.put(
+                f"task:session:{ident}",
+                c.session,
+                kind="detail",
+                text=text,
+                turn_id="voice",
+                status="complete",
+                updated_at=123,
+            )
+        before = [(m["id"], m["ordinal"], m["updated"]) for m in c.store.history(c.session)]
+        self.host.backend.restored_conversation_events = lambda: events
+        await self.context.close()
+        self.context = Owned()
+        await c.start(self.context)
+        rows = c.store.history(c.session)
+        self.assertEqual(before, [(m["id"], m["ordinal"], m["updated"]) for m in rows])
+        self.assertEqual(rows[0]["kind"], "message")
+        self.assertEqual(rows[1]["kind"], "detail")
+        self.assertEqual(rows[1]["text"], "调用工具\nselect_audio_output")
+        self.host.backend.submit.assert_not_awaited()
+        cursor = c.store.cursor()
+        await self.context.close()
+        self.context = Owned()
+        await c.start(self.context)
+        self.assertEqual(c.store.cursor(), cursor)
+
+    async def test_old_mcp_metadata_is_only_used_for_display_not_new_capabilities(self):
+        item = {"type": "mcpToolCall", "id": "old", "tool": "memory"}
+        event = task_event(
+            "item/completed",
+            {"item": item | {"arguments": '{"action":"remember","arguments":{"id":"existing"}}'}},
+        )
+        self.assertEqual(event["text"], "调用工具\nupdate_memory")
+        self.assertNotIn("arguments", event)
+        for arguments in ("malformed", {"action": []}, []):
+            event = task_event("item/completed", {"item": item | {"arguments": arguments}})
+            self.assertEqual(event["text"], "调用工具\nmemory")
 
     async def test_web_result_is_quiet_context_voice_result_is_spoken(self):
         c = self.host.conversation

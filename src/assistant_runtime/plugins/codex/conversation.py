@@ -1,5 +1,83 @@
 """Translate provider-specific events into the shared conversation vocabulary."""
 
+import json
+
+
+def tool_name(item):
+    """Use precise actions when projecting historical overloaded MCP calls."""
+    name = item.get("tool", "")
+    actions = {
+        "device": {
+            "room": "select_audio_output",
+            "volume": "set_audio_volume",
+            "stop": "stop_playback",
+            "sleep": "end_voice_conversation",
+            "progress": "get_task_status",
+            "cancel": "cancel_task",
+            "list": "list_devices",
+            "inspect": "inspect_device",
+            "snapshot": "capture_image",
+        },
+        "memory": {
+            "search": "search_memory",
+            "read": "read_memory",
+            "remember": "remember_memory",
+            "forget": "forget_memory",
+        },
+    }
+    if name not in actions:
+        return name
+    arguments = item.get("arguments", {})
+    if isinstance(arguments, str) and len(arguments) <= 16000:
+        try:
+            arguments = json.loads(arguments)
+        except (ValueError, RecursionError):
+            return name
+    if not isinstance(arguments, dict):
+        return name
+    action = arguments.get("action")
+    if not isinstance(action, str):
+        return name
+    if name == "memory" and action == "remember":
+        values = arguments.get("arguments")
+        if isinstance(values, dict) and values.get("id"):
+            return "update_memory"
+    return actions[name].get(action, name)
+
+
+def image_content(result):
+    """Normalize native and JSON-wrapped MCP media; preserve durable asset refs."""
+    images, attachments = [], []
+
+    def visit(value, depth=0):
+        if depth > 6 or not isinstance(value, dict):
+            return
+        if isinstance(value.get("attachments"), list):
+            attachments.extend(value["attachments"][:4])
+        if value.get("type") == "image":
+            images.append(
+                {
+                    "data_base64": value.get("data"),
+                    "mime_type": value.get("mimeType") or value.get("mime_type"),
+                }
+            )
+        elif value.get("type") == "text":
+            text = value.get("text", "")
+            if isinstance(text, str) and len(text) <= 16 * 1024 * 1024 and text.lstrip().startswith("{"):
+                try:
+                    visit(json.loads(text), depth + 1)
+                except (ValueError, RecursionError):
+                    pass
+        if isinstance(value.get("content"), list):
+            for block in value["content"][:32]:
+                visit(block, depth + 1)
+        # Native structured content duplicates the text payload; prefer text refs.
+        if not attachments:
+            visit(value.get("structuredContent"), depth + 1)
+
+    visit(result)
+    return images[:4], attachments[:4]
+
 
 def task_event(method, params):
     turn = params.get("turnId") or params.get("turn", {}).get("id")
@@ -27,7 +105,7 @@ def task_event(method, params):
         value = (
             item.get("aggregatedOutput")
             or item.get("command")
-            or item.get("tool")
+            or tool_name(item)
             or item.get("changes")
             or item.get("error")
             or ""
@@ -40,7 +118,14 @@ def task_event(method, params):
         if method == "item/started"
         else ("failed" if item.get("status") in ("failed", "declined") else "complete")
     )
-    return {**common, "kind": "message", "text": text, "detail": detail, "status": status}
+    event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
+    if kind == "mcpToolCall" and method == "item/completed":
+        images, attachments = image_content(item.get("result"))
+        if images:
+            event["images"] = images
+        if attachments:
+            event["attachments"] = attachments
+    return event
 
 
 def voice_event(data):

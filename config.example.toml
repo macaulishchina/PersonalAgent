@@ -68,16 +68,13 @@ memory_auto_capture = true
 # metrics = ["temperature", "humidity"]
 # trigger_name = "读取HomePod温湿度"
 
-# Optional Linux camera: install camera extra, add v4l2 to plugins. Audio is separate.
+# Optional video gateway: install camera extra, add go2rtc to plugins. Audio is separate.
 # [devices.office_camera]
-# adapter = "v4l2"
+# adapter = "go2rtc"
 # kind = "camera"
 # label = "书房摄像头"
 # location = "书房"
 # [devices.office_camera.connection]
-# path = "/dev/v4l/by-id/usb-YOUR_CAMERA_SERIAL-video-index0"
-# width = 1280
-# height = 720
-# framerate = 15
-# input_format = "mjpeg"
+# base_url = "http://127.0.0.1:8553"
+# stream = "office_camera"
 # timeout_seconds = 8

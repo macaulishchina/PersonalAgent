@@ -13,7 +13,6 @@ import {
   ChevronDown,
   Square,
   LogOut,
-  ImagePlus,
   LoaderCircle,
   WifiOff,
 } from "lucide-react";
@@ -30,6 +29,13 @@ type Message = {
   status: string;
   attachments: Attachment[];
   updated: number;
+  turn_id?: string | null;
+};
+type MessageGroup = {
+  id: string;
+  role: string;
+  turn_id?: string | null;
+  messages: Message[];
 };
 type State = {
   name: string;
@@ -137,6 +143,272 @@ const markdownComponents = {
     <span>[{alt || "外部图片"}]</span>
   ),
 };
+const toolLabels: Record<string, string> = {
+  device: "设备操作",
+  memory: "记忆操作",
+  search_memory: "查询记忆",
+  read_memory: "读取记忆",
+  remember_memory: "保存记忆",
+  update_memory: "更新记忆",
+  forget_memory: "遗忘记忆",
+  list_devices: "查看设备",
+  inspect_device: "检查设备状态",
+  capture_image: "获取画面",
+  select_audio_output: "切换音箱",
+  set_audio_volume: "调整音量",
+  stop_playback: "停止播报",
+  end_voice_conversation: "结束语音对话",
+  get_task_status: "查看任务进度",
+  cancel_task: "取消任务",
+};
+function messageDetail(message: Message) {
+  if (message.kind !== "detail") return null;
+  const [heading, ...lines] = message.text.trim().split("\n");
+  if (heading === "调用工具") {
+    const [name, ...body] = lines;
+    return {
+      name: name || heading,
+      label: toolLabels[name] || (name ? `调用 ${name}` : heading),
+      body: body.join("\n").trim(),
+    };
+  }
+  if (["执行命令", "修改文件", "检索资料"].includes(heading)) {
+    return { name: heading, label: heading, body: lines.join("\n").trim() };
+  }
+  // Earlier voice-task replies were stored as details despite being plain prose.
+  return null;
+}
+function groupMessages(messages: Message[]): MessageGroup[] {
+  const groups: MessageGroup[] = [];
+  for (const message of messages) {
+    const last = groups.at(-1);
+    const sameTurn = message.turn_id && message.turn_id === last?.turn_id;
+    const nextTurn =
+      message.turn_id && last?.turn_id && message.turn_id !== last.turn_id;
+    const nearby =
+      last && Math.abs(message.updated - last.messages.at(-1)!.updated) <= 300;
+    // One reply owns its tools; unrelated turns or long gaps get their own header/copy action.
+    if (last?.role === message.role && !nextTurn && (sameTurn || nearby)) {
+      last.messages.push(message);
+      last.turn_id ||= message.turn_id;
+    } else
+      groups.push({
+        id: message.id,
+        role: message.role,
+        turn_id: message.turn_id,
+        messages: [message],
+      });
+  }
+  return groups;
+}
+function ToolActivity({
+  message,
+  name,
+  label,
+}: {
+  message: Message;
+  name: string;
+  label: string;
+}) {
+  const busy = message.status === "streaming";
+  const failed = message.status === "failed";
+  const labels: Record<string, string> = {
+    streaming: "进行中",
+    complete: "完成",
+    failed: "失败",
+    interrupted: "已取消",
+    unknown: "未确认",
+  };
+  const status = labels[message.status] || "未确认";
+  return (
+    <span className={"tool-activity" + (failed ? " failed" : "")} title={name}>
+      <span
+        className={"task-indicator" + (busy ? " busy" : "")}
+        aria-hidden="true"
+      />
+      <span className="tool-label">{label}</span>
+      <span className="tool-status">{status}</span>
+    </span>
+  );
+}
+function MessageImages({
+  attachments,
+  onOpen,
+}: {
+  attachments: Attachment[];
+  onOpen: (url: string) => void;
+}) {
+  if (!attachments.length) return null;
+  return (
+    <div className="message-images">
+      {attachments.map((a) => (
+        <button
+          key={a.id}
+          aria-label={"查看图片 " + a.name}
+          onClick={() => onOpen("/api/uploads/" + a.id)}
+        >
+          <img src={"/api/uploads/" + a.id} alt={a.name} loading="lazy" />
+        </button>
+      ))}
+    </div>
+  );
+}
+function MessageEntry({
+  message: m,
+  onOpen,
+}: {
+  message: Message;
+  onOpen: (url: string) => void;
+}) {
+  const detail = messageDetail(m);
+  const statuses: Record<string, string> = {
+    sending: "正在发送",
+    unknown: "状态待确认",
+    interrupted: "已取消",
+    failed: "未完成",
+  };
+  return (
+    <article
+      className={
+        "message " +
+        m.role +
+        (detail ? " detail" + (!detail.body ? " simple-tool" : "") : "")
+      }
+      data-message-id={m.id}
+      aria-label={
+        detail ? detail.label : m.role === "user" ? "你的消息" : "助手消息"
+      }
+    >
+      {detail ? (
+        <>
+          {!detail.body ? (
+            <ToolActivity message={m} name={detail.name} label={detail.label} />
+          ) : (
+            <details>
+              <summary>
+                <ToolActivity
+                  message={m}
+                  name={detail.name}
+                  label={detail.label}
+                />
+                <ChevronDown size={14} />
+              </summary>
+              <div className="detail-body">
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {detail.body}
+                </Markdown>
+              </div>
+            </details>
+          )}
+          <MessageImages attachments={m.attachments} onOpen={onOpen} />
+        </>
+      ) : (
+        <>
+          <MessageImages attachments={m.attachments} onOpen={onOpen} />
+          <div className="message-body">
+            <Markdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+            >
+              {m.text}
+            </Markdown>
+            {m.status === "streaming" && !m.text && (
+              <span className="thinking">
+                正在思考<span>···</span>
+              </span>
+            )}
+          </div>
+          {statuses[m.status] && (
+            <div
+              className={
+                "message-status" +
+                (["unknown", "failed"].includes(m.status) ? " error" : "")
+              }
+              role="status"
+            >
+              {statuses[m.status]}
+            </div>
+          )}
+        </>
+      )}
+    </article>
+  );
+}
+function ConversationGroup({
+  group,
+  name,
+  copied,
+  onCopy,
+  onOpen,
+}: {
+  group: MessageGroup;
+  name: string;
+  copied: string;
+  onCopy: (id: string, text: string) => Promise<void>;
+  onOpen: (url: string) => void;
+}) {
+  const user = group.role === "user";
+  const speaker = user ? "你" : name;
+  const date = new Date(group.messages[0].updated * 1000);
+  const text = group.messages
+    .filter((m) => !messageDetail(m))
+    .map((m) => m.text)
+    .filter(Boolean)
+    .join("\n\n");
+  return (
+    <section
+      className={"message-group " + group.role}
+      aria-label={speaker + "的消息"}
+      data-speaker={group.role}
+    >
+      <div className="message-meta">
+        <span className="speaker">{speaker}</span>
+        <time
+          dateTime={date.toISOString()}
+          title={date.toLocaleString("zh-CN")}
+        >
+          {date.toLocaleDateString() === new Date().toLocaleDateString()
+            ? date.toLocaleTimeString("zh-CN", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : date.toLocaleString("zh-CN", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+        </time>
+        {user && group.messages.every((m) => m.source === "voice") && (
+          <span className="source-badge" title="通过语音发送">
+            <AudioLines size={12} />
+            语音
+          </span>
+        )}
+        {group.messages.every((m) => m.kind === "legacy") && (
+          <span className="source-badge">历史记录</span>
+        )}
+        {!user && text && (
+          <button
+            className="copy"
+            type="button"
+            aria-label="复制回复"
+            title={copied === group.id ? "已复制" : "复制这组回复"}
+            onClick={() => onCopy(group.id, text)}
+          >
+            {copied === group.id ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        )}
+      </div>
+      {group.messages.map((m) => (
+        <MessageEntry key={m.id} message={m} onOpen={onOpen} />
+      ))}
+    </section>
+  );
+}
 function App() {
   const [authorized, setAuthorized] = useState<boolean | null>(null),
     [token, setToken] = useState(""),
@@ -158,7 +430,8 @@ function App() {
     cursor = useRef(0),
     bottom = useRef<HTMLDivElement>(null),
     input = useRef<HTMLTextAreaElement>(null),
-    file = useRef<HTMLInputElement>(null);
+    file = useRef<HTMLInputElement>(null),
+    composer = useRef<HTMLDivElement>(null);
   const following = useRef(true),
     starting = useRef(false),
     stopped = useRef(false),
@@ -248,6 +521,27 @@ function App() {
     if (following.current)
       bottom.current?.scrollIntoView({ behavior: "instant" });
   }, [messages]);
+  useEffect(() => {
+    if (!authorized || !composer.current) return;
+    let frame = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      document.documentElement.style.setProperty(
+        "--composer-height",
+        `${entry.target.getBoundingClientRect().height}px`,
+      );
+      cancelAnimationFrame(frame);
+      if (following.current)
+        frame = requestAnimationFrame(() =>
+          bottom.current?.scrollIntoView({ behavior: "instant" }),
+        );
+    });
+    observer.observe(composer.current);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      document.documentElement.style.removeProperty("--composer-height");
+    };
+  }, [authorized]);
   useEffect(() => {
     const scroll = () => {
       const near =
@@ -381,18 +675,10 @@ function App() {
       fail(e);
     }
   }
-  async function copy(m: Message) {
+  async function copy(id: string, text: string) {
     try {
-      if (navigator.clipboard) await navigator.clipboard.writeText(m.text);
-      else {
-        const t = document.createElement("textarea");
-        t.value = m.text;
-        document.body.appendChild(t);
-        t.select();
-        document.execCommand("copy");
-        t.remove();
-      }
-      setCopied(m.id);
+      await clipboard(text);
+      setCopied(id);
       setTimeout(() => setCopied(""), 1500);
     } catch {
       setError("复制失败，请选择文字复制");
@@ -494,114 +780,19 @@ function App() {
                 <p>语音和文字，共享同一段对话。</p>
               </div>
             )}
-            {messages.map((m) => (
-              <article
-                key={m.id}
-                className={
-                  "message " +
-                  m.role +
-                  " " +
-                  (m.kind === "detail" ? "detail" : "")
-                }
-                data-message-id={m.id}
-              >
-                {m.kind === "detail" ? (
-                  <details>
-                    <summary>
-                      <span
-                        className={
-                          "task-indicator " +
-                          (m.status === "streaming" ? "busy" : "")
-                        }
-                      />
-                      <span>
-                        {m.text.split("\n")[0].slice(0, 65) || "正在处理"}
-                      </span>
-                      <ChevronDown size={14} />
-                    </summary>
-                    <div className="detail-body">
-                      <Markdown
-                        remarkPlugins={[remarkGfm]}
-                        components={markdownComponents}
-                      >
-                        {m.text}
-                      </Markdown>
-                    </div>
-                  </details>
-                ) : (
-                  <>
-                    <div className="message-meta">
-                      {m.role === "user" ? "你" : state.name}
-                      {m.source === "voice" && (
-                        <span title="语音消息">
-                          <AudioLines size={12} />
-                          语音
-                        </span>
-                      )}
-                      {m.kind === "legacy" && <span>历史记录</span>}
-                      <time>
-                        {new Date(m.updated * 1000).toLocaleTimeString(
-                          "zh-CN",
-                          { hour: "2-digit", minute: "2-digit" },
-                        )}
-                      </time>
-                    </div>
-                    {m.attachments.length > 0 && (
-                      <div className="message-images">
-                        {m.attachments.map((a) => (
-                          <button
-                            key={a.id}
-                            aria-label={"查看图片 " + a.name}
-                            onClick={() => setZoom("/api/uploads/" + a.id)}
-                          >
-                            <img src={"/api/uploads/" + a.id} alt={a.name} />
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <div className="message-body">
-                      <Markdown
-                        remarkPlugins={[remarkGfm]}
-                        components={markdownComponents}
-                      >
-                        {m.text}
-                      </Markdown>
-                      {m.status === "streaming" && !m.text && (
-                        <span className="thinking">
-                          正在思考<span>···</span>
-                        </span>
-                      )}
-                    </div>
-                    <div className="message-footer">
-                      {m.role === "assistant" && m.status !== "streaming" && (
-                        <button
-                          className="copy"
-                          aria-label="复制回复"
-                          onClick={() => copy(m)}
-                        >
-                          {copied === m.id ? (
-                            <Check size={14} />
-                          ) : (
-                            <Copy size={14} />
-                          )}
-                        </button>
-                      )}
-                      {m.status === "sending" && <span>正在发送</span>}
-                      {m.status === "unknown" && (
-                        <span className="error">状态待确认</span>
-                      )}
-                      {m.status === "interrupted" && <span>已取消</span>}
-                      {m.status === "failed" && (
-                        <span className="error">未完成</span>
-                      )}
-                    </div>
-                  </>
-                )}
-              </article>
+            {groupMessages(messages).map((group) => (
+              <ConversationGroup
+                key={group.id}
+                group={group}
+                name={state.name}
+                copied={copied}
+                onCopy={copy}
+                onOpen={setZoom}
+              />
             ))}
             <div ref={bottom} />
           </main>
-          <div className="composer-wrap">
+          <div className="composer-wrap" ref={composer}>
             {!atBottom && (
               <button
                 className="jump"
@@ -676,35 +867,7 @@ function App() {
                   ))}
                 </div>
               )}
-              <textarea
-                ref={input}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={1}
-                placeholder="发消息，或继续刚才的话题…"
-                aria-label="消息"
-                maxLength={32000}
-                onPaste={(e) => {
-                  const images = Array.from(e.clipboardData.files).filter((f) =>
-                    f.type.startsWith("image/"),
-                  );
-                  if (images.length) {
-                    e.preventDefault();
-                    void upload(images);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    !e.shiftKey &&
-                    !e.nativeEvent.isComposing
-                  ) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <div className="composer-tools">
+              <div className="composer-entry">
                 <input
                   ref={file}
                   type="file"
@@ -727,10 +890,34 @@ function App() {
                     <Plus size={22} />
                   )}
                 </button>
-                <span className="input-hint">
-                  <ImagePlus size={13} />
-                  支持图片
-                </span>
+                <textarea
+                  ref={input}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={1}
+                  placeholder="发消息，或继续刚才的话题…"
+                  aria-label="消息"
+                  maxLength={32000}
+                  onPaste={(e) => {
+                    const images = Array.from(e.clipboardData.files).filter(
+                      (f) => f.type.startsWith("image/"),
+                    );
+                    if (images.length) {
+                      e.preventDefault();
+                      void upload(images);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === "Enter" &&
+                      !e.shiftKey &&
+                      !e.nativeEvent.isComposing
+                    ) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                />
                 <button
                   className="send"
                   type="submit"

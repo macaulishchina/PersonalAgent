@@ -1,0 +1,8 @@
+# Optional Linux USB camera access for the existing go2rtc service.
+# Select this file through COMPOSE_FILE in the private project .env.
+services:
+  go2rtc:
+    devices:
+      - "${GO2RTC_VIDEO_DEVICE:?Set GO2RTC_VIDEO_DEVICE to the stable camera path}:/dev/video0:rw"
+    group_add:
+      - "${GO2RTC_VIDEO_GID:?Set GO2RTC_VIDEO_GID to the camera device group ID}"

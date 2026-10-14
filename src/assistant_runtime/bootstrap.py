@@ -28,10 +28,10 @@ def compose(service):
 
         return AirPlayPlugin(config, service.devices, service.audio_outputs, lambda: service.route.room)
 
-    def v4l2():
-        from .plugins.v4l2.plugin import V4L2Plugin
+    def go2rtc():
+        from .plugins.go2rtc.plugin import Go2RTCPlugin
 
-        return V4L2Plugin(config, service.devices, service.video_inputs)
+        return Go2RTCPlugin(config, service.devices, service.video_inputs)
 
     def apple_home():
         from .plugins.apple_home.plugin import AppleHomePlugin
@@ -48,7 +48,7 @@ def compose(service):
         "pipewire": lambda: PipeWirePlugin(config, store, service.devices, service.audio_outputs),
         "keyword": lambda: KeywordPlugin(config),
         "airplay": airplay,
-        "v4l2": v4l2,
+        "go2rtc": go2rtc,
         "web": web,
         "apple_home": apple_home,
         "codex": lambda: CodexPlugin(

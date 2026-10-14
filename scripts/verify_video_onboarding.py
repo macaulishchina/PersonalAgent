@@ -41,8 +41,69 @@ async def snapshot(config, ident):
     }, data
 
 
-async def verify(config, ident, save_frame, restart, codex):
-    folder = config.state_dir / "acceptance" / "v4l2-camera"
+async def gateway_command(action):
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "compose",
+        action,
+        "go2rtc",
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        async with asyncio.timeout(30):
+            code = await process.wait()
+        if code:
+            raise RuntimeError(f"go2rtc gateway {action} failed (exit {code})")
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+
+
+async def verify_gateway_recovery(config, ident):
+    if config.devices[ident]["adapter"] != "go2rtc":
+        raise ValueError("Gateway recovery requires a go2rtc camera")
+    before = await request(config, {"command": "status"})
+    try:
+        await gateway_command("stop")
+        missing = await request(config, {"command": "devices", "action": "inspect", "device_id": ident})
+        assert missing["device"]["state"] == "unavailable", missing
+        try:
+            await snapshot(config, ident)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Stopped gateway must not return an old frame")
+        healthy = await request(config, {"command": "status"})
+        assert healthy["capture_recent"], "Gateway outage interrupted the microphone"
+        assert healthy["room"] == before["room"]
+    finally:
+        await gateway_command("start")
+    async with asyncio.timeout(30):
+        while True:
+            recovered = await request(config, {"command": "devices", "action": "inspect", "device_id": ident})
+            if recovered["device"]["state"] == "available":
+                break
+            await asyncio.sleep(0.5)
+    assert recovered["device"]["data"]["capture_verified"] is False
+    metadata, _ = await snapshot(config, ident)
+    after = await request(config, {"command": "status"})
+    assert after["session_id"] == before["session_id"]
+    assert after["room"] == before["room"]
+    return {
+        "outage_reported": True,
+        "stale_frame_rejected": True,
+        "microphone_preserved": True,
+        "session_preserved": True,
+        "output_preserved": True,
+        "snapshot": metadata,
+    }
+
+
+async def verify(config, ident, save_frame, restart, codex, gateway_restart=False):
+    folder = config.state_dir / "acceptance" / "video"
     folder.mkdir(parents=True, exist_ok=True)
     report = {
         "started_at": time.time(),
@@ -66,6 +127,7 @@ async def verify(config, ident, save_frame, restart, codex):
         assert detail["device"]["capabilities"] == ["video.snapshot"]
         assert detail["device"]["data"]["capturing"] is False
         report["initial_camera"] = detail
+        report["adapter"] = detail["device"]["adapter"]
         for index in range(3):
             metadata, data = await snapshot(config, ident)
             report["captures"].append(metadata)
@@ -160,6 +222,8 @@ async def verify(config, ident, save_frame, restart, codex):
             k: after[k] for k in ("room", "mode", "wake_count", "capture_recent", "session_id")
         }
         report["capture_did_not_activate_voice"] = after["wake_count"] == initial["wake_count"]
+        if gateway_restart:
+            report["gateway_recovery"] = await verify_gateway_recovery(config, ident)
         if restart:
             if after["task_running"]:
                 raise RuntimeError("Do not restart while a foreground task is running")
@@ -196,7 +260,9 @@ async def verify(config, ident, save_frame, restart, codex):
         if store:
             store.db.close()
         report["finished_at"] = time.time()
-        (folder / "real-devices.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        evidence = folder / "real-devices.json"
+        evidence.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        evidence.chmod(0o600)
         print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 
 
@@ -211,12 +277,26 @@ def main():
         "--restart", action="store_true", help="Verify installed service restart after captures"
     )
     parser.add_argument(
+        "--restart-gateway",
+        action="store_true",
+        help="Verify a real go2rtc outage, stale-frame rejection and recovery",
+    )
+    parser.add_argument(
         "--codex",
         action="store_true",
         help="Explicitly send a test image to Codex/OpenAI for visual acceptance",
     )
     args = parser.parse_args()
-    asyncio.run(verify(Config.load(args.config), args.device, args.save_frame, args.restart, args.codex))
+    asyncio.run(
+        verify(
+            Config.load(args.config),
+            args.device,
+            args.save_frame,
+            args.restart,
+            args.codex,
+            args.restart_gateway,
+        )
+    )
 
 
 if __name__ == "__main__":

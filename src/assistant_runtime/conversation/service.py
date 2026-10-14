@@ -1,6 +1,8 @@
 """One durable conversation; provider events and entrances share this owner."""
 
 import asyncio
+import base64
+from dataclasses import asdict
 import hashlib
 import json
 import uuid
@@ -8,6 +10,7 @@ import uuid
 from ..kernel.runtime import Manifest
 from ..kernel.contracts import Control
 from .store import ConversationStore
+from .media import ImageAttachments, MAX_BYTES
 
 
 class Conversation:
@@ -16,6 +19,9 @@ class Conversation:
     def __init__(self, host):
         self.host = host
         self.store = ConversationStore(host.store)
+        self.images = ImageAttachments(host.config.state_dir, self.store.db)
+        self.image_queue = asyncio.Queue(maxsize=8)
+        self.image_pending = set()
         self.context = None
         self.submit_lock = asyncio.Lock()
         self.voice_pending = asyncio.Event()
@@ -37,6 +43,7 @@ class Conversation:
 
     async def start(self, context):
         self.context = context
+        context.spawn(self.save_images(), "reply-images")
         self.store.recover(self.session)
         self.web_turns = {
             row[0]
@@ -46,8 +53,21 @@ class Conversation:
         }
         for event in self.host.backend.restored_conversation_events():
             ident = event.get("message_id")
-            if not ident or self.store.get(f"task:{self.session}:{ident}"):
-                self.provider_event(event)
+            if ident:
+                old = self.store.get(f"task:{self.session}:{ident}")
+                if old:
+                    display_kind = "detail" if event.get("detail") else "message"
+                    display_changed = old["kind"] != display_kind or (
+                        event.get("detail") and old["text"] != event["text"]
+                    )
+                    missing_media = (event.get("images") or event.get("attachments")) and not old[
+                        "attachments"
+                    ]
+                    if not display_changed and not missing_media:
+                        continue
+            self.provider_event(event, restored=True)
+            if self.image_queue.full():
+                await self.image_queue.join()
         key = "chat.legacy_imported"
         if not self.host.store.get(key):
             for ident, timestamp, role, text in self.host.store.db.execute(
@@ -172,7 +192,7 @@ class Conversation:
                 with self.store.db:
                     self.store.db.executemany("INSERT OR IGNORE INTO chat_context VALUES(?)", ids)
 
-    def provider_event(self, event):
+    def provider_event(self, event, *, restored=False):
         if not getattr(self.host.backend, "session_id", None):
             return
         kind, turn = event["kind"], event.get("turn_id")
@@ -198,18 +218,39 @@ class Conversation:
                 mid,
                 self.session,
                 text=(old["text"] if old else "") + event["delta"],
-                kind="message" if turn in self.web_turns else "detail",
+                kind="message",
                 turn_id=turn,
             )
         elif kind == "message" and ident:
+            mid = f"task:{self.session}:{ident}"
+            old = self.store.get(mid)
+            references = self.images.resolve(event.get("attachments", []))
             self.store.put(
-                f"task:{self.session}:{ident}",
+                mid,
                 self.session,
                 text=event["text"],
-                kind="detail" if event["detail"] or turn not in self.web_turns else "message",
+                kind="detail" if event["detail"] else "message",
                 turn_id=turn,
                 status=event["status"],
+                attachments=references or None,
+                updated_at=old["updated"]
+                if old and (restored or event.get("images") or event.get("attachments"))
+                else None,
             )
+            if references:
+                self.image_recovered(mid)
+            if (
+                event.get("images")
+                and not references
+                and self.host.config.web.get("enable")
+                and not (old and old["attachments"])
+                and mid not in self.image_pending
+            ):
+                try:
+                    self.image_queue.put_nowait((mid, event["images"]))
+                    self.image_pending.add(mid)
+                except asyncio.QueueFull:
+                    self.image_failed(mid)
         elif kind == "turn_completed":
             status = event["status"]
             if status in ("interrupted", "failed") and turn in self.web_turns:
@@ -222,6 +263,7 @@ class Conversation:
                     status="complete",
                     turn_id=turn,
                 )
+
             for (mid,) in self.store.db.execute(
                 "SELECT id FROM chat_messages WHERE session_id=? AND turn_id=? AND status='streaming'",
                 (self.session, turn),
@@ -235,6 +277,94 @@ class Conversation:
                     turn_id=turn,
                     status="complete" if status == "completed" else status,
                 )
+
+    def image_failed(self, mid):
+        message = self.store.get(mid)
+        self.store.put(
+            "image-error:" + mid,
+            message["session_id"],
+            text="回复中的图片未能显示，请重试。",
+            status="complete",
+            turn_id=message["turn_id"],
+        )
+
+    def image_recovered(self, mid):
+        notice = self.store.get("image-error:" + mid)
+        if notice and "未能显示" in notice["text"]:
+            self.store.put(
+                notice["id"],
+                notice["session_id"],
+                text="回复中的图片已恢复。",
+                status="complete",
+                turn_id=notice["turn_id"],
+            )
+
+    async def capture_reply(self, frame):
+        """Retain the requested picture before provider display/history truncation."""
+        metadata = asdict(frame)
+        metadata.pop("data")
+        result = {"frame": {**metadata, "data_base64": base64.b64encode(frame.data).decode()}}
+        if self.host.config.web.get("enable"):
+            reference = await self.images.add(
+                frame.data,
+                "摄像头画面.jpg",
+                key=f"capture:{self.session}:{frame.device_id}:{frame.generation}:{frame.captured_at}",
+            )
+            result["attachments"] = [reference]
+        return result
+
+    async def save_images(self):
+        while True:
+            mid, images = await self.image_queue.get()
+            try:
+                if self.store.get(mid)["attachments"]:
+                    self.image_recovered(mid)
+                    continue
+                media = []
+                failed = False
+                for index, image in enumerate(images):
+                    try:
+                        encoded = image.get("data_base64")
+                        if (
+                            not isinstance(encoded, str)
+                            or len(encoded) > (MAX_BYTES + 2) // 3 * 4
+                            or image.get("mime_type") not in {"image/jpeg", "image/png", "image/webp"}
+                        ):
+                            raise ValueError("Invalid provider image")
+                        data = await asyncio.to_thread(base64.b64decode, encoded, validate=True)
+                        media.append(
+                            await self.images.add(data, f"助手图片 {index + 1}.jpg", key=f"{mid}:{index}")
+                        )
+                    except Exception:
+                        failed = True
+                old = self.store.get(mid)
+                if old["attachments"]:
+                    # A newer event supplied durable references while decoding.
+                    self.image_recovered(mid)
+                    continue
+                if media:
+                    with self.store.db:
+                        self.store.db.executemany(
+                            "UPDATE chat_uploads SET attached=1 WHERE id=?", [(a["id"],) for a in media]
+                        )
+                        self.store.put(
+                            mid,
+                            old["session_id"],
+                            **{k: old[k] for k in ("role", "source", "kind", "text", "status", "turn_id")},
+                            attachments=media,
+                            updated_at=old["updated"],
+                        )
+                    if not failed:
+                        self.image_recovered(mid)
+                if failed:
+                    self.image_failed(mid)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.image_failed(mid)
+            finally:
+                self.image_pending.discard(mid)
+                self.image_queue.task_done()
 
     async def provider_notice(self, text, turn_id):
         self.store.put(

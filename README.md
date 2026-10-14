@@ -92,7 +92,7 @@ web = {enable = true, host = "0.0.0.0", port = 8046}
 
 Restart with `.venv/bin/personal-agent --config config.toml restart`. Open `http://SERVER_IP:8046/`. The existing report server on 8045 is independent. At first startup a random access credential is written to `<instance-root>/state/web-access-token`, readable only by the service account. Read it locally and enter it on the login page; do not commit it or put it in a URL. `web.token_file` optionally overrides that path. An explicitly approved existing password can be pinned with `web.approved_short_password_sha256` in private instance configuration; only that exact password (at least eight characters) is exempt from the normal 24-character minimum. This does not change or regenerate the credential file. Browser login lasts seven days and survives service restarts. To rotate access, replace that file with a new strong random token and restart; existing cookies are invalidated. Bind to `127.0.0.1` for SSH tunnels or use a trusted LAN/VPN. The plain HTTP listener is not intended for public Internet exposure.
 
-The page supports text, paste/drop/upload of up to four JPEG/PNG/WebP images (10 MB each), Markdown/code copying, task details, stop playback, and cancel task. There is no browser audio input/output. Web messages select silent playback until the next actual voice user turn; microphone reception and background work continue. Quiet hours affect voice only. A new message during a task steers that task instead of replacing it. Interrupted or uncertain outcomes are shown, never automatically replayed.
+The page supports text, paste/drop/upload of up to four JPEG/PNG/WebP images (10 MB each), Markdown/code copying, task details, stop playback, and cancel task. User uploads and image content returned by tools share private chat attachments. Tool images are visible even when execution details are collapsed, support the same preview, and survive refresh/restart. Requested camera frames are saved before provider display/history truncation; the result carries registered attachment IDs. Available complete image content or valid references can repair missing attachments without another device capture. Already-truncated old pictures cannot be reconstructed. There is no browser audio input/output. Web messages select silent playback until the next actual voice user turn; microphone reception and background work continue. Quiet hours affect voice only. A new message during a task steers that task instead of replacing it. Interrupted or uncertain outcomes are shown, never automatically replayed.
 
 Chat data and normalized images live in private `state/`; unattached uploads expire after a day. Never expose that directory through a static file server. Final voice transcripts are synchronized into the provider task context without creating tasks; Web input/results update live voice context. If synchronization fails, the page displays the failure. Different tabs converge on the same authoritative server state; while disconnected they display their last received state, then catch up.
 
@@ -103,7 +103,11 @@ Validation:
 .venv/bin/python scripts/verify_web.py --config config.toml
 ```
 
-The second command uses real subscription calls, two isolated browsers, synthetic speech and a generated image in a temporary workspace. It neither records the room nor plays through speakers, and does not read production conversation history. Private acceptance evidence is written to `state/acceptance/web/`. Frontend changes require a rebuild; the standard check runs its build when its dependencies are installed.
+For the real subscription → MCP → two-browser image path, including a large synthetic camera frame and recovery without recapture, use `.venv/bin/python scripts/verify_web.py --config config.toml --reply-images`. It does not capture the room.
+
+For a read-only check of existing assistant images in the installed local UI use `.venv/bin/python scripts/verify_web.py --config config.toml --installed-images`; it checks two browsers, preview, reload and connection recovery without capturing another image or starting a model task.
+
+The default second command uses real subscription calls, two isolated browsers, synthetic speech and a generated image in a temporary workspace. It neither records the room nor plays through speakers, and does not read production conversation history. Private acceptance evidence is written to `state/acceptance/web/`. Frontend changes require a rebuild; the standard check runs its build when its dependencies are installed.
 
 ## Run and maintain
 
@@ -143,7 +147,7 @@ The unit is `personal-agent.service`. `--output /tmp/personal-agent.service` ren
 
 The [hardware onboarding acceptance report](reports/DEVICE_ONBOARDING.html) records the actual microphone/speaker, acoustic, Codex tool and service-restart checks.
 
-All physical endpoints use `devices.<logical_id>`, with `adapter`, `kind`, `label`, optional `location`/`enabled`/`max_age_seconds`/`physical_id`, and an adapter-owned `connection` table. Old top-level microphone/speaker maps are removed. The default voice input/output are explicit logical IDs (`input_device` and `default_output`). At most 32 devices are allowed. The shared directory reports capabilities, timestamped availability and freshness; it never substitutes another device or exposes connection secrets to AI. `available` means the hardware node is present; it does not by itself prove physical sound/capture. `capturing` and `route_ready` describe active audio use separately.
+All physical endpoints use `devices.<logical_id>`, with `adapter`, `kind`, `label`, optional `location`/`enabled`/`max_age_seconds`/`physical_id`, and an adapter-owned `connection` table. Old top-level microphone/speaker maps are removed. The default voice input/output are explicit logical IDs (`input_device` and `default_output`). At most 32 devices are allowed. The shared directory reports capabilities, timestamped availability and freshness; it never substitutes another device or exposes connection secrets to AI. `available` reports the adapter's probe result: for PipeWire it means a hardware node is present, while for go2rtc it means the gateway can list the configured stream. It does not by itself prove physical sound/capture. `capturing` and `route_ready` describe active audio use separately; gateway video reports `capture_verified` for successful acquisition in the current observed generation.
 
 For another PipeWire microphone/speaker, add its device table and stable identity, choose input/output if needed, restart, then inspect it. Unknown/duplicate/ambiguous identities fail rather than select the first device. The [PipeWire integration guide](src/assistant_runtime/plugins/pipewire/README.md) contains the supported connection schema and repeatable real-device acceptance command.
 
@@ -151,9 +155,25 @@ For another protocol, add one trusted adapter factory via `local_plugins`/`plugi
 
 Read-only state integrations (including future sensor snapshots) reuse this directory/query/tool path. A new actuator action still needs a narrowly defined capability and tool contract. AirPlay/RAOP is now implemented by the optional [AirPlay adapter](src/assistant_runtime/plugins/airplay/README.md). Enable the airplay extra/plugin and configure the receiver identity and UDP ports; then select its logical ID through the existing room/device tool. Other media transports register an AudioOutputProvider and reuse the same routing/player contracts.
 
-Linux USB video uses the optional [V4L2 adapter](src/assistant_runtime/plugins/v4l2/README.md). Enable the camera extra and v4l2 plugin, then configure a camera endpoint with a stable USB video path and supported format/dimensions. `devices snapshot <id>` captures one fresh JPEG through the shared `VideoCapture` capability; `--output state/preview.jpg` explicitly saves it. The `device` MCP's `capture_image` tool receives native image content for user-requested visual questions. Video stays separate from microphone selection, generic events and long-term memory. No continuous capture or automatic visual trigger is enabled.
+Video inputs use the optional [go2rtc adapter](src/assistant_runtime/plugins/go2rtc/README.md). Enable the camera extra and go2rtc plugin, then configure each camera with its gateway URL and stable stream name. USB paths, formats and network camera protocols belong to go2rtc; the assistant only requests fresh JPEGs through the shared `VideoCapture` capability. `devices snapshot <id>` captures a frame; `--output state/preview.jpg` explicitly saves it. The `device` MCP's `capture_image` tool receives native image content for user-requested visual questions. Video stays separate from microphone selection, generic events and long-term memory. No continuous capture or automatic visual trigger is enabled.
 
 HomePod temperature/humidity uses the optional [Apple Home adapter](src/assistant_runtime/plugins/apple_home/README.md), separate from AirPlay playback. Enable `apple_home`, declare a sensor endpoint, associate it with the speaker using `physical_id`, and configure the once-only paired refresh bridge/Home automation. Sensor `readings` include separate validity, source time, unit and age per metric; expired or calibrating data is never a current value. This source neither wakes the assistant nor captures memory. Existing CLI and device MCP queries discover it without new HomePod-specific tools.
+
+## Optional camera gateway (go2rtc)
+
+`docker-compose.yml` runs only the official go2rtc 1.9.14 camera gateway. It uses Linux host networking, with HTTP on `0.0.0.0:8553`, RTSP on `0.0.0.0:8554`, and WebRTC TCP/UDP on `0.0.0.0:8555`. This gateway has its own lifecycle; the assistant continues to run through its existing user service. A gateway alone does not register a camera capability with the assistant.
+
+See the [go2rtc Docker device onboarding guide](deploy/go2rtc.md) for private configuration, USB mappings and permissions, adding multiple cameras, unplug/replug recovery, Linux host migration and acceptance checks. Read it before adding a camera or changing the gateway deployment. The current installation's Xiaomi authorization and access instructions live in private, ignored `state/go2rtc/`.
+
+```sh
+docker compose up -d
+docker compose ps
+docker compose logs --tail 100 go2rtc
+docker compose restart go2rtc
+docker compose stop go2rtc
+```
+
+Open `http://SERVER_IP:8553/`. The configured access credential is in private `state/go2rtc/access.txt`. `restart: unless-stopped` provides persistence across Docker startup; a deliberate stop stays stopped. The health check reports API availability, not successful video capture.
 
 ## Memory
 

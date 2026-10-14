@@ -1,16 +1,14 @@
 """Authenticated HTTP/SSE entrance; conversation ownership stays in the host."""
 
 import asyncio
-import io
 import ipaddress
 import json
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
-import uuid
 
 from aiohttp import web
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import UnidentifiedImageError
 
 from ...kernel.runtime import Manifest
 from .auth import Access
@@ -204,29 +202,10 @@ class WebPlugin:
                 if len(data) > 10 * 1024 * 1024:
                     raise ValueError("单张图片不能超过 10 MB")
 
-            def decode():
-                with Image.open(io.BytesIO(data)) as image:
-                    if image.format not in ("JPEG", "PNG", "WEBP") or image.width * image.height > 20_000_000:
-                        raise ValueError("请使用不超过 2000 万像素的 JPEG、PNG 或 WebP 图片")
-                    image = ImageOps.exif_transpose(image)
-                    image.thumbnail((2048, 2048))
-                    image = image.convert("RGB")
-                    result = io.BytesIO()
-                    image.save(result, format="JPEG", quality=90)
-                    return result.getvalue()
-
-            normalized = await asyncio.to_thread(decode)
-            ident = uuid.uuid4().hex
-            path = self.uploads / ident
-            path.write_bytes(normalized)
-            path.chmod(0o600)
-            filename = Path(field.filename or "图片").name[:120]
-            with self.db:
-                self.db.execute(
-                    "INSERT INTO chat_uploads VALUES(?,?,?,?,0)", (ident, filename, "image/jpeg", time.time())
-                )
+            media = await self.conversation.images.add(data, field.filename)
+            ident = media["id"]
             return web.json_response(
-                {"id": ident, "name": filename, "url": f"/api/uploads/{ident}"}, status=201
+                {"id": ident, "name": media["name"], "url": f"/api/uploads/{ident}"}, status=201
             )
 
     async def image(self, request):

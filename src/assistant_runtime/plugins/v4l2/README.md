@@ -1,5 +1,7 @@
 # V4L2 camera integration
 
+The current composition root does not register this adapter. Use the [go2rtc integration](../go2rtc/README.md) for camera onboarding; the implementation below is inactive in the deployed assistant.
+
 Linux UVC cameras with an exact `/dev/v4l/by-id/*-video-index0` or
 `/dev/v4l/by-path/*-video-index0` identity use the `v4l2` adapter. UGREEN Camera 2K
 and other MJPEG/YUYV cameras share this driver; no host or brand is hard-coded.

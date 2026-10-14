@@ -130,7 +130,17 @@ The microphone and existing speakers now use `devices.<logical_id>` configuratio
 - 94 development tests pass, including provider ownership, external routing with the same microphone, unknown volume preservation, reference cleanup, queue bounds/old audio discard and specific output labels sharing a room.
 - Evidence: `state/acceptance/airplay-homepod/real-devices.json`, `state/homepod-onboarding-run.log`. The measured chime location is 7.22 seconds from mic capture start, including preroll/stream setup/receiver buffering; it is not word-end assistant response latency. Fast acoustic interruption, long-duration stability and HomePod echo cancellation experience have not been separately established.
 
-## V4L2 camera onboarding
+## go2rtc video gateway onboarding
+
+- The installed `living_camera` keeps its logical ID, label, location and physical association, and now uses the `go2rtc` adapter. USB identity/format and acquisition belong to the Docker gateway; the assistant requests snapshots through the unchanged video capability, CLI and device MCP. The old direct V4L2 factory is no longer registered; its inactive source files are retained after automatic approval rejected their deletion.
+- Repeated independently decoded, nonblank 1280×720 JPEGs passed through the installed capability socket, with successful-run acquisition times around 0.35–0.48 seconds. Actual Codex list/inspect/capture calls returned native image content; its scene description matched the private preview. The first model attempt returned `serverOverloaded`; the later unchanged-model retry passed.
+- Stopping the real Docker gateway made inspect report unavailable and capture return an error rather than earlier pixels. Starting it restored fresh capture. The microphone, selected output and logical session remained intact. A separate assistant service restart preserved the session/output and restored real capture. Physical USB hotplug and whole-machine reboot were not performed.
+- A ten-second isolated adapter idle sample used 0.0031 CPU seconds (0.03% of one core), with 40,288 KiB process RSS and a 4 KiB RSS change. This includes the probe process and imported dependencies, not the whole assistant or gateway. Metadata-only observation performed zero acquisitions.
+- The complete development gate passed 154 tests, including HTTP authentication, redirect rejection, response bounds, invalid JPEGs, source/generation changes, concurrent acquisition, cancellation, timeout, outage/recovery, shared routing, MCP image delivery, reply-image recovery and deeply nested provider metadata.
+- Fresh-install configuration was checked in an isolated container with networking disabled: first-stream addition returned HTTP 200 and persisted the source. The inline empty `streams: {}` configuration that caused an unsaved HTTP 400 result is removed from the example. Installed desktop/mobile browsers passed existing-image preview, reload and connection recovery without another capture or model task.
+- Private evidence: `state/acceptance/video/real-devices.json` (Codex), `local-recovery.json` (gateway/service recovery), `idle-adapter.json`, `codex-capacity-first.json` and the explicitly saved `preview.jpg`. No HTML report is generated.
+
+## Historical direct V4L2 camera onboarding
 
 - The UGREEN USB video endpoint is registered as `living_camera`, separate from its PipeWire microphone, using an instance-configured stable by-id path.
 - Installed `devices snapshot` returned fresh, independently decoded 1280×720 JPEGs in roughly 0.34–0.50 seconds. Microphone capture remained recent and the selected output stayed unchanged.

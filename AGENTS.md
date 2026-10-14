@@ -4,6 +4,7 @@
 - `kernel/` imports only the standard library and its contracts. Never import plugins there.
 - Keep Codex protocol fields inside `plugins/codex/`; native voice and task delegation share one owner.
 - Add a capability contract and an adapter for a new device/provider. Do not add hardware branches to the assistant.
+- Before changing go2rtc deployment or adding cameras through it, read `deploy/go2rtc.md` for device mapping, stable identity, permissions, reconnection and acceptance.
 - No paid API fallback, raw recording by default, automatic room fallback, or extra audio gain.
 - Wake word, assistant display name, output names and hardware identities are instance configuration.
 - Event notifications must not wait for device reconnect, model inference, or memory retrieval.

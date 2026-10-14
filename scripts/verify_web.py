@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import io
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -23,6 +24,8 @@ from assistant_runtime.plugins.codex.backend import CodexBackend
 from assistant_runtime.plugins.codex.native import NativeVoice
 from assistant_runtime.conversation.service import Conversation
 from assistant_runtime.plugins.web.plugin import WebPlugin
+from assistant_runtime.cli import request
+from assistant_runtime.plugins.web.settings import WebSettings
 
 
 class AcceptanceHost:
@@ -291,11 +294,276 @@ async def run(config):
             print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
 
 
+async def check_reply_images(config):
+    """Real subscription/MCP/browser path with a synthetic large camera image."""
+    from assistant_runtime.kernel.contracts import VideoFrame
+
+    evidence = config.state_dir / "acceptance/web-images"
+    evidence.mkdir(parents=True, exist_ok=True)
+    result = {"passed": False, "synthetic_camera": True, "started": time.time()}
+    with tempfile.TemporaryDirectory(prefix="reply-images-") as folder:
+        root = Path(folder)
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        spec = {"adapter": "acceptance", "kind": "camera", "label": "验收相机", "connection": {}}
+        isolated = replace(
+            config,
+            root=root,
+            workspace=str(root),
+            codex_sandbox="read-only",
+            devices={"fixture_camera": spec},
+            plugins=[*config.plugins, "acceptance"],
+            web={"enable": True, "host": "127.0.0.1", "port": port},
+        )
+        host = AcceptanceHost(isolated)
+        source = io.BytesIO()
+        Image.effect_noise((640, 480), 100).convert("RGB").save(source, format="JPEG", quality=92)
+        frame = source.getvalue()
+        captures = 0
+
+        async def connection(reader, writer):
+            nonlocal captures
+            try:
+                d = json.loads(await reader.readline())
+                if d.get("command") != "devices":
+                    raise ValueError("Camera fixture permits only device queries/capture")
+                if d["action"] == "snapshot" and d["device_id"] == "fixture_camera":
+                    captures += 1
+                    data = await host.conversation.capture_reply(
+                        VideoFrame("fixture_camera", frame, 640, 480, time.time(), captures)
+                    )
+                elif d["action"] == "list":
+                    data = {
+                        "devices": [
+                            {
+                                "id": "fixture_camera",
+                                "label": "验收相机",
+                                "kind": "camera",
+                                "capabilities": ["video.snapshot"],
+                                "state": "available",
+                            }
+                        ]
+                    }
+                else:
+                    raise ValueError("Unexpected fixture action")
+                reply = {"ok": True, "result": data}
+            except Exception as exc:
+                reply = {"ok": False, "error": str(exc)}
+            writer.write((json.dumps(reply) + "\n").encode())
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(connection, path=isolated.socket)
+        try:
+            await host.start()
+            token = (isolated.state_dir / "web-access-token").read_text().strip()
+            origin = f"http://127.0.0.1:{port}"
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                contexts = [
+                    await browser.new_context(viewport={"width": 1280, "height": 900}),
+                    await browser.new_context(
+                        viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True
+                    ),
+                ]
+                pages = [await context.new_page() for context in contexts]
+                errors = []
+                for page in pages:
+                    page.on("pageerror", lambda e: errors.append(str(e)))
+                    await page.goto(origin)
+                    await page.locator('input[type="password"]').fill(token)
+                    await page.get_by_role("button", name="进入对话", exact=True).click()
+                    await page.get_by_label("消息", exact=True).wait_for()
+                a, b = pages
+                await a.get_by_label("消息", exact=True).fill(
+                    "验收图片显示。必须使用 device MCP 的 list_devices 和 capture_image(device_id=fixture_camera) 返回一张截图，然后简短回复已返回。只用这两个工具，不用shell、记忆或其它控制，不需要分析图片。"
+                )
+                await a.get_by_role("button", name="发送", exact=True).click()
+                await until(lambda: host.backend.busy or host.conversation.web_dispatching)
+                await until(lambda: not host.backend.busy and not host.conversation.web_dispatching)
+                assert captures == 1
+                for page in pages:
+                    await page.locator("article.assistant .message-images img").first.wait_for()
+                    await page.locator(
+                        "article.assistant .message-images img"
+                    ).first.scroll_into_view_if_needed()
+                    await page.wait_for_function(
+                        "() => document.querySelector('article.assistant .message-images img').naturalWidth === 640"
+                    )
+                asset = a.locator("article.assistant .message-images img").first
+                src = await asset.get_attribute("src")
+                assert src == await b.locator("article.assistant .message-images img").first.get_attribute(
+                    "src"
+                )
+                assert await asset.evaluate("i => !i.closest('details')")
+                response = await a.request.get(origin + src)
+                assert len(await response.body()) > 65000
+                await asset.click()
+                await a.locator(".lightbox img").wait_for()
+                await a.wait_for_function(
+                    "() => document.querySelector('.lightbox img').naturalWidth === 640"
+                )
+                await a.keyboard.press("Escape")
+                await b.reload()
+                await b.locator("article.assistant .message-images img").first.wait_for()
+                assert src == await b.locator("article.assistant .message-images img").first.get_attribute(
+                    "src"
+                )
+                session = host.backend.session_id
+                # Exercise recovery of a missing projection using the real stored
+                # provider result; do not call the camera fixture a second time.
+                with host.store.db:
+                    host.store.db.execute("UPDATE chat_messages SET attachments='[]' WHERE role='assistant'")
+                await host.close()
+                host = AcceptanceHost(isolated)
+                await host.start()
+                assert host.backend.session_id == session
+                await host.conversation.image_queue.join()
+                await a.reload()
+                await a.locator("article.assistant .message-images img").first.wait_for()
+                await a.locator("article.assistant .message-images img").first.scroll_into_view_if_needed()
+                await a.wait_for_function(
+                    "() => document.querySelector('article.assistant .message-images img').naturalWidth === 640"
+                )
+                assert src == await a.locator("article.assistant .message-images img").first.get_attribute(
+                    "src"
+                )
+                assert captures == 1
+                assert not errors, errors
+                assert host.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0] == 1
+                await browser.close()
+                result.update(
+                    passed=True,
+                    captures=captures,
+                    original_bytes=len(frame),
+                    full_image_served=True,
+                    preview=True,
+                    desktop_mobile_sync=True,
+                    reload=True,
+                    restart_backfill_without_recapture=True,
+                    browser_errors=errors,
+                )
+        finally:
+            await host.close()
+            server.close()
+            await server.wait_closed()
+            result["finished"] = time.time()
+            (evidence / "subscription.json").write_text(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+
+
+async def check_installed_images(config):
+    """Read-only browser checks against the installed loopback UI; no room capture."""
+    settings = WebSettings.parse(config.web)
+    if settings.host not in {"0.0.0.0", "127.0.0.1"}:
+        raise ValueError("Installed browser acceptance requires a local loopback listener")
+    origin = f"http://127.0.0.1:{settings.port}"
+    token = settings.credential_path(config.state_dir).read_text().strip()
+    before = await request(config, {"command": "status"})
+    captures = {d["id"]: d["data"].get("capture_count") for d in before["devices"] if d["kind"] == "camera"}
+    result = {"passed": False, "started": time.time(), "fresh_capture_requested": False}
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            desktop = await browser.new_context(viewport={"width": 1280, "height": 900})
+            mobile = await browser.new_context(
+                viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True
+            )
+            a, b = await desktop.new_page(), await mobile.new_page()
+            errors = []
+            for page in (a, b):
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                await page.goto(origin)
+                await page.locator('input[type="password"]').fill(token)
+                await page.get_by_role("button", name="进入对话", exact=True).click()
+                await page.locator("article.assistant .message-images img").first.wait_for()
+                await page.wait_for_function("""() => {
+                    const images = [...document.querySelectorAll('article.assistant .message-images img')];
+                    return images.length && images.every(i => i.complete && i.naturalWidth > 0);
+                }""")
+
+            def image_state(page):
+                return page.locator("article.assistant .message-images img").evaluate_all(
+                    "images => images.map(i => ({src: i.getAttribute('src'), width: i.naturalWidth, height: i.naturalHeight, outsideDetails: !i.closest('details')}))"
+                )
+
+            first = await image_state(a)
+            assert first == await image_state(b)
+            assert all(i["outsideDetails"] for i in first)
+            await a.locator("article.assistant .message-images img").first.click()
+            await a.locator(".lightbox img").wait_for()
+            await a.wait_for_function("() => document.querySelector('.lightbox img').naturalWidth > 0")
+            await a.keyboard.press("Escape")
+            await a.locator(".lightbox").wait_for(state="detached")
+            await b.reload()
+            await b.locator("article.assistant .message-images img").first.wait_for()
+            await b.wait_for_function(
+                "() => [...document.querySelectorAll('article.assistant .message-images img')].every(i => i.complete && i.naturalWidth > 0)"
+            )
+            assert first == await image_state(b)
+            await desktop.set_offline(True)
+            await desktop.set_offline(False)
+            await a.reload()
+            await a.locator("article.assistant .message-images img").first.wait_for()
+            await a.wait_for_function(
+                "() => [...document.querySelectorAll('article.assistant .message-images img')].every(i => i.complete && i.naturalWidth > 0)"
+            )
+            assert first == await image_state(a)
+            assert not errors, errors
+            # Sign out these test browser sessions only; never output credentials/cookies.
+            for page in (a, b):
+                response = await page.request.post(
+                    origin + "/api/logout", headers={"Origin": origin}, data={}
+                )
+                assert response.status == 200
+            await browser.close()
+            result.update(
+                assistant_images=first,
+                desktop_mobile_sync=True,
+                image_preview=True,
+                reload_and_network_recovery=True,
+                browser_errors=errors,
+            )
+        after = await request(config, {"command": "status"})
+        assert after["session_id"] == before["session_id"]
+        assert after["capture_recent"]
+        assert captures == {
+            d["id"]: d["data"].get("capture_count") for d in after["devices"] if d["kind"] == "camera"
+        }
+        result["passed"] = True
+    finally:
+        result["finished"] = time.time()
+        path = config.state_dir / "acceptance/web-images/installed.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+        path.chmod(0o600)
+        print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="config.toml")
+    parser.add_argument(
+        "--installed-images",
+        action="store_true",
+        help="Verify existing assistant images in the installed loopback UI; no new capture or model task",
+    )
+    parser.add_argument(
+        "--reply-images",
+        action="store_true",
+        help="Real Codex/MCP/browser image regression with a synthetic camera; no room capture",
+    )
     args = parser.parse_args()
-    asyncio.run(run(Config.load(args.config)))
+    if args.reply_images and args.installed_images:
+        parser.error("Choose one image acceptance mode")
+    verify = (
+        check_reply_images
+        if args.reply_images
+        else (check_installed_images if args.installed_images else run)
+    )
+    asyncio.run(verify(Config.load(args.config)))
 
 
 if __name__ == "__main__":

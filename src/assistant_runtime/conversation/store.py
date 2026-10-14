@@ -74,6 +74,7 @@ class ConversationStore:
         status="streaming",
         turn_id=None,
         attachments=None,
+        updated_at=None,
     ):
         old = self.get(ident)
         if old and old["session_id"] != session:
@@ -103,7 +104,7 @@ class ConversationStore:
                     old["ordinal"] if old else seq,
                     *values[:6],
                     json.dumps(attachments),
-                    time.time(),
+                    time.time() if updated_at is None else updated_at,
                 ),
             )
         return self.get(ident)

@@ -8,8 +8,6 @@ import logging
 import os
 import signal
 import time
-import base64
-from dataclasses import asdict
 
 import miniaudio
 import numpy as np
@@ -340,9 +338,7 @@ class AssistantService:
             elif action == "devices":
                 if d.get("action") == "snapshot":
                     frame = await self.runtime.invoke(VideoCapture(d.get("device_id")))
-                    metadata = asdict(frame)
-                    metadata.pop("data")
-                    result = {"frame": {**metadata, "data_base64": base64.b64encode(frame.data).decode()}}
+                    result = await self.conversation.capture_reply(frame)
                 else:
                     result = await self.runtime.invoke(
                         DeviceQuery(d.get("action", "list"), d.get("device_id"))
