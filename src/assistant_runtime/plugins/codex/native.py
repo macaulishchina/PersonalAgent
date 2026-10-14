@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from .browser_audio import BrowserAudio
+from .conversation import voice_event
 
 
 class NativeVoice:
@@ -22,11 +23,33 @@ class NativeVoice:
         self.output_frames = 0
         self.open_timing_ms = {}
         self.rtp_stats = []
+        self.on_conversation = None
+        self.web_silent = False
+        self.suppressed_turns = set()
+        self.assistant_turns = set()
 
     def media_event(self, data, epoch):
         if epoch != self.epoch or self.closing:
             return
         kind = data.get("type")
+        turn = data.get("turn", {})
+        ident = turn.get("id") or data.get("turn_id")
+        if kind == "turn.created" and turn.get("role") == "assistant":
+            self.assistant_turns.add(ident)
+        if kind == "turn.done":
+            self.assistant_turns.discard(ident)
+        if kind == "turn.created" and turn.get("role") == "user":
+            self.web_silent = False
+        if turn.get("role") == "assistant" and self.web_silent:
+            self.suppressed_turns.add(ident)
+        if ident in self.suppressed_turns:
+            if kind == "turn.done":
+                self.suppressed_turns.discard(ident)
+            return
+        if self.on_conversation:
+            event = voice_event(data)
+            if event:
+                self.on_conversation(event, epoch)
         if kind == "turn.created" and data.get("turn", {}).get("role") == "user":
             self._task(self.on_event({"kind": "user_turn", "epoch": epoch}))
         elif kind == "error":
@@ -59,6 +82,9 @@ class NativeVoice:
         self.epoch += 1
         epoch = self.epoch
         self.closing = False
+        self.web_silent = False
+        self.suppressed_turns.clear()
+        self.assistant_turns.clear()
         self.ready.clear()
         self.last_error = None
         started = time.monotonic()
@@ -76,9 +102,7 @@ class NativeVoice:
                 await self.on_event({"kind": "disconnected", "epoch": epoch})
 
         def output(pcm):
-            if epoch == self.epoch and not self.closing:
-                self.output_frames += 1
-                self.on_audio(pcm)
+            self.deliver_audio(pcm, epoch)
 
         self.engine = BrowserAudio(output, event)
         for pcm in preroll:
@@ -94,6 +118,7 @@ class NativeVoice:
                     "threadId": self.backend.thread_id,
                     "version": "v3",
                     "outputModality": "audio",
+                    "clientManagedHandoffs": self.on_conversation is not None,
                     "voice": self.config.realtime_voice,
                     "transport": {"type": "webrtc", "sdp": sdp},
                     "prompt": f"你是{self.config.assistant_name}，用户的中文个人语音助手。用户已经唤醒你。简短自然地交流，听懂停顿和改口。普通聊天直接回答；文件操作、复杂任务或设备控制委派给 Codex。等待真实结果，不要假装完成。任务工作期间仍与用户交流，补充要求交给 Codex。用户插话就听，别继续旧回答。用户说结束对话时请 Codex 调用 audio_control sleep；停播不取消任务，明确取消才停止任务。",
@@ -101,7 +126,7 @@ class NativeVoice:
                     + getattr(self, "memory_context", "")
                     + "\n"
                     + getattr(self, "device_context", "")
-                    + "\n需要最新设备状态时委派 Codex 调用 device list / inspect；用户明确要求看当前画面时，委派 Codex 用 device snapshot 抓取已配置摄像头的一帧并分析，等待实际结果。你没有持续视频输入，不要猜测画面或主动打开摄像头。",
+                    + "\n需要最新设备状态或传感器读数时委派 Codex 调用 device MCP 的 list_devices / inspect_device，等待实际结果；每项读数都须有效且未过期，不用记忆或目录心跳猜测当前测量值。用户明确要求看当前画面时，委派 Codex 用 device MCP 的 capture_image 抓取已配置摄像头的一帧并分析，等待实际结果。你没有持续视频输入，不要猜测画面或主动打开摄像头。",
                     "realtimeEndInstructions": "用户语音会话结束。已开始的任务继续，保存真实工作结果，不重复执行。",
                 },
                 timeout=20,
@@ -115,6 +140,12 @@ class NativeVoice:
         except BaseException:
             await self.close()
             raise
+
+    def deliver_audio(self, pcm, epoch):
+        if epoch == self.epoch and not self.closing:
+            self.output_frames += 1
+            if not self.web_silent:
+                self.on_audio(pcm)
 
     async def _stats(self, epoch):
         while epoch == self.epoch and not self.closing:
@@ -149,9 +180,26 @@ class NativeVoice:
             )
 
     async def send_text(self, text):
+        self.web_silent = False
         return await self.backend.client.request(
             "thread/realtime/appendText", {"threadId": self.backend.thread_id, "role": "user", "text": text}
         )
+
+    def silence_web_reply(self):
+        """Web input selects silent output until the next actual voice user turn."""
+        self.web_silent = True
+        self.suppressed_turns.update(self.assistant_turns)
+        if self.on_conversation:
+            for ident in self.assistant_turns:
+                self.on_conversation({"kind": "interrupted", "message_id": ident}, self.epoch)
+
+    async def append_context(self, text):
+        if self.opened and not self.closing:
+            await self.backend.client.request(
+                "thread/realtime/appendText",
+                {"threadId": self.backend.thread_id, "role": "assistant", "text": text},
+                timeout=10,
+            )
 
     async def say(self, text):
         if self.opened and not self.closing:
@@ -160,6 +208,8 @@ class NativeVoice:
             )
 
     async def close(self):
+        if self.on_conversation:
+            self.on_conversation({"kind": "closed"}, self.epoch)
         self.closing = True
         self.epoch += 1
         self.ready.clear()

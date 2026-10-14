@@ -15,6 +15,11 @@ minimum_volume = 80
 # Background tasks keep running. At end, standby resumes; it does not speak.
 # quiet_hours = {enable = true, start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}
 # Set enable = false to disable silence while retaining the schedule.
+# Optional shared chat: voice profile, add "web" to plugins, build frontend first.
+# web = {enable = true, host = "127.0.0.1", port = 8046}
+# Optional Apple Home sensor source: install apple-home extra, add apple_home to plugins.
+# Use an explicit reachable LAN IP; pair the virtual bridge and configure Home automation.
+# apple_home = {host = "192.168.1.10", port = 8047, hap_port = 51827, poll_seconds = 60, refresh_timeout = 6}
 memory_enabled = true
 memory_auto_capture = true
 # root = "/absolute/path/to/instance"
@@ -43,12 +48,25 @@ memory_auto_capture = true
 # kind = "speaker"
 # label = "HomePod"
 # location = "客厅"
+# physical_id = "living_homepod"  # shared with the sensor endpoint below
 # max_age_seconds = 45
 # [devices.homepod.connection]
 # host = "192.168.1.50"
 # identifier = "discovered-raop-identifier"
 # timing_port = 49160
 # control_port = 49161
+
+# Optional sensor endpoint of the same HomePod; not provided by AirPlay.
+# [devices.homepod_environment]
+# adapter = "apple_home"
+# kind = "sensor"
+# label = "HomePod 温湿度"
+# location = "客厅"
+# physical_id = "living_homepod"
+# max_age_seconds = 180
+# [devices.homepod_environment.connection]
+# metrics = ["temperature", "humidity"]
+# trigger_name = "读取HomePod温湿度"
 
 # Optional Linux camera: install camera extra, add v4l2 to plugins. Audio is separate.
 # [devices.office_camera]

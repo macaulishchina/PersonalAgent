@@ -588,6 +588,22 @@ wheels = [
 ]
 
 [[package]]
+name = "hap-python"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chacha20poly1305-reuseable" },
+    { name = "cryptography" },
+    { name = "h11" },
+    { name = "orjson" },
+    { name = "zeroconf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/c1/5eaf042f06183ea87976f525bc69c309f57b20dabf2787023464b88b0393/hap_python-5.0.0.tar.gz", hash = "sha256:455d3ac0721cc9cbb6373cf8c9422c3182db2d95c472f94d3a65cc94dda7434d", size = 290982, upload-time = "2025-08-25T12:11:59.945Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/eb/57af891c844f80b193cc1da96e55ca14430e16739c12a7b48f21585f3d36/hap_python-5.0.0-py3-none-any.whl", hash = "sha256:c1ca3abc68adbfb0a4a50be3fff2399ab7ed7ac3d91f66f4e9d9d26037c04ed7", size = 264621, upload-time = "2025-08-25T12:11:58.668Z" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1188,6 +1204,24 @@ wheels = [
 ]
 
 [[package]]
+name = "orjson"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz", hash = "sha256:d1de5eb04485110c5da4c657e49168995d55e076b1ce60f1a042e254f4186c4f", size = 2732604, upload-time = "2026-10-07T14:09:25.719Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/17/ed65f84ed5ed6a1e06eb628611b4172e7480fc4ad92594856751a6363cac/orjson-3.13.0-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:fb8644dc6d705e1269ed2842bf4dbe2b4e50d670de503bf79d5cef3a5148a4c7", size = 223063, upload-time = "2026-10-07T14:08:21.979Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/4d/9332eb96d2e379384be0f211f543835eebc81f460c9403b84abe1294c431/orjson-3.13.0-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:6ff2a2c67f35202f7d823753d38ad371a9b7fc297567cdfff4420e763cb9f6f8", size = 123364, upload-time = "2026-10-07T14:08:24.026Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/06/558456b7da27e974a8c9ea09117b07119f6fa131cd62b8b9ecad9eea94e1/orjson-3.13.0-cp312-cp312-manylinux2014_armv7l.manylinux_2_17_armv7l.whl", hash = "sha256:65c4e0e106ccc7265b488385659117a6805c37d042f737558ecd68aa0c67ad8f", size = 113199, upload-time = "2026-10-07T14:08:25.476Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/f2/1187a9c09965620348262ec0f406868f6d7c234b2e9b5ee51020bdde5748/orjson-3.13.0-cp312-cp312-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:fbbad6b9b1da43f25c1f5b20cd5a268e028a2fc95d5a8d1ade6059973bc71584", size = 130329, upload-time = "2026-10-07T14:08:26.877Z" },
+    { url = "https://files.pythonhosted.org/packages/46/07/5d1a151bc11600434fe799e73abfc6a4d463d02e149a20e47c59d3a985ae/orjson-3.13.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ae1d895cf7bbfd50ef34bb63bb727b14514f259f3e3f8dd010783bd38e864c6e", size = 129072, upload-time = "2026-10-07T14:08:28.355Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/8c/bb07c368abbf4021c4cd01c12edb526e00090f7f750ff1b88da6e6b6c7a6/orjson-3.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bceadfd314bd238f584fc229a4bbaf0e573597e7a026dec5429fbf29fd66c641", size = 130612, upload-time = "2026-10-07T14:08:30.041Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/8d/4b66d19619ed344ac000ffea7c006477d0061d580646e736ef0e203759e8/orjson-3.13.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b74c30e56346aad067937d766846ee74c231d1d18aad3f324e9b9261de3b2d5e", size = 134632, upload-time = "2026-10-07T14:08:31.474Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/88/f8221f6593e37eb26ec4706e185b9ac6f38ff0c8f7bad5459844031ffd2d/orjson-3.13.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:4329c19b8a25693f60a77b867c9d2a3ab637b20e36f5b7bea7f5acb492b44b15", size = 126807, upload-time = "2026-10-07T14:08:32.914Z" },
+    { url = "https://files.pythonhosted.org/packages/58/9d/a1ca7321eeafd7d72e174cdc388cc96301f41516d863e7b1f64f0a1735be/orjson-3.13.0-cp312-cp312-win_amd64.whl", hash = "sha256:b571236d8393edcd3236e07423f762bfcf571f852aad667a3bce9e7b755e0790", size = 121538, upload-time = "2026-10-07T14:08:34.325Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/a0/1f19b4779c910104370932fceb9ed436b47ac077f297db74008062525c04/orjson-3.13.0-cp312-cp312-win_arm64.whl", hash = "sha256:8594956a75223f657e1e68c568c0eeb3dd145f02cd6b78a47fd9a8095dbc4eae", size = 126259, upload-time = "2026-10-07T14:08:35.765Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1224,6 +1258,10 @@ airplay = [
     { name = "imageio-ffmpeg" },
     { name = "pyatv" },
 ]
+apple-home = [
+    { name = "aiohttp" },
+    { name = "hap-python" },
+]
 camera = [
     { name = "imageio-ffmpeg" },
     { name = "pillow" },
@@ -1250,12 +1288,19 @@ voice = [
     { name = "sherpa-onnx-core" },
     { name = "soxr" },
 ]
+web = [
+    { name = "aiohttp" },
+    { name = "pillow" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'apple-home'", specifier = ">=3.14,<4" },
     { name = "aiohttp", marker = "extra == 'voice'", specifier = ">=3.14,<4" },
+    { name = "aiohttp", marker = "extra == 'web'", specifier = ">=3.14,<4" },
     { name = "fastembed", marker = "extra == 'memory'", specifier = "==0.9.0" },
     { name = "fastmcp", marker = "extra == 'memory'", specifier = "==4.0.0b1" },
+    { name = "hap-python", marker = "extra == 'apple-home'", specifier = "==5.0.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'airplay'", specifier = "==0.6.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'camera'", specifier = "==0.6.0" },
     { name = "kaldi-native-fbank", marker = "extra == 'voice'", specifier = "==1.22.3" },
@@ -1266,6 +1311,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "extra == 'voice'", specifier = "==1.31.0" },
     { name = "pillow", marker = "extra == 'camera'", specifier = ">=12,<13" },
+    { name = "pillow", marker = "extra == 'web'", specifier = ">=12,<13" },
     { name = "playwright", marker = "extra == 'voice'", specifier = "==1.63.0" },
     { name = "pyatv", marker = "extra == 'airplay'", specifier = "==0.18.0" },
     { name = "pywebrtc-audio", marker = "extra == 'voice'", specifier = "==0.2.0" },
@@ -1274,7 +1320,7 @@ requires-dist = [
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "soxr", marker = "extra == 'voice'", specifier = ">=0.5" },
 ]
-provides-extras = ["voice", "airplay", "camera", "memory", "dev"]
+provides-extras = ["voice", "web", "airplay", "apple-home", "camera", "memory", "dev"]
 
 [[package]]
 name = "pillow"

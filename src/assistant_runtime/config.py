@@ -33,6 +33,8 @@ class Config:
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
     quiet_hours: dict[str, str | bool] = field(default_factory=dict)
+    web: dict = field(default_factory=dict)
+    apple_home: dict = field(default_factory=dict)
     input_device: str = ""
     default_output: str = ""
     minimum_volume: int = 80
@@ -54,6 +56,12 @@ class Config:
     memory_auto_capture: bool = True
 
     def __post_init__(self):
+        from assistant_runtime.plugins.web.settings import WebSettings
+
+        from assistant_runtime.plugins.apple_home.settings import AppleHomeSettings
+
+        WebSettings.parse(self.web)
+        AppleHomeSettings.parse(self.apple_home)
         QuietHours.from_settings(self.quiet_hours)
         for name in (
             "codex_model",
@@ -72,12 +80,24 @@ class Config:
         for ident, spec in self.devices.items():
             if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", ident) or not isinstance(spec, dict):
                 raise ValueError("Invalid device ID or definition")
-            allowed = {"adapter", "kind", "label", "location", "connection", "enabled", "max_age_seconds"}
+            allowed = {
+                "adapter",
+                "kind",
+                "label",
+                "location",
+                "connection",
+                "enabled",
+                "max_age_seconds",
+                "physical_id",
+            }
             if set(spec) - allowed:
                 raise ValueError(f"Unknown device settings: {ident}")
             for name in ("adapter", "kind", "label"):
                 if not isinstance(spec.get(name), str) or not spec[name].strip() or len(spec[name]) > 120:
                     raise ValueError(f"Invalid device {name}: {ident}")
+            physical = spec.get("physical_id", ident)
+            if not isinstance(physical, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", physical):
+                raise ValueError("Invalid physical device association")
             if not isinstance(spec.get("connection"), dict):
                 raise ValueError(f"Device connection must be a table: {ident}")
             if not isinstance(spec.get("location", ""), str) or len(spec.get("location", "")) > 120:

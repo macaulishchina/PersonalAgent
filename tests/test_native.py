@@ -200,6 +200,41 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
         await voice.notification("thread/realtime/transcript/done", {"role": "user", "text": "结束对话"})
         self.assertEqual(events.await_count, 1)  # final text only, no provider event or sideband duplicates
 
+    async def test_web_reply_silent_until_real_voice_turn_and_old_turn_stays_hidden(self):
+        events, output = AsyncMock(), Mock()
+        voice = NativeVoice(None, None, output, events)
+        voice.on_conversation = Mock()
+        voice.media_event(
+            {"type": "turn.created", "turn": {"id": "old", "role": "assistant", "transcript": "旧回答"}},
+            voice.epoch,
+        )
+        voice.on_conversation.reset_mock()
+        voice.silence_web_reply()
+        voice.on_conversation.assert_called_once_with(
+            {"kind": "interrupted", "message_id": "old"}, voice.epoch
+        )
+        voice.on_conversation.reset_mock()
+        voice.deliver_audio(b"pcm", voice.epoch)
+        output.assert_not_called()
+        voice.media_event(
+            {"type": "turn.created", "turn": {"id": "silent", "role": "assistant", "transcript": "网页回复"}},
+            voice.epoch,
+        )
+        voice.on_conversation.assert_not_called()
+        voice.media_event(
+            {"type": "turn.created", "turn": {"id": "user", "role": "user", "transcript": "继续"}},
+            voice.epoch,
+        )
+        self.assertFalse(voice.web_silent)
+        voice.media_event(
+            {"type": "turn.done", "turn": {"id": "silent", "role": "assistant", "transcript": "网页回复"}},
+            voice.epoch,
+        )
+        voice.deliver_audio(b"new", voice.epoch)
+        output.assert_called_once_with(b"new")
+        await asyncio.gather(*voice.tasks)
+        self.assertFalse(any(c.args[0].get("text") == "网页回复" for c in events.await_args_list))
+
     async def test_wake_uses_raw_microphone_not_echo_filtered_keyword(self):
         s = AssistantService.__new__(AssistantService)
         s.active = False

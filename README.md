@@ -57,6 +57,54 @@ Optional `quiet_hours = {enable = true, start = "23:00", end = "07:00", timezone
 
 For a core-only, hardware-free installation use `uv sync --locked`; `profile="headless"` runs management/explicit-trigger validation without voice, models, Codex or memory. Missing capabilities are reported rather than simulated as completed tasks.
 
+## Memory and device MCP services
+
+The assistant connects two independent local MCP servers. They reuse the existing host capability handlers and one `.venv`; no new device driver or memory database runs inside MCP.
+
+| Server | Tools |
+| --- | --- |
+| `memory` | `search_memory`, `read_memory`, `remember_memory`, `update_memory`, `forget_memory` |
+| `device` | `list_devices`, `inspect_device`, `capture_image`, `select_audio_output`, `set_audio_volume`, `stop_playback`, `end_voice_conversation`, `get_task_status`, `cancel_task` |
+
+Memory updates require the current revision obtained from `read_memory`; read/search never save facts. Device queries read the shared live inventory, so newly onboarded sensors/cameras/speakers appear without editing MCP. Supported read capabilities are listed in each device descriptor. Adding a new kind of actuator command still requires an explicit capability and tool. Stop playback and cancel task remain distinct; task-status queries do not cause speech.
+
+Codex registers both services only in this project's foreground thread, with the already authorized local-operation permissions. Memory-curation threads disable them. Another MCP client can launch either service independently with `.venv/bin/python -m assistant_runtime.mcp memory --socket /path/to/instance/state/control.sock` or replace `memory` with `device`. Use the actual `Config.socket` path (see `doctor`/instance root); the combined `personal_agent` MCP is removed. Registration does not alter global Codex settings or memory identities on disk.
+
+For repeatable isolated verification run `.venv/bin/python scripts/verify_mcp.py --config config.toml`. This checks separate real stdio inventories, actual Mem0 create/read/update/search/forget and revision conflicts, newly registered synthetic devices, native image content, and real Codex calls to both servers. It uses temporary synthetic state, no room capture/playback or production memories. Private evidence goes to `state/acceptance/mcp/`.
+
+## Shared Web chat
+
+The optional `web` plugin is a text-and-image entrance to the **same persistent conversation** as native voice. It is not a new assistant, task thread, or management website. It runs inside the existing service. Browser tabs receive ordered message snapshots over resumable SSE; duplicate request IDs do not execute twice. Historical transcripts are imported locally and marked as historical records.
+
+Build once with Node/npm; the deployed service needs only Python:
+
+```sh
+uv sync --locked --extra voice --extra memory --extra web --extra dev
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+Retain any other enabled extras, such as `airplay` and `camera`, when running `uv sync`. In the voice-profile instance configuration, add `"web"` to the existing `plugins` list and add this top-level setting before any TOML tables:
+
+```toml
+web = {enable = true, host = "0.0.0.0", port = 8046}
+```
+
+Restart with `.venv/bin/personal-agent --config config.toml restart`. Open `http://SERVER_IP:8046/`. The existing report server on 8045 is independent. At first startup a random access credential is written to `<instance-root>/state/web-access-token`, readable only by the service account. Read it locally and enter it on the login page; do not commit it or put it in a URL. `web.token_file` optionally overrides that path. An explicitly approved existing password can be pinned with `web.approved_short_password_sha256` in private instance configuration; only that exact password (at least eight characters) is exempt from the normal 24-character minimum. This does not change or regenerate the credential file. Browser login lasts seven days and survives service restarts. To rotate access, replace that file with a new strong random token and restart; existing cookies are invalidated. Bind to `127.0.0.1` for SSH tunnels or use a trusted LAN/VPN. The plain HTTP listener is not intended for public Internet exposure.
+
+The page supports text, paste/drop/upload of up to four JPEG/PNG/WebP images (10 MB each), Markdown/code copying, task details, stop playback, and cancel task. There is no browser audio input/output. Web messages select silent playback until the next actual voice user turn; microphone reception and background work continue. Quiet hours affect voice only. A new message during a task steers that task instead of replacing it. Interrupted or uncertain outcomes are shown, never automatically replayed.
+
+Chat data and normalized images live in private `state/`; unattached uploads expire after a day. Never expose that directory through a static file server. Final voice transcripts are synchronized into the provider task context without creating tasks; Web input/results update live voice context. If synchronization fails, the page displays the failure. Different tabs converge on the same authoritative server state; while disconnected they display their last received state, then catch up.
+
+Validation:
+
+```sh
+.venv/bin/python scripts/check.py
+.venv/bin/python scripts/verify_web.py --config config.toml
+```
+
+The second command uses real subscription calls, two isolated browsers, synthetic speech and a generated image in a temporary workspace. It neither records the room nor plays through speakers, and does not read production conversation history. Private acceptance evidence is written to `state/acceptance/web/`. Frontend changes require a rebuild; the standard check runs its build when its dependencies are installed.
+
 ## Run and maintain
 
 ```sh
@@ -95,15 +143,17 @@ The unit is `personal-agent.service`. `--output /tmp/personal-agent.service` ren
 
 The [hardware onboarding acceptance report](reports/DEVICE_ONBOARDING.html) records the actual microphone/speaker, acoustic, Codex tool and service-restart checks.
 
-All physical endpoints use `devices.<logical_id>`, with `adapter`, `kind`, `label`, optional `location`/`enabled`/`max_age_seconds`, and an adapter-owned `connection` table. Old top-level microphone/speaker maps are removed. The default voice input/output are explicit logical IDs (`input_device` and `default_output`). At most 32 devices are allowed. The shared directory reports capabilities, timestamped availability and freshness; it never substitutes another device or exposes connection secrets to AI. `available` means the hardware node is present; it does not by itself prove physical sound/capture. `capturing` and `route_ready` describe active audio use separately.
+All physical endpoints use `devices.<logical_id>`, with `adapter`, `kind`, `label`, optional `location`/`enabled`/`max_age_seconds`/`physical_id`, and an adapter-owned `connection` table. Old top-level microphone/speaker maps are removed. The default voice input/output are explicit logical IDs (`input_device` and `default_output`). At most 32 devices are allowed. The shared directory reports capabilities, timestamped availability and freshness; it never substitutes another device or exposes connection secrets to AI. `available` means the hardware node is present; it does not by itself prove physical sound/capture. `capturing` and `route_ready` describe active audio use separately.
 
 For another PipeWire microphone/speaker, add its device table and stable identity, choose input/output if needed, restart, then inspect it. Unknown/duplicate/ambiguous identities fail rather than select the first device. The [PipeWire integration guide](src/assistant_runtime/plugins/pipewire/README.md) contains the supported connection schema and repeatable real-device acceptance command.
 
-For another protocol, add one trusted adapter factory via `local_plugins`/`plugins`. Its startup registers each configured device with `host.devices.register(owner, id, capabilities, async_probe)`; updates use `DeviceObservation` and `host.devices.observe`. The shared `DevicesPlugin` owns `DeviceQuery` dispatch by logical ID. Do not register another `DeviceQuery` handler in an individual adapter. Codex's existing `device` tool supports read-only `list` and `inspect` in addition to audio controls; it and CLI use the same runtime handler. Native voice receives the enabled inventory on session startup and delegates current-state queries to Codex. No observation activates a conversation or becomes long-term memory automatically.
+For another protocol, add one trusted adapter factory via `local_plugins`/`plugins`. Its startup registers each configured device with `host.devices.register(owner, id, capabilities, async_probe)`; updates use `DeviceObservation` and `host.devices.observe`. The shared `DevicesPlugin` owns `DeviceQuery` dispatch by logical ID. Do not register another `DeviceQuery` handler in an individual adapter. The existing device MCP's `list_devices` / `inspect_device` tools and CLI use the same runtime handler. Native voice receives the enabled inventory on session startup and delegates current-state queries to Codex. No observation activates a conversation or becomes long-term memory automatically.
 
 Read-only state integrations (including future sensor snapshots) reuse this directory/query/tool path. A new actuator action still needs a narrowly defined capability and tool contract. AirPlay/RAOP is now implemented by the optional [AirPlay adapter](src/assistant_runtime/plugins/airplay/README.md). Enable the airplay extra/plugin and configure the receiver identity and UDP ports; then select its logical ID through the existing room/device tool. Other media transports register an AudioOutputProvider and reuse the same routing/player contracts.
 
-Linux USB video uses the optional [V4L2 adapter](src/assistant_runtime/plugins/v4l2/README.md). Enable the camera extra and v4l2 plugin, then configure a camera endpoint with a stable USB video path and supported format/dimensions. `devices snapshot <id>` captures one fresh JPEG through the shared `VideoCapture` capability; `--output state/preview.jpg` explicitly saves it. Codex's existing `device snapshot` tool receives native image content for user-requested visual questions. Video stays separate from microphone selection, generic events and long-term memory. No continuous capture or automatic visual trigger is enabled.
+Linux USB video uses the optional [V4L2 adapter](src/assistant_runtime/plugins/v4l2/README.md). Enable the camera extra and v4l2 plugin, then configure a camera endpoint with a stable USB video path and supported format/dimensions. `devices snapshot <id>` captures one fresh JPEG through the shared `VideoCapture` capability; `--output state/preview.jpg` explicitly saves it. The `device` MCP's `capture_image` tool receives native image content for user-requested visual questions. Video stays separate from microphone selection, generic events and long-term memory. No continuous capture or automatic visual trigger is enabled.
+
+HomePod temperature/humidity uses the optional [Apple Home adapter](src/assistant_runtime/plugins/apple_home/README.md), separate from AirPlay playback. Enable `apple_home`, declare a sensor endpoint, associate it with the speaker using `physical_id`, and configure the once-only paired refresh bridge/Home automation. Sensor `readings` include separate validity, source time, unit and age per metric; expired or calibrating data is never a current value. This source neither wakes the assistant nor captures memory. Existing CLI and device MCP queries discover it without new HomePod-specific tools.
 
 ## Memory
 
@@ -141,6 +191,7 @@ The pre-refactor Git tag is `baseline-before-refactor`. Code rollback must prese
 - `verify_memory.py`: repeat real Mem0/ChatGPT-subscription acceptance with isolated synthetic facts and actual MCP queries.
 - `verify_device_onboarding.py`: explicit microphone/speaker acoustic and Codex capability acceptance.
 - `verify_video_onboarding.py`: explicit camera capture, restart and optionally authorized Codex image acceptance.
+- `verify_environment.py`: isolated synthetic sensor source or real Apple Home readback, stdio MCP and optional Codex query/restart acceptance.
 
 One-off protocol probes, old model-comparison/training experiments, fixture-specific room tests and report generators have been removed. Their source remains available in Git history. Runtime and reusable hardware tests do not depend on them. Reports are produced only on an explicit user request.
 

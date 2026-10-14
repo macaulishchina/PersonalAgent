@@ -69,11 +69,60 @@ class VideoInputProvider(Protocol):
 
 
 @dataclass(frozen=True)
+class SensorReading:
+    """One metric's validity and source time, independent of device heartbeats."""
+
+    metric: str
+    value: float | None
+    unit: str
+    source: str
+    observed_at: float | None = None
+    status: str = "valid"
+
+    def __post_init__(self):
+        if (
+            not isinstance(self.metric, str)
+            or not self.metric
+            or len(self.metric) > 64
+            or not isinstance(self.unit, str)
+            or not self.unit
+            or len(self.unit) > 32
+        ):
+            raise ValueError("Invalid sensor metric/unit")
+        if not isinstance(self.source, str) or not self.source or len(self.source) > 200:
+            raise ValueError("Invalid sensor source")
+        if not isinstance(self.status, str) or self.status not in {
+            "valid",
+            "unavailable",
+            "calibrating",
+            "error",
+        }:
+            raise ValueError("Invalid sensor reading status")
+        if self.observed_at is not None and (
+            type(self.observed_at) not in (int, float)
+            or not math.isfinite(self.observed_at)
+            or self.observed_at < 0
+        ):
+            raise ValueError("Invalid sensor observation time")
+        if self.status == "valid":
+            if (
+                self.value is None
+                or type(self.value) not in (float, int)
+                or not math.isfinite(self.value)
+                or self.observed_at is None
+            ):
+                raise ValueError("Valid sensor reading requires a finite value and observation time")
+        elif self.value is not None:
+            raise ValueError("Unavailable sensor reading cannot contain a current value")
+
+
+@dataclass(frozen=True)
 class DeviceObservation:
     state: str
     data: dict[str, Any] = field(default_factory=dict)
     observed_at: float = field(default_factory=time.time)
     error: str | None = None
+    readings: dict[str, SensorReading] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

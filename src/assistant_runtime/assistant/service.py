@@ -294,6 +294,7 @@ class AssistantService:
             "room": self.route.room,
             "volume": self.route.volume,
             "task_running": self.backend.busy,
+            "task_progress": self.backend.progress,
             "speaking": self.player.playing,
             "pending_speech": self.player.pending_voice_frames,
             "input_count": self.input_count,

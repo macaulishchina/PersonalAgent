@@ -11,7 +11,9 @@ dependencies = []
 
 [project.optional-dependencies]
 voice = ["numpy>=1.26", "sherpa-onnx==1.13.8", "sherpa-onnx-core==1.13.8", "soxr>=0.5", "miniaudio>=1.61", "onnxruntime==1.31.0", "kaldi-native-fbank==1.22.3", "pywebrtc-audio==0.2.0", "playwright==1.63.0", "aiohttp>=3.14,<4"]
+web = ["aiohttp>=3.14,<4", "pillow>=12,<13"]
 airplay = ["pyatv==0.18.0", "imageio-ffmpeg==0.6.0"]
+apple-home = ["HAP-python==5.0.0", "aiohttp>=3.14,<4"]
 camera = ["imageio-ffmpeg==0.6.0", "pillow>=12,<13"]
 memory = [
     "fastembed==0.9.0",
@@ -30,6 +32,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "assistant_runtime.plugins.codex" = ["*.js"]
 "assistant_runtime.plugins.keyword" = ["FUNASR_LICENSE.txt"]
+"assistant_runtime.plugins.web" = ["static/*", "static/assets/*"]
 
 [tool.ruff]
 line-length = 110

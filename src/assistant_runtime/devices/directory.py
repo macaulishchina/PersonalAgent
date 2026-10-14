@@ -8,7 +8,7 @@ import math
 import json
 import time
 
-from ..kernel.contracts import DeviceQuery, VideoCapture
+from ..kernel.contracts import DeviceQuery, VideoCapture, SensorReading
 from ..kernel.runtime import Manifest
 
 
@@ -18,6 +18,7 @@ class DeviceDirectory:
         self.entries = {}
         self.probes = {}
         self.observations = {}
+        self.reading_clocks = {}
 
     def register(self, owner, device_id, capabilities, probe):
         spec = self.config[device_id]
@@ -33,6 +34,7 @@ class DeviceDirectory:
             "location": spec.get("location", ""),
             "kind": spec["kind"],
             "adapter": owner,
+            "physical_id": spec.get("physical_id", device_id),
             "capabilities": list(capabilities),
         }
         self.probes[device_id] = probe
@@ -44,11 +46,29 @@ class DeviceDirectory:
             raise ValueError("Invalid device availability")
         if not math.isfinite(observation.observed_at):
             raise ValueError("Invalid device observation time")
+        for metric, reading in observation.readings.items():
+            if not isinstance(reading, SensorReading) or reading.metric != metric:
+                raise ValueError("Sensor readings require matching typed metric identities")
+            if f"sensor.{metric}" not in self.entries[device_id]["capabilities"]:
+                raise ValueError("Sensor metric was not declared by this endpoint")
         # Bound the non-media state payload and copy it out of adapter ownership.
         payload = json.dumps(asdict(observation), ensure_ascii=False, allow_nan=False)
         if len(payload.encode()) > 8192:
             raise ValueError("Device snapshot exceeds 8 KiB")
-        self.observations[device_id] = (json.loads(payload), time.monotonic())
+        data = json.loads(payload)
+        clocks = self.reading_clocks.setdefault(device_id, {})
+        for metric, reading in data["readings"].items():
+            fingerprint = json.dumps(reading, sort_keys=True)
+            if clocks.get(metric, (None,))[0] != fingerprint:
+                age = (
+                    max(0, time.time() - reading["observed_at"])
+                    if reading["observed_at"] is not None
+                    else None
+                )
+                clocks[metric] = (fingerprint, time.monotonic(), age)
+        for metric in set(clocks) - data["readings"].keys():
+            del clocks[metric]
+        self.observations[device_id] = (data, time.monotonic())
 
     def snapshot(self, device_id):
         if device_id not in self.entries:
@@ -68,6 +88,36 @@ class DeviceDirectory:
             fresh=age is not None and age <= self.config[device_id].get("max_age_seconds", 15),
             error=observation.get("error"),
         )
+        result["readings"] = {}
+        for metric, reading in observation.get("readings", {}).items():
+            _, since, initial_age = self.reading_clocks[device_id][metric]
+            metric_age = (
+                None
+                if initial_age is None
+                else max(0, initial_age + time.monotonic() - since, time.time() - reading["observed_at"])
+            )
+            fresh = (
+                reading["status"] == "valid"
+                and observation.get("state") == "available"
+                and result["fresh"]
+                and metric_age is not None
+                and metric_age <= self.config[device_id].get("max_age_seconds", 15)
+            )
+            status = reading["status"]
+            if status == "valid" and not fresh:
+                status = (
+                    "stale"
+                    if not result["fresh"]
+                    or metric_age is None
+                    or metric_age > self.config[device_id].get("max_age_seconds", 15)
+                    else "unavailable"
+                )
+            result["readings"][metric] = {
+                **reading,
+                "status": status,
+                "fresh": fresh,
+                "age_seconds": round(metric_age, 3) if metric_age is not None else None,
+            }
         return copy.deepcopy(result)
 
     def list(self):

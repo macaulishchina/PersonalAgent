@@ -183,7 +183,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
                     events.get_nowait()
                     events.task_done()
                 await service.backend.submit(
-                    f"本次只进行只读设备验收。先使用 personal_agent 的 device 工具 action=list；再分别使用 action=inspect，value={config.input_device} 和 value={target}。必须实际调用这三项查询，不用 shell，不调用 memory，不改设备，不执行其他任务。最后简述两台设备的名称、能力和在线状态。"
+                    f"本次只进行只读设备验收。先使用 device MCP 的 list_devices；再分别使用 inspect_device，device_id={config.input_device} 和 device_id={target}。必须实际调用这三项查询，不用 shell，不调用 memory，不改设备，不执行其他任务。最后简述两台设备的名称、能力和在线状态。"
                 )
                 await wait(lambda: not service.backend.busy, 120)
                 queries = []

@@ -198,12 +198,15 @@ async def verify(config, rounds, folder):
             user_records = (await invoke("search", query="项目 Python 版本", scope="user"))["records"]
             assert not any(r["id"] in {p["id"] for p in project_records} for r in user_records)
             await backend.submit(
-                '本次只做记忆查询验收。必须实际调用 personal_agent 的 memory 工具 action=search，arguments={"query":"项目 Python 版本","scope":"project"}；根据结果回答项目 Python 版本。禁止 shell、其他工具和任何修改。'
+                '本次只做记忆查询验收。必须实际调用 memory MCP 的 search_memory 工具，query="项目 Python 版本"，scope="project"；根据结果回答项目 Python 版本。禁止 shell、其他工具和任何修改。'
             )
             async with asyncio.timeout(120):
                 while backend.busy:
                     await asyncio.sleep(0.1)
-            assert any(c["tool"] == "memory" and c["status"] == "completed" for c in calls), calls
+            assert any(
+                c["server"] == "memory" and c["tool"] == "search_memory" and c["status"] == "completed"
+                for c in calls
+            ), calls
             task = store.recent(1)[0]
             assert task["status"] == "completed" and "3.12" in task["result"], task
             result.update(

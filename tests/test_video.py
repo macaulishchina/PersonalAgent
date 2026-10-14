@@ -229,7 +229,7 @@ class CameraProcessTest(unittest.IsolatedAsyncioTestCase):
 class CameraMcpTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_is_real_mcp_content_not_embedded_json(self):
         from fastmcp import Client
-        from assistant_runtime.plugins.codex import tools
+        from assistant_runtime.mcp.device import create_server
 
         payload = {
             "frame": {
@@ -242,10 +242,11 @@ class CameraMcpTest(unittest.IsolatedAsyncioTestCase):
                 "data_base64": base64.b64encode(jpeg()).decode(),
             }
         }
-        with patch.object(tools, "invoke", AsyncMock(return_value=payload)) as call:
-            async with Client(tools.mcp) as client:
-                result = await client.call_tool("device", {"action": "snapshot", "value": "camera"})
-            call.assert_awaited_once_with("devices", action="snapshot", device_id="camera")
+        boundary = AsyncMock()
+        boundary.invoke.return_value = payload
+        async with Client(create_server(boundary)) as client:
+            result = await client.call_tool("capture_image", {"device_id": "camera"})
+        boundary.invoke.assert_awaited_once_with(VideoCapture("camera"))
         images = [block for block in result.content if block.type == "image"]
         self.assertEqual(len(images), 1)
         self.assertEqual(base64.b64decode(images[0].data), jpeg())

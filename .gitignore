@@ -18,3 +18,7 @@ memory-export*.json
 # Local packaging output
 /build/
 /dist/
+
+# Web frontend dependencies and packaged build output
+/frontend/node_modules/
+/src/assistant_runtime/plugins/web/static/

@@ -10,8 +10,10 @@ flowchart LR
   Audio[PipeWire input / playback] <--> Assistant
   Assistant <--> Brain[Codex plugin: native voice + tasks]
   Assistant <--> Kernel[Plugin lifecycle / capabilities / health]
-  Brain --> MCP[Local MCP capability facade]
-  MCP --> Kernel
+  Brain --> MemoryMCP[Memory MCP]
+  Brain --> DeviceMCP[Device MCP]
+  MemoryMCP --> Kernel
+  DeviceMCP --> Kernel
   Kernel --> Memory[Memory policy / durable capture jobs]
   Memory --> BM[Mem0 worker: local vectors and history]
   BM --> Curator[Official Codex subscription task callback]
@@ -20,18 +22,22 @@ flowchart LR
 | Location | Owns | Must not own |
 | --- | --- | --- |
 | `kernel/` | API v1 contracts, dependency order, handler dispatch, task/resource tracking, event fan-out, generations | Devices, Codex protocols, assistant policy |
+| `conversation/` | Durable shared timeline, submission receipts, entrance/output intent | HTTP, device drivers, separate task execution |
+| `plugins/web/` | Authenticated chat HTTP/SSE and bundled frontend | Independent AI sessions, physical audio, arbitrary file serving |
 | `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
+| `mcp/` | Independent memory/device MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
 | `plugins/codex/` | One foreground provider thread, its voice transport and native task delegation; separate maintenance context | Device drivers, long-term memory storage |
 | `devices/` | Shared inventory, adapter-owned registration, timestamped state, read-only query routing external audio and video provider registration | Hardware protocol code, conversation activation |
 | `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
 | `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
 | `plugins/v4l2/` | Stable Linux video identity, explicit bounded JPEG capture and cleanup | Conversation policy, gesture inference or automatic recording |
+| `plugins/apple_home/` | Authenticated Apple Home readings, paired HAP refresh bridge, normalization and source freshness | AirPlay playback, model tasks, memory, HomePod account access |
 | `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
 | `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
 | `headless.py` | Hardware-free management/trigger host | Pretending unavailable voice/brain is operational |
 
-A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, and `VideoCapture` are separate typed requests. CLI, explicit local commands and the Codex MCP facade use the same handlers. The user explicitly authorized preapproval for this project’s own `memory` and `device` tools; the project thread exposes only these two tools from its local server. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
+A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, and `VideoCapture` are separate typed requests. CLI, explicit local commands and the two independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
@@ -40,12 +46,32 @@ Audio uses a separate bounded path. Format/rate/time/connection generation are e
 - `wake_words` selects equivalent phrases supported by the installed FSMN V2 bundle, handled by one KWS stream and one activation path. The keyword plugin owns 80ms batching, bounded native features/CTC history, one ONNX inference thread and checksum validation. Inference runs off the event loop; generation changes invalidate results across sleep/session resets. The inference-only upstream FunASR decoder is vendored with its MIT license, without a Torch/FunASR runtime dependency. Local commands strip any configured leading phrase before parsing.
 - Assistant owns standby → connecting → active → reconnecting → standby. Only explicit wake/trigger activates it. Background work never activates voice.
 - Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
-- Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation remains the sole task dispatcher; transcripts are not dispatched a second time.
+- Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation and explicit Web submissions enter the same provider thread; transcripts are synchronized as context, never dispatched a second time.
 - The audio adapter owns selected output and device availability. It reconnects that output and never silently changes rooms.
 - The player owns queue/epoch/mute state. Stop, cancel-task and end-session are distinct operations.
 - Memory is not provider chat history and cannot prove an action completed. It is sourced, revisable context.
 
 Disconnect recovery runs as a tracked task, leaving the event consumer available. Unknown task outcomes remain unknown and are reconciled from provider state after restart; no input replay. The critical Codex provider failure restarts the service through systemd. Optional memory failures degrade that capability and retry without stopping capture/playback. Contexts own spawned tasks and async cleanup, and generations reject stale request results/events. Plugins in one process are trusted code, not security sandboxes; native-library crashes remain process-wide failures.
+
+## Shared conversation and Web entrance
+
+`conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. The foreground Codex adapter remains the only task executor.
+
+Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.
+
+Live native voice and task inference have distinct context windows even on one provider thread. The conversation owner explicitly transfers confirmed voice messages through the provider's context-only import method, and Web messages/results through its live context adapter. A local playback gate enforces silent Web replies because the experimental native interface may generate audio even for assistant-role context updates. Physical voice user turns restore playback. Background task delivery is client-managed so Web tasks do not acquire automatic spoken results. Temporary sync failures are visible; context sync never invokes another task.
+
+The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
+
+## MCP service boundary
+
+`mcp/memory.py` exposes `search_memory`, `read_memory`, `remember_memory`, `update_memory`, and `forget_memory`. `mcp/device.py` exposes device discovery/inspection, explicit image capture, speaker selection/volume and the existing interaction controls. Individual operations have typed arguments and read/write annotations; there is no overloaded arbitrary `action` tool. Remember creates a new fact; update requires the existing ID, current revision and original scope. Forget retains its established tombstone semantics.
+
+Each server is an independent stdio entry point (`python -m assistant_runtime.mcp memory|device --socket PATH`). Both use the same Python environment and host capability socket. They are provider-neutral and can be connected by an MCP client independently of Codex. The former combined Codex `tools.py` facade is removed. `plugins/codex/mcp.py` only supplies project-thread server registration/tool allowlists; maintenance threads disable both servers. Existing local-operation preapproval is retained within this project and does not authorize additional/global tools.
+
+The MCP layer translates between tool schemas/results and `MemoryRequest`, `DeviceQuery`, `VideoCapture`, or `Control`. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. The task-status tool uses a read-only status request; it does not activate or speak through voice. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
+
+`list_devices` reads the live registered directory on every call; `inspect_device` uses that directory's probe routing. A device added through the established onboarding workflow therefore appears with its capabilities and fresh readings without a new MCP schema or hardware-specific branch. A new action such as a thermostat setpoint still requires its own typed capability, narrow tool and approval decision; a new device declaration cannot grant an arbitrary command executor. Unit and isolated real-MCP acceptance both test a sensor registered after the MCP connection was established.
 
 ## Long-term memory
 
@@ -93,9 +119,15 @@ Use stable logical IDs such as `living_temperature` and `living_homepod` in assi
 
 An adapter reports measurements with device ID, metric, value, unit, sample time, reception time and validity/freshness. State distinguishes unavailable, stale and current readings. Historical values may be returned only when explicitly labeled; a missing device must not silently become another device. Keep sensor snapshots separate from long-term memory. Persist history only when an actual feature requires it, with retention defined for that feature.
 
+Each logical endpoint has exactly one adapter owner. Optional `physical_id` associates multiple endpoints of one piece of hardware without merging their owners or availability: HomePod playback uses AirPlay while its sensor endpoint uses Apple Home; a USB camera can have separate video/audio endpoints. An endpoint without an explicit association uses its logical ID. A sibling being online does not establish measurement availability.
+
+The stdlib-only `SensorReading` contract carries one metric's numeric value, unit, source, sample timestamp and validity. Adapter decoding/validation produces this contract; the directory checks declared metric capabilities and serializes it under `readings`. Every metric has independent age/freshness. Unchanged heartbeats cannot reset its monotonic ageing. Unavailable/calibrating metrics have no current numeric value; a retained expired reading is marked stale. Configuration controls the freshness limit. Neither device discovery nor MCP maintains a second sensor registry.
+
+The optional Apple Home adapter uses upstream HAP-python for a paired virtual Lightbulb refresh trigger and a bounded authenticated HTTP route for Home automation readback. Source timestamp/order validation happens before atomic replacement of the latest private SQLite snapshot. Refresh is bounded, coalesced and optional; failure degrades the source, not another endpoint or the assistant. Pairing/accessory identities persist across restart and later additions. Apple-side automation must be configured once against real Home/accessories; synthetic HTTP/MCP acceptance does not prove real HomePod acquisition. Measurements publish metadata observations without activating voice, task dispatch or long-term memory. CLI and existing device MCP queries reuse the directory; no HomePod-specific model tool is introduced.
+
 A media output implements the stdlib-only AudioOutputProvider / PlaybackTransport protocols: prepare availability, open a rate-specific PCM writer, bounded write, health, volume and close/flush. External providers register through host.audio_outputs; the existing audio owner opens them and mirrors their input into its reference bus without another physical output. A media output preserves explicit format/rate, availability and connection-generation handling. A transport that cannot discard buffered audio reports that limitation; accepting a playback command does not prove audible playback. HomePod uses the optional AirPlay adapter registered under the existing audio routing owner; its microphone is not an input capability. No alternate assistant conversation policy is installed.
 
-A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. V4L2 captures only on explicit requests; no continuous acquisition or recording occurs in standby. CLI can explicitly save a JPEG; Codex receives native MCP image content through device snapshot. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
+A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. V4L2 captures only on explicit requests; no continuous acquisition or recording occurs in standby. CLI can explicitly save a JPEG; Codex receives native MCP image content through device MCP capture_image. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
 
 ### Capability ownership and AI access
 

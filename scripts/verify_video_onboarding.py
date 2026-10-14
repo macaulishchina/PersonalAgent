@@ -124,9 +124,9 @@ async def verify(config, ident, save_frame, restart, codex):
                 try:
                     await backend.start()
                     await backend.submit(
-                        f"用户明确要求本次摄像头看图验收。必须实际调用 personal_agent 的 device 工具："
-                        f"先 action=list，然后 action=inspect,value={ident}，最后 action=snapshot,value={ident}。"
-                        "根据 snapshot 返回的实际图片，用中文描述最明显的物体、布局和颜色（两到三句）。"
+                        f"用户明确要求本次摄像头看图验收。必须实际调用 device MCP 的工具："
+                        f"先 list_devices，然后 inspect_device,device_id={ident}，最后 capture_image,device_id={ident}。"
+                        "根据 capture_image 返回的实际图片，用中文描述最明显的物体、布局和颜色（两到三句）。"
                         "不要猜测人员身份。只能调用以上设备查询，不使用 shell、memory、音量或音箱控制，"
                         "不修改文件、不启动语音。若图片无法理解如实说明。"
                     )
@@ -137,7 +137,10 @@ async def verify(config, ident, save_frame, restart, codex):
                     report["codex_result"] = store.recent(1)
                     assert not backend.last_error, backend.last_error
                     assert any(
-                        call["tool"] == "device" and "image" in call["content_types"] for call in calls
+                        call["server"] == "device"
+                        and call["tool"] == "capture_image"
+                        and "image" in call["content_types"]
+                        for call in calls
                     ), "Actual Codex MCP result did not contain an image block"
                     result = store.recent(1)
                     assert result and result[0]["status"] == "completed", result
