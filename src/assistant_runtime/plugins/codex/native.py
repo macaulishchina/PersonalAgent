@@ -111,7 +111,10 @@ class NativeVoice:
         try:
             sdp = await self.engine.start()
             self.open_timing_ms["offer"] = round((time.monotonic() - started) * 1000)
-            self.opened = True
+            async with self.backend.submit_lock:
+                if self.backend.integrations:
+                    self.backend.integrations.require_confirmed()
+                self.opened = True
             await self.backend.client.request(
                 "thread/realtime/start",
                 {
@@ -218,7 +221,6 @@ class NativeVoice:
         self.epoch += 1
         self.ready.clear()
         if self.opened:
-            self.opened = False
             try:
                 await self.backend.client.request(
                     "thread/realtime/stop", {"threadId": self.backend.thread_id}, timeout=5
@@ -233,3 +235,4 @@ class NativeVoice:
         if self.engine:
             await self.engine.close()
             self.engine = None
+        self.opened = False

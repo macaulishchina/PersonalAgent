@@ -233,3 +233,14 @@ persistent inbox, composer unread badge, independent channel receipts and quiet-
 optional voice delivery. Add `notifications` to an explicit plugin list alongside `tasks`.
 Monitoring tasks can set `notify_completion=false` and publish only new source events
 through the separate notifications MCP. Phone push is not installed.
+
+## Third-party MCP management
+
+Enable `integrations` and install its optional extra in the existing environment.
+The assistant can configure instance-owned stdio/Streamable HTTP MCPs, choose their
+foreground/background scope and tool policy, verify actual connections, and refresh
+the same foreground conversation at idle. Background runs retain their tool snapshot;
+authorized installation tasks use the `mcp_management` resource. Credentials and the
+revisioned registry stay private; shared Codex configuration is untouched. See the
+[integration guide](src/assistant_runtime/plugins/integrations/README.md) for schemas,
+CLI/tools, OAuth and reproducible hardware-free acceptance.

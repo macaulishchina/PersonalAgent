@@ -915,6 +915,20 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.plugin.request(TaskRequest("execution_info", {"run_ids": ids}))
 
+    async def test_mcp_management_grant_requires_the_scoped_run_to_still_be_active(self):
+        d = await self.create(resources=["mcp_management"], trigger={"kind": "interval", "seconds": 3600})
+        run = self.plugin.repo.enqueue(d, "management-check")
+
+        async def granted():
+            info = await self.plugin.request(TaskRequest("execution_info", {"run_ids": [run["id"]]}))
+            return info[run["id"]]["mcp_management"]
+
+        self.assertFalse(await granted())
+        self.plugin.repo.update_run(run["id"], "running")
+        self.assertTrue(await granted())
+        self.plugin.repo.update_run(run["id"], "completed")
+        self.assertFalse(await granted())
+
     async def test_lost_notification_ack_retries_without_duplicate_event(self):
         d = await self.create(execution={"kind": "reminder"})
         self.plugin.due(d["id"])

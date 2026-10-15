@@ -392,6 +392,8 @@ class TasksPlugin:
                 result[ident] = {
                     "task_id": run["task_id"],
                     "state": run["state"],
+                    "mcp_management": run["state"] in {"running", "waiting_user"}
+                    and "mcp_management" in run["data"]["spec"].get("resources", []),
                     "duration_seconds": run["data"].get("duration_seconds")
                     if run["data"].get("finished_at") is not None
                     else None,

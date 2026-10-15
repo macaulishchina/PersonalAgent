@@ -372,17 +372,15 @@ class AssistantService:
             result = await self.conversation.recording_reply(clip)
             return {**result, "operation_id": recording.operation_id}
 
-        return await self._device_for_client(reader, operation())
+        return await self._operation_for_client(reader, operation())
 
-    async def _device_for_client(self, reader, operation):
-        work = asyncio.create_task(operation, name="requested-device-operation")
-        disconnected = asyncio.create_task(reader.read(1), name="device-caller")
+    async def _operation_for_client(self, reader, operation):
+        work = asyncio.create_task(operation, name="requested-capability")
+        disconnected = asyncio.create_task(reader.read(1), name="capability-caller")
         try:
             done, _ = await asyncio.wait((work, disconnected), return_when=asyncio.FIRST_COMPLETED)
             if disconnected in done:
-                raise ConnectionError(
-                    "Device caller disconnected; operation canceled, prior effects may be partial"
-                )
+                raise ConnectionError("Caller disconnected; operation canceled, prior effects may be partial")
             return await work
         finally:
             for task in (work, disconnected):
@@ -404,7 +402,7 @@ class AssistantService:
                 operation = {"operation_id": d["operation_id"]} if d.get("operation_id") else {}
                 if d.get("action") == "snapshot":
                     capture = VideoCapture(d.get("device_id"), **operation)
-                    frame = await self._device_for_client(reader, self.runtime.invoke(capture))
+                    frame = await self._operation_for_client(reader, self.runtime.invoke(capture))
                     result = {
                         **await self.conversation.capture_reply(frame),
                         "operation_id": capture.operation_id,
@@ -414,7 +412,7 @@ class AssistantService:
                     result = await self._record_for_client(reader, recording)
                 elif d.get("action") in {"move", "stop-camera"}:
                     stopping = d["action"] == "stop-camera"
-                    result = await self._device_for_client(
+                    result = await self._operation_for_client(
                         reader,
                         self.runtime.invoke(
                             CameraMotion(
@@ -428,7 +426,7 @@ class AssistantService:
                 elif d.get("action") == "volume":
                     from ..kernel.contracts import AudioVolume
 
-                    result = await self._device_for_client(
+                    result = await self._operation_for_client(
                         reader,
                         self.runtime.invoke(AudioVolume(d.get("device_id"), d.get("percent"), **operation)),
                     )
@@ -466,6 +464,21 @@ class AssistantService:
 
                 result = await self.runtime.invoke(
                     TaskRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "mcp":
+                from ..kernel.contracts import IntegrationRequest
+
+                result = await self._operation_for_client(
+                    reader,
+                    self.runtime.invoke(
+                        IntegrationRequest(d["action"], d.get("arguments", {}), d.get("caller_run")),
+                        timeout=170,
+                    ),
                 )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()

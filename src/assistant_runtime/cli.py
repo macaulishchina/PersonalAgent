@@ -17,7 +17,9 @@ async def request(config, payload):
     try:
         writer.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
         await writer.drain()
-        response = json.loads(await asyncio.wait_for(reader.readline(), 95))
+        response = json.loads(
+            await asyncio.wait_for(reader.readline(), 180 if payload["command"] == "mcp" else 95)
+        )
         if not response["ok"]:
             raise RuntimeError(response["error"])
         return response["result"]
@@ -119,6 +121,12 @@ def main():
     memory.add_argument(
         "arguments", nargs="?", default="{}", help="JSON arguments; import accepts records array"
     )
+    mcp = sub.add_parser("mcp", help="Manage this assistant instance's third-party MCPs")
+    mcp.add_argument(
+        "action",
+        choices=["list", "get", "configure", "enable", "remove", "verify", "apply", "reload", "login"],
+    )
+    mcp.add_argument("arguments", nargs="?", default="{}", help="JSON MCP management arguments")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:

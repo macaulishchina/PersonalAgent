@@ -40,3 +40,15 @@ NOTIFICATION_TOOLS = (
     "get_notification",
     "mark_notification_read",
 )
+
+INTEGRATION_TOOLS = (
+    "list_mcp_servers",
+    "inspect_mcp_server",
+    "verify_mcp_server",
+    "configure_mcp_server",
+    "set_mcp_server_enabled",
+    "remove_mcp_server",
+    "apply_mcp_configuration",
+    "reload_mcp_configuration",
+    "begin_mcp_login",
+)

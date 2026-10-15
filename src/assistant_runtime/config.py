@@ -53,6 +53,7 @@ class Config:
             "memory",
             "gesture",
             "notifications",
+            "integrations",
             "tasks",
         ]
     )
@@ -65,10 +66,14 @@ class Config:
         }
     )
     local_plugins: dict[str, str] = field(default_factory=dict)
+    external_mcp: dict = field(default_factory=dict)
     memory_enabled: bool = True
     memory_auto_capture: bool = True
 
     def __post_init__(self):
+        from assistant_runtime.plugins.integrations.settings import IntegrationSettings
+
+        IntegrationSettings.parse(self.external_mcp)
         from assistant_runtime.plugins.web.settings import WebSettings
 
         from assistant_runtime.plugins.apple_home.settings import AppleHomeSettings

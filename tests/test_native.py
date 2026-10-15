@@ -128,6 +128,25 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_remains_active_until_stop_and_transport_cleanup_finish(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def stop(*args, **kwargs):
+            started.set()
+            await release.wait()
+
+        backend = SimpleNamespace(
+            client=SimpleNamespace(request=AsyncMock(side_effect=stop)), thread_id="main"
+        )
+        voice = NativeVoice(None, backend, None, AsyncMock())
+        voice.opened = True
+        closing = asyncio.create_task(voice.close())
+        await started.wait()
+        self.assertTrue(voice.opened)
+        release.set()
+        await closing
+        self.assertFalse(voice.opened)
+
     async def test_equivalent_keyword_results_activate_once_and_then_stream_audio(self):
         for phrase in ["嘟嘟", "你好嘟嘟"]:
             with self.subTest(phrase=phrase):

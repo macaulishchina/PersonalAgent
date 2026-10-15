@@ -1284,6 +1284,9 @@ dev = [
     { name = "mypy" },
     { name = "ruff" },
 ]
+integrations = [
+    { name = "fastmcp" },
+]
 memory = [
     { name = "fastembed" },
     { name = "fastmcp" },
@@ -1319,6 +1322,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'web'", specifier = ">=3.14,<4" },
     { name = "apscheduler", marker = "extra == 'tasks'", specifier = "==3.11.0" },
     { name = "fastembed", marker = "extra == 'memory'", specifier = "==0.9.0" },
+    { name = "fastmcp", marker = "extra == 'integrations'", specifier = "==4.0.0b1" },
     { name = "fastmcp", marker = "extra == 'memory'", specifier = "==4.0.0b1" },
     { name = "fastmcp", marker = "extra == 'tasks'", specifier = "==4.0.0b1" },
     { name = "hap-python", marker = "extra == 'apple-home'", specifier = "==5.0.0" },
@@ -1342,7 +1346,7 @@ requires-dist = [
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "soxr", marker = "extra == 'voice'", specifier = ">=0.5" },
 ]
-provides-extras = ["voice", "tasks", "web", "airplay", "apple-home", "camera", "memory", "dev"]
+provides-extras = ["voice", "tasks", "integrations", "web", "airplay", "apple-home", "camera", "memory", "dev"]
 
 [[package]]
 name = "pillow"

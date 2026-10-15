@@ -48,6 +48,18 @@ class CodexJobs:
         cfg = self.backend.config
         selection = spec["execution"]
         await self.select(selection["model"], selection["reasoning_effort"])
+        integration_adapter = getattr(self.backend, "integrations", None)
+        integration_config = (
+            await integration_adapter.capture(
+                "background",
+                run["id"],
+                cwd=directory / "scratch",
+                manage_integrations="mcp_management" in spec.get("resources", []),
+            )
+            if integration_adapter
+            else None
+        )
+        mcp_revision = integration_adapter.registry.revision if integration_adapter else None
         params = {
             "model": selection["model"],
             "cwd": str(directory / "scratch"),
@@ -68,7 +80,9 @@ class CodexJobs:
                     "TMP": str(directory / "scratch"),
                     "TEMP": str(directory / "scratch"),
                 },
-                "mcp_servers": server_config(
+                "mcp_servers": integration_config
+                if getattr(self.backend, "integrations", None)
+                else server_config(
                     cfg.socket, task_run=run["id"], notifications="notifications" in cfg.plugins
                 ),
             },
@@ -76,8 +90,11 @@ class CodexJobs:
         existing = run["data"].get("thread_id")
         if existing:
             summary = await self.client.request("thread/read", {"threadId": existing, "includeTurns": False})
+            if summary["thread"].get("status", {}).get("type") == "active":
+                raise RuntimeError("Prior execution is still active; continuation not replayed")
             if self.archived(summary["thread"]):
                 await self.client.request("thread/unarchive", {"threadId": existing})
+            await self.client.request("thread/unsubscribe", {"threadId": existing})
         result = await self.client.request(
             "thread/resume" if existing else "thread/start",
             {**params, **({"threadId": existing} if existing else {})},
@@ -85,8 +102,19 @@ class CodexJobs:
         )
         thread = result["thread"]["id"]
         self.threads[thread] = run["id"]
-        self.handles[run["id"]] = {"thread_id": thread}
-        if self.notify(run["id"], "dispatching", thread_id=thread) is False:
+        self.handles[run["id"]] = {
+            "thread_id": thread,
+            **({"mcp_revision": mcp_revision} if integration_adapter else {}),
+        }
+        if (
+            self.notify(
+                run["id"],
+                "dispatching",
+                thread_id=thread,
+                **({"mcp_revision": mcp_revision} if getattr(self.backend, "integrations", None) else {}),
+            )
+            is False
+        ):
             return
         if spec.get("long_term"):
             await self.client.request(

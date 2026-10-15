@@ -18,6 +18,16 @@ def compose(service):
     from .workfiles import WorkFiles, WorkFilesMaintenance
 
     service.workfiles = WorkFiles(config.state_dir, store.db, config.work_files)
+    from .plugins.integrations.registry import McpRegistry
+
+    service.mcp_registry = (
+        McpRegistry(config.state_dir, config.external_mcp) if "integrations" in config.plugins else None
+    )
+
+    def integrations():
+        from .plugins.integrations.plugin import IntegrationsPlugin
+
+        return IntegrationsPlugin(service, service.mcp_registry, lambda: service.backend.integrations)
 
     def notifications():
         from .plugins.notifications.plugin import NotificationsPlugin
@@ -81,9 +91,16 @@ def compose(service):
         "web": web,
         "tasks": tasks,
         "notifications": notifications,
+        "integrations": integrations,
         "apple_home": apple_home,
         "codex": lambda: CodexPlugin(
-            config, store, service.audio_received, service.events.put, service.speak, service.tool_control
+            config,
+            store,
+            service.audio_received,
+            service.events.put,
+            service.speak,
+            service.tool_control,
+            service.mcp_registry if "integrations" in config.plugins else None,
         ),
         "gesture": GesturePlugin,
         "memory": lambda: MemoryPlugin(

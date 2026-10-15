@@ -81,6 +81,30 @@ class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(start["sandbox"], self.config.codex_sandbox)
         self.assertNotIn("thread/archive", self.methods())
 
+    async def test_background_mcp_configuration_and_revision_are_a_dispatch_snapshot(self):
+        registry = SimpleNamespace(revision=7)
+        capture = AsyncMock(return_value={"external_example": {"enabled": True}})
+        self.backend.integrations = SimpleNamespace(registry=registry, capture=capture)
+        self.run["data"]["spec"]["resources"] = ["mcp_management"]
+        notices = []
+        self.runner.notify = lambda *args, **kwargs: notices.append((args, kwargs))
+
+        async def rpc(method, params, **kwargs):
+            result = await self.rpc(method, params, **kwargs)
+            if method == "thread/resume":
+                registry.revision = 8
+            return result
+
+        self.client.request.side_effect = rpc
+        await self.runner.launch(self.run, self.area)
+        capture.assert_awaited_once_with(
+            "background", "run", cwd=self.area / "scratch", manage_integrations=True
+        )
+        resume = next(c.args[1] for c in self.client.request.await_args_list if c.args[0] == "thread/resume")
+        self.assertEqual(resume["config"]["mcp_servers"], {"external_example": {"enabled": True}})
+        self.assertEqual(notices[0][1]["mcp_revision"], 7)
+        self.assertEqual(self.runner.handles["run"]["mcp_revision"], 7)
+
     async def test_terminal_archive_releases_only_background_handles(self):
         self.runner.threads = {"background": "run", "other": "other-run"}
         self.runner.handles = {"run": {"thread_id": "background"}, "other-run": {}}

@@ -14,10 +14,12 @@ from ..kernel.contracts import (
     DeviceOperationQuery,
     DeviceOperationCancel,
     AudioVolume,
+    IntegrationRequest,
 )
 
 Request = (
-    NotificationRequest
+    IntegrationRequest
+    | NotificationRequest
     | TaskRequest
     | Control
     | DeviceQuery
@@ -41,7 +43,9 @@ class LocalRuntimeClient:
         self.socket, self.timeout = str(socket), timeout
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, NotificationRequest):
+        if isinstance(request, IntegrationRequest):
+            payload = {"command": "mcp", **asdict(request)}
+        elif isinstance(request, NotificationRequest):
             payload = {"command": "notifications", **asdict(request)}
         elif isinstance(request, TaskRequest):
             payload = {"command": "tasks", **asdict(request)}

@@ -95,6 +95,35 @@ The MCP layer translates between tool schemas/results and the corresponding type
 
 `list_devices` reads the live registered directory on every call; `inspect_device` uses that directory's probe routing. A device added through the established onboarding workflow therefore appears with its capabilities and fresh readings without a new MCP schema or hardware-specific branch. A new action such as a thermostat setpoint still requires its own typed capability, narrow tool and approval decision; a new device declaration cannot grant an arbitrary command executor. Unit and isolated real-MCP acceptance both test a sensor registered after the MCP connection was established.
 
+## Third-party MCP management
+
+`plugins/integrations/` owns the private atomic revisioned registry, policy validation,
+management capability and verification receipts. `IntegrationProvider` is the reasoning
+adapter seam; Codex MCP field mapping, native discovery, authentication and thread refresh
+remain in `plugins/codex/integrations.py`. The independent `integrations` MCP and CLI
+share `IntegrationRequest`; they do not implement a second external-tool proxy.
+
+Definitions have explicit foreground/background scopes, tool filtering and approval,
+bounded startup/call timeouts, stable per-server cwd and private credential references.
+User/project MCP inheritance is explicit; each context reads its effective config so
+unknown user/project servers can be disabled, including after a cwd change. Memory
+maintenance and validation contexts always disable inherited and internal tools.
+Background executions retain their dispatch snapshot and `mcp_revision`; the shared
+registry cannot mutate tools during a run. Authorized installation runs use the existing
+`mcp_management` resource, checked against an active execution and inherited by children
+only within their parent's resource scope. Other jobs get only management queries/probes.
+
+The foreground waits for idle model and native voice, releases its subscription and
+resumes the same persisted thread with the new MCP configuration. It never restarts the
+assistant or replays a turn. Native voice start shares its dispatch lock; closing voice
+stays active through teardown. Failed refresh restores the previous confirmed config
+and requires a correction or explicit retry of the failed revision. Discovery uses owned
+ephemeral contexts, checks real tools/auth, bounds concurrency and cleans up even after
+cancellation or a late startup acknowledgement. It is distinct from applying configuration
+or testing a real tool action. External descriptions and metadata remain data, not
+instructions. These endpoints do not replace main voice or implicitly acquire framework
+device leases. See the [integration guide](src/assistant_runtime/plugins/integrations/README.md).
+
 ## Long-term memory
 
 The default backend is Mem0 1.0.11, using its original ADD/UPDATE/DELETE/NONE workflow. Version 2.2.1 uses additive automatic ingestion and was not selected for this application’s correction/merge contract. A trusted worker in the **same `.venv`** owns one embedded local Qdrant store and Mem0’s SQLite history. Telemetry and remote provider defaults are disabled. A thin FastEmbed provider uses the existing multilingual MiniLM model, 384 dimensions, two threads and an explicit local-only cache under `models/memory-embedding/`.

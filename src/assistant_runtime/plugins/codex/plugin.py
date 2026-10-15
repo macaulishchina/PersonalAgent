@@ -9,14 +9,17 @@ from .native import NativeVoice
 class CodexPlugin:
     manifest = Manifest("codex", ("devices",), critical=True)
 
-    def __init__(self, config, store, on_audio, on_event, speak, control):
-        self.backend = CodexBackend(config, store, speak, control)
+    def __init__(self, config, store, on_audio, on_event, speak, control, mcp_registry=None):
+        self.backend = CodexBackend(config, store, speak, control, mcp_registry)
         self.voice = NativeVoice(
             config, self.backend, lambda pcm: on_audio(AudioFrame(pcm, 24000, self.voice.epoch)), on_event
         )
         self.backend.on_realtime = self.voice.notification
+        self.backend.voice_active = lambda: self.voice.opened
 
     async def start(self, context):
+        if self.backend.integrations:
+            self.backend.integrations.context = context
         context.own(self.backend.close)
         context.own(self.voice.close)
         await self.backend.start()

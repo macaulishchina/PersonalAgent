@@ -11,6 +11,22 @@ API_VERSION = 1
 
 
 @dataclass(frozen=True)
+class IntegrationRequest:
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+class IntegrationProvider(Protocol):
+    """Optional reasoning-provider seam; no native RPC fields escape the adapter."""
+
+    def status(self) -> dict: ...
+    async def apply(self, force: bool = False) -> dict: ...
+    async def verify(self, name: str, context: str, schemas: bool = False) -> dict: ...
+    async def login(self, name: str) -> dict: ...
+
+
+@dataclass(frozen=True)
 class NotificationRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)
