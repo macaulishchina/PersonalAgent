@@ -20,6 +20,7 @@
 - Test concurrency uses independent module processes (default up to 3; `--jobs 1` for serial diagnosis). Keep temporary state, databases and ports private; serialize modules sharing a real resource. Physical-device, authenticated-provider and installed-service acceptance scripts stay explicit and are never added to automatic parallel tests. Preserve real engine/restart/cancellation tests; speed must not come from replacing them with mocks or hiding skips/failures.
 - For uncertain provider behavior, run a minimal isolated protocol probe early. Define the integration's acceptance boundaries before expanding implementation. Separate local checks, real-provider acceptance and deployment/user/device waits; do not rerun successful checks merely while waiting for unrelated work.
 - Private data lives in ignored `state/`, `models/`, and `config.toml`. Never commit credentials or recordings.
+- Assistant-generated reusable skills under `.agents/` are project sources and belong in Git. Keep their credentials, recordings and raw acceptance artifacts in ignored instance storage.
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
 - Continue development on `main` by default; leave this workspace on `main` after merging and pushing.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
