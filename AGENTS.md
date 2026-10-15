@@ -1,6 +1,6 @@
 # Personal Agent engineering guide
 
-- Read `ARCHITECTURE.md` before changing a boundary. Each module owns one responsibility.
+- Read the relevant sections of `ARCHITECTURE.md` and the owning plugin README before changing a boundary. Each module owns one responsibility; use targeted reads instead of repeatedly loading unrelated modules.
 - `kernel/` imports only the standard library and its contracts. Never import plugins there.
 - Keep Codex protocol fields inside `plugins/codex/`; native voice and task delegation share one owner.
 - Add a capability contract and an adapter for a new device/provider. Do not add hardware branches to the assistant.
@@ -15,7 +15,10 @@
 - Memory uses upstream Mem0, driven by the official Codex subscription task interface with local embeddings. Do not create a second live vector database, HTTP model proxy, or custom extraction/dedup/ranking algorithm.
 - Before changing memory capture, test source validation, corrections, deletion, stale jobs and retries.
 - A passing fake test does not establish real-device success. Record integration evidence separately.
-- Run `.venv/bin/python scripts/check.py` before deployment. All code uses one `.venv`.
+- During development, choose affected domains with `.venv/bin/python scripts/check.py --group codex --group tasks`, or a module/class/method with `--test test_integrations.AdapterTest`. `--list` shows groups; `--static-only` runs format/lint/types. The AI chooses scope from changed contracts and uncertainty, including adjacent callers and lifecycle behavior. A selected pass is not a full gate.
+- Run `.venv/bin/python scripts/check.py` after final source/test/dependency edits, before commit/push or deploying changed application code. Finish targeted fixes first; avoid starting a "final" full gate while more source changes are planned. A passing full check remains usable while its checked code/dependencies/test inputs are unchanged. Config-only/device-pairing changes require configuration validation and targeted live readiness/acceptance, not another unrelated full suite/frontend build. All code uses one `.venv`.
+- Test concurrency uses independent module processes (default up to 3; `--jobs 1` for serial diagnosis). Keep temporary state, databases and ports private; serialize modules sharing a real resource. Physical-device, authenticated-provider and installed-service acceptance scripts stay explicit and are never added to automatic parallel tests. Preserve real engine/restart/cancellation tests; speed must not come from replacing them with mocks or hiding skips/failures.
+- For uncertain provider behavior, run a minimal isolated protocol probe early. Define the integration's acceptance boundaries before expanding implementation. Separate local checks, real-provider acceptance and deployment/user/device waits; do not rerun successful checks merely while waiting for unrelated work.
 - Private data lives in ignored `state/`, `models/`, and `config.toml`. Never commit credentials or recordings.
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
 - Continue development on `main` by default; leave this workspace on `main` after merging and pushing.

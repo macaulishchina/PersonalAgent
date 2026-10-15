@@ -109,6 +109,37 @@ For a read-only check of existing assistant images in the installed local UI use
 
 The default second command uses real subscription calls, two isolated browsers, synthetic speech and a generated image in a temporary workspace. It neither records the room nor plays through speakers, and does not read production conversation history. Private acceptance evidence is written to `state/acceptance/web/`. Frontend changes require a rebuild; the standard check runs its build when its dependencies are installed.
 
+## Development checks
+
+For the development loop, select affected contracts instead of rebuilding and
+testing every domain after each edit:
+
+```sh
+.venv/bin/python scripts/check.py --list
+.venv/bin/python scripts/check.py --group codex --group tasks
+.venv/bin/python scripts/check.py --test test_integrations.AdapterTest
+.venv/bin/python scripts/check.py --static-only
+```
+
+No arguments run the full pre-commit gate: format, lint, kernel types, installed
+frontend build, and every discovered test module. Selection is explicitly labeled
+`SELECTED`; it never counts as a full pass. Frontend checks run for web selections
+or explicit `--frontend`, so backend iterations skip the build. New/nested test
+modules are included automatically; unassigned modules appear in `core`.
+
+Tests run in separate module processes, up to three at a time, with measured slow
+modules first. Temporary databases/ports remain isolated and the real Mem0 tests
+stay in one process lane. Use `--jobs 1` for serial diagnosis, `--timeout` to adjust
+the per-command/module bound, and `--verbose` for complete output and slow test
+durations. Failures, skips, per-stage/module times and total wall time are reported;
+failure/timeout returns nonzero. Real hardware/provider acceptance and service
+restart are separate explicit operations, never part of parallel unit checks.
+
+Run the full gate once the final source/tests/dependencies are ready, before
+commit/push or application-code deployment. Configuration-only changes reuse an
+unchanged code gate and validate the configuration plus affected live behavior.
+Do not add result caching or reduce coverage to improve the reported time.
+
 ## Run and maintain
 
 ```sh
