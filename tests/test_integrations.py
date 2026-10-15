@@ -41,6 +41,8 @@ class RegistryTest(unittest.TestCase):
 
     def test_private_atomic_roundtrip_revision_and_idempotent_retry(self):
         r = self.registry
+        self.assertEqual(r.path, self.root / ".agents/mcp/servers.json")
+        self.assertEqual(r.work, self.root / "state/mcp/servers")
         r.configure("mobile", STDIO, 0)
         self.assertEqual(r.revision, 1)
         self.assertEqual(r.path.stat().st_mode & 0o777, 0o600)
@@ -73,6 +75,18 @@ class RegistryTest(unittest.TestCase):
         self.registry.configure("mobile", HTTP, 2)
         self.assertEqual(self.registry.snapshot()["removed"], [])
         self.assertNotIn("private=value", json.dumps(self.registry.public("mobile")))
+
+    def test_legacy_private_registry_requires_explicit_migration_before_versioning(self):
+        legacy = self.root / "state/mcp/servers.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("private configuration must not be copied automatically")
+        with self.assertRaisesRegex(ValueError, "migrate non-secret definitions"):
+            McpRegistry(self.root, {})
+        self.assertFalse(self.registry.path.exists())
+        legacy.write_text('{"revision":0,"servers":{},"removed":[]}')
+        registry = McpRegistry(self.root, {"registry_path": str(legacy)})
+        self.assertEqual(registry.path, legacy)
+        self.assertEqual(registry.revision, 0)
 
     def test_validation_never_replaces_good_registry_and_manual_edits_require_revision(self):
         self.registry.configure("first", STDIO, 0)

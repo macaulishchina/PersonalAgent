@@ -97,8 +97,11 @@ The MCP layer translates between tool schemas/results and the corresponding type
 
 ## Third-party MCP management
 
-`plugins/integrations/` owns the private atomic revisioned registry, policy validation,
-management capability and verification receipts. `IntegrationProvider` is the reasoning
+`plugins/integrations/` owns the atomic revisioned `.agents/mcp/servers.json` registry,
+policy validation, management capability and verification receipts. Non-secret definitions
+are versioned in Git; package files, receipts and runtime directories stay in ignored
+`state/`. Credentials use host environment references or the native credential store,
+never literal secrets in the registry. `IntegrationProvider` is the reasoning
 adapter seam; Codex MCP field mapping, native discovery, authentication and thread refresh
 remain in `plugins/codex/integrations.py`. The independent `integrations` MCP and CLI
 share `IntegrationRequest`; they do not implement a second external-tool proxy.

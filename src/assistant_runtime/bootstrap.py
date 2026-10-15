@@ -21,7 +21,7 @@ def compose(service):
     from .plugins.integrations.registry import McpRegistry
 
     service.mcp_registry = (
-        McpRegistry(config.state_dir, config.external_mcp) if "integrations" in config.plugins else None
+        McpRegistry(config.root, config.external_mcp) if "integrations" in config.plugins else None
     )
 
     def integrations():

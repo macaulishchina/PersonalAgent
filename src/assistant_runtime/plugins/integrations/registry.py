@@ -1,4 +1,4 @@
-"""One private atomic registry; no writes to Codex's shared configuration."""
+"""Versioned MCP definitions; runtime state and credentials stay outside Git."""
 
 import asyncio
 import copy
@@ -11,14 +11,24 @@ from .settings import IntegrationSettings, definition, name
 
 
 class McpRegistry:
-    def __init__(self, state_dir, settings):
+    def __init__(self, root, settings):
         self.settings = IntegrationSettings.parse(settings)
+        root = Path(root)
         self.path = (
             Path(self.settings.registry_path)
             if self.settings.registry_path
-            else Path(state_dir) / "mcp/servers.json"
+            else root / ".agents/mcp/servers.json"
         )
-        self.work = Path(state_dir) / "mcp/servers"
+        if (
+            not self.settings.registry_path
+            and not self.path.exists()
+            and (root / "state/mcp/servers.json").exists()
+        ):
+            raise ValueError(
+                "MCP registry moved to .agents/mcp/servers.json; migrate non-secret definitions "
+                "or explicitly set registry_path to retain the private registry"
+            )
+        self.work = root / "state/mcp/servers"
         self.lock = asyncio.Lock()
         self.data = {"revision": 0, "servers": {}, "removed": []}
         self.reload()

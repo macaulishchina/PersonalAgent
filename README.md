@@ -4,6 +4,8 @@ A local, reactive personal assistant for Linux. The current brain is Codex with 
 
 See [architecture](ARCHITECTURE.md), the [hardware onboarding standard](ARCHITECTURE.md#hardware-onboarding-standard), [requirements](REQUIREMENTS.md), [validation](VALIDATION.md), [wake-word evaluation](reports/WAKE_EVALUATION.md), the [ASR candidate CPU comparison](reports/ASR_CANDIDATE_COMPARISON.html) ([full text](reports/ASR_CANDIDATE_COMPARISON.md)), the [human-voice comparison](reports/WAKE_HUMAN_COMPARISON.html) ([full text](reports/WAKE_HUMAN_COMPARISON.md)), and the [synthetic-voice comparison](reports/WAKE_MODEL_COMPARISON.html) ([full text](reports/WAKE_MODEL_COMPARISON.md)).
 
+Camera usage experience is maintained in [相机设备使用指南](.agents/skills/camera-device-guide/SKILL.md).
+
 ## Install
 
 Python 3.12 and `uv` are required. All application and memory dependencies share one `.venv`.
@@ -271,7 +273,8 @@ Enable `integrations` and install its optional extra in the existing environment
 The assistant can configure instance-owned stdio/Streamable HTTP MCPs, choose their
 foreground/background scope and tool policy, verify actual connections, and refresh
 the same foreground conversation at idle. Background runs retain their tool snapshot;
-authorized installation tasks use the `mcp_management` resource. Credentials and the
-revisioned registry stay private; shared Codex configuration is untouched. See the
+authorized installation tasks use the `mcp_management` resource. Non-secret definitions
+in `.agents/mcp/servers.json` belong in Git; credentials and runtime state stay private.
+Shared Codex configuration is untouched. See the
 [integration guide](src/assistant_runtime/plugins/integrations/README.md) for schemas,
 CLI/tools, OAuth and reproducible hardware-free acceptance.

@@ -15,10 +15,17 @@ inherit_user_servers = false
 # registry_path = "/absolute/private/path/servers.json"
 ```
 
-The default registry is private `state/mcp/servers.json`. Management writes an
-atomic, mode-0600 JSON file with a global optimistic revision; configuration never
-belongs in Git. A failed write leaves the last good file and in-memory state intact.
+The default registry is `<instance root>/.agents/mcp/servers.json`. Its non-secret
+definitions belong in Git, including MCPs installed by the assistant. Management
+writes an atomic, mode-0600 JSON file with a global optimistic revision. A failed
+write leaves the last good file and in-memory state intact. Credential values never
+belong in this file: use environment references or the native provider credential
+store. Literal environment/header values are for non-secret settings only. Server
+work directories, verification receipts and raw acceptance artifacts stay private
+in ignored `state/`; committing a registry does not package its dependencies.
 Manual edits require increasing the registry revision, followed by `reload`.
+An existing `state/mcp/servers.json` is never silently copied into Git. Migrate its
+non-secret definitions explicitly, or set `registry_path` to retain that private file.
 Server removal drops private values but retains a disabled identity, preventing an
 old resumed context from resurrecting that registration. Removal does not uninstall
 packages or delete user data.
@@ -92,7 +99,10 @@ through its existing authorized execution tools, configure this registry, verify
 both intended scopes, request application, and then call an appropriate native MCP
 tool within the user's authorization. Configuring a command does not install it.
 Use the server's persistent work directory for dependencies; use the task's own
-scratch for temporary downloads/scripts. Do not modify shared Codex configuration.
+scratch for temporary downloads/scripts. Record the installed package version and
+startup definition in the versioned registry and its adjacent installation notes.
+Do not modify shared Codex configuration. An existing installation outside `state/`
+can be referenced by its actual executable path without copying package binaries.
 
 A background installation task declares `resources=["mcp_management"]`. This reuses
 the task scheduler's resource lock and child-scope rules; only its active execution

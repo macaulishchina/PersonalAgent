@@ -109,5 +109,6 @@ max_notifications = 10000
 [external_mcp]
 max_servers = 32
 inherit_user_servers = false
-# Definitions are managed privately in state/mcp/servers.json, not in shared Codex config.
+# Non-secret definitions in .agents/mcp/servers.json belong in Git.
+# Credentials use environment references; runtime files remain in ignored state/.
 # registry_path = "/absolute/private/path/servers.json"
