@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from assistant_runtime.devices.outputs import AudioOutputs
 from assistant_runtime.plugins.pipewire.audio import AudioRoute
@@ -31,6 +31,7 @@ class OutputRegistrationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_external_route_keeps_same_microphone_and_skips_unknown_volume(self):
         c = self.config()
+        c.default_output = "remote"
         outputs = AudioOutputs(c.devices)
         transport = SimpleNamespace(healthy=True, write=AsyncMock(), close=AsyncMock())
         provider = SimpleNamespace(
@@ -44,12 +45,14 @@ class OutputRegistrationTest(unittest.IsolatedAsyncioTestCase):
         store = SimpleNamespace(get=lambda k, d: d, set=Mock())
         route = AudioRoute(c, store, outputs)
         route.devices = AsyncMock(return_value=([{"name": "alsa_input.usb_UGREEN_Camera_2K"}], []))
-        await route.select("remote")
+        await route.ensure(force=True)
         self.assertTrue(route.ready.is_set())
         self.assertIsNone(route.volume)
         self.assertEqual(route.source, "alsa_input.usb_UGREEN_Camera_2K")
         provider.set_volume.assert_not_awaited()
-        self.assertIs(await route.open_output(24000), transport)
+        opened = await route.open_output(24000)
+        self.assertIs(opened.transport, transport)
+        await opened.close()
         await route.set_volume(50)
         provider.set_volume.assert_awaited_once_with(80)
         provider.ensure_ready.side_effect = RuntimeError("receiver disconnected")
@@ -57,7 +60,7 @@ class OutputRegistrationTest(unittest.IsolatedAsyncioTestCase):
             await route.ensure()
         self.assertFalse(route.ready.is_set())
         await route.close()
-        provider.close.assert_awaited_once()
+        provider.close.assert_not_awaited()
 
     async def test_reference_and_remote_output_close_together(self):
         output = SimpleNamespace(healthy=True, write=AsyncMock(), close=AsyncMock())
@@ -70,14 +73,44 @@ class OutputRegistrationTest(unittest.IsolatedAsyncioTestCase):
         output.close.assert_awaited_once()
         reference.close.assert_awaited_once()
 
-    def test_specific_living_speaker_label_beats_shared_room_alias(self):
-        aliases = {"living": ["客厅音箱", "客厅"], "homepod": ["HomePod", "客厅"]}
-        self.assertEqual(parse_command("切换到客厅音箱", aliases).value, "living")
-        self.assertEqual(parse_command("切换到HomePod", aliases).value, "homepod")
-        self.assertIsNone(parse_command("切换到客厅", aliases))
+    def test_room_names_never_become_route_switches(self):
+        for text in ("切换到客厅音箱", "切换到HomePod", "切换到客厅"):
+            self.assertIsNone(parse_command(text))
 
 
 class AirPlayBoundTest(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_receiver_cleanup_is_retried_before_releasing_stream_lease(self):
+        try:
+            from assistant_runtime.plugins.airplay.output import AirPlayPlayback
+        except ImportError:
+            self.skipTest("optional AirPlay extra is absent")
+
+        atv = SimpleNamespace(stream=SimpleNamespace(stream_file=AsyncMock()), close=lambda: [])
+        process = SimpleNamespace(
+            returncode=0,
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdout=SimpleNamespace(feed_eof=Mock()),
+        )
+        transport = AirPlayPlayback(atv, process, 24000, SimpleNamespace(last_error=None))
+        outputs = AudioOutputs({"remote": {"kind": "speaker", "adapter": "fake"}})
+        outputs.register("fake", "remote", SimpleNamespace(open=AsyncMock(return_value=transport)))
+        stream = await outputs.open("remote", 24000, owner="tool")
+        with patch(
+            "assistant_runtime.plugins.airplay.output.close_atv",
+            new=AsyncMock(side_effect=[TimeoutError("receiver cleanup unconfirmed"), None]),
+        ) as cleanup:
+            try:
+                with self.assertRaises(TimeoutError):
+                    await stream.close()
+                self.assertTrue(outputs.resources.held)
+                self.assertFalse(transport.cleanup_complete)
+                await stream.close()
+                self.assertEqual(cleanup.await_count, 2)
+                self.assertTrue(transport.cleanup_complete)
+                self.assertFalse(outputs.resources.held)
+            finally:
+                await outputs.close()
+
     def test_fixed_port_and_identity_validation(self):
         try:
             from assistant_runtime.plugins.airplay.output import validate_connection

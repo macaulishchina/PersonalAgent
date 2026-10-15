@@ -7,6 +7,8 @@
 - Before changing go2rtc deployment or adding cameras through it, read `deploy/go2rtc.md` for device mapping, stable identity, permissions, reconnection and acceptance.
 - No paid API fallback, raw recording by default, automatic room fallback, or extra audio gain.
 - Wake word, assistant display name, output names and hardware identities are instance configuration.
+- Main voice input/output are frozen startup bindings (`input_device` / `default_output`). Never switch them through MCP, CLI, voice commands, saved state or shell during a process. Extra audio/video endpoints are device tools; adding or using them must not replace the main voice route. Change bindings through instance configuration and restart only.
+- Device streams open through `audio_inputs` / `audio_outputs` resource registries, including the fixed voice streams. Sharing is adapter-declared; default to busy, never preempt another owner. Device tool actions use typed requests and `device_operations` IDs/query/cancel; tool input is data and never an implicit user turn.
 - Event notifications must not wait for device reconnect, model inference, or memory retrieval.
 - Track background work and resource cleanup through plugin contexts. Never replay uncertain user tasks.
 - Memory uses upstream Mem0, driven by the official Codex subscription task interface with local embeddings. Do not create a second live vector database, HTTP model proxy, or custom extraction/dedup/ranking algorithm.
@@ -15,6 +17,7 @@
 - Run `.venv/bin/python scripts/check.py` before deployment. All code uses one `.venv`.
 - Private data lives in ignored `state/`, `models/`, and `config.toml`. Never commit credentials or recordings.
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
+- Continue development on `main` by default; leave this workspace on `main` after merging and pushing.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
 
 - Runtime foreground/background agents use registered `workfiles` scratch/artifact areas. Task state belongs to the tasks plugin; provider protocol and Goal fields stay in the Codex adapter. Never steer a background task through the foreground turn or infer completion from memory.

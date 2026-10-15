@@ -7,13 +7,26 @@ from .devices import PipeWireDevices
 class PipeWirePlugin:
     manifest = Manifest("pipewire")
 
-    def __init__(self, config, store, directory, outputs):
-        self.route = AudioRoute(config, store, outputs)
+    def __init__(self, config, store, directory, outputs, voice_io, inputs):
+        self.outputs, self.inputs = outputs, inputs
+        self.route = AudioRoute(config, store, outputs, voice_io, inputs)
         self.player = StreamPlayer(self.route)
         self.devices = PipeWireDevices(config, self.route, directory)
 
     async def start(self, context):
         self.devices.register()
+        from .io import PipeWireEndpoint
+
+        for ident, spec in self.devices.specs.items():
+            registry = self.inputs if spec["kind"] == "microphone" else self.outputs
+            registry.register(
+                "pipewire",
+                ident,
+                PipeWireEndpoint(
+                    spec, self.route.config.minimum_volume if ident == self.route.output_device else 0
+                ),
+                shared=True,
+            )
         context.spawn(self.devices.run(context), "device-observer")
         context.own(self.route.close)
         context.own(self.player.stop)

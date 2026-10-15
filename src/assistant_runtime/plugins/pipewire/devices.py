@@ -57,7 +57,7 @@ class PipeWireDevices:
             capabilities = (
                 ("audio.capture",)
                 if spec["kind"] == "microphone"
-                else ("audio.playback", "audio.select", "audio.volume", "audio.stop")
+                else ("audio.playback", "audio.volume", "audio.stop")
             )
             self.directory.register("pipewire", ident, capabilities, self.refresh)
 
@@ -65,8 +65,8 @@ class PipeWireDevices:
         sources, sinks = await self.route.devices()
         for ident, spec in self.specs.items():
             data = {
-                "selected": ident
-                == (self.config.input_device if spec["kind"] == "microphone" else self.route.room)
+                "voice_bound": ident
+                == (self.route.input_device if spec["kind"] == "microphone" else self.route.output_device)
             }
             try:
                 node = resolve(spec, sources, sinks)
@@ -74,7 +74,7 @@ class PipeWireDevices:
                     data.update(node_state=node.get("state"), muted=node.get("mute"))
                     if spec["kind"] == "microphone":
                         p = self.route.capture
-                        data["capturing"] = data["selected"] and p is not None and p.returncode is None
+                        data["capturing"] = data["voice_bound"] and p is not None and p.healthy
                     else:
                         values = [v.get("value") for v in node.get("volume", {}).values()]
                         data["volume_percent"] = (
@@ -82,7 +82,7 @@ class PipeWireDevices:
                             if values and all(type(v) is int and v >= 0 for v in values)
                             else None
                         )
-                        data["route_ready"] = data["selected"] and self.route.ready.is_set()
+                        data["route_ready"] = data["voice_bound"] and self.route.ready.is_set()
                 observation = DeviceObservation(
                     "available" if node else "unavailable",
                     data,

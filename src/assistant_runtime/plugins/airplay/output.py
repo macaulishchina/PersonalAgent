@@ -1,6 +1,7 @@
 """Bounded PCM -> FFmpeg MP3 -> pyatv public StreamReader streaming API."""
 
 import asyncio
+import copy
 import ipaddress
 import time
 
@@ -27,10 +28,11 @@ def validate_connection(connection):
 class AirPlayOutput:
     def __init__(self, spec):
         validate_connection(spec["connection"])
-        self.spec = spec
+        self.spec = copy.deepcopy(spec)
         self.config = None
         self.last_scan = 0
         self.scan_lock = asyncio.Lock()
+        self.open_lock = asyncio.Lock()
         self.connection = None
         self.last_error = None
         self.volume = None  # RAOP getters may be cached/defaults, not receiver reads.
@@ -54,6 +56,12 @@ class AirPlayOutput:
         await self.discover()
 
     async def open(self, rate):
+        async with self.open_lock:
+            if self.connection and self.connection.healthy:
+                raise RuntimeError("AirPlay device busy; existing stream preserved")
+            return await self._open(rate)
+
+    async def _open(self, rate):
         await self.close()
         cfg = await self.discover()
         c = self.spec["connection"]
@@ -88,6 +96,8 @@ class AirPlayOutput:
         if self.connection and self.connection.healthy:
             await self.connection.atv.audio.set_volume(value)
         self.volume = value
+        applied = bool(self.connection and self.connection.healthy)
+        return {"volume_percent": value, "applied": applied, "scope": "device" if applied else "next_stream"}
 
     async def close(self):
         if self.connection:
@@ -106,6 +116,8 @@ class AirPlayPlayback:
         self.atv, self.process, self.rate, self.owner = atv, process, rate, owner
         self.queue = asyncio.Queue(maxsize=75)
         self.closed = False
+        self.cleanup_complete = False
+        self.close_lock = asyncio.Lock()
         self.sent_bytes = 0
         self.started = time.monotonic()
         self.encoder_task = asyncio.create_task(self._encode(), name="airplay:encode")
@@ -196,18 +208,20 @@ class AirPlayPlayback:
             raise
 
     async def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        self.encoder_task.cancel()
-        # EOF releases upstream decoder executor reads before its task is cancelled.
-        if self.process.returncode is None:
-            self.process.kill()
-            await self.process.wait()
-        self.process.stdout.feed_eof()
-        self.stream_task.cancel()
-        await asyncio.gather(self.encoder_task, self.stream_task, return_exceptions=True)
-        while not self.queue.empty():
-            self.queue.get_nowait()
-            self.queue.task_done()
-        await close_atv(self.atv)
+        async with self.close_lock:
+            if self.cleanup_complete:
+                return
+            self.closed = True
+            self.encoder_task.cancel()
+            # EOF releases upstream decoder executor reads before its task is cancelled.
+            if self.process.returncode is None:
+                self.process.kill()
+                await self.process.wait()
+            self.process.stdout.feed_eof()
+            self.stream_task.cancel()
+            await asyncio.gather(self.encoder_task, self.stream_task, return_exceptions=True)
+            while not self.queue.empty():
+                self.queue.get_nowait()
+                self.queue.task_done()
+            await close_atv(self.atv)
+            self.cleanup_complete = True

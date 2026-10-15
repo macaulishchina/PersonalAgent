@@ -32,9 +32,9 @@ class CommandsTest(unittest.TestCase):
         ]:
             self.assertIsNone(parse_command(text), text)
 
-    def test_chinese_volume_and_rooms(self):
+    def test_chinese_volume_and_no_route_switching(self):
         self.assertEqual(parse_command("请把音量调到百分之四十。").value, 40)
-        self.assertEqual(parse_command("切换到书房音箱", {"study": "书房"}).value, "study")
+        self.assertIsNone(parse_command("切换到书房音箱"))
         self.assertIsNone(parse_command("音量调到百分之一百二十"))
 
 

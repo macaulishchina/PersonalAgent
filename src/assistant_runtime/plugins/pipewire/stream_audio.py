@@ -104,7 +104,7 @@ class StreamPlayer:
         self.last_stop_seconds = time.monotonic() - start
 
     async def _kill(self):
-        if self.transport and self.transport.healthy:
+        if self.transport:
             await self.transport.close()
         self.transport = None
 
@@ -133,7 +133,9 @@ class StreamPlayer:
                     if epoch != self.epoch:
                         continue
                     async with self.lock:
-                        if not self.transport or not self.transport.healthy:
+                        if self.transport and not self.transport.healthy:
+                            await self._kill()
+                        if not self.transport:
                             self.transport = await self.route.open_output(self.rate)
                         if epoch != self.epoch:
                             continue

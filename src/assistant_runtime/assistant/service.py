@@ -92,32 +92,30 @@ class AssistantService:
             await self.voice.say(text)
 
     async def notify_task(self, text):
-        """Explicit output-only notification. Standby microphone remains local KWS."""
-        if self.quiet_active():
-            return
-        if self.active and self.voice.opened:
-            await self.voice.say(text[:1000])
-            return
+        """Output-only notification; return transport receipt, never a read receipt."""
+        if self.quiet_active() or self.active:
+            return "deferred"
         async with self.transition:
             if self.active or self.quiet_active():
-                return
+                return "deferred"
             self.notification_output = True
             self.player.manual_muted = False
+            started = time.monotonic()
             try:
                 await self.voice.open(notification_only=True)
                 await self.voice.say(text[:1000])
-                started = time.monotonic()
                 while time.monotonic() - started < 30:
                     if self.active or self.quiet_active() or self.player.manual_muted:
-                        break
+                        return "interrupted"
                     if (
                         self.last_output
                         and self.last_output > started
                         and time.monotonic() - self.last_output > 1.5
                         and not self.player.playing
                     ):
-                        break
+                        return "played"
                     await asyncio.sleep(0.1)
+                return "unknown"
             finally:
                 self.notification_output = False
                 await self.player.stop()
@@ -223,7 +221,7 @@ class AssistantService:
                         self.backend.last_user_text = text
                         self.input_count += 1
                         self.last_activity = time.monotonic()
-                        cmd = parse_command(text, self.config.output_aliases, self.config.wake_words)
+                        cmd = parse_command(text, self.config.wake_words)
                         if cmd:
                             await self.control(cmd)
                 elif event["kind"] == "user_turn":
@@ -265,6 +263,10 @@ class AssistantService:
             self.recovering = False
 
     async def control(self, cmd):
+        if cmd.kind not in {"sleep", "stop", "cancel", "volume", "progress"}:
+            raise ValueError(
+                "Voice input/output are fixed by startup configuration; runtime switching is disabled"
+            )
         self.last_activity = time.monotonic()
         if cmd.kind == "sleep":
             await self.sleep()
@@ -285,10 +287,6 @@ class AssistantService:
             await self.player.stop()
             cancelled = await self.backend.cancel()
             await self.speak("已请求取消当前任务。" if cancelled else "当前没有正在执行的任务。")
-        elif cmd.kind == "room":
-            await self.player.stop(suppress=False)
-            await self.route.select(cmd.value)
-            await self.speak("已切换到" + self.config.output_labels.get(cmd.value, cmd.value) + "。")
         elif cmd.kind == "volume":
             await self.route.set_volume(cmd.value)
             await self.speak("音量已调整。")
@@ -297,12 +295,10 @@ class AssistantService:
 
     async def tool_control(self, args):
         action = args["action"]
-        if action not in {"room", "volume", "stop", "sleep"}:
+        if action not in {"volume", "stop", "sleep"}:
             raise ValueError("Unsupported device action")
-        await self.runtime.invoke(
-            Control(action, args.get("room") if action == "room" else args.get("volume"))
-        )
-        return {"ok": True, "room": self.route.room, "volume": self.route.volume, "active": self.active}
+        await self.runtime.invoke(Control(action, args.get("volume")))
+        return {"ok": True, "volume": self.route.volume, "active": self.active}
 
     def status(self):
         return {
@@ -330,7 +326,11 @@ class AssistantService:
             "mode": self.mode,
             "microphone_enabled": not self.no_mic,
             "capture_recent": self.last_frame is not None and time.monotonic() - self.last_frame < 3,
-            "room": self.route.room,
+            "voice_io": {
+                "input_device": self.route.input_device,
+                "output_device": self.route.output_device,
+                "locked": True,
+            },
             "volume": self.route.volume,
             "task_running": self.backend.busy,
             "task_progress": self.backend.progress,
@@ -369,18 +369,24 @@ class AssistantService:
     async def _record_for_client(self, reader, recording):
         async def operation():
             clip = await self.runtime.invoke(recording, timeout=recording.duration_seconds + 35)
-            return await self.conversation.recording_reply(clip)
+            result = await self.conversation.recording_reply(clip)
+            return {**result, "operation_id": recording.operation_id}
 
-        work = asyncio.create_task(operation(), name="requested-video")
-        disconnected = asyncio.create_task(reader.read(1), name="video-caller")
+        return await self._device_for_client(reader, operation())
+
+    async def _device_for_client(self, reader, operation):
+        work = asyncio.create_task(operation, name="requested-device-operation")
+        disconnected = asyncio.create_task(reader.read(1), name="device-caller")
         try:
             done, _ = await asyncio.wait((work, disconnected), return_when=asyncio.FIRST_COMPLETED)
             if disconnected in done:
-                raise ConnectionError("Recording caller disconnected; incomplete recording canceled")
+                raise ConnectionError(
+                    "Device caller disconnected; operation canceled, prior effects may be partial"
+                )
             return await work
         finally:
             for task in (work, disconnected):
-                if not task.done():
+                if not task.done() and not task.cancelling():
                     task.cancel()
             await asyncio.gather(work, disconnected, return_exceptions=True)
 
@@ -390,30 +396,66 @@ class AssistantService:
             action = d["command"]
             if action == "wake":
                 await self.wake()
-            elif action in {"sleep", "stop", "cancel", "room", "volume", "progress"}:
+            elif action in {"sleep", "stop", "cancel", "volume", "progress"}:
                 await self.runtime.invoke(Control(action, d.get("value")))
             elif action == "gesture":
                 await self.runtime.plugins["gesture"].simulate(d.get("value", "wave"))
             elif action == "devices":
+                operation = {"operation_id": d["operation_id"]} if d.get("operation_id") else {}
                 if d.get("action") == "snapshot":
-                    frame = await self.runtime.invoke(VideoCapture(d.get("device_id")))
-                    result = await self.conversation.capture_reply(frame)
+                    capture = VideoCapture(d.get("device_id"), **operation)
+                    frame = await self._device_for_client(reader, self.runtime.invoke(capture))
+                    result = {
+                        **await self.conversation.capture_reply(frame),
+                        "operation_id": capture.operation_id,
+                    }
                 elif d.get("action") == "record":
-                    recording = VideoRecord(d.get("device_id"), d.get("duration_seconds", 10))
+                    recording = VideoRecord(d.get("device_id"), d.get("duration_seconds", 10), **operation)
                     result = await self._record_for_client(reader, recording)
                 elif d.get("action") in {"move", "stop-camera"}:
                     stopping = d["action"] == "stop-camera"
+                    result = await self._device_for_client(
+                        reader,
+                        self.runtime.invoke(
+                            CameraMotion(
+                                d.get("device_id"),
+                                "stop" if stopping else d.get("direction"),
+                                0 if stopping else d.get("duration_ms", 80),
+                                **operation,
+                            )
+                        ),
+                    )
+                elif d.get("action") == "volume":
+                    from ..kernel.contracts import AudioVolume
+
+                    result = await self._device_for_client(
+                        reader,
+                        self.runtime.invoke(AudioVolume(d.get("device_id"), d.get("percent"), **operation)),
+                    )
+                elif d.get("action") in {"operations", "cancel-operation"}:
+                    from ..kernel.contracts import DeviceOperationQuery, DeviceOperationCancel
+
+                    request_type = (
+                        DeviceOperationCancel if d["action"] == "cancel-operation" else DeviceOperationQuery
+                    )
                     result = await self.runtime.invoke(
-                        CameraMotion(
-                            d.get("device_id"),
-                            "stop" if stopping else d.get("direction"),
-                            0 if stopping else d.get("duration_ms", 80),
-                        )
+                        request_type(d.get("device_id"), d.get("operation_id"))
                     )
                 else:
                     result = await self.runtime.invoke(
                         DeviceQuery(d.get("action", "list"), d.get("device_id"))
                     )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "notifications":
+                from ..kernel.contracts import NotificationRequest
+
+                result = await self.runtime.invoke(
+                    NotificationRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=15
+                )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
                 writer.close()

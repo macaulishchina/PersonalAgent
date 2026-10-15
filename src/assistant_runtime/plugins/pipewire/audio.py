@@ -1,15 +1,23 @@
 import asyncio
+import copy
 import json
 import logging
 import os
 import time
 
+from ...kernel.contracts import VoiceBinding
 from .devices import resolve, validate_device
 
 import numpy as np
 from pywebrtc_audio import AudioProcessor
 
 log = logging.getLogger(__name__)
+
+PINNED_STREAM_ARGS = (
+    "--property=node.dont-reconnect=true",
+    "--property=node.dont-fallback=true",
+    "--property=node.dont-move=true",
+)
 
 
 def audio_env():
@@ -36,17 +44,19 @@ async def command(*args, timeout=12):
 
 
 class AudioRoute:
-    def __init__(self, config, store, outputs=None):
+    def __init__(self, config, store, outputs=None, voice_io=None, inputs=None):
         self.config, self.store = config, store
-        self.room = store.get("room", config.default_output)
+        self._voice_io = voice_io or VoiceBinding(config.input_device, config.default_output)
+        self._input_spec = copy.deepcopy(config.devices[self.input_device])
+        self._output_spec = copy.deepcopy(config.devices[self.output_device])
         for spec in config.devices.values():
             if spec["adapter"] == "pipewire" and spec.get("enabled", True):
                 validate_device(spec)
-        if self.room not in config.output_devices:
-            raise ValueError("Previously selected output removed; choose an explicit configured output")
-        if config.devices[config.input_device]["adapter"] != "pipewire":
+        if self.output_device not in config.output_devices:
+            raise ValueError("Configured voice output is unavailable or disabled")
+        if self._input_spec["adapter"] != "pipewire":
             raise ValueError("Selected microphone requires its configured adapter")
-        self.outputs = outputs
+        self.outputs, self.inputs = outputs, inputs
         self.external_output = None
         # Observe the device, never restore an old service volume over its setting.
         self.volume = None
@@ -62,6 +72,14 @@ class AudioRoute:
         self.last_error = None
         self.last_connect = 0
 
+    @property
+    def input_device(self):
+        return self._voice_io.input_device
+
+    @property
+    def output_device(self):
+        return self._voice_io.output_device
+
     async def devices(self):
         sources = json.loads(await command("pactl", "-f", "json", "list", "sources"))
         sinks = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
@@ -70,18 +88,18 @@ class AudioRoute:
     async def ensure(self, force=False, check_volume=False):
         async with self.lock:
             sources, sinks = await self.devices()
-            spec = self.config.devices[self.room]
-            external = self.outputs.get(self.room) if spec["adapter"] != "pipewire" else None
+            spec = self._output_spec
+            external = self.outputs.get(self.output_device) if spec["adapter"] != "pipewire" else None
             if external:
                 try:
                     await external.ensure_ready()
                 except (RuntimeError, TimeoutError, OSError):
                     self.ready.clear()
-                    self.last_error = f"{self.room} output unavailable"
+                    self.last_error = f"{self.output_device} output unavailable"
                     raise
             target = spec["connection"].get("address") if not external else None
             bluetooth = target is not None
-            source_node = resolve(self.config.devices[self.config.input_device], sources, sinks)
+            source_node = resolve(self._input_spec, sources, sinks)
             sink_node = resolve(spec, sources, sinks) if not external else None
             physical_source = source_node["name"] if source_node else None
             physical_sink = sink_node["name"] if sink_node else None
@@ -92,7 +110,9 @@ class AudioRoute:
                 self.source = physical_source
                 self.sink = self.physical_sink = physical_sink
                 self.last_error = (
-                    "microphone unavailable" if not physical_source else f"{self.room} speaker unavailable"
+                    "microphone unavailable"
+                    if not physical_source
+                    else f"{self.output_device} speaker unavailable"
                 )
                 if bluetooth and not physical_sink and time.monotonic() - self.last_connect > 20:
                     self.last_connect = time.monotonic()
@@ -157,7 +177,7 @@ class AudioRoute:
             await self.ensure_minimum_volume()
             self.ready.set()
             self.last_error = None
-            log.info("audio_ready room=%s echo_cancel=%s", self.room, bool(self.module))
+            log.info("audio_ready output_device=%s echo_cancel=%s", self.output_device, bool(self.module))
 
     async def ensure_minimum_volume(self):
         self.volume = None
@@ -200,21 +220,11 @@ class AudioRoute:
             if value:
                 await self.ensure_minimum_volume()
 
-    async def select(self, room):
-        if room not in self.config.output_devices:
-            raise ValueError("unknown speaker")
-        if self.config.devices[room]["adapter"] != "pipewire":
-            self.outputs.get(room)  # Reject a missing provider before changing the selection.
-        self.room = room
-        self.store.set("room", room)
-        self.ready.clear()
-        await self.ensure(force=True)
-
     async def open_output(self, rate):
         from .playback import PipeWirePlayback, MirroredPlayback
 
         if self.external_output:
-            transport = await self.external_output.open(rate)
+            transport = await self.outputs.open(self.output_device, rate, owner="voice")
             if self.module:
                 try:
                     reference = await PipeWirePlayback.open(self.sink, rate)
@@ -223,7 +233,9 @@ class AudioRoute:
                     await transport.close()
                     raise
             return transport
-        return await PipeWirePlayback.open(self.sink, rate)
+        return await self.outputs.open(
+            self.output_device, rate, owner="voice", opener=lambda: PipeWirePlayback.open(self.sink, rate)
+        )
 
     async def _clean_stale_modules(self):
         # This pactl build omits module IDs in JSON; the short table has them.
@@ -239,9 +251,10 @@ class AudioRoute:
                 await command("pactl", "unload-module", fields[0])
 
     async def _unload(self):
-        for p in (self.capture, self.reference_capture):
-            if p and p.returncode is None:
-                p.terminate()
+        if self.capture:
+            await self.capture.close()
+        if self.reference_capture and self.reference_capture.returncode is None:
+            self.reference_capture.terminate()
         for name in ("bridge", "module"):
             module = getattr(self, name)
             if module:
@@ -253,8 +266,7 @@ class AudioRoute:
 
     async def close(self):
         self.ready.clear()
-        if self.external_output:
-            await self.external_output.close()
+        # Stream ownership belongs to the player/registry, never close a provider globally here.
         await self._unload()
 
     async def _record(self, source, name):
@@ -268,6 +280,7 @@ class AudioRoute:
             "--latency-msec=20",
             f"--client-name={name}",
             f"--device={source}",
+            *PINNED_STREAM_ARGS,
             env=audio_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -283,7 +296,9 @@ class AudioRoute:
                     # Listen without redirecting to another room while offline.
                     if not self.source:
                         raise
-                capture = self.capture = await self._record(self.source, "personal-agent-microphone")
+                if self.inputs is None:
+                    raise RuntimeError("Audio input providers not configured")
+                capture = self.capture = await self.inputs.open(self.input_device, 16000, owner="voice")
                 processor = None
                 if self.module:
                     reference = self.reference_capture = await self._record(
@@ -300,16 +315,14 @@ class AudioRoute:
                     # Keep unprocessed speech for local keyword detection only.
                     if reference:
                         near, far = await asyncio.wait_for(
-                            asyncio.gather(
-                                capture.stdout.readexactly(640), reference.stdout.readexactly(640)
-                            ),
+                            asyncio.gather(capture.read(640), reference.stdout.readexactly(640)),
                             3,
                         )
                         data = processor.process(
                             np.frombuffer(near, dtype="<i2").copy(), np.frombuffer(far, dtype="<i2").copy()
                         ).tobytes()
                     else:
-                        near = data = await asyncio.wait_for(capture.stdout.readexactly(640), 3)
+                        near = data = await asyncio.wait_for(capture.read(640), 3)
                     self.raw_frame = near
                     yield data
             except asyncio.CancelledError:
@@ -320,8 +333,10 @@ class AudioRoute:
                 log.warning("audio_input_waiting: %s", self.last_error)
                 await asyncio.sleep(1)
             finally:
-                for p in (capture, reference):
-                    if p and p.returncode is None:
-                        p.terminate()
-                        await p.wait()
+                if capture:
+                    await capture.close()
+                if reference and reference.returncode is None:
+                    reference.terminate()
+                    await reference.wait()
+                self.capture = self.reference_capture = None
                 self.raw_frame = None

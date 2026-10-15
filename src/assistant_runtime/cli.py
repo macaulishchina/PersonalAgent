@@ -58,17 +58,28 @@ def main():
     for name in ["text", "say"]:
         sub.add_parser(name).add_argument("text")
     sub.add_parser("inject-wav").add_argument("path")
-    for name in ["room", "gesture"]:
-        sub.add_parser(name).add_argument("value")
+    sub.add_parser("gesture").add_argument("value")
     sub.add_parser("volume").add_argument("value", type=int, choices=range(101), metavar="0..100")
     devices = sub.add_parser("devices")
     devices.add_argument(
         "action",
-        choices=["list", "inspect", "snapshot", "record", "move", "stop-camera"],
+        choices=[
+            "list",
+            "inspect",
+            "snapshot",
+            "record",
+            "move",
+            "stop-camera",
+            "operations",
+            "cancel-operation",
+            "volume",
+        ],
         nargs="?",
         default="list",
     )
     devices.add_argument("device_id", nargs="?")
+    devices.add_argument("--operation-id", help="Operation identity; required for cancel-operation")
+    devices.add_argument("--percent", type=int, choices=range(101), metavar="0..100")
     devices.add_argument(
         "--output", help="Save a requested snapshot (JPEG) or recorded clip (MP4) to this path"
     )
@@ -77,6 +88,9 @@ def main():
     devices.add_argument(
         "--duration", dest="duration_seconds", type=int, default=10, help="Video clip, 1..60 seconds"
     )
+    notifications = sub.add_parser("notifications")
+    notifications.add_argument("action", choices=["list", "get", "publish", "update", "read", "retry"])
+    notifications.add_argument("arguments", nargs="?", default="{}", help="JSON notification arguments")
     tasks = sub.add_parser("tasks")
     tasks.add_argument(
         "action",
@@ -147,6 +161,10 @@ def main():
             output = payload.pop("output", None)
             if args.command == "devices" and (args.action != "list" and not args.device_id):
                 raise ValueError("Device action requires a device ID")
+            if args.command == "devices" and args.action == "cancel-operation" and not args.operation_id:
+                raise ValueError("cancel-operation requires --operation-id")
+            if args.command == "devices" and args.action == "volume" and args.percent is None:
+                raise ValueError("devices volume requires --percent")
             if args.command == "devices" and args.action == "move":
                 if not args.direction or not 1 <= args.duration_ms <= 500:
                     raise ValueError("move requires --direction and a duration of 1..500 ms")

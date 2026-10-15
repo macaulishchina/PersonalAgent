@@ -8,9 +8,27 @@ from typing import Protocol
 
 from ..kernel.contracts import Control, DeviceQuery, MemoryRequest, VideoCapture, CameraMotion, VideoRecord
 
-from ..kernel.contracts import TaskRequest
+from ..kernel.contracts import (
+    TaskRequest,
+    NotificationRequest,
+    DeviceOperationQuery,
+    DeviceOperationCancel,
+    AudioVolume,
+)
 
-Request = TaskRequest | Control | DeviceQuery | MemoryRequest | VideoCapture | CameraMotion | VideoRecord
+Request = (
+    NotificationRequest
+    | TaskRequest
+    | Control
+    | DeviceQuery
+    | MemoryRequest
+    | VideoCapture
+    | CameraMotion
+    | VideoRecord
+    | DeviceOperationQuery
+    | DeviceOperationCancel
+    | AudioVolume
+)
 
 
 class CapabilityClient(Protocol):
@@ -23,14 +41,22 @@ class LocalRuntimeClient:
         self.socket, self.timeout = str(socket), timeout
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, TaskRequest):
+        if isinstance(request, NotificationRequest):
+            payload = {"command": "notifications", **asdict(request)}
+        elif isinstance(request, TaskRequest):
             payload = {"command": "tasks", **asdict(request)}
         elif isinstance(request, MemoryRequest):
             payload = {"command": "memory", **asdict(request)}
         elif isinstance(request, DeviceQuery):
             payload = {"command": "devices", **asdict(request)}
+        elif isinstance(request, DeviceOperationQuery):
+            payload = {"command": "devices", "action": "operations", **asdict(request)}
+        elif isinstance(request, DeviceOperationCancel):
+            payload = {"command": "devices", "action": "cancel-operation", **asdict(request)}
+        elif isinstance(request, AudioVolume):
+            payload = {"command": "devices", "action": "volume", **asdict(request)}
         elif isinstance(request, VideoCapture):
-            payload = {"command": "devices", "action": "snapshot", "device_id": request.device_id}
+            payload = {"command": "devices", "action": "snapshot", **asdict(request)}
         elif isinstance(request, CameraMotion):
             payload = {"command": "devices", "action": "move", **asdict(request)}
         elif isinstance(request, VideoRecord):

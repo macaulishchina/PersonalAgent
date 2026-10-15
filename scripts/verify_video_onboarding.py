@@ -78,7 +78,7 @@ async def verify_gateway_recovery(config, ident):
             raise AssertionError("Stopped gateway must not return an old frame")
         healthy = await request(config, {"command": "status"})
         assert healthy["capture_recent"], "Gateway outage interrupted the microphone"
-        assert healthy["room"] == before["room"]
+        assert healthy["voice_io"] == before["voice_io"]
     finally:
         await gateway_command("start")
     async with asyncio.timeout(30):
@@ -91,7 +91,7 @@ async def verify_gateway_recovery(config, ident):
     metadata, _ = await snapshot(config, ident)
     after = await request(config, {"command": "status"})
     assert after["session_id"] == before["session_id"]
-    assert after["room"] == before["room"]
+    assert after["voice_io"] == before["voice_io"]
     return {
         "outage_reported": True,
         "stale_frame_rejected": True,
@@ -118,7 +118,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
     try:
         initial = await request(config, {"command": "status"})
         report["before"] = {
-            k: initial[k] for k in ("room", "mode", "wake_count", "capture_recent", "session_id")
+            k: initial[k] for k in ("voice_io", "mode", "wake_count", "capture_recent", "session_id")
         }
         inventory = await request(config, {"command": "devices", "action": "list"})
         report["inventory"] = inventory
@@ -132,7 +132,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
             metadata, data = await snapshot(config, ident)
             report["captures"].append(metadata)
             current = await request(config, {"command": "status"})
-            assert current["room"] == initial["room"]
+            assert current["voice_io"] == initial["voice_io"]
             assert current["capture_recent"], "Camera acquisition interrupted live microphone capture"
             if save_frame and index == 0:
                 image_path = folder / "preview.jpg"
@@ -217,9 +217,9 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
             report["codex_validated"] = True
         report["after_camera"] = detail
         after = await request(config, {"command": "status"})
-        assert after["room"] == initial["room"]
+        assert after["voice_io"] == initial["voice_io"]
         report["after"] = {
-            k: after[k] for k in ("room", "mode", "wake_count", "capture_recent", "session_id")
+            k: after[k] for k in ("voice_io", "mode", "wake_count", "capture_recent", "session_id")
         }
         report["capture_did_not_activate_voice"] = after["wake_count"] == initial["wake_count"]
         if gateway_restart:
@@ -241,7 +241,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
                         pass
                     await asyncio.sleep(0.5)
             assert healthy["session_id"] == initial["session_id"]
-            assert healthy["room"] == initial["room"]
+            assert healthy["voice_io"] == initial["voice_io"]
             recovered_frame, _ = await snapshot(config, ident)
             report["restart"] = {
                 "session_preserved": True,

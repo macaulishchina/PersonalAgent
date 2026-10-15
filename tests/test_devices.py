@@ -112,7 +112,8 @@ class PipeWireIdentityTest(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace
 
         route = SimpleNamespace(
-            room="living",
+            input_device="living_microphone",
+            output_device="living",
             capture=None,
             ready=asyncio.Event(),
             devices=AsyncMock(
@@ -127,7 +128,7 @@ class PipeWireIdentityTest(unittest.IsolatedAsyncioTestCase):
         await adapter.refresh()
         self.assertEqual(directory.snapshot("living")["state"], "unavailable")
         self.assertEqual(directory.snapshot("study")["state"], "available")
-        self.assertFalse(directory.snapshot("study")["data"]["selected"])
+        self.assertFalse(directory.snapshot("study")["data"]["voice_bound"])
         self.assertEqual(directory.snapshot("living_microphone")["state"], "available")
         self.assertFalse(directory.snapshot("living_microphone")["data"]["capturing"])
 
@@ -168,10 +169,8 @@ class DeviceConfigTest(unittest.TestCase):
 
 
 class DeviceNameTest(unittest.TestCase):
-    def test_same_room_outputs_require_a_specific_label(self):
+    def test_device_names_do_not_activate_voice_route_switching(self):
         from assistant_runtime.assistant.commands import parse_command
 
-        aliases = {"speaker_a": ["客厅小爱音箱", "客厅"], "speaker_b": ["客厅 HomePod", "客厅"]}
-        self.assertIsNone(parse_command("切换到客厅音箱", aliases))
-        self.assertEqual(parse_command("切换到客厅小爱音箱", aliases).value, "speaker_a")
-        self.assertEqual(parse_command("切换到客厅HomePod", aliases).value, "speaker_b")
+        for text in ("切换到客厅音箱", "切换到客厅小爱音箱", "切换到客厅HomePod"):
+            self.assertIsNone(parse_command(text))

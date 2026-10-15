@@ -125,7 +125,7 @@ async def verify(config, device, fixed, codex):
                     await backend.close()
                     store.db.close()
         after = await request(config, {"command": "status"})
-        assert after["session_id"] == before["session_id"] and after["room"] == before["room"]
+        assert after["session_id"] == before["session_id"] and after["voice_io"] == before["voice_io"]
         assert after["capture_recent"] and after["wake_count"] == before["wake_count"]
         report.update(
             passed=True, microphone_preserved=True, voice_not_activated=True, session_preserved=True

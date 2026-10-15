@@ -11,10 +11,25 @@ API_VERSION = 1
 
 
 @dataclass(frozen=True)
+class NotificationRequest:
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
 class TaskRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)
     caller_run: str | None = None
+
+
+@dataclass(frozen=True)
+class VoiceBinding:
+    """The process-lifetime voice endpoints, separate from device tool operations."""
+
+    input_device: str
+    output_device: str
 
 
 @dataclass(frozen=True)
@@ -41,9 +56,53 @@ class DeviceQuery:
     device_id: str | None = None
 
 
+def operation_id():
+    return uuid.uuid4().hex
+
+
+def validate_operation_id(value):
+    if not isinstance(value, str) or len(value) != 32 or any(c not in "0123456789abcdef" for c in value):
+        raise ValueError("Operation ID must be 32 lowercase hexadecimal characters")
+
+
+@dataclass(frozen=True)
+class DeviceOperationQuery:
+    device_id: str
+    operation_id: str | None = None
+
+    def __post_init__(self):
+        if self.operation_id is not None:
+            validate_operation_id(self.operation_id)
+
+
+@dataclass(frozen=True)
+class DeviceOperationCancel:
+    device_id: str
+    operation_id: str
+
+    def __post_init__(self):
+        validate_operation_id(self.operation_id)
+
+
+@dataclass(frozen=True)
+class AudioVolume:
+    device_id: str
+    percent: int
+    operation_id: str = field(default_factory=operation_id, compare=False)
+
+    def __post_init__(self):
+        validate_operation_id(self.operation_id)
+        if type(self.percent) is not int or not 0 <= self.percent <= 100:
+            raise ValueError("Volume must be an integer from 0 to 100")
+
+
 @dataclass(frozen=True)
 class VideoCapture:
     device_id: str
+    operation_id: str = field(default_factory=operation_id, compare=False)
+
+    def __post_init__(self):
+        validate_operation_id(self.operation_id)
 
 
 MAX_VIDEO_BYTES = 64 * 1024 * 1024
@@ -53,8 +112,10 @@ MAX_VIDEO_BYTES = 64 * 1024 * 1024
 class VideoRecord:
     device_id: str
     duration_seconds: int = 10
+    operation_id: str = field(default_factory=operation_id, compare=False)
 
     def __post_init__(self):
+        validate_operation_id(self.operation_id)
         if not isinstance(self.device_id, str) or not 0 < len(self.device_id) <= 64:
             raise ValueError("Invalid camera device ID")
         if type(self.duration_seconds) is not int or not 1 <= self.duration_seconds <= 60:
@@ -99,8 +160,10 @@ class CameraMotion:
     device_id: str
     direction: str
     duration_ms: int = 80
+    operation_id: str = field(default_factory=operation_id, compare=False)
 
     def __post_init__(self):
+        validate_operation_id(self.operation_id)
         if not isinstance(self.device_id, str) or not 0 < len(self.device_id) <= 64:
             raise ValueError("Invalid camera device ID")
         if not isinstance(self.direction, str) or self.direction not in {
@@ -243,14 +306,27 @@ class PlaybackTransport(Protocol):
     async def close(self) -> None: ...
 
 
+class CaptureTransport(Protocol):
+    """Independent PCM16 capture; closing it never closes another consumer."""
+
+    @property
+    def healthy(self) -> bool: ...
+    async def read(self, size: int) -> bytes: ...
+    async def close(self) -> None: ...
+
+
+class AudioInputProvider(Protocol):
+    async def open(self, sample_rate: int) -> CaptureTransport: ...
+
+
 class AudioOutputProvider(Protocol):
-    """A registered external speaker transport; unknown volume stays None."""
+    """A registered speaker provider; unknown volume stays None."""
 
     volume: int | None
 
     async def ensure_ready(self) -> None: ...
     async def open(self, sample_rate: int) -> PlaybackTransport: ...
-    async def set_volume(self, value: int) -> None: ...
+    async def set_volume(self, value: int) -> dict: ...
     async def close(self) -> None: ...
 
 

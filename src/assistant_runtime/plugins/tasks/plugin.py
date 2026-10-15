@@ -7,43 +7,63 @@ import json
 from pathlib import Path
 import time
 import uuid
+import weakref
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from ...kernel.runtime import Manifest
-from ...kernel.contracts import TaskRequest, DeviceQuery
+from ...kernel.contracts import TaskRequest, DeviceQuery, NotificationRequest
 from .settings import TaskSettings
-from .repository import TaskRepository, ACTIVE, TERMINAL
+from .repository import TaskRepository, ACTIVE, TERMINAL, one_shot
 from .schedules import next_time, trigger
 
 
-STATE_LABELS = {
-    "enabled": "已启用",
-    "paused": "已暂停",
-    "archived": "已归档",
-    "terminated": "已终止",
-    "queued": "排队中",
+PLAN_LABELS = {
+    "enabled": "计划已启用",
+    "paused": "后续触发已暂停",
+    "archived": "任务已归档",
+    "terminated": "任务已终止",
+}
+RUN_LABELS = {
+    "queued": "等待启动",
     "dispatching": "正在启动",
     "running": "执行中",
-    "waiting_user": "等待你回答",
-    "unknown": "结果待核对",
-    "completed": "已完成",
-    "failed": "失败",
-    "canceled": "已取消",
-    "missed": "已错过",
+    "waiting_user": "等待你处理",
+    "unknown": "执行状态待核实",
+    "paused": "本次已暂停",
+    "completed": "本次已完成",
+    "failed": "本次执行失败",
+    "canceled": "本次已取消",
+    "missed": "本次已跳过",
+}
+RUN_SUMMARIES = {
+    "completed": "本次执行已结束，未提供文字摘要。",
+    "failed": "本次执行失败。",
+    "canceled": "本次执行已取消。",
+    "missed": "本次计划未启动，已跳过。",
 }
 
 
+def plan_label(definition):
+    if definition["state"] != "enabled":
+        return PLAN_LABELS[definition["state"]]
+    if definition["spec"]["trigger"]["kind"] == "event":
+        return "事件监听已启用"
+    return "定时计划已启用" if definition["next_at"] is not None else "无待触发计划"
+
+
 class TasksPlugin:
-    manifest = Manifest("tasks", ("conversation", "codex"))
+    manifest = Manifest("tasks", ("conversation", "codex", "notifications"))
 
     def __init__(self, host):
         self.host = host
-        self.manifest = Manifest("tasks", ("conversation", host.config.bindings["brain"]))
+        self.manifest = Manifest("tasks", ("conversation", host.config.bindings["brain"], "notifications"))
         self.settings = TaskSettings.parse(host.config.tasks)
         self.repo = TaskRepository(host.store.db)
         self.scheduler = None
         self.launching = set()
         self.started = False
+        self.notification_error = None
+        self.run_locks = weakref.WeakValueDictionary()
 
     async def start(self, context):
         self.context = context
@@ -60,11 +80,14 @@ class TasksPlugin:
                 except Exception:
                     state, text = "unknown", "无法核对上次执行结果，未自动重做"
                 self.repo.update_run(run["id"], state, progress=text)
+        self.repo.seed_finalizations()
+        self.archive_finished()
         for definition in self.repo.definitions():
             self.schedule(definition)
         self.scheduler.resume()
         self.started = True
         context.spawn(self.worker(), "dispatch-and-deliver")
+        context.spawn(self.finalize_finished(), "finalize-executions")
         context.spawn(self.watch_events(), "event-rules")
 
     def schedule(self, d):
@@ -81,6 +104,48 @@ class TasksPlugin:
                 replace_existing=True,
                 misfire_grace_time=None,
             )
+
+    def archive_finished(self, task_ids=None):
+        if task_ids is not None and not task_ids:
+            return
+        definitions = {d["id"]: d for d in self.repo.definitions()}
+        candidates = set(definitions) if task_ids is None else set(task_ids)
+        # Finishing a child can also finish an otherwise completed parent.
+        for ident in list(candidates):
+            seen = set()
+            while ident in definitions and ident not in seen:
+                seen.add(ident)
+                ident = definitions[ident]["spec"].get("parent_id")
+                if ident:
+                    candidates.add(ident)
+        children = {}
+        for d in definitions.values():
+            children.setdefault(d["spec"].get("parent_id"), []).append(d["id"])
+
+        def unfinished(ident):
+            if self.repo.active_runs(ident):
+                return True
+            d = definitions[ident]
+            if d["state"] not in {"archived", "terminated"}:
+                latest = self.repo.runs(ident, limit=1)
+                recurring = d["spec"]["trigger"]["kind"] in {"interval", "cron", "event"}
+                if d["next_at"] is not None or recurring or not latest:
+                    return True
+            return any(unfinished(child) for child in children.get(ident, []))
+
+        for ident in candidates:
+            d = definitions.get(ident)
+            if not d or d["state"] not in {"enabled", "paused"} or not d["spec"]["auto_archive"]:
+                continue
+            if not one_shot(d["spec"]) or unfinished(ident):
+                continue
+            latest = self.repo.runs(ident, limit=1)
+            if not latest or latest[0]["state"] not in TERMINAL:
+                continue
+            # Automatic archival only changes organization. Unlike explicit archive,
+            # it never interrupts work, deletes results or creates another notification.
+            definitions[ident] = self.repo.update_definition(ident, state="archived", next_at=None)
+            self.schedule(definitions[ident])
 
     async def scheduled_due(self, ident):
         self.due(ident)
@@ -108,16 +173,28 @@ class TasksPlugin:
                     candidate, datetime.fromtimestamp(occurrence + 0.001, timezone.utc)
                 )
             nxt = candidate.timestamp() if candidate else None
-        overlap = bool(self.repo.active_runs(ident))
-        state = "missed" if overlap or now - occurrence > spec["misfire_seconds"] else "queued"
+        active = self.repo.active_runs(ident)
+        reason = "overlap" if active else "late" if now - occurrence > spec["misfire_seconds"] else None
+        state = "missed" if reason else "queued"
+        skipped = (
+            {
+                "skip_reason": reason,
+                "blocked_by": [run["id"] for run in active],
+                "progress": "触发时同一任务已有未结束的执行，为避免重复，本轮未启动。"
+                if reason == "overlap"
+                else "已超过允许补跑的时限，本轮未启动。",
+            }
+            if reason
+            else None
+        )
         with self.repo.db:
-            self.repo.enqueue(d, f"time:{occurrence:.6f}", state)
+            self.repo.enqueue(d, f"time:{occurrence:.6f}", state, additions=skipped)
             self.repo.db.execute("UPDATE job_definitions SET next_at=? WHERE id=?", (nxt, ident))
         self.schedule(self.repo.definition(ident))
 
     def provider_update(self, ident, state, **data):
         run = self.repo.run(ident)
-        if run["state"] in {"canceled", "paused"}:
+        if run["state"] in TERMINAL | {"paused"}:
             identifiers = {k: v for k, v in data.items() if k in {"thread_id", "turn_id"}}
             if identifiers:
                 self.repo.update_run(ident, **identifiers)
@@ -146,9 +223,11 @@ class TasksPlugin:
             "resources",
             "execution",
             "notify_voice",
+            "notify_completion",
             "parent_id",
             "authorization",
             "misfire_seconds",
+            "auto_archive",
         }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Unknown task specification fields")
@@ -159,6 +238,7 @@ class TasksPlugin:
             "resources": [],
             "execution": {},
             "notify_voice": False,
+            "notify_completion": True,
             "authorization": "user",
             "misfire_seconds": self.settings.misfire_seconds,
             **value,
@@ -166,7 +246,7 @@ class TasksPlugin:
         for key, maxlen in (("title", 200), ("prompt", 4000)):
             if not isinstance(s.get(key), str) or not 0 < len(s[key].strip()) <= maxlen:
                 raise ValueError(f"Invalid task {key}")
-        for key in ("long_term", "notify_voice"):
+        for key in ("long_term", "notify_voice", "notify_completion"):
             if type(s[key]) is not bool:
                 raise ValueError(key + " must be boolean")
         if type(s["misfire_seconds"]) is not int or not 0 <= s["misfire_seconds"] <= 86400:
@@ -189,6 +269,9 @@ class TasksPlugin:
         trigger(tr, self.settings.timezone, time.time())
         if tr["kind"] == "event":
             self.validate_event(tr.get("event", {}))
+        s.setdefault("auto_archive", one_shot(s))
+        if type(s["auto_archive"]) is not bool or (s["auto_archive"] and not one_shot(s)):
+            raise ValueError("auto_archive requires a one-shot, non-Goal task")
         if caller:
             parent = self.repo.run(caller)
             p = parent["data"]["spec"]
@@ -275,35 +358,56 @@ class TasksPlugin:
                 raise ValueError("Invalid event timing/hysteresis")
 
     async def request(self, request):
+        if request.action in {"continue", "cancel_run", "pause_run", "supplement"}:
+            lock = self.run_locks.setdefault(request.arguments["run_id"], asyncio.Lock())
+            async with lock:
+                return await self._request(request)
+        return await self._request(request)
+
+    async def _request(self, request):
         a, args, caller = request.action, request.arguments, request.caller_run
         if caller and a not in {"create", "list", "get", "models", "artifacts"}:
             raise ValueError("Background executions cannot manage other tasks")
         if a == "models":
             return {"models": await self.executor.models(), "configuration": self.settings.execution}
         if a == "list":
-            search, state = str(args.get("query", "")), args.get("state")
+            definitions, before, removed, updates = self.repo.definition_page(args)
             return {
-                "tasks": [
-                    d
-                    for d in self.repo.definitions()
-                    if (not state or d["state"] == state)
-                    and search.lower() in json.dumps(d["spec"], ensure_ascii=False).lower()
-                ],
-                "runs": sorted(
-                    {r["id"]: r for r in self.repo.runs() + self.repo.active_runs()}.values(),
-                    key=lambda r: r["created"],
-                    reverse=True,
-                ),
+                "tasks": definitions,
+                "updates": updates,
+                "runs": self.repo.list_runs(definitions + updates),
+                "before": before,
+                "removed": removed,
             }
+        if a == "execution_info":
+            ids = args.get("run_ids")
+            if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(i, str) for i in ids):
+                raise ValueError("Expected at most 100 execution IDs")
+            result = {}
+            for ident in set(ids):
+                try:
+                    run = self.repo.run(ident)
+                except ValueError:
+                    continue
+                result[ident] = {
+                    "task_id": run["task_id"],
+                    "state": run["state"],
+                    "duration_seconds": run["data"].get("duration_seconds")
+                    if run["data"].get("finished_at") is not None
+                    else None,
+                    "attachments": run["data"].get("attachments", [])[:4],
+                }
+            return result
         if a == "get":
             ident = args["task_id"]
+            definition = self.repo.definition(ident)
+            runs, active, before, updates = self.repo.run_page(ident, args)
             return {
-                "task": self.repo.definition(ident),
-                "runs": sorted(
-                    {r["id"]: r for r in self.repo.runs(ident) + self.repo.active_runs(ident)}.values(),
-                    key=lambda r: r["created"],
-                    reverse=True,
-                ),
+                "task": definition,
+                "runs": runs,
+                "active_runs": active,
+                "before": before,
+                "updates": updates,
             }
         if a == "create":
             request_id = str(args["request_id"])
@@ -354,6 +458,8 @@ class TasksPlugin:
                     raise ValueError("Execution cannot be continued in this state")
                 if run["state"] == "waiting_user":
                     raise ValueError("Answer the waiting task with supplement")
+                if self.repo.definition(run["task_id"])["state"] in {"archived", "terminated"}:
+                    raise ValueError("Task has ended; create a new task to continue its work")
                 self.host.workfiles.retain(self.owner(run))
                 self.repo.update_run(
                     run["id"],
@@ -361,6 +467,7 @@ class TasksPlugin:
                     continuation=self.input_text(args),
                     goal={},
                     completion_delivered=False,
+                    completion_round=run["data"].get("completion_round", 0) + 1,
                     artifacts=[],
                     questions=[],
                     turn_active=False,
@@ -384,6 +491,10 @@ class TasksPlugin:
                 raise ValueError("Task changed; read latest revision")
             combined = {**d["spec"], **args["changes"]}
             combined.pop("depth", None)
+            if {"trigger", "long_term"}.intersection(args["changes"]) and "auto_archive" not in args[
+                "changes"
+            ]:
+                combined.pop("auto_archive", None)
             spec = await self.validate_spec(combined)
             if self.repo.definition(d["id"])["revision"] != d["revision"]:
                 raise ValueError("Task changed; read latest revision")
@@ -445,13 +556,15 @@ class TasksPlugin:
         return f"tasks/{run['task_id']}/{run['id']}"
 
     def publish_definition(self, d):
+        if not d["spec"].get("notify_completion", True):
+            return
         self.host.conversation.store.put(
             "job:" + d["id"],
             self.host.conversation.session,
             source="background",
             kind="task",
             status="complete",
-            text=d["spec"]["title"] + " · " + STATE_LABELS[d["state"]],
+            text=d["spec"]["title"] + " · " + plan_label(d),
             turn_id="job:" + d["id"],
         )
 
@@ -462,8 +575,10 @@ class TasksPlugin:
                 return
             directory = self.host.workfiles.area(self.owner(run))
             if run["data"]["spec"]["execution"]["kind"] == "reminder":
+                self.repo.update_run(ident, "dispatching")
                 self.repo.update_run(ident, "completed", progress=run["data"]["spec"]["prompt"])
             elif run["data"]["spec"]["execution"]["kind"] == "device_query":
+                self.repo.update_run(ident, "dispatching")
                 result = await self.host.runtime.invoke(
                     DeviceQuery("inspect", run["data"]["spec"]["execution"]["device_id"])
                 )
@@ -518,61 +633,90 @@ class TasksPlugin:
                 text = (
                     r["data"]["spec"]["title"]
                     + " · "
-                    + STATE_LABELS[r["state"]]
+                    + RUN_LABELS[r["state"]]
                     + "\n\n"
                     + r["data"].get("progress", "")
                 )
                 questions = r["data"].get("questions", [])
                 if questions:
                     text += "\n\n" + "\n".join(q["question"] for q in questions)
-                self.host.conversation.store.put(
-                    "run:" + r["id"],
-                    self.host.conversation.session,
-                    source="background",
-                    kind="task",
-                    status="complete",
-                    text=text,
-                    turn_id="run:" + r["id"],
-                    attachments=self.host.conversation.media.resolve(r["data"].get("attachments", []))
-                    if r["data"].get("attachments")
-                    else None,
-                )
+                if r["state"] in TERMINAL:
+                    self.host.workfiles.finish(self.owner(r))
+                    if not r["data"].get("completion_delivered"):
+                        try:
+                            if r["data"]["spec"].get("notify_completion", True):
+                                await self.host.runtime.invoke(
+                                    NotificationRequest(
+                                        "publish",
+                                        {
+                                            "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
+                                            "title": r["data"]["spec"]["title"]
+                                            + " · "
+                                            + RUN_LABELS[r["state"]],
+                                            "body": (r["data"].get("progress") or RUN_SUMMARIES[r["state"]])[
+                                                :8000
+                                            ],
+                                            "voice": r["data"]["spec"]["notify_voice"],
+                                        },
+                                        r["id"],
+                                    )
+                                )
+                            self.repo.update_run(
+                                r["id"],
+                                completion_delivered=True,
+                                artifacts=self.host.workfiles.artifacts(self.owner(r)),
+                            )
+                            self.notification_error = None
+                        except Exception as exc:
+                            self.notification_error = str(exc)[:240]
+                            # Don't acknowledge the run revision until its outbox receipt is durable.
+                            # Stable event identity makes retry after a crash safe.
+                            continue
+                elif r["data"]["spec"].get("notify_completion", True):
+                    self.host.conversation.store.put(
+                        "run:" + r["id"],
+                        self.host.conversation.session,
+                        source="background",
+                        kind="task",
+                        status="complete",
+                        text=text,
+                        turn_id="run:" + r["id"],
+                        attachments=self.host.conversation.media.resolve(r["data"].get("attachments", []))
+                        if r["data"].get("attachments")
+                        else None,
+                    )
                 with self.repo.db:
                     self.repo.db.execute(
                         "UPDATE job_runs SET delivered=? WHERE id=?", (r["revision"], r["id"])
                     )
-                if r["state"] in TERMINAL:
-                    self.host.workfiles.finish(self.owner(r))
-                    if not r["data"].get("completion_delivered"):
-                        self.repo.update_run(
-                            r["id"],
-                            completion_delivered=True,
-                            artifacts=self.host.workfiles.artifacts(self.owner(r)),
-                        )
-                        self.context.spawn(self.sync_result(r), "deliver:" + r["id"])
+            self.archive_finished({r["task_id"] for r in runs if r["state"] in TERMINAL})
             await asyncio.sleep(0.5)
 
-    async def sync_result(self, run):
-        text = (
-            "后台任务结果（仅同步上下文，不重复执行）："
-            + run["data"]["spec"]["title"]
-            + "；状态："
-            + run["state"]
-            + "\n"
-            + run["data"].get("progress", "")[:8000]
-        )
-        try:
-            await self.host.backend.import_voice_messages([{"role": "assistant", "text": text}])
-            # Native assistant-role injection can generate unsolicited audio.
-            # Foreground history is updated silently; active voice queries tasks MCP.
-            if run["data"]["spec"]["notify_voice"]:
-                if self.host.quiet_active():
-                    self.repo.update_run(run["id"], voice_delivery="quiet_hours")
-                else:
-                    await self.host.notify_task(text)
-                    self.repo.update_run(run["id"], voice_delivery="requested")
-        except Exception:
-            self.repo.update_run(run["id"], sync_error="结果已保存到聊天，模型上下文同步暂未成功")
+    async def finalize_once(self, ident):
+        lock = self.run_locks.setdefault(ident, asyncio.Lock())
+        async with lock:
+            run = self.repo.run(ident)
+            receipt = self.repo.finalization(ident)
+            if (
+                run["state"] not in TERMINAL
+                or not receipt
+                or receipt["state"] != "pending"
+                or receipt["completion_round"] != run["data"].get("completion_round", 0)
+                or receipt["next_at"] > time.time()
+            ):
+                return
+            try:
+                await self.executor.finalize(run)
+            except Exception as exc:
+                self.repo.finalize_receipt(run, exc)
+            else:
+                self.repo.finalize_receipt(run)
+
+    async def finalize_finished(self):
+        while True:
+            for ident in self.repo.finalizations():
+                await self.finalize_once(ident)
+            await asyncio.sleep(0.5)
 
     async def watch_events(self):
         while True:
@@ -652,8 +796,17 @@ class TasksPlugin:
         self.host.backend.jobs = None
 
     def diagnostics(self):
+        pending = self.repo.db.execute(
+            "SELECT count(*) FROM job_finalizations WHERE state='pending'"
+        ).fetchone()[0]
+        failure = self.repo.db.execute(
+            "SELECT error FROM job_finalizations WHERE state='pending' AND error IS NOT NULL ORDER BY updated DESC LIMIT 1"
+        ).fetchone()
         return {
             "ready": self.started,
             "concurrency": self.settings.concurrency,
             "execution": self.settings.execution,
+            "notification_error": self.notification_error,
+            "finalizations_pending": pending,
+            "finalization_error": failure[0] if failure else None,
         }

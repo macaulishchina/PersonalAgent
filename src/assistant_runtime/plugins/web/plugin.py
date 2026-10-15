@@ -52,6 +52,8 @@ class WebPlugin:
                 web.post("/api/messages", self.send),
                 web.get("/api/events", self.events),
                 web.post("/api/control", self.control),
+                web.get("/api/notifications", self.notification_list),
+                web.post("/api/notifications", self.notification_action),
                 web.get("/api/tasks", self.task_list),
                 web.post("/api/tasks", self.task_action),
                 web.get("/api/tasks/{run_id}/artifacts/{name}", self.task_artifact),
@@ -150,7 +152,7 @@ class WebPlugin:
     async def send(self, request):
         data = await self.object_body(request)
         result = await self.conversation.submit(
-            data["request_id"], data.get("text", ""), data.get("attachments", [])
+            data["request_id"], data.get("text", ""), data.get("attachments", []), data.get("notification_id")
         )
         return web.json_response(result, status=202)
 
@@ -158,14 +160,52 @@ class WebPlugin:
         data = await self.object_body(request)
         return web.json_response(await self.conversation.control(data["action"]))
 
+    async def notification_list(self, request):
+        from ...kernel.contracts import NotificationRequest
+
+        if not getattr(self.host, "notifications", None):
+            return web.json_response({"items": [], "unread": 0, "before": None})
+        return web.json_response(
+            await self.host.runtime.invoke(
+                NotificationRequest(
+                    "list",
+                    {
+                        "unread": request.query.get("unread") == "true",
+                        "before": request.query.get("before"),
+                    },
+                )
+            )
+        )
+
+    async def notification_action(self, request):
+        from ...kernel.contracts import NotificationRequest
+
+        data = await self.object_body(request)
+        if data.get("action") not in {"read", "read_all", "retry", "get"}:
+            raise ValueError("Unsupported inbox action")
+        return web.json_response(
+            await self.host.runtime.invoke(NotificationRequest(data["action"], data.get("arguments", {})))
+        )
+
     async def task_list(self, request):
         from ...kernel.contracts import TaskRequest
 
         if "tasks" not in self.host.runtime.plugins:
-            return web.json_response({"tasks": [], "runs": []})
-        return web.json_response(
-            await self.host.runtime.invoke(TaskRequest("list", {"query": request.query.get("query", "")}))
-        )
+            return web.json_response({"tasks": [], "runs": [], "before": None})
+        args = {
+            key: request.query[key] for key in ("query", "view", "before", "task_id") if key in request.query
+        }
+        for key in ("include_archived", "active_only"):
+            if key in request.query:
+                if request.query[key] not in {"true", "false"}:
+                    raise ValueError("Task filters must be true or false")
+                args[key] = request.query[key] == "true"
+        if "known" in request.query:
+            args["known"] = json.loads(request.query["known"])
+        if "limit" in request.query:
+            args["limit"] = int(request.query["limit"])
+        action = "get" if "task_id" in args else "list"
+        return web.json_response(await self.host.runtime.invoke(TaskRequest(action, args)))
 
     async def task_action(self, request):
         from ...kernel.contracts import TaskRequest

@@ -35,6 +35,7 @@ class Config:
     quiet_hours: dict[str, str | bool] = field(default_factory=dict)
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
+    notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     work_files: dict = field(default_factory=dict)
     input_device: str = ""
@@ -45,7 +46,15 @@ class Config:
     model_dir: str = ""
     unit_name: str = "personal-agent.service"
     plugins: list[str] = field(
-        default_factory=lambda: ["pipewire", "keyword", "codex", "memory", "gesture", "tasks"]
+        default_factory=lambda: [
+            "pipewire",
+            "keyword",
+            "codex",
+            "memory",
+            "gesture",
+            "notifications",
+            "tasks",
+        ]
     )
     bindings: dict[str, str] = field(
         default_factory=lambda: {
@@ -66,6 +75,9 @@ class Config:
 
         from assistant_runtime.plugins.tasks.settings import TaskSettings
 
+        from assistant_runtime.plugins.notifications.settings import NotificationSettings
+
+        NotificationSettings.parse(self.notifications)
         TaskSettings.parse(self.tasks)
         WebSettings.parse(self.web)
         AppleHomeSettings.parse(self.apple_home)
@@ -129,28 +141,6 @@ class Config:
     @property
     def output_devices(self):
         return {i: s for i, s in self.devices.items() if s["kind"] == "speaker" and s.get("enabled", True)}
-
-    @property
-    def output_labels(self):
-        return {i: s["label"] for i, s in self.output_devices.items()}
-
-    @property
-    def output_aliases(self):
-        return {
-            i: list(dict.fromkeys([s["label"], s.get("location") or s["label"]]))
-            for i, s in self.output_devices.items()
-        }
-
-    @property
-    def microphone_match(self):
-        return self.devices[self.input_device]["connection"]["match"]
-
-    @property
-    def output_connections(self):
-        return {
-            i: s["connection"].get("address", s["connection"].get("sink"))
-            for i, s in self.output_devices.items()
-        }
 
     @property
     def state_dir(self):

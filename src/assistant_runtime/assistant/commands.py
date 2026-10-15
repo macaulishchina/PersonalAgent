@@ -20,7 +20,7 @@ def chinese_number(text):
     return digits.get(text)
 
 
-def parse_command(text, room_labels=None, wake_words=()):
+def parse_command(text, wake_words=()):
     s = normalize(text)
     for word in sorted((normalize(word) for word in wake_words), key=len, reverse=True):
         if word and s.startswith(word):
@@ -41,19 +41,6 @@ def parse_command(text, room_labels=None, wake_words=()):
         return Control("sleep")
     if s in {"现在进度", "进度怎么样", "做完了吗", "任务进度", "现在做到哪了"}:
         return Control("progress")
-    matching_outputs = {}
-    for ident, labels in (room_labels or {}).items():
-        for index, label in enumerate([labels] if isinstance(labels, str) else labels):
-            room = re.escape(normalize(label))
-            if re.fullmatch(rf"(?:切换到?|换到?|使用|用)({room})(?:音箱|播放|播报)?", s) or re.fullmatch(
-                rf"(?:在)?({room})(?:音箱)?(?:播放|播报|回答)", s
-            ):
-                rank = 2 if index == 0 else 1  # Specific device label beats a shared room alias.
-                matching_outputs[ident] = max(rank, matching_outputs.get(ident, 0))
-    if matching_outputs:
-        best = max(matching_outputs.values())
-        candidates = [ident for ident, rank in matching_outputs.items() if rank == best]
-        return Control("room", candidates[0]) if len(candidates) == 1 else None
     if s in {"音量最大", "声音调到最大", "音量调到最大"}:
         return Control("volume", 100)
     if s in {"静音", "音量最小", "关闭声音"}:

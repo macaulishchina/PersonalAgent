@@ -14,11 +14,13 @@ import {
   Square,
   LogOut,
   ListTodo,
+  Bell,
+  Quote,
   LoaderCircle,
   WifiOff,
 } from "lucide-react";
 import "./style.css";
-import { TaskPanel } from "./tasks";
+import { ActivityPanel, type PanelSection } from "./activity";
 
 type Attachment = { id: string; name: string; type?: string; url?: string };
 type Message = {
@@ -47,6 +49,7 @@ type State = {
   quiet: boolean;
   session_id: string;
   web_dispatching: boolean;
+  notifications_unread?: number;
   sync_error?: string;
 };
 const initial: State = {
@@ -164,6 +167,11 @@ const toolLabels: Record<string, string> = {
   stop_playback: "停止播报",
   end_voice_conversation: "结束语音对话",
   tasks: "后台任务",
+  publish_notification: "发送通知",
+  update_notification: "更新通知",
+  list_notifications: "查看通知",
+  get_notification: "读取通知",
+  mark_notification_read: "标记通知已读",
   create_task: "创建后台任务",
   list_tasks: "查看任务",
   get_task: "查看任务进度",
@@ -301,7 +309,7 @@ function MessageEntry({
       className={
         "message " +
         m.role +
-        (m.kind === "task" ? " task-message" : "") +
+        (["task", "notification"].includes(m.kind) ? " task-message" : "") +
         (detail ? " detail" + (!detail.body ? " simple-tool" : "") : "")
       }
       data-message-id={m.id}
@@ -477,7 +485,11 @@ function ResponseActivity({
   );
 }
 function App() {
-  const [showTasks, setShowTasks] = useState(false);
+  const [activePanel, setActivePanel] = useState<PanelSection | null>(null);
+  const [notificationContext, setNotificationContext] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [authorized, setAuthorized] = useState<boolean | null>(null),
     [token, setToken] = useState(""),
     [error, setError] = useState("");
@@ -710,12 +722,16 @@ function App() {
       request_id: nonce(),
       text: draft.trim(),
       attachments: attachments.map((a) => a.id),
+      ...(notificationContext
+        ? { notification_id: notificationContext.id }
+        : {}),
     };
     const cached = sessionStorage.getItem("pa-outbox");
     if (cached) {
       const old = JSON.parse(cached);
       if (
         old.text === body.text &&
+        old.notification_id === body.notification_id &&
         JSON.stringify(old.attachments) === JSON.stringify(body.attachments)
       )
         body.request_id = old.request_id;
@@ -732,6 +748,7 @@ function App() {
       } else {
         setDraft((current) => (current.trim() === body.text ? "" : current));
         setAttachments([]);
+        setNotificationContext(null);
         sessionStorage.removeItem("pa-outbox");
         following.current = true;
         bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -822,11 +839,16 @@ function App() {
         </div>
       </header>
       {authorized && (
-        <TaskPanel
-          open={showTasks}
-          onClose={() => setShowTasks(false)}
+        <ActivityPanel
+          section={activePanel}
+          onClose={() => setActivePanel(null)}
+          unreadCount={state.notifications_unread || 0}
           api={api}
           nonce={nonce}
+          onReference={(notice) => {
+            setNotificationContext(notice);
+            window.setTimeout(() => input.current?.focus(), 180);
+          }}
         />
       )}
       {authorized === null ? (
@@ -957,6 +979,21 @@ function App() {
                 void upload(e.dataTransfer.files);
               }}
             >
+              {notificationContext && (
+                <div className="notification-reference">
+                  <Quote size={13} aria-hidden="true" />
+                  <span title={notificationContext.title}>
+                    引用：{notificationContext.title}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="取消引用通知"
+                    onClick={() => setNotificationContext(null)}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              )}
               {attachments.length > 0 && (
                 <div className="attachments">
                   {attachments.map((a) => (
@@ -1048,18 +1085,47 @@ function App() {
               </div>
             </form>
             <div className="composer-caption">
-              <button
-                type="button"
-                className="task-entry"
-                aria-label="任务"
-                aria-haspopup="dialog"
-                aria-expanded={showTasks}
-                aria-controls="task-panel"
-                onClick={() => setShowTasks(true)}
-              >
-                <ListTodo size={15} />
-                后台任务
-              </button>
+              <div className="composer-shortcuts">
+                <button
+                  type="button"
+                  className="task-entry"
+                  aria-label="任务"
+                  aria-haspopup="dialog"
+                  aria-expanded={activePanel === "tasks"}
+                  aria-controls="activity-panel"
+                  onClick={() => {
+                    setActivePanel((current) =>
+                      current === "tasks" ? null : "tasks",
+                    );
+                  }}
+                >
+                  <ListTodo size={15} />
+                  后台任务
+                </button>
+                <button
+                  type="button"
+                  className="task-entry"
+                  aria-label="通知"
+                  aria-haspopup="dialog"
+                  aria-expanded={activePanel === "notifications"}
+                  aria-controls="activity-panel"
+                  onClick={() => {
+                    setActivePanel((current) =>
+                      current === "notifications" ? null : "notifications",
+                    );
+                  }}
+                >
+                  <Bell size={15} />
+                  通知
+                  {!!state.notifications_unread && (
+                    <b className="notification-badge">
+                      {state.notifications_unread > 99
+                        ? "99+"
+                        : state.notifications_unread}
+                    </b>
+                  )}
+                </button>
+              </div>
               <div className="composer-caption-info">
                 {state.task_running
                   ? "可以继续补充要求，任务会继续进行。"

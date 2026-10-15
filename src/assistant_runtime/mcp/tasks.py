@@ -30,8 +30,10 @@ def create_server(client, caller_run=None):
         workspace: str | None = None,
         resources: list[str] | None = None,
         notify_voice: bool = False,
+        notify_completion: bool = True,
+        auto_archive: bool | None = None,
     ) -> dict:
-        """Persist authorized work. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope."""
+        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent."""
         spec = {
             "title": title,
             "prompt": prompt,
@@ -40,24 +42,44 @@ def create_server(client, caller_run=None):
             "long_term": long_term,
             "resources": resources or [],
             "notify_voice": notify_voice,
+            "notify_completion": notify_completion,
         }
+        if auto_archive is not None:
+            spec["auto_archive"] = auto_archive
         if workspace:
             spec["workspace"] = workspace
         return await call("create", request_id=request_id, spec=spec)
 
     @server.tool(annotations=READ)
-    async def list_tasks(query: str = "", state: str | None = None) -> dict:
-        """Search definitions and recent execution states, including next trigger times."""
-        return await call("list", query=query, state=state)
+    async def list_tasks(
+        query: str = "",
+        state: str | None = None,
+        view: str = "all",
+        include_archived: bool = False,
+        active_only: bool = False,
+        before: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """Search a bounded page of definitions and latest/unfinished execution summaries. view: all/temporary/planned. Temporary defaults to unfinished non-archived work; include_archived=true includes all temporary results. Planned defaults to non-archived plans, including paused and terminated; include_archived=true also includes archived plans. active_only=true selects enabled plans with future triggers, event listening or unfinished executions. Paused/archived/terminated plans and ended one-shots are inactive. Pass the returned before cursor for older tasks (limit 1–50); get_task provides complete results."""
+        return await call(
+            "list",
+            query=query,
+            state=state,
+            view=view,
+            include_archived=include_archived,
+            active_only=active_only,
+            before=before,
+            limit=limit,
+        )
 
     @server.tool(annotations=READ)
-    async def get_task(task_id: str) -> dict:
-        """Get definition revision, execution IDs, model choices, progress, questions and results."""
-        return await call("get", task_id=task_id)
+    async def get_task(task_id: str, before: str | None = None, limit: int = 20) -> dict:
+        """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers."""
+        return await call("get", task_id=task_id, before=before, limit=limit)
 
     @server.tool(annotations=WRITE)
     async def update_task(task_id: str, revision: int, changes: dict) -> dict:
-        """Change future executions with optimistic revision checking; use supplement for active work."""
+        """Change future executions with optimistic revision checking; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Active executions keep their creation-time settings; use supplement for active work."""
         return await call("update", task_id=task_id, revision=revision, changes=changes)
 
     @server.tool(annotations=WRITE)

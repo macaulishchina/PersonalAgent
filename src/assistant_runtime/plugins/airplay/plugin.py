@@ -10,9 +10,9 @@ from .output import AirPlayOutput
 class AirPlayPlugin:
     manifest = Manifest("airplay")
 
-    def __init__(self, config, directory, outputs, selected):
+    def __init__(self, config, directory, outputs, voice_io):
         self.directory, self.outputs = directory, outputs
-        self.selected = selected
+        self.voice_io = voice_io
         self.providers = {}
         for ident, spec in config.devices.items():
             if spec["adapter"] == "airplay" and spec.get("enabled", True):
@@ -27,9 +27,7 @@ class AirPlayPlugin:
             async def probe(ident=ident):
                 await self.observe(ident, force=True)
 
-            self.directory.register(
-                "airplay", ident, ("audio.playback", "audio.select", "audio.volume", "audio.stop"), probe
-            )
+            self.directory.register("airplay", ident, ("audio.playback", "audio.volume", "audio.stop"), probe)
             self.outputs.register("airplay", ident, provider)
             context.own(provider.close)
         context.spawn(self.watch(), "device-observer")
@@ -41,7 +39,7 @@ class AirPlayPlugin:
             connection = provider.connection
             data = {
                 "receiver_name": cfg.name,
-                "selected": self.selected() == ident,
+                "voice_bound": self.voice_io.output_device == ident,
                 "stream_open": bool(connection and connection.healthy),
                 "volume_percent": provider.volume,
                 "volume_source": "last_explicit_request" if provider.volume is not None else "not_readable",

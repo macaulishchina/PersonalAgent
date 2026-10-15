@@ -1,6 +1,8 @@
 """Isolated background threads on the existing subscription App Server."""
 
 import asyncio
+from pathlib import Path
+import weakref
 from .backend import INSTRUCTIONS
 from .mcp import server_config
 
@@ -11,7 +13,7 @@ class CodexJobs:
         self.threads = {}
         self.questions = {}
         self.catalog = []
-        self.locks = {}
+        self.locks = weakref.WeakValueDictionary()
         self.handles = {}
 
     async def models(self):
@@ -48,7 +50,7 @@ class CodexJobs:
         await self.select(selection["model"], selection["reasoning_effort"])
         params = {
             "model": selection["model"],
-            "cwd": spec["workspace"],
+            "cwd": str(directory / "scratch"),
             "sandbox": cfg.codex_sandbox,
             "approvalPolicy": cfg.approval_policy,
             "developerInstructions": INSTRUCTIONS
@@ -56,7 +58,9 @@ class CodexJobs:
             + str(directory / "scratch")
             + "，交付成果放 "
             + str(directory / "artifacts")
-            + "；用户项目修改仍在指定工作区。后台子任务仅可通过 tasks MCP 在本任务范围内派发。",
+            + "。本轮默认工作目录是自己的 scratch，不在用户项目根目录创建临时文件。用户授权的目标工作区为 "
+            + spec["workspace"]
+            + "，需要项目操作时显式指定目标路径和命令 cwd；沿用已有授权和沙盒配置。后台子任务仅可通过 tasks MCP 在本任务范围内派发。用户授权的监控发现新信息时用 notifications MCP 推送，event_key 使用源事件 ID，不使用轮询时间或 run ID；没有变化就保持静默。入队成功后才推进检查游标。任务完成摘要由系统自动投递，不要另发重复摘要。",
             "config": {
                 "model_reasoning_effort": selection["reasoning_effort"],
                 "shell_environment_policy.set": {
@@ -64,10 +68,16 @@ class CodexJobs:
                     "TMP": str(directory / "scratch"),
                     "TEMP": str(directory / "scratch"),
                 },
-                "mcp_servers": server_config(cfg.socket, task_run=run["id"]),
+                "mcp_servers": server_config(
+                    cfg.socket, task_run=run["id"], notifications="notifications" in cfg.plugins
+                ),
             },
         }
         existing = run["data"].get("thread_id")
+        if existing:
+            summary = await self.client.request("thread/read", {"threadId": existing, "includeTurns": False})
+            if self.archived(summary["thread"]):
+                await self.client.request("thread/unarchive", {"threadId": existing})
         result = await self.client.request(
             "thread/resume" if existing else "thread/start",
             {**params, **({"threadId": existing} if existing else {})},
@@ -203,6 +213,62 @@ class CodexJobs:
             if not cursor:
                 break
         self.questions.pop(run["id"], None)
+
+    @staticmethod
+    def archived(thread):
+        # Provider-owned persisted path is the archive state available on the
+        # installed protocol's thread/read response (no archived boolean field).
+        return "archived_sessions" in Path(thread.get("path") or "").parts
+
+    async def finalize(self, run):
+        async with self.locks.setdefault(run["id"], asyncio.Lock()):
+            if run["state"] not in {"completed", "failed", "canceled", "missed"}:
+                raise ValueError("Only confirmed-ended executions may be archived")
+            thread = run["data"].get("thread_id")
+            if not thread:
+                return
+            if thread == getattr(self.backend, "thread_id", None):
+                raise ValueError("Cannot archive the foreground conversation")
+            summary = (await self.client.request("thread/read", {"threadId": thread, "includeTurns": False}))[
+                "thread"
+            ]
+            if summary.get("status", {}).get("type") == "active":
+                raise RuntimeError("Execution thread is still active; archive deferred")
+            if not self.archived(summary):
+                turns = await self.client.request(
+                    "thread/turns/list",
+                    {"threadId": thread, "limit": 1, "sortDirection": "desc", "itemsView": "summary"},
+                )
+                latest = turns.get("data", [])
+                if latest and latest[0].get("status") not in {"completed", "failed", "interrupted"}:
+                    raise RuntimeError("Latest turn has not ended; archive deferred")
+                if summary.get("status", {}).get("type") not in {None, "notLoaded"}:
+                    terminals = await self.client.request(
+                        "thread/backgroundTerminals/list", {"threadId": thread}
+                    )
+                    if terminals.get("data"):
+                        raise RuntimeError("Background commands are still running; archive deferred")
+                if latest or summary.get("path"):
+                    try:
+                        await self.client.request("thread/archive", {"threadId": thread})
+                    except Exception:
+                        # An archive acknowledgement can be lost, or another client
+                        # can archive the same finished record. Verify rather than replay work.
+                        check = (
+                            await self.client.request(
+                                "thread/read", {"threadId": thread, "includeTurns": False}
+                            )
+                        )["thread"]
+                        if not self.archived(check):
+                            raise
+            try:
+                await self.client.request("thread/unsubscribe", {"threadId": thread}, timeout=10)
+            except Exception:
+                # Archiving is confirmed; unsubscribe cannot invalidate its receipt.
+                pass
+            self.threads.pop(thread, None)
+            self.handles.pop(run["id"], None)
+            self.questions.pop(run["id"], None)
 
     async def reconcile(self, run):
         thread = run["data"].get("thread_id")

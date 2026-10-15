@@ -133,7 +133,7 @@ async def verify(config, devices, duration):
         assert (
             after["capture_recent"]
             and after["session_id"] == before["session_id"]
-            and after["room"] == before["room"]
+            and after["voice_io"] == before["voice_io"]
         )
         evidence.update(passed=True, microphone_preserved=True, session_preserved=True)
     except BaseException as exc:

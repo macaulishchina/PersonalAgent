@@ -42,7 +42,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
     before = await request(config, {"command": "status"})
     if before["task_running"] or before["mode"] != "standby":
         raise RuntimeError("Wait until the assistant is idle before explicit hardware acceptance")
-    target = output_device or before["room"]
+    target = output_device or config.default_output
     if target not in config.output_devices:
         raise ValueError("Unknown output device")
     report = {"started_at": time.time(), "input_device": config.input_device, "output_device": target}
@@ -52,6 +52,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
         with tempfile.TemporaryDirectory(prefix="hw-", dir=config.state_dir) as temp:
             isolated = dataclasses.replace(
                 config,
+                default_output=target,
                 root=Path(temp),
                 workspace=temp,
                 model_dir=str(config.models),
@@ -78,7 +79,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
                 await wait(
                     lambda: getattr(service, "context", None) is not None and service.context.state == "ready"
                 )
-                await service.route.select(target)
+                await service.route.ensure(force=True)
                 inventory = await request(isolated, {"command": "devices", "action": "list"})
                 mic = await request(
                     isolated, {"command": "devices", "action": "inspect", "device_id": config.input_device}
@@ -159,7 +160,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
                         await asyncio.sleep(0.2)
                     assert missing["device"]["state"] == "unavailable"
                     report["disconnected_output"] = missing
-                    assert service.route.room == target
+                    assert service.route.output_device == target
                     assert (await service.runtime.invoke(DeviceQuery("inspect", config.input_device)))[
                         "device"
                     ]["state"] == "available"

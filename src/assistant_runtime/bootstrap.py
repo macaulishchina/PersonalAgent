@@ -1,7 +1,7 @@
 """Composition root. This is the only module that chooses concrete plugins."""
 
 from .kernel.runtime import Runtime
-from .kernel.contracts import Control, Trigger
+from .kernel.contracts import Control, Trigger, VoiceBinding
 
 
 def compose(service):
@@ -19,15 +19,29 @@ def compose(service):
 
     service.workfiles = WorkFiles(config.state_dir, store.db, config.work_files)
 
+    def notifications():
+        from .plugins.notifications.plugin import NotificationsPlugin
+
+        return NotificationsPlugin(service)
+
     def tasks():
         from .plugins.tasks.plugin import TasksPlugin
 
         return TasksPlugin(service)
 
-    service.devices = DeviceDirectory(config.devices)
+    service.voice_io = VoiceBinding(config.input_device, config.default_output)
+    service.devices = DeviceDirectory(config.devices, service.voice_io)
+    from .devices.resources import DeviceResources
+    from .devices.operations import DeviceOperations
+
+    service.device_resources = DeviceResources()
+    service.device_operations = DeviceOperations(service.devices, service.device_resources)
     from .devices.outputs import AudioOutputs
 
-    service.audio_outputs = AudioOutputs(config.devices)
+    service.audio_outputs = AudioOutputs(config.devices, service.device_resources)
+    from .devices.inputs import AudioInputs
+
+    service.audio_inputs = AudioInputs(config.devices, service.device_resources)
     from .devices.video import VideoInputs
 
     service.video_inputs = VideoInputs(config.devices)
@@ -38,7 +52,7 @@ def compose(service):
     def airplay():
         from .plugins.airplay.plugin import AirPlayPlugin
 
-        return AirPlayPlugin(config, service.devices, service.audio_outputs, lambda: service.route.room)
+        return AirPlayPlugin(config, service.devices, service.audio_outputs, service.voice_io)
 
     def go2rtc():
         from .plugins.go2rtc.plugin import Go2RTCPlugin
@@ -58,12 +72,15 @@ def compose(service):
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
     runtime.add(WorkFilesMaintenance(service.workfiles))
     factories = {
-        "pipewire": lambda: PipeWirePlugin(config, store, service.devices, service.audio_outputs),
+        "pipewire": lambda: PipeWirePlugin(
+            config, store, service.devices, service.audio_outputs, service.voice_io, service.audio_inputs
+        ),
         "keyword": lambda: KeywordPlugin(config),
         "airplay": airplay,
         "go2rtc": go2rtc,
         "web": web,
         "tasks": tasks,
+        "notifications": notifications,
         "apple_home": apple_home,
         "codex": lambda: CodexPlugin(
             config, store, service.audio_received, service.events.put, service.speak, service.tool_control
@@ -100,7 +117,15 @@ def compose(service):
                 raise ValueError("Plugin manifest name must match its registry name")
             runtime.add(plugin)
     runtime.bindings = {k: v for k, v in runtime.bindings.items() if v in runtime.plugins}
-    runtime.add(DevicesPlugin(service.devices, service.video_inputs, service.camera_controls))
+    runtime.add(
+        DevicesPlugin(
+            service.devices,
+            service.video_inputs,
+            service.camera_controls,
+            service.audio_inputs,
+            service.audio_outputs,
+        )
+    )
     runtime.add(
         AssistantPlugin(service, tuple(config.bindings[key] for key in ("audio", "trigger", "brain")))
     )

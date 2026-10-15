@@ -62,6 +62,150 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)
 
+    async def test_task_pages_use_owner_filter_cursor_and_details(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from assistant_runtime.plugins.tasks.repository import TaskRepository
+        from assistant_runtime.plugins.tasks.plugin import TasksPlugin
+        import json
+        import uuid
+
+        repo = TaskRepository(self.host.store.db)
+        for number in range(45):
+            ident = f"{number:032x}"
+            spec = {"title": f"任务 {number}", "prompt": "分页", "trigger": {"kind": "immediate"}}
+            self.host.store.db.execute(
+                "INSERT INTO job_definitions(id,request_id,fingerprint,state,spec,created,updated) VALUES(?,?,?,'archived',?,?,?)",
+                (ident, str(uuid.uuid4()), "test", json.dumps(spec), 100, 100),
+            )
+        for number in range(45):
+            repo.enqueue(repo.definition(f"{44:032x}"), str(number), "missed")
+        self.host.store.db.commit()
+        owner = object.__new__(TasksPlugin)
+        owner.repo = repo
+        self.host.runtime.plugins = {"tasks": SimpleNamespace()}
+        self.host.runtime.invoke = AsyncMock(side_effect=owner.request)
+        response = await self.client.get(
+            self.base + "/api/tasks?view=temporary&include_archived=true&limit=20"
+        )
+        self.assertEqual(response.status, 401)
+        await self.login()
+        response = await self.client.get(
+            self.base + "/api/tasks?view=temporary&include_archived=true&limit=20"
+        )
+        first = await response.json()
+        self.assertEqual(len(first["tasks"]), 20)
+        response = await self.client.get(self.base + "/api/tasks", params={"view": "temporary"})
+        self.assertEqual((await response.json())["tasks"], [])
+        response = await self.client.get(self.base + "/api/tasks", params={"view": "planned"})
+        self.assertEqual((await response.json())["tasks"], [])
+        response = await self.client.get(
+            self.base + "/api/tasks", params={"view": "planned", "active_only": "true"}
+        )
+        self.assertEqual((await response.json())["tasks"], [])
+        self.assertIs(self.host.runtime.invoke.await_args.args[0].arguments["active_only"], True)
+        response = await self.client.get(
+            self.base + "/api/tasks",
+            params={"view": "temporary", "include_archived": "true", "before": first["before"], "limit": 20},
+        )
+        second = await response.json()
+        self.assertEqual(len(second["tasks"]), 20)
+        self.assertFalse({d["id"] for d in first["tasks"]} & {d["id"] for d in second["tasks"]})
+        response = await self.client.get(
+            self.base + "/api/tasks",
+            params={"view": "temporary", "include_archived": "true", "query": "任务 0"},
+        )
+        self.assertEqual([d["id"] for d in (await response.json())["tasks"]], [f"{0:032x}"])
+        response = await self.client.get(
+            self.base + "/api/tasks", params={"task_id": f"{44:032x}", "limit": 20}
+        )
+        detail = await response.json()
+        self.assertEqual(len(detail["runs"]), 20)
+        self.assertIsNotNone(detail["before"])
+        for params in (
+            {"limit": "500"},
+            {"limit": "invalid"},
+            {"before": "invalid"},
+            {"known": "not json"},
+            {"view": "planned", "active_only": "yes"},
+            {"view": "temporary", "include_archived": "1"},
+            {"view": "temporary", "before": first["before"]},
+        ):
+            response = await self.client.get(self.base + "/api/tasks", params=params)
+            self.assertEqual(response.status, 400)
+
+    async def test_notification_inbox_auth_read_and_follow_up_context(self):
+        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.kernel.contracts import NotificationRequest
+        from unittest.mock import AsyncMock
+        import uuid
+
+        notifications = NotificationsPlugin(self.host)
+        self.host.runtime.invoke = AsyncMock(side_effect=notifications.request)
+        response = await self.client.get(self.base + "/api/notifications")
+        self.assertEqual(response.status, 401)
+        await self.login()
+        notice = await notifications.request(
+            NotificationRequest(
+                "publish",
+                {
+                    "event_key": "announcement",
+                    "title": "新预告",
+                    "body": "确认窗口为明天。",
+                },
+            )
+        )
+        response = await self.client.get(self.base + "/api/notifications")
+        listing = await response.json()
+        self.assertEqual(listing["unread"], 1)
+        self.assertNotIn("archived", listing["items"][0])
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={"action": "archive", "arguments": {"id": notice["id"], "revision": 1}},
+        )
+        self.assertEqual(response.status, 400)
+        self.assertTrue(notifications.repo.get(notice["id"])["unread"])
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={"action": "read", "arguments": {"id": notice["id"], "revision": 1}},
+            headers={"Origin": "http://evil.test"},
+        )
+        self.assertEqual(response.status, 403)
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={"action": "read", "arguments": {"id": notice["id"], "revision": 1}},
+        )
+        self.assertEqual(response.status, 200)
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={"action": "read_all", "arguments": {"before": listing["read_before"]}},
+            headers={"Origin": "http://evil.test"},
+        )
+        self.assertEqual(response.status, 403)
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={"action": "read_all", "arguments": {"before": listing["read_before"]}},
+        )
+        self.assertEqual(response.status, 200)
+        response = await self.client.post(
+            self.base + "/api/messages",
+            json={
+                "request_id": str(uuid.uuid4()),
+                "text": "帮我解释一下",
+                "attachments": [],
+                "notification_id": notice["id"],
+            },
+        )
+        self.assertEqual(response.status, 202)
+        for _ in range(20):
+            if self.host.backend.submit.await_count:
+                break
+            await asyncio.sleep(0.02)
+        text = self.host.backend.submit.await_args.args[0]
+        self.assertIn("确认窗口为明天", text)
+        self.assertIn("帮我解释一下", text)
+        self.assertEqual(self.host.conversation.session, "session")
+
     async def test_invalid_json_shapes_are_client_errors(self):
         r = await self.client.post(self.base + "/api/login", json=[])
         self.assertEqual(r.status, 400)

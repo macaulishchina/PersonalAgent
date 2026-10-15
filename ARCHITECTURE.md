@@ -27,7 +27,7 @@ flowchart LR
 | `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
 | `mcp/` | Independent memory/device/tasks MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
 | `plugins/codex/` | Foreground voice/thread, isolated background threads/Goals and maintenance context; provider event routing | Device drivers, long-term memory storage |
-| `devices/` | Shared inventory, adapter-owned registration, timestamped state, query/media/camera-control routing | Hardware protocol code, conversation activation |
+| `devices/` | Shared inventory, adapter-owned registration, timestamped state, query/media/control routing, resource leases and operation receipts | Hardware protocol code, conversation activation |
 | `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
 | `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
 | `plugins/go2rtc/` | Configured gateway stream identity, bounded snapshots/clips and directional pan/tilt, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
@@ -37,7 +37,7 @@ flowchart LR
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
 | `headless.py` | Hardware-free management/trigger host | Pretending unavailable voice/brain is operational |
 
-A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, and `CameraMotion` are separate typed requests. CLI, explicit local commands and the independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
+A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, `CameraMotion`, `AudioVolume`, `DeviceOperationQuery`, and `DeviceOperationCancel` are separate typed requests. CLI, explicit local commands and the independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
@@ -47,7 +47,7 @@ Audio uses a separate bounded path. Format/rate/time/connection generation are e
 - Assistant owns standby → connecting → active → reconnecting → standby. Only explicit wake/trigger activates it. Background work never activates voice.
 - Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
 - Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation and explicit Web submissions enter the same provider thread; transcripts are synchronized as context, never dispatched a second time.
-- The audio adapter owns selected output and device availability. It reconnects that output and never silently changes rooms.
+- The composition root freezes one `VoiceBinding` from `input_device` / `default_output` at startup. The audio adapter snapshots those device connections and reconnects only those endpoints; saved room state is ignored. Binding changes require configuration plus restart. MCP, dynamic tools, CLI and voice commands cannot select another main input/output.
 - The player owns queue/epoch/mute state. Stop, cancel-task and end-session are distinct operations.
 - Memory is not provider chat history and cannot prove an action completed. It is sourced, revisable context.
 
@@ -65,6 +65,15 @@ Requested capture replies register complete pixels with the conversation media o
 
 The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
 
+Task and notification views share one persistent native dialog. On desktop it is a
+nonmodal side panel; the original composer shortcuts remain clickable and switch the
+view directly. The panel ends above those shortcuts; outside pointer interaction closes
+it without consuming the click. On small screens it is modal, with background scroll
+locked until close completes. Headers show the active title and its actions, not a second
+navigation. Filters/detail/scroll survive switching. One owner animates the surface and
+scrim through the browser Web Animations API; interrupted transitions resume from the
+current frame and reduced-motion bypasses animation. Views poll only while active.
+
 ## MCP service boundary
 
 Explicit video recording uses `VideoRecord` → the registered video provider → a
@@ -78,11 +87,11 @@ and Web serves known video IDs through its existing authenticated attachment rou
 including seek ranges. Video-only output is shown live and survives history reload.
 Image uploads remain image-only; no continuous recorder or video-analysis API is added.
 
-`mcp/memory.py` exposes `search_memory`, `read_memory`, `remember_memory`, `update_memory`, and `forget_memory`. `mcp/device.py` exposes device discovery/inspection, explicit image capture, speaker selection/volume and the existing interaction controls. Individual operations have typed arguments and read/write annotations; there is no overloaded arbitrary `action` tool. Remember creates a new fact; update requires the existing ID, current revision and original scope. Forget retains its established tombstone semantics.
+`mcp/memory.py` exposes `search_memory`, `read_memory`, `remember_memory`, `update_memory`, and `forget_memory`. `mcp/device.py` exposes device discovery/inspection, explicit image/video capture, camera motion, device-targeted volume, operation queries/cancellation and the existing interaction controls. Individual operations have typed arguments and read/write annotations; there is no overloaded arbitrary `action` tool. Remember creates a new fact; update requires the existing ID, current revision and original scope. Forget retains its established tombstone semantics.
 
 Each server is an independent stdio entry point (`python -m assistant_runtime.mcp memory|device --socket PATH`). Both use the same Python environment and host capability socket. They are provider-neutral and can be connected by an MCP client independently of Codex. The former combined Codex `tools.py` facade is removed. `plugins/codex/mcp.py` only supplies project-thread server registration/tool allowlists; maintenance threads disable both servers. Existing local-operation preapproval is retained within this project and does not authorize additional/global tools.
 
-The MCP layer translates between tool schemas/results and `MemoryRequest`, `DeviceQuery`, `VideoCapture`, or `Control`. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. Task management is exposed by independent tasks MCP and TaskRequest capabilities; it does not activate microphone capture. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
+The MCP layer translates between tool schemas/results and the corresponding typed kernel capability requests. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. Task management is exposed by independent tasks MCP and TaskRequest capabilities; it does not activate microphone capture. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
 
 `list_devices` reads the live registered directory on every call; `inspect_device` uses that directory's probe routing. A device added through the established onboarding workflow therefore appears with its capabilities and fresh readings without a new MCP schema or hardware-specific branch. A new action such as a thermostat setpoint still requires its own typed capability, narrow tool and approval decision; a new device declaration cannot grant an arbitrary command executor. Unit and isolated real-MCP acceptance both test a sensor registered after the MCP connection was established.
 
@@ -138,7 +147,49 @@ The stdlib-only `SensorReading` contract carries one metric's numeric value, uni
 
 The optional Apple Home adapter uses upstream HAP-python for a paired virtual Lightbulb refresh trigger and a bounded authenticated HTTP route for Home automation readback. Source timestamp/order validation happens before atomic replacement of the latest private SQLite snapshot. Refresh is bounded, coalesced and optional; failure degrades the source, not another endpoint or the assistant. Pairing/accessory identities persist across restart and later additions. Apple-side automation must be configured once against real Home/accessories; synthetic HTTP/MCP acceptance does not prove real HomePod acquisition. Measurements publish metadata observations without activating voice, task dispatch or long-term memory. CLI and existing device MCP queries reuse the directory; no HomePod-specific model tool is introduced.
 
-A media output implements the stdlib-only AudioOutputProvider / PlaybackTransport protocols: prepare availability, open a rate-specific PCM writer, bounded write, health, volume and close/flush. External providers register through host.audio_outputs; the existing audio owner opens them and mirrors their input into its reference bus without another physical output. A media output preserves explicit format/rate, availability and connection-generation handling. A transport that cannot discard buffered audio reports that limitation; accepting a playback command does not prove audible playback. HomePod uses the optional AirPlay adapter registered under the existing audio routing owner; its microphone is not an input capability. No alternate assistant conversation policy is installed.
+The device inventory marks `voice_role=input|output|null` and `voice_binding_locked`.
+Binding fixes the conversation route, not exclusive ownership of that physical endpoint:
+a tool may target either a main or additional device by its explicit logical ID.
+`capabilities` describes hardware; `tool_operations` lists registered executable actions,
+and `media_streams` describes the implemented stream providers and sharing policy.
+A descriptor does not imply an unimplemented microphone, speaker or video-output tool.
+
+`host.audio_inputs` / `host.audio_outputs` own independent PCM transports and resource
+leases for both main voice and tool consumers. An adapter registers an AudioInputProvider
+or AudioOutputProvider and explicitly declares whether streams may share the endpoint.
+The default is exclusive: a busy resource returns an error without closing, moving or
+replacing its owner. PipeWire declares independent capture streams/mixed playback;
+AirPlay remains exclusive per receiver. Closing a stream affects only that stream;
+a lease is released after successful transport cleanup. Failed cleanup retains the lease.
+Related sensor/speaker/camera endpoints may share `physical_id` without implying the
+same resource; the adapter must declare actual contention. Raw provider access is for
+inspection/volume only; stream acquisition always goes through the registry.
+
+Audio input is bounded mono PCM16 data for its explicit consumer, not a conversation
+turn, wake trigger, instruction or automatic memory. New tool-side recording/playback
+requires its own typed request, bounded handler and narrow MCP schema. It must not borrow
+the voice player/capture, activate voice, select a route or use a fallback device.
+This framework supplies the ownership path; it adds no speech synthesis, transcription,
+music source or room-specific listening feature. External voice output may mirror its
+own PCM into the existing AEC reference bus without playing through another speaker.
+Accepting PCM proves submission, not audible physical playback.
+
+`DeviceOperations` coordinates existing snapshot, recording, camera motion and volume
+handlers through explicit operation IDs. Resources are per logical endpoint and named
+function, so an unrelated operation does not block another device. Camera stop remains
+available while motion is busy; the adapter owns the physical stop and its cleanup.
+Operation workers and cleanup belong to the devices plugin lifecycle. MCP can query or
+cancel one operation without canceling main voice or other work. Caller disconnect and
+timeout cancel that operation and wait for adapter cleanup; cancellation does not undo
+already delivered physical effects. Mutating failures may have an unknown outcome.
+SQLite retains identity/state/timing receipts across restart, while in-memory completed
+metadata and list queries are bounded. Receipts contain no PCM, images, credentials or
+request text. A restarted running operation becomes unknown and is never replayed;
+reusing an ID requires querying its receipt, never executing it again.
+
+`set_audio_volume(device_id, percent)` targets that registered speaker without changing
+the binding. A response with `applied=false, scope=next_stream` is only a saved preference.
+`stop_playback` and `end_voice_conversation` remain explicit controls of the main session.
 
 A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. The go2rtc adapter requests uncached snapshots only on explicit input; its metadata observer never opens a video consumer. The separately managed gateway owns USB V4L2, RTSP and other camera protocols, formats and optional transcoding. The assistant neither opens video nodes nor launches camera FFmpeg processes. Gateway reachability and stream registration are distinct from successful acquisition; `capture_verified` describes a successful frame in the current observed source generation. Source changes or observed outages invalidate that generation, and failed requests never return earlier pixels. CLI can explicitly save a JPEG; Codex receives native MCP image content through device MCP capture_image. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
 
@@ -158,7 +209,7 @@ Define a concrete request contract in `kernel/contracts.py` only when the first 
 
 The shared directory contains enabled logical IDs, labels/locations, declared capabilities and freshness-aware availability. Every adapter registers devices during start and updates observations in owned background work. One directory plugin owns the query request type and validates that all enabled configuration entries were registered. A future state sensor can reuse list/inspect without changing the directory or adding another handler.
 
-Expose narrowly defined tools through the local capability facade; CLI and Codex use the same handlers and result semantics. The service request dispatcher must route those new requests to the capability owner. Current `device` list/inspect tools automatically expose registered descriptors and non-media state. Existing audio actions stay on their explicit control route. Add only additional tool schemas required by a new action; read and mutating actions have distinct descriptions/approval semantics, and existing tool authorization is not implicitly widened.
+Expose narrowly defined tools through the local capability facade; CLI and Codex use the same handlers and result semantics. The service request dispatcher must route those new requests to the capability owner. Current `device` list/inspect tools automatically expose registered descriptors and non-media state. Device volume uses `AudioVolume`; main-session interruption stays on its explicit control route. Add only additional tool schemas required by a new action; read and mutating actions have distinct descriptions/approval semantics, and existing tool authorization is not implicitly widened.
 
 Provide enabled-device descriptions at voice-session startup so the voice layer can delegate appropriate queries/actions to Codex. The model reads actual state through tools rather than guessing from a description. Measurements and external-device labels are data, not instructions. Do not copy arbitrary BLE payloads into system/developer prompts.
 
@@ -195,6 +246,34 @@ stable result cards. The composition root injects the Codex executor; no Codex R
 belong in kernel contracts or task MCP. The provider routes background events before
 foreground/voice handling, so steering and questions cannot contaminate the main turn.
 APScheduler supplies calendars; SQLite owns persisted occurrence IDs and schedule cursors.
+Immediate non-Goal one-shot delegations are temporary; scheduled/event/Goal work is
+planned. One-shots automatically archive after any terminal outcome by default, while
+retaining results/outbox delivery. This organizational transition never cancels work;
+parents wait for unfinished descendants. Startup applies the same policy to existing
+ended tasks. Archived records remain queryable but cannot resume execution.
+Each model execution starts with its registered run `scratch/` as provider cwd;
+the authorized target project remains explicit task context, and results go to its
+own `artifacts/`. Existing sandbox/approval settings remain instance-owned.
+Provider thread cleanup is separate from task-definition archival. A durable per-run,
+per-continuation receipt queues confirmed terminal executions for the executor's
+finalize method, including existing ended runs on startup. The lifecycle-owned cleanup
+worker checks provider status, latest-turn summary and live commands before archiving,
+unsubscribes and releases handles. Failures back off without rerunning work, blocking
+notifications, changing results/timing or consuming notification revisions. Active,
+waiting, paused and uncertain runs are retained. Explicit continuation serializes with
+cleanup and restores an archived provider thread before resume. Foreground threads
+are excluded; provider RPCs and archive-path semantics stay in the Codex adapter.
+Task browsing uses SQLite keyset pages ordered by creation time and stable ID, with
+server-side category/search filters and indexed per-task run history. Web has temporary
+work first (unfinished non-archived by default, optional include-archived) and plans
+(non-archived by default, optional include-archived). The MCP active-only filter selects enabled definitions with future
+triggers, event listening or unfinished runs; paused/archived/terminated definitions
+and ended one-shots are inactive. Filter values are part of each cursor's scope. Web and MCP share
+the same bounded page contract (20 by default, at most 50). List rows contain bounded
+latest/unfinished summaries; full results are fetched only for the selected task.
+Web loads older tasks and expanded run history on scroll, polls only one bounded head
+page plus bounded known unfinished tasks/runs, and aborts obsolete queries on navigation. Cached
+older pages do not multiply polling requests. Closed/hidden views do not poll.
 No uncertain action is automatically replayed. A Goal's completion differs from an
 ordinary turn completing; external processes require their own checkpoints and identity.
 
@@ -208,3 +287,27 @@ shared through the existing provider and scope/source policy, never used as exec
 scratch/artifact areas for main conversations and each task run. Only ended scratch areas
 expire; no repository traversal cleanup. Artifacts are downloadable via authenticated
 registered-run routes. Media still uses the existing bounded attachment owner.
+
+## Durable notifications
+
+`plugins/notifications/` owns the stable inbox, producer-scoped event identity, revisions,
+revision-aware read/unread state and per-channel delivery receipts. Notifications have
+no archive state; corrections become unread again. `NotificationRequest` is the common
+capability used by independent notifications MCP, CLI and Web. Task identity is derived
+from its run, not accepted from generated content. Publishing commits notification and
+outbox before acknowledgement; task completion marks delivery queued only after publish.
+The kernel's bounded lossy event bus is not a notification store.
+
+Adapters own transport work, retry safety and delivery receipts. Chat uses stable IDs;
+Codex context and audio expose uncertain outcomes rather than replaying non-idempotent
+side effects. Policies apply at delivery, including idle/quiet periods and expiry. No
+worker blocks the main conversation; no notification enables remote microphone input.
+Read acknowledgements are user actions and independent of channel success. The inbox
+survives provider session replacement. Selected notification evidence joins a follow-up
+as quoted data, never as privileged instructions. Mobile push remains an adapter seam.
+
+Notification execution metadata is a read projection through `TaskRequest`, with execution
+lookups batched per inbox page. Task event publication and automatic completion notices
+are distinct. Timing becoming available does not create a content correction, reset read
+state or replay chat/context/voice deliveries. Web refreshes pending execution metadata
+without replacing paginated inbox contents.

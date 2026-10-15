@@ -1,7 +1,7 @@
 # Tasks plugin
 
 Trusted local plugin for independent background work on the existing ChatGPT subscription.
-Enable `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
+Enable `notifications` and `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
 Requires the conversation and configured brain capabilities. Does not activate the microphone.
 
 ## Configuration
@@ -121,3 +121,81 @@ for a silent reminder, real Codex artifact, long-term Goal and cancellation. It 
 only to managed task areas and saves private evidence under `state/acceptance/tasks/`.
 Do not count fake tests as provider/hardware acceptance. No camera or microphone capture
 is needed to validate this plugin.
+
+Task results now enter the notifications outbox before completion acknowledgement.
+`notify_completion=false` keeps routine monitoring runs out of the chat/inbox; agents
+explicitly publish new events through notifications MCP. Automatic failure notifications also respect this setting.
+The notifications plugin owns quiet-hour deferral and transport recovery.
+
+Execution results retain `started_at`, `finished_at`, and accumulated `duration_seconds`.
+Timing starts on dispatch, includes waiting for answers, excludes queue, explicit pause
+and unknown-state intervals, and remains fixed during notification delivery/retries.
+Continuing a run adds its new execution segments. Old runs without measured starts
+have no fabricated duration. Result notifications carry this value in origin metadata.
+`create_task(notify_completion=False)` disables automatic end-of-run notifications,
+including failure; `update_task(changes={"notify_completion": True})` changes future
+run snapshots. `notify_voice` only adds spoken delivery when notifications are enabled.
+
+A scheduled occurrence with state `missed` is displayed as “本次已跳过”: it never
+started. New records retain `skip_reason` (`overlap` / `late`), blocking run IDs and
+an explanatory progress message. Overlap does not queue a duplicate; recurring tasks
+continue with their next scheduled occurrence. Older records without recorded reasons
+remain generic. Terminal records never use a pending-execution UI placeholder.
+
+User-facing wording distinguishes plan state from execution state. Pausing a plan
+changes future triggers; pausing one execution does not pause that plan. Queued,
+starting, waiting for user input, unconfirmed, failed and skipped records have their
+own descriptions. An empty completed result is not displayed as pending. Result
+notifications describe one execution, not completion of a recurring task. The
+notification switch applies to future run snapshots and automatic result notices;
+authorized event alerts remain separate. Duration is accumulated execution time,
+not queue time or model-only inference latency.
+
+Immediate, non-Goal one-shot work is categorized as `temporary`; scheduled/event/Goal
+work is `planned`. One-shot non-Goal tasks (immediate/date) default `auto_archive=true`.
+All terminal outcomes (completed/failed/canceled/missed) archive automatically, retaining
+results, artifacts and pending notification delivery. Waiting/paused/unknown/running
+work remains visible. Automatic archive never invokes cancel/stop; parents wait for
+unfinished descendants. Startup reconciles already-ended one-shots, including records
+created before this default. `auto_archive=false` is available for explicitly reusable
+work; changing trigger/Goal type recomputes defaults unless the request overrides them.
+Archived tasks are read-only; follow-up work uses a new task. Web has two tabs: temporary delegations first, then plans. Temporary defaults to
+unfinished non-archived work; “包含归档” shows all temporary results. Plans default
+to non-archived definitions, including paused and terminated plans; “包含归档”
+also shows archived plans. Both checkboxes default off and retain independent states.
+Tabs, checkbox and loaded item count share one compact toolbar row.
+Plan detail actions are ordered “触发一次”, “暂停计划/恢复计划”, “终止计划”.
+The last action uses the existing archive operation: stop future triggers, cancel
+unfinished executions/descendants, and retain results as archived. Its first click
+arms an inline “确认终止” button; only a second click submits. Confirmation resets
+on blur, outside pointer, Escape, panel close, task change or after five seconds.
+There is no separate archive menu action in Web.
+
+Task and run browsing use cursor pages (`before`, default `limit=20`, maximum 50).
+`list_tasks` accepts `view=temporary|planned|all` and a server-side `query`;
+Both temporary and planned accept `include_archived` (boolean, default false).
+The planned API also supports `active_only=true` for enabled plans with future
+triggers, event listening or unfinished executions. Filters are applied in SQLite and bound into the cursor, including
+search and state, so filter changes start a fresh page. Run entries are concise summaries. `get_task` returns full run pages and a
+separate bounded `active_runs` snapshot, so an older unfinished execution remains
+visible after newer skipped occurrences. Pass each response's `before` unchanged
+to continue that same query. Web scrolls to fetch older pages; expanding history
+permits loading more executions. Polling never refetches all previously loaded
+pages, and inactive/hidden views pause polling. The host accepts up to 50 `known`
+IDs and returns matching off-page definitions in `updates` plus current execution
+summaries, or filtered-out IDs in `removed`. Web prioritizes older unfinished work
+in that bounded set so it can complete or archive without a stale list row.
+No records are deleted by paging.
+
+Each model run uses its registered `scratch/` as actual working directory and temp
+directory; `artifacts/` retains deliverables. The target `workspace` is still included
+explicitly for authorized project operations, with existing configured permissions.
+Codex execution conversations are archived after each confirmed terminal execution,
+independently of whether the recurring plan remains enabled or a definition is archived.
+`job_finalizations` stores a per-run/continuation receipt; its owned worker restores
+unfinished cleanup after restart and retries archive failures with backoff. It verifies
+provider inactivity, a terminal latest turn and no live commands. Waiting/paused/unknown
+runs stay available. An explicit continuation restores an archived thread; background
+archiving never launches another model turn or changes delivery/read receipts. Existing
+ended project executions are swept into this policy; unrelated/foreground threads are
+not enumerated. Artifacts and execution records remain available in Web.

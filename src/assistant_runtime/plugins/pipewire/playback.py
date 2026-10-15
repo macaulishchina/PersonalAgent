@@ -1,7 +1,7 @@
 """PipeWire PCM writer and optional reference mirror for an external output."""
 
 import asyncio
-from .audio import audio_env
+from .audio import audio_env, PINNED_STREAM_ARGS
 
 
 class PipeWirePlayback:
@@ -26,6 +26,7 @@ class PipeWirePlayback:
             "--volume=65536",
             "--client-name=personal-agent-output",
             f"--device={sink}",
+            *PINNED_STREAM_ARGS,
             env=audio_env(),
             stdin=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,

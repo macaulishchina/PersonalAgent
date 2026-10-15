@@ -8,7 +8,9 @@ DEVICE_TOOLS = (
     "record_video",
     "move_camera",
     "stop_camera",
-    "select_audio_output",
+    "list_device_operations",
+    "get_device_operation",
+    "cancel_device_operation",
     "set_audio_volume",
     "stop_playback",
     "end_voice_conversation",
@@ -29,4 +31,12 @@ TASK_TOOLS = (
     "continue_task_run",
     "supplement_task",
     "list_task_artifacts",
+)
+
+NOTIFICATION_TOOLS = (
+    "publish_notification",
+    "update_notification",
+    "list_notifications",
+    "get_notification",
+    "mark_notification_read",
 )

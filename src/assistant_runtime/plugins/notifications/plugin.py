@@ -1,0 +1,225 @@
+"""Notification ownership, producer attribution and durable channel dispatch."""
+
+import asyncio
+import math
+from urllib.parse import urlsplit
+from ...kernel.runtime import Manifest
+from ...kernel.contracts import NotificationRequest, TaskRequest
+from .settings import NotificationSettings
+from .repository import Notifications
+from .channels import ChatChannel, ContextChannel, VoiceChannel, Deferred
+
+
+class NotificationsPlugin:
+    manifest = Manifest("notifications", ("conversation",))
+
+    def __init__(self, host):
+        self.host = host
+        self.settings = NotificationSettings.parse(host.config.notifications)
+        self.repo = Notifications(host.store.db, self.settings)
+        self.channels = {}
+        self.context = None
+        host.notifications = self
+        self.register_channel("chat", ChatChannel(host))
+        self.register_channel("context", ContextChannel(host))
+        if self.settings.voice_enabled:
+            self.register_channel("voice", VoiceChannel(host, self.settings))
+
+    def register_channel(self, name, adapter):
+        if self.context or name in self.channels or not name.isidentifier():
+            raise ValueError("Register a unique notification channel before startup")
+        self.channels[name] = adapter
+
+    async def start(self, context):
+        if set(self.settings.channels) - self.channels.keys():
+            raise ValueError("Configured notification channel is not registered")
+        self.context = context
+        context.register(NotificationRequest, self.request)
+        for name, channel in self.channels.items():
+            self.repo.recover(name, channel.replay_safe)
+            context.spawn(self.worker(name, channel), "delivery:" + name)
+
+    def source(self, caller):
+        if caller:
+            row = self.repo.db.execute("SELECT task_id,data FROM job_runs WHERE id=?", (caller,)).fetchone()
+            if not row:
+                raise ValueError("Unknown notification task execution")
+            import json
+
+            run_data = json.loads(row[1])
+            return "task:" + row[0], {
+                "task_id": row[0],
+                "run_id": caller,
+                "task_title": run_data["spec"]["title"],
+                **(
+                    {"duration_seconds": run_data["duration_seconds"]}
+                    if run_data.get("finished_at") is not None
+                    and run_data.get("duration_seconds") is not None
+                    else {}
+                ),
+            }
+        return "assistant", {}
+
+    def validate(self, args):
+        allowed = {"event_key", "title", "body", "url", "priority", "voice", "expires_at", "id", "revision"}
+        if set(args) - allowed:
+            raise ValueError("Unknown notification fields")
+        for key, limit in (("title", 200), ("body", 8000)):
+            if not isinstance(args.get(key), str) or not 0 < len(args[key].strip()) <= limit:
+                raise ValueError("Invalid notification " + key)
+        key = args.get("event_key", "")
+        if not args.get("id") and (not isinstance(key, str) or not 0 < len(key) <= 240):
+            raise ValueError("Notification requires stable event_key")
+        url = args.get("url", "")
+        if not isinstance(url, str) or len(url) > 2000:
+            raise ValueError("Invalid source URL")
+        if url:
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme not in {"https", "http"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError("Source URL must be HTTP(S) without credentials")
+        expires = args.get("expires_at")
+        if expires is not None and (type(expires) not in (int, float) or not math.isfinite(expires)):
+            raise ValueError("expires_at must be a Unix timestamp")
+        if (
+            args.get("priority", "normal") not in {"normal", "important"}
+            or type(args.get("voice", False)) is not bool
+        ):
+            raise ValueError("Invalid notification priority/voice")
+        if args.get("voice") and "voice" not in self.channels:
+            raise ValueError("Voice notifications disabled")
+        return {
+            key: args.get(key, default)
+            for key, default in (
+                ("title", ""),
+                ("body", ""),
+                ("url", ""),
+                ("priority", "normal"),
+                ("voice", False),
+                ("expires_at", None),
+            )
+        }
+
+    async def describe(self, items):
+        # Execution facts remain owned by tasks. Resolve them at read time so an
+        # event published before completion gains final timing without republishing,
+        # changing its content revision/read state or replaying any delivery.
+        origins = [item["payload"].get("origin", {}) for item in items]
+        ids = list({origin["run_id"] for origin in origins if origin.get("task_id") and origin.get("run_id")})
+        info = {}
+        if ids:
+            try:
+                info = await self.host.runtime.invoke(
+                    TaskRequest("execution_info", {"run_ids": ids}), timeout=1
+                )
+            except (ValueError, RuntimeError, AttributeError, TimeoutError):
+                pass
+        for item, origin in zip(items, origins):
+            task_id, run_id = origin.get("task_id"), origin.get("run_id")
+            if not task_id or not run_id or item["source"] != "task:" + task_id:
+                continue
+            run = info.get(run_id)
+            if run and run["task_id"] != task_id:
+                run = None
+            item["execution"] = {
+                "kind": "result" if item["event_key"].startswith("task-result:") else "event",
+                "state": run["state"] if run else None,
+                "duration_seconds": run["duration_seconds"] if run else origin.get("duration_seconds"),
+            }
+        return items
+
+    async def request(self, request):
+        action, args = request.action, request.arguments
+        if not isinstance(args, dict):
+            raise ValueError("Notification arguments must be an object")
+        if request.caller_run and action not in {"publish", "update", "get", "list"}:
+            raise ValueError("Background tasks cannot mark user notifications read or retry delivery")
+        if action in {"publish", "update"}:
+            payload = self.validate(args)
+            source, origin = self.source(request.caller_run)
+            if action == "update" and not args.get("id"):
+                raise ValueError("Update requires notification id")
+            # Run identity is server-derived metadata, not part of event deduplication.
+            payload["origin"] = origin
+            old = None
+            if args.get("id"):
+                old = self.repo.get(args["id"])
+            else:
+                row = self.repo.db.execute(
+                    "SELECT id FROM notifications WHERE source=? AND event_key=?", (source, args["event_key"])
+                ).fetchone()
+                if row:
+                    old = self.repo.get(row[0])
+            if old and args.get("id") and not request.caller_run:
+                source = old["source"]
+            if old:
+                payload["origin"] = old["payload"].get("origin", {})
+            channels = list(self.settings.channels) + (["voice"] if payload["voice"] else [])
+            return self.repo.publish(
+                source,
+                args.get("event_key", ""),
+                payload,
+                channels,
+                ident=args.get("id"),
+                revision=args.get("revision"),
+            )
+        if action == "get":
+            return (await self.describe([self.repo.get(args["id"])]))[0]
+        if action == "list":
+            listing = self.repo.list(
+                unread=args.get("unread", False), before=args.get("before"), limit=args.get("limit", 50)
+            )
+            listing["items"] = await self.describe(listing["items"])
+            return listing
+        if action == "read_all":
+            return self.repo.read_all(args.get("before"))
+        if action == "read":
+            return self.repo.mark_read(args["id"], args["revision"])
+        if action == "retry":
+            if args.get("channel") not in self.channels:
+                raise ValueError("Unknown notification channel")
+            return self.repo.retry(args["id"], args["revision"], args["channel"])
+        raise ValueError("Unknown notification action")
+
+    async def deliver_once(self, name, channel):
+        item = self.repo.claim(name)
+        if not item:
+            return False
+        try:
+            await asyncio.wait_for(channel.deliver(item), self.settings.delivery_timeout)
+        except Deferred as exc:
+            self.repo.finish(item, name, "pending", str(exc), delay=5, deferred=True)
+        except asyncio.CancelledError:
+            # Keep inflight; restart recovery knows whether replay is safe.
+            raise
+        except Exception as exc:
+            attempt = next(d["attempts"] for d in item["deliveries"] if d["channel"] == name)
+            state = (
+                "unknown"
+                if not channel.replay_safe
+                else "failed"
+                if attempt >= self.settings.max_attempts
+                else "pending"
+            )
+            self.repo.finish(
+                item,
+                name,
+                state,
+                str(exc)[:300],
+                delay=min(3600, self.settings.retry_seconds * 2 ** (attempt - 1)),
+            )
+        else:
+            self.repo.finish(item, name, "delivered")
+        return True
+
+    async def worker(self, name, channel):
+        while True:
+            delivered = await self.deliver_once(name, channel)
+            await asyncio.sleep(0.05 if delivered else 0.5)
+
+    def diagnostics(self):
+        return {"channels": list(self.channels), "unread": self.repo.unread_count()}

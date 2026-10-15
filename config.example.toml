@@ -25,6 +25,8 @@ memory_auto_capture = true
 # root = "/absolute/path/to/instance"
 # workspace = "/absolute/path/to/your/workspace"
 # model_dir = "/absolute/path/to/wake-models"
+# Fixed main voice endpoints for the entire process; change config and restart.
+# Extra devices remain tool endpoints and never replace these bindings at runtime.
 # input_device = "office_microphone"
 # default_output = "office_speaker"
 # [devices.office_microphone]
@@ -92,3 +94,13 @@ reasoning_effort = "auto"
 [work_files]
 retention_days = 7
 # root = "/absolute/private/instance/work"
+
+# Enable "notifications" in plugins; required by tasks. Phone push is not installed.
+[notifications]
+channels = ["chat", "context"]
+voice_enabled = true
+voice_spacing_seconds = 60
+max_attempts = 5
+retry_seconds = 5
+delivery_timeout = 45
+max_notifications = 10000

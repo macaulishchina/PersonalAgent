@@ -22,3 +22,13 @@ memory-export*.json
 # Web frontend dependencies and packaged build output
 /frontend/node_modules/
 /src/assistant_runtime/plugins/web/static/
+
+# Local scratch, acceptance output and editor/process leftovers.
+/tmp/
+/scratch/
+/artifacts/
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store

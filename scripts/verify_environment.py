@@ -233,11 +233,11 @@ async def verify(config, ident, codex, restart, synthetic):
             query = LocalRuntimeClient(config.socket).invoke
             await pipeline(config, ident, query, codex, report)
             after = await request(config, {"command": "status"})
-            assert after["room"] == initial["room"]
+            assert after["voice_io"] == initial["voice_io"]
             assert after["session_id"] == initial["session_id"]
             assert after["capture_recent"], "Microphone stopped during sensor readback"
             report["preserved"] = {
-                "room": after["room"],
+                "voice_io": after["voice_io"],
                 "session_id": after["session_id"],
                 "voice_wakes_unchanged": after["wake_count"] == initial["wake_count"],
                 "microphone_active": True,
@@ -262,7 +262,9 @@ async def verify(config, ident, codex, restart, synthetic):
                 detail = (await query(DeviceQuery("inspect", ident)))["device"]
                 for metric, reading in before.items():
                     assert detail["readings"][metric]["observed_at"] >= reading["observed_at"]
-                assert ready["session_id"] == initial["session_id"] and ready["room"] == initial["room"]
+                assert (
+                    ready["session_id"] == initial["session_id"] and ready["voice_io"] == initial["voice_io"]
+                )
                 report["restart_readback"] = detail
         report["passed"] = True
     except BaseException as exc:

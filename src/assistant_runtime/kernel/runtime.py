@@ -67,7 +67,8 @@ class Context:
         self.state = "stopping"
         tasks = list(self.tasks)
         for task in tasks:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         try:
             await self.resources.aclose()
