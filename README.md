@@ -1,6 +1,6 @@
 # Personal Agent
 
-A local, reactive personal assistant for Linux. The current brain is Codex with the existing ChatGPT subscription: native voice, task execution and persistent task context. Local plugins supply microphones, speakers, wake detection and long-term memory. The application is not named after its wake word or deployment machine.
+A local, reactive personal assistant for Linux. The current brain is Codex with the existing ChatGPT subscription: native voice, task execution and persistent task context. Local plugins supply microphones, speakers, wake detection, long-term memory and durable background tasks. The application is not named after its wake word or deployment machine.
 
 See [architecture](ARCHITECTURE.md), the [hardware onboarding standard](ARCHITECTURE.md#hardware-onboarding-standard), [requirements](REQUIREMENTS.md), [validation](VALIDATION.md), [wake-word evaluation](reports/WAKE_EVALUATION.md), the [ASR candidate CPU comparison](reports/ASR_CANDIDATE_COMPARISON.html) ([full text](reports/ASR_CANDIDATE_COMPARISON.md)), the [human-voice comparison](reports/WAKE_HUMAN_COMPARISON.html) ([full text](reports/WAKE_HUMAN_COMPARISON.md)), and the [synthetic-voice comparison](reports/WAKE_MODEL_COMPARISON.html) ([full text](reports/WAKE_MODEL_COMPARISON.md)).
 
@@ -9,7 +9,7 @@ See [architecture](ARCHITECTURE.md), the [hardware onboarding standard](ARCHITEC
 Python 3.12 and `uv` are required. All application and memory dependencies share one `.venv`.
 
 ```sh
-uv sync --locked --extra voice --extra memory --extra dev
+uv sync --locked --extra voice --extra memory --extra tasks --extra dev
 .venv/bin/playwright install chromium
 .venv/bin/python scripts/download_models.py --wake-bundle /path/to/fsmn-v2
 cp config.example.toml config.toml
@@ -79,7 +79,7 @@ The optional `web` plugin is a text-and-image entrance to the **same persistent 
 Build once with Node/npm; the deployed service needs only Python:
 
 ```sh
-uv sync --locked --extra voice --extra memory --extra web --extra dev
+uv sync --locked --extra voice --extra memory --extra tasks --extra web --extra dev
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
@@ -222,3 +222,7 @@ Generated artifacts remain outside version control:
 - `models/`: deployed model bundles and existing checkpoints.
 
 The selected FSMN V2 bundle and its production keyword adapter remain the current wake detector. Removing experiment code does not alter the deployed model or its checksum.
+
+## Background tasks and working files
+
+Enable the `tasks` plugin for independent scheduled, event-triggered and long-running work. See [task configuration, MCP/CLI and recovery](src/assistant_runtime/plugins/tasks/README.md). Background model and reasoning settings live in `[tasks.execution]`, defaulting to `auto`; `[work_files]` configures shared temporary-file retention. Web has a Task panel, while results remain in the shared conversation.

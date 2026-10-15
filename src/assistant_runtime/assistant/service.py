@@ -51,6 +51,7 @@ class AssistantService:
         self.preroll = deque(maxlen=50)  # approximately one second, memory only
         self.tasks = []
         self.transition = asyncio.Lock()
+        self.notification_output = False
         self.last_wake = None
         self.last_output = None
         self.recovering = False
@@ -79,7 +80,7 @@ class AssistantService:
             if pcm.generation != self.voice.epoch:
                 return
             pcm = pcm.pcm
-        if not self.active or self.quiet_active():
+        if (not self.active and not self.notification_output) or self.quiet_active():
             return
         self.player.feed(pcm)
         if np.max(np.abs(np.frombuffer(pcm, dtype="<i2").astype(np.int32)), initial=0) > 150:
@@ -89,6 +90,38 @@ class AssistantService:
     async def speak(self, text):
         if self.active and not self.quiet_active():
             await self.voice.say(text)
+
+    async def notify_task(self, text):
+        """Explicit output-only notification. Standby microphone remains local KWS."""
+        if self.quiet_active():
+            return
+        if self.active and self.voice.opened:
+            await self.voice.say(text[:1000])
+            return
+        async with self.transition:
+            if self.active or self.quiet_active():
+                return
+            self.notification_output = True
+            self.player.manual_muted = False
+            try:
+                await self.voice.open(notification_only=True)
+                await self.voice.say(text[:1000])
+                started = time.monotonic()
+                while time.monotonic() - started < 30:
+                    if self.active or self.quiet_active() or self.player.manual_muted:
+                        break
+                    if (
+                        self.last_output
+                        and self.last_output > started
+                        and time.monotonic() - self.last_output > 1.5
+                        and not self.player.playing
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
+            finally:
+                self.notification_output = False
+                await self.player.stop()
+                await self.voice.close()
 
     async def wake(self, preroll=()):
         if self.active or self.quiet_active():
@@ -381,6 +414,17 @@ class AssistantService:
                     result = await self.runtime.invoke(
                         DeviceQuery(d.get("action", "list"), d.get("device_id"))
                     )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "tasks":
+                from ..kernel.contracts import TaskRequest
+
+                result = await self.runtime.invoke(
+                    TaskRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
                 writer.close()

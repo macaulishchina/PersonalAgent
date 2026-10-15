@@ -11,6 +11,13 @@ API_VERSION = 1
 
 
 @dataclass(frozen=True)
+class TaskRequest:
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
 class Control:
     kind: str
     value: Any = None

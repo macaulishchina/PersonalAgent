@@ -78,3 +78,17 @@ memory_auto_capture = true
 # base_url = "http://127.0.0.1:8553"
 # stream = "office_camera"
 # timeout_seconds = 8
+
+# Optional durable background tasks: install tasks extra and add "tasks" to plugins.
+[tasks]
+timezone = "Asia/Shanghai"
+concurrency = 2
+misfire_seconds = 300
+[tasks.execution]
+# auto: initiating model chooses concrete values from the account model catalog.
+# Fixed values here override task-level suggestions; never modifies global Codex config.
+model = "auto"
+reasoning_effort = "auto"
+[work_files]
+retention_days = 7
+# root = "/absolute/private/instance/work"

@@ -91,15 +91,4 @@ def create_server(client: CapabilityClient) -> FastMCP:
         """Return voice to standby when the user ends the conversation. Preserve shared chat/history; background tasks CONTINUE."""
         return await client.invoke(Control("sleep"))
 
-    @server.tool(annotations=READ)
-    async def get_task_status() -> dict:
-        """Read current assistant task progress without speaking, waking voice or canceling work."""
-        status = await client.status()
-        return {"running": status["task_running"], "progress": status.get("task_progress", "")}
-
-    @server.tool(annotations={**WRITE, "destructiveHint": True})
-    async def cancel_task() -> dict:
-        """Cancel the CURRENT background task only on the user's explicit request. To stop sound while keeping work, use stop_playback instead."""
-        return await client.invoke(Control("cancel"))
-
     return server

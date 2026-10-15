@@ -25,8 +25,8 @@ flowchart LR
 | `conversation/` | Durable shared timeline, submission receipts, entrance/output intent | HTTP, device drivers, separate task execution |
 | `plugins/web/` | Authenticated chat HTTP/SSE and bundled frontend | Independent AI sessions, physical audio, arbitrary file serving |
 | `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
-| `mcp/` | Independent memory/device MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
-| `plugins/codex/` | One foreground provider thread, its voice transport and native task delegation; separate maintenance context | Device drivers, long-term memory storage |
+| `mcp/` | Independent memory/device/tasks MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
+| `plugins/codex/` | Foreground voice/thread, isolated background threads/Goals and maintenance context; provider event routing | Device drivers, long-term memory storage |
 | `devices/` | Shared inventory, adapter-owned registration, timestamped state, query/media/camera-control routing | Hardware protocol code, conversation activation |
 | `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
 | `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
@@ -37,7 +37,7 @@ flowchart LR
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
 | `headless.py` | Hardware-free management/trigger host | Pretending unavailable voice/brain is operational |
 
-A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, and `CameraMotion` are separate typed requests. CLI, explicit local commands and the two independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
+A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, and `CameraMotion` are separate typed requests. CLI, explicit local commands and the independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
@@ -55,7 +55,7 @@ Disconnect recovery runs as a tracked task, leaving the event consumer available
 
 ## Shared conversation and Web entrance
 
-`conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. The foreground Codex adapter remains the only task executor.
+`conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. Foreground Codex handles conversational delegation; the optional tasks plugin owns durable background work through an injected executor adapter.
 
 Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.
 
@@ -82,7 +82,7 @@ Image uploads remain image-only; no continuous recorder or video-analysis API is
 
 Each server is an independent stdio entry point (`python -m assistant_runtime.mcp memory|device --socket PATH`). Both use the same Python environment and host capability socket. They are provider-neutral and can be connected by an MCP client independently of Codex. The former combined Codex `tools.py` facade is removed. `plugins/codex/mcp.py` only supplies project-thread server registration/tool allowlists; maintenance threads disable both servers. Existing local-operation preapproval is retained within this project and does not authorize additional/global tools.
 
-The MCP layer translates between tool schemas/results and `MemoryRequest`, `DeviceQuery`, `VideoCapture`, or `Control`. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. The task-status tool uses a read-only status request; it does not activate or speak through voice. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
+The MCP layer translates between tool schemas/results and `MemoryRequest`, `DeviceQuery`, `VideoCapture`, or `Control`. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. Task management is exposed by independent tasks MCP and TaskRequest capabilities; it does not activate microphone capture. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
 
 `list_devices` reads the live registered directory on every call; `inspect_device` uses that directory's probe routing. A device added through the established onboarding workflow therefore appears with its capabilities and fresh readings without a new MCP schema or hardware-specific branch. A new action such as a thermostat setpoint still requires its own typed capability, narrow tool and approval decision; a new device declaration cannot grant an arbitrary command executor. Unit and isolated real-MCP acceptance both test a sensor registered after the MCP connection was established.
 
@@ -187,3 +187,24 @@ For a BLE temperature sensor the first implementation includes protocol identifi
 ## Evolution rules
 
 Add concrete capabilities when an extension needs them; do not expand a universal event object into a second RPC system. Keep media work bounded and expensive memory work out of the audio process. Preserve task and memory state during code rollback. Tests belong beside the behavior they protect, and one check command runs formatting, static checks and unit contracts. No compatibility package or old CLI is shipped during development.
+
+## Durable background work
+
+`plugins/tasks/` owns definitions, trigger evaluation, run snapshots, resource slots and
+stable result cards. The composition root injects the Codex executor; no Codex RPC fields
+belong in kernel contracts or task MCP. The provider routes background events before
+foreground/voice handling, so steering and questions cannot contaminate the main turn.
+APScheduler supplies calendars; SQLite owns persisted occurrence IDs and schedule cursors.
+No uncertain action is automatically replayed. A Goal's completion differs from an
+ordinary turn completing; external processes require their own checkpoints and identity.
+
+`tasks` MCP is independent of memory/device. CLI and authenticated Web share TaskRequest;
+existing foreground cancellation controls remain distinct. Task models resolve from the
+account catalog at creation according to fixed configuration or initiating-agent choice.
+User-authorized goals may derive scoped children, not new unapproved goals. Memory is
+shared through the existing provider and scope/source policy, never used as execution proof.
+
+`workfiles.py` is application-wide directory ownership and retention. It registers private
+scratch/artifact areas for main conversations and each task run. Only ended scratch areas
+expire; no repository traversal cleanup. Artifacts are downloadable via authenticated
+registered-run routes. Media still uses the existing bounded attachment owner.

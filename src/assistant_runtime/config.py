@@ -35,6 +35,8 @@ class Config:
     quiet_hours: dict[str, str | bool] = field(default_factory=dict)
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
+    tasks: dict = field(default_factory=dict)
+    work_files: dict = field(default_factory=dict)
     input_device: str = ""
     default_output: str = ""
     minimum_volume: int = 80
@@ -42,7 +44,9 @@ class Config:
     devices: dict[str, dict] = field(default_factory=dict)
     model_dir: str = ""
     unit_name: str = "personal-agent.service"
-    plugins: list[str] = field(default_factory=lambda: ["pipewire", "keyword", "codex", "memory", "gesture"])
+    plugins: list[str] = field(
+        default_factory=lambda: ["pipewire", "keyword", "codex", "memory", "gesture", "tasks"]
+    )
     bindings: dict[str, str] = field(
         default_factory=lambda: {
             "audio": "pipewire",
@@ -60,6 +64,9 @@ class Config:
 
         from assistant_runtime.plugins.apple_home.settings import AppleHomeSettings
 
+        from assistant_runtime.plugins.tasks.settings import TaskSettings
+
+        TaskSettings.parse(self.tasks)
         WebSettings.parse(self.web)
         AppleHomeSettings.parse(self.apple_home)
         QuietHours.from_settings(self.quiet_hours)

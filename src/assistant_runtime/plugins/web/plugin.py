@@ -52,6 +52,9 @@ class WebPlugin:
                 web.post("/api/messages", self.send),
                 web.get("/api/events", self.events),
                 web.post("/api/control", self.control),
+                web.get("/api/tasks", self.task_list),
+                web.post("/api/tasks", self.task_action),
+                web.get("/api/tasks/{run_id}/artifacts/{name}", self.task_artifact),
                 web.post("/api/uploads", self.upload),
                 web.get("/api/uploads/{id}", self.attachment),
                 web.get("/", self.index),
@@ -85,6 +88,8 @@ class WebPlugin:
             raise
         except (ValueError, TypeError, KeyError, UnidentifiedImageError) as exc:
             response = web.json_response({"error": str(exc)[:180]}, status=400)
+        except RuntimeError as exc:
+            response = web.json_response({"error": str(exc)[:180]}, status=503)
         except PermissionError as exc:
             response = web.json_response({"error": str(exc)}, status=401)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -152,6 +157,40 @@ class WebPlugin:
     async def control(self, request):
         data = await self.object_body(request)
         return web.json_response(await self.conversation.control(data["action"]))
+
+    async def task_list(self, request):
+        from ...kernel.contracts import TaskRequest
+
+        if "tasks" not in self.host.runtime.plugins:
+            return web.json_response({"tasks": [], "runs": []})
+        return web.json_response(
+            await self.host.runtime.invoke(TaskRequest("list", {"query": request.query.get("query", "")}))
+        )
+
+    async def task_action(self, request):
+        from ...kernel.contracts import TaskRequest
+
+        d = await self.object_body(request)
+        return web.json_response(
+            await self.host.runtime.invoke(TaskRequest(d["action"], d.get("arguments", {})), timeout=90)
+        )
+
+    async def task_artifact(self, request):
+        import re
+
+        name, ident = request.match_info["name"], request.match_info["run_id"]
+        if not re.fullmatch(r"[a-f0-9]{32}", ident) or Path(name).name != name or name in {".", ".."}:
+            raise web.HTTPNotFound()
+        plugin = self.host.runtime.plugins["tasks"]
+        run = plugin.repo.run(ident)
+        entries = self.host.workfiles.artifacts(plugin.owner(run))
+        if name not in {entry["name"] for entry in entries}:
+            raise web.HTTPNotFound()
+        path = self.host.workfiles.area(plugin.owner(run)) / "artifacts" / name
+        response = web.FileResponse(path)
+        response.headers["Content-Type"] = "application/octet-stream"
+        response.headers["Content-Disposition"] = "attachment"
+        return response
 
     async def events(self, request):
         if len(self.streams) >= 12:

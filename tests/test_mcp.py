@@ -101,7 +101,8 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
             tools = {t.name: t for t in await client.list_tools()}
             self.assertEqual(set(tools), set(DEVICE_TOOLS))
             self.assertTrue(tools["list_devices"].annotations.read_only_hint)
-            self.assertTrue(tools["get_task_status"].annotations.read_only_hint)
+            self.assertNotIn("get_task_status", tools)
+            self.assertNotIn("cancel_task", tools)
             self.assertFalse(tools["capture_image"].annotations.read_only_hint)
             self.assertEqual((await client.call_tool("list_devices", {})).structured_content, {"devices": []})
             specs["new_temperature"] = {
@@ -166,14 +167,12 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
         async with Client(device_server(handler)) as client:
             await client.call_tool("stop_playback", {})
             handler.invoke.assert_awaited_once_with(Control("stop"))
-            state = await client.call_tool("get_task_status", {})
-            self.assertEqual(state.structured_content, {"running": True, "progress": "执行中"})
-            handler.invoke.assert_awaited_once()
-            await client.call_tool("cancel_task", {})
-            self.assertEqual(handler.invoke.await_args.args[0], Control("cancel"))
+            handler.status.assert_not_awaited()
+            with self.assertRaises(ToolError):
+                await client.call_tool("cancel_task", {})
             with self.assertRaises(ToolError):
                 await client.call_tool("set_audio_volume", {"percent": 101})
-            self.assertEqual(handler.invoke.await_count, 2)
+            self.assertEqual(handler.invoke.await_count, 1)
 
     async def test_remote_failure_does_not_become_a_success_or_replay(self):
         calls = []

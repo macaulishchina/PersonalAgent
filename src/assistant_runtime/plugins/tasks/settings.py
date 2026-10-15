@@ -1,0 +1,29 @@
+"""Strict instance settings, independent from foreground and memory models."""
+
+from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
+
+
+@dataclass
+class TaskSettings:
+    timezone: str = "Asia/Shanghai"
+    concurrency: int = 2
+    misfire_seconds: int = 300
+    execution: dict = field(default_factory=lambda: {"model": "auto", "reasoning_effort": "auto"})
+
+    @classmethod
+    def parse(cls, data):
+        if not isinstance(data, dict) or set(data) - cls.__dataclass_fields__.keys():
+            raise ValueError("Unknown task settings")
+        result = cls(**data)
+        ZoneInfo(result.timezone)
+        if type(result.concurrency) is not int or not 1 <= result.concurrency <= 8:
+            raise ValueError("Task concurrency must be 1..8")
+        if type(result.misfire_seconds) is not int or not 0 <= result.misfire_seconds <= 86400:
+            raise ValueError("Invalid task misfire window")
+        if not isinstance(result.execution, dict) or set(result.execution) - {"model", "reasoning_effort"}:
+            raise ValueError("Unknown task execution settings")
+        result.execution = {"model": "auto", "reasoning_effort": "auto", **result.execution}
+        if any(not isinstance(v, str) or not v.strip() for v in result.execution.values()):
+            raise ValueError("Task execution settings must be nonempty strings")
+        return result

@@ -103,6 +103,8 @@ class Runtime:
         self.handlers[request_type] = owner, handler
 
     async def invoke(self, request, timeout=15):
+        if type(request) not in self.handlers:
+            raise RuntimeError(f"{type(request).__name__} unavailable: plugin is starting or disabled")
         owner, handler = self.handlers[type(request)]
         context = self.contexts[owner]
         epoch = context.generation

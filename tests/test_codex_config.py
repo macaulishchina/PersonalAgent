@@ -42,7 +42,7 @@ class ProjectModelConfigTest(unittest.IsolatedAsyncioTestCase):
                 store = Store(Path(folder) / "state.db")
                 if saved:
                     store.set("thread_id", saved)
-                config = Config(codex_model="chosen-model", codex_reasoning_effort="low")
+                config = Config(root=Path(folder), codex_model="chosen-model", codex_reasoning_effort="low")
                 backend = CodexBackend(config, store, AsyncMock(), AsyncMock())
                 backend.client.start = AsyncMock()
                 backend._events = AsyncMock()
@@ -53,6 +53,7 @@ class ProjectModelConfigTest(unittest.IsolatedAsyncioTestCase):
                             "model": "resolved-model",
                             "reasoningEffort": "low",
                         },
+                        {},
                         {"turn": {"id": "turn-1"}},
                     ]
                 )
@@ -65,7 +66,7 @@ class ProjectModelConfigTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(backend.resolved_model, "resolved-model")
                 self.assertEqual(backend.resolved_reasoning_effort, "low")
                 await backend.submit("test task")
-                params = backend.client.request.await_args_list[1].args[1]
+                params = backend.client.request.await_args_list[2].args[1]
                 self.assertEqual((params["model"], params["effort"]), ("chosen-model", "low"))
                 self.assertEqual(params["threadId"], saved or "new-thread")
                 store.db.close()

@@ -13,10 +13,12 @@ import {
   ChevronDown,
   Square,
   LogOut,
+  ListTodo,
   LoaderCircle,
   WifiOff,
 } from "lucide-react";
 import "./style.css";
+import { TaskPanel } from "./tasks";
 
 type Attachment = { id: string; name: string; type?: string; url?: string };
 type Message = {
@@ -161,8 +163,14 @@ const toolLabels: Record<string, string> = {
   set_audio_volume: "调整音量",
   stop_playback: "停止播报",
   end_voice_conversation: "结束语音对话",
-  get_task_status: "查看任务进度",
-  cancel_task: "取消任务",
+  tasks: "后台任务",
+  create_task: "创建后台任务",
+  list_tasks: "查看任务",
+  get_task: "查看任务进度",
+  supplement_task: "补充任务要求",
+  cancel_task_run: "取消本次执行",
+  pause_task: "暂停任务计划",
+  resume_task: "恢复任务计划",
 };
 function messageDetail(message: Message) {
   if (message.kind !== "detail") return null;
@@ -244,29 +252,33 @@ function MessageMedia({
   if (!attachments.length) return null;
   return (
     <div className="message-media">
-      {attachments.map((a) => a.type === "video/mp4" ? (
-        <figure className="message-video" key={a.id}>
-          <video
-            src={"/api/uploads/" + a.id}
-            controls
-            playsInline
-            preload="metadata"
-            aria-label={a.name || "摄像头录像"}
-          />
-          <figcaption>
-            <span>{a.name}</span>
-            <a href={"/api/uploads/" + a.id} download={a.name}>下载</a>
-          </figcaption>
-        </figure>
-      ) : (
-        <button
-          key={a.id}
-          aria-label={"查看图片 " + a.name}
-          onClick={() => onOpen("/api/uploads/" + a.id)}
-        >
-          <img src={"/api/uploads/" + a.id} alt={a.name} loading="lazy" />
-        </button>
-      ))}
+      {attachments.map((a) =>
+        a.type === "video/mp4" ? (
+          <figure className="message-video" key={a.id}>
+            <video
+              src={"/api/uploads/" + a.id}
+              controls
+              playsInline
+              preload="metadata"
+              aria-label={a.name || "摄像头录像"}
+            />
+            <figcaption>
+              <span>{a.name}</span>
+              <a href={"/api/uploads/" + a.id} download={a.name}>
+                下载
+              </a>
+            </figcaption>
+          </figure>
+        ) : (
+          <button
+            key={a.id}
+            aria-label={"查看图片 " + a.name}
+            onClick={() => onOpen("/api/uploads/" + a.id)}
+          >
+            <img src={"/api/uploads/" + a.id} alt={a.name} loading="lazy" />
+          </button>
+        ),
+      )}
     </div>
   );
 }
@@ -289,6 +301,7 @@ function MessageEntry({
       className={
         "message " +
         m.role +
+        (m.kind === "task" ? " task-message" : "") +
         (detail ? " detail" + (!detail.body ? " simple-tool" : "") : "")
       }
       data-message-id={m.id}
@@ -426,7 +439,45 @@ function ConversationGroup({
     </section>
   );
 }
+function ResponseActivity({
+  name,
+  label,
+  disconnected,
+}: {
+  name: string;
+  label: string;
+  disconnected: boolean;
+}) {
+  return (
+    <section
+      className="message-group assistant response-activity"
+      aria-label="助手响应状态"
+    >
+      <div className="message-meta">
+        <span className="speaker">{name}</span>
+      </div>
+      <div
+        className="response-progress"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {disconnected ? (
+          <WifiOff size={15} aria-hidden="true" />
+        ) : (
+          <span className="response-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
+        <span>{label}</span>
+      </div>
+    </section>
+  );
+}
 function App() {
+  const [showTasks, setShowTasks] = useState(false);
   const [authorized, setAuthorized] = useState<boolean | null>(null),
     [token, setToken] = useState(""),
     [error, setError] = useState("");
@@ -453,6 +504,32 @@ function App() {
     starting = useRef(false),
     stopped = useRef(false),
     generation = useRef(0);
+  // Derive activity from transport/provider state; never persist a fake reply.
+  const latestUser = messages
+    .filter((message) => message.role === "user")
+    .at(-1);
+  const pendingDispatch = latestUser?.status === "sending";
+  const foregroundBusy =
+    sending || pendingDispatch || state.web_dispatching || state.task_running;
+  const streamingReply = messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.kind === "message" &&
+      message.status === "streaming" &&
+      message.text.trim() &&
+      message.ordinal > (latestUser?.ordinal ?? -1),
+  );
+  const responseLabel = !foregroundBusy
+    ? ""
+    : !online
+      ? "连接已断开，正在重新连接…"
+      : sending
+        ? "正在发送…"
+        : pendingDispatch || state.web_dispatching
+          ? "正在准备回复…"
+          : streamingReply
+            ? ""
+            : "正在处理…";
   const merge = useCallback(
     (items: Message[]) =>
       setMessages((prev) => {
@@ -537,7 +614,7 @@ function App() {
   useEffect(() => {
     if (following.current)
       bottom.current?.scrollIntoView({ behavior: "instant" });
-  }, [messages]);
+  }, [messages, responseLabel]);
   useEffect(() => {
     if (!authorized || !composer.current) return;
     let frame = 0;
@@ -627,6 +704,7 @@ function App() {
     )
       return;
     setSending(true);
+    following.current = true;
     setError("");
     const body = {
       request_id: nonce(),
@@ -743,6 +821,14 @@ function App() {
           )}
         </div>
       </header>
+      {authorized && (
+        <TaskPanel
+          open={showTasks}
+          onClose={() => setShowTasks(false)}
+          api={api}
+          nonce={nonce}
+        />
+      )}
       {authorized === null ? (
         <main className="welcome">
           <LoaderCircle className="spin" />
@@ -807,6 +893,13 @@ function App() {
                 onOpen={setZoom}
               />
             ))}
+            {responseLabel && (
+              <ResponseActivity
+                name={state.name}
+                label={responseLabel}
+                disconnected={!online}
+              />
+            )}
             <div ref={bottom} />
           </main>
           <div className="composer-wrap" ref={composer}>
@@ -955,10 +1048,24 @@ function App() {
               </div>
             </form>
             <div className="composer-caption">
-              {state.task_running
-                ? "可以继续补充要求，任务会继续进行。"
-                : "与语音入口实时同步"}
-              <span>Enter 发送 · Shift + Enter 换行</span>
+              <button
+                type="button"
+                className="task-entry"
+                aria-label="任务"
+                aria-haspopup="dialog"
+                aria-expanded={showTasks}
+                aria-controls="task-panel"
+                onClick={() => setShowTasks(true)}
+              >
+                <ListTodo size={15} />
+                后台任务
+              </button>
+              <div className="composer-caption-info">
+                {state.task_running
+                  ? "可以继续补充要求，任务会继续进行。"
+                  : "与语音入口实时同步"}
+                <span>Enter 发送 · Shift + Enter 换行</span>
+              </div>
             </div>
           </div>
         </>

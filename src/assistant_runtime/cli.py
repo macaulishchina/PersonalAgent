@@ -77,6 +77,29 @@ def main():
     devices.add_argument(
         "--duration", dest="duration_seconds", type=int, default=10, help="Video clip, 1..60 seconds"
     )
+    tasks = sub.add_parser("tasks")
+    tasks.add_argument(
+        "action",
+        choices=[
+            "list",
+            "get",
+            "models",
+            "create",
+            "update",
+            "run",
+            "pause",
+            "resume",
+            "terminate",
+            "archive",
+            "cancel_run",
+            "pause_run",
+            "continue",
+            "supplement",
+            "artifacts",
+            "workfiles",
+        ],
+    )
+    tasks.add_argument("arguments", nargs="?", default="{}", help="JSON task arguments")
     memory = sub.add_parser("memory")
     memory.add_argument("action", choices=["search", "read", "remember", "forget", "export", "import"])
     memory.add_argument(

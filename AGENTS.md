@@ -16,3 +16,5 @@
 - Private data lives in ignored `state/`, `models/`, and `config.toml`. Never commit credentials or recordings.
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
+
+- Runtime foreground/background agents use registered `workfiles` scratch/artifact areas. Task state belongs to the tasks plugin; provider protocol and Goal fields stay in the Codex adapter. Never steer a background task through the foreground turn or infer completion from memory.

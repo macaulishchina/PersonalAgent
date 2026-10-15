@@ -15,6 +15,15 @@ def compose(service):
     from .devices.directory import DeviceDirectory, DevicesPlugin
 
     config, store = service.config, service.store
+    from .workfiles import WorkFiles, WorkFilesMaintenance
+
+    service.workfiles = WorkFiles(config.state_dir, store.db, config.work_files)
+
+    def tasks():
+        from .plugins.tasks.plugin import TasksPlugin
+
+        return TasksPlugin(service)
+
     service.devices = DeviceDirectory(config.devices)
     from .devices.outputs import AudioOutputs
 
@@ -47,12 +56,14 @@ def compose(service):
         return WebPlugin(service)
 
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
+    runtime.add(WorkFilesMaintenance(service.workfiles))
     factories = {
         "pipewire": lambda: PipeWirePlugin(config, store, service.devices, service.audio_outputs),
         "keyword": lambda: KeywordPlugin(config),
         "airplay": airplay,
         "go2rtc": go2rtc,
         "web": web,
+        "tasks": tasks,
         "apple_home": apple_home,
         "codex": lambda: CodexPlugin(
             config, store, service.audio_received, service.events.put, service.speak, service.tool_control
@@ -97,6 +108,9 @@ def compose(service):
     service.route, service.player = runtime.resolve("audio").route, runtime.resolve("audio").player
     service.recognizer = runtime.resolve("trigger").recognizer
     service.backend, service.voice = runtime.resolve("brain").backend, runtime.resolve("brain").voice
+    from .plugins.codex.jobs import CodexJobs
+
+    service.task_executor = lambda notify: CodexJobs(service.backend, notify)
     service.memory = runtime.plugins.get(config.bindings.get("memory"))
     service.backend.on_task_done = service.memory.enqueue if service.memory else None
     from .conversation.service import Conversation

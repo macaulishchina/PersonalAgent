@@ -8,7 +8,9 @@ from typing import Protocol
 
 from ..kernel.contracts import Control, DeviceQuery, MemoryRequest, VideoCapture, CameraMotion, VideoRecord
 
-Request = Control | DeviceQuery | MemoryRequest | VideoCapture | CameraMotion | VideoRecord
+from ..kernel.contracts import TaskRequest
+
+Request = TaskRequest | Control | DeviceQuery | MemoryRequest | VideoCapture | CameraMotion | VideoRecord
 
 
 class CapabilityClient(Protocol):
@@ -21,7 +23,9 @@ class LocalRuntimeClient:
         self.socket, self.timeout = str(socket), timeout
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, MemoryRequest):
+        if isinstance(request, TaskRequest):
+            payload = {"command": "tasks", **asdict(request)}
+        elif isinstance(request, MemoryRequest):
             payload = {"command": "memory", **asdict(request)}
         elif isinstance(request, DeviceQuery):
             payload = {"command": "devices", **asdict(request)}
