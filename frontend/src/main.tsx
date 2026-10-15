@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import "./style.css";
 
-type Attachment = { id: string; name: string; url?: string };
+type Attachment = { id: string; name: string; type?: string; url?: string };
 type Message = {
   id: string;
   ordinal: number;
@@ -154,6 +154,9 @@ const toolLabels: Record<string, string> = {
   list_devices: "查看设备",
   inspect_device: "检查设备状态",
   capture_image: "获取画面",
+  record_video: "录制视频",
+  move_camera: "调整摄像头方向",
+  stop_camera: "停止摄像头转向",
   select_audio_output: "切换音箱",
   set_audio_volume: "调整音量",
   stop_playback: "停止播报",
@@ -231,7 +234,7 @@ function ToolActivity({
     </span>
   );
 }
-function MessageImages({
+function MessageMedia({
   attachments,
   onOpen,
 }: {
@@ -240,8 +243,22 @@ function MessageImages({
 }) {
   if (!attachments.length) return null;
   return (
-    <div className="message-images">
-      {attachments.map((a) => (
+    <div className="message-media">
+      {attachments.map((a) => a.type === "video/mp4" ? (
+        <figure className="message-video" key={a.id}>
+          <video
+            src={"/api/uploads/" + a.id}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={a.name || "摄像头录像"}
+          />
+          <figcaption>
+            <span>{a.name}</span>
+            <a href={"/api/uploads/" + a.id} download={a.name}>下载</a>
+          </figcaption>
+        </figure>
+      ) : (
         <button
           key={a.id}
           aria-label={"查看图片 " + a.name}
@@ -303,11 +320,11 @@ function MessageEntry({
               </div>
             </details>
           )}
-          <MessageImages attachments={m.attachments} onOpen={onOpen} />
+          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
         </>
       ) : (
         <>
-          <MessageImages attachments={m.attachments} onOpen={onOpen} />
+          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
           <div className="message-body">
             <Markdown
               remarkPlugins={[remarkGfm]}

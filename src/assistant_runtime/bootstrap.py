@@ -22,6 +22,9 @@ def compose(service):
     from .devices.video import VideoInputs
 
     service.video_inputs = VideoInputs(config.devices)
+    from .devices.cameras import CameraControls
+
+    service.camera_controls = CameraControls(config.devices)
 
     def airplay():
         from .plugins.airplay.plugin import AirPlayPlugin
@@ -31,7 +34,7 @@ def compose(service):
     def go2rtc():
         from .plugins.go2rtc.plugin import Go2RTCPlugin
 
-        return Go2RTCPlugin(config, service.devices, service.video_inputs)
+        return Go2RTCPlugin(config, service.devices, service.video_inputs, service.camera_controls)
 
     def apple_home():
         from .plugins.apple_home.plugin import AppleHomePlugin
@@ -86,7 +89,7 @@ def compose(service):
                 raise ValueError("Plugin manifest name must match its registry name")
             runtime.add(plugin)
     runtime.bindings = {k: v for k, v in runtime.bindings.items() if v in runtime.plugins}
-    runtime.add(DevicesPlugin(service.devices, service.video_inputs))
+    runtime.add(DevicesPlugin(service.devices, service.video_inputs, service.camera_controls))
     runtime.add(
         AssistantPlugin(service, tuple(config.bindings[key] for key in ("audio", "trigger", "brain")))
     )

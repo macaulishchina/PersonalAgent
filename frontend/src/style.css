@@ -565,23 +565,23 @@ p {
   width: 19px;
   height: 19px;
 }
-.message-images {
+.message-media {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 8px;
   justify-content: flex-end;
 }
-.assistant .message-images {
+.assistant .message-media {
   justify-content: flex-start;
 }
-.detail .message-images {
+.detail .message-media {
   margin-top: 12px;
 }
-.message-images button {
+.message-media button {
   padding: 0;
 }
-.message-images img {
+.message-media img {
   max-width: 240px;
   max-height: 220px;
   object-fit: cover;
@@ -700,7 +700,7 @@ p {
   .welcome h1 {
     font-size: 26px;
   }
-  .message-images img {
+  .message-media img {
     max-width: 190px;
   }
   .lightbox {
@@ -735,4 +735,34 @@ p {
 }
 .code-block pre {
   margin: 0;
+}
+
+.message-video {
+  margin: 0;
+  width: min(100%, 560px);
+  min-width: 0;
+}
+.message-video video {
+  display: block;
+  width: 100%;
+  max-height: 440px;
+  background: #111;
+  border-radius: 14px;
+}
+.message-video figcaption {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 7px 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.message-video figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-video figcaption a {
+  color: inherit;
+  flex: none;
 }

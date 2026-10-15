@@ -27,17 +27,17 @@ flowchart LR
 | `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
 | `mcp/` | Independent memory/device MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
 | `plugins/codex/` | One foreground provider thread, its voice transport and native task delegation; separate maintenance context | Device drivers, long-term memory storage |
-| `devices/` | Shared inventory, adapter-owned registration, timestamped state, read-only query routing external audio and video provider registration | Hardware protocol code, conversation activation |
+| `devices/` | Shared inventory, adapter-owned registration, timestamped state, query/media/camera-control routing | Hardware protocol code, conversation activation |
 | `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
 | `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
-| `plugins/go2rtc/` | Configured gateway stream identity, bounded on-demand JPEG requests, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
+| `plugins/go2rtc/` | Configured gateway stream identity, bounded snapshots/clips and directional pan/tilt, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
 | `plugins/apple_home/` | Authenticated Apple Home readings, paired HAP refresh bridge, normalization and source freshness | AirPlay playback, model tasks, memory, HomePod account access |
 | `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
 | `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
 | `headless.py` | Hardware-free management/trigger host | Pretending unavailable voice/brain is operational |
 
-A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, and `VideoCapture` are separate typed requests. CLI, explicit local commands and the two independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
+A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, and `CameraMotion` are separate typed requests. CLI, explicit local commands and the two independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
@@ -66,6 +66,17 @@ Requested capture replies register complete pixels with the conversation media o
 The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
 
 ## MCP service boundary
+
+Explicit video recording uses `VideoRecord` → the registered video provider → a
+completed private `VideoClip`. Gateway encoding is on demand and reuses configured
+sources; host FFmpeg is limited to finalizing and validating the completed local
+file. Duration, size, generation and resource cleanup are bounded. The conversation
+media owner adopts only validated files from its recording staging directory and
+returns registered attachment references. Raw clip bytes and arbitrary file paths
+do not enter MCP, SSE or model context. `record_video` is a mutating device tool,
+and Web serves known video IDs through its existing authenticated attachment route,
+including seek ranges. Video-only output is shown live and survives history reload.
+Image uploads remain image-only; no continuous recorder or video-analysis API is added.
 
 `mcp/memory.py` exposes `search_memory`, `read_memory`, `remember_memory`, `update_memory`, and `forget_memory`. `mcp/device.py` exposes device discovery/inspection, explicit image capture, speaker selection/volume and the existing interaction controls. Individual operations have typed arguments and read/write annotations; there is no overloaded arbitrary `action` tool. Remember creates a new fact; update requires the existing ID, current revision and original scope. Forget retains its established tombstone semantics.
 
@@ -132,6 +143,16 @@ A media output implements the stdlib-only AudioOutputProvider / PlaybackTranspor
 A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. The go2rtc adapter requests uncached snapshots only on explicit input; its metadata observer never opens a video consumer. The separately managed gateway owns USB V4L2, RTSP and other camera protocols, formats and optional transcoding. The assistant neither opens video nodes nor launches camera FFmpeg processes. Gateway reachability and stream registration are distinct from successful acquisition; `capture_verified` describes a successful frame in the current observed source generation. Source changes or observed outages invalidate that generation, and failed requests never return earlier pixels. CLI can explicitly save a JPEG; Codex receives native MCP image content through device MCP capture_image. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
 
 ### Capability ownership and AI access
+
+Directional camera actuation uses the typed `CameraMotion` request and the shared
+`CameraControls` registry, separate from media acquisition and assistant voice
+controls. Only explicitly configured, physically verified movable endpoints
+declare `camera.pan_tilt`; fixed lenses retain snapshot/recording capabilities without motor control. The go2rtc adapter
+owns bounded active-session acquisition, short motor requests, stop/cancellation
+and cleanup. No movement is retried on uncertain outcomes, and command delivery
+does not imply measured position. The MCP `move_camera` and `stop_camera` tools
+translate requests without camera protocol code. Directions, duration limits and
+lack of angle feedback are discoverable through the existing device directory.
 
 Define a concrete request contract in `kernel/contracts.py` only when the first integration needs it. Keep protocol-specific fields in the adapter. The current runtime permits one handler per request type: when multiple sensor/device plugins implement the same ability, a single capability owner routes by logical device ID to the matching adapter. Individual physical devices must not each register the same request type. Do not create a universal arbitrary-method execution tool.
 

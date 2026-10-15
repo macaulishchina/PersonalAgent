@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from ..kernel.contracts import Control, DeviceQuery, MemoryRequest, VideoCapture
+from ..kernel.contracts import Control, DeviceQuery, MemoryRequest, VideoCapture, CameraMotion, VideoRecord
 
-Request = Control | DeviceQuery | MemoryRequest | VideoCapture
+Request = Control | DeviceQuery | MemoryRequest | VideoCapture | CameraMotion | VideoRecord
 
 
 class CapabilityClient(Protocol):
@@ -27,6 +27,10 @@ class LocalRuntimeClient:
             payload = {"command": "devices", **asdict(request)}
         elif isinstance(request, VideoCapture):
             payload = {"command": "devices", "action": "snapshot", "device_id": request.device_id}
+        elif isinstance(request, CameraMotion):
+            payload = {"command": "devices", "action": "move", **asdict(request)}
+        elif isinstance(request, VideoRecord):
+            payload = {"command": "devices", "action": "record", **asdict(request)}
         elif isinstance(request, Control):
             payload = {"command": request.kind, "value": request.value}
         else:

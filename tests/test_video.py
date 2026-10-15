@@ -15,7 +15,7 @@ from PIL import Image
 from assistant_runtime.config import Config
 from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
 from assistant_runtime.devices.video import VideoInputs
-from assistant_runtime.kernel.contracts import VideoCapture, VideoFrame, DeviceQuery
+from assistant_runtime.kernel.contracts import VideoCapture, VideoFrame, DeviceQuery, VideoRecord, VideoClip
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.go2rtc.camera import validate_connection
 from assistant_runtime.plugins.go2rtc.plugin import Go2RTCPlugin
@@ -46,6 +46,18 @@ def frame(ident="camera"):
 
 
 class VideoRegistrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_wrong_recording_identity_is_rejected_without_deleting_foreign_files(self):
+        registry = VideoInputs({"camera": camera_spec()})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "foreign.mp4"
+            path.write_bytes(b"foreign data")
+            provider = AsyncMock()
+            provider.record.return_value = VideoClip("other", path, 10, 10, 1, 12, time.time(), 1)
+            registry.register("go2rtc", "camera", provider)
+            with self.assertRaisesRegex(RuntimeError, "identity"):
+                await registry.record(VideoRecord("camera", 1))
+            self.assertEqual(path.read_bytes(), b"foreign data")
+
     def test_stable_device_identity_and_bounded_connection(self):
         for values in (
             {"base_url": "file:///dev/video0"},
@@ -58,6 +70,16 @@ class VideoRegistrationTest(unittest.IsolatedAsyncioTestCase):
             {"timeout_seconds": True},
             {"timeout_seconds": float("nan")},
             {"timeout_seconds": 0},
+            {"snapshot_width": True},
+            {"snapshot_width": 0},
+            {"snapshot_width": 1921},
+            {"snapshot_height": 1081},
+            {"snapshot_height": "720"},
+            {"pan_tilt": True},
+            {"pan_tilt": {"axes": []}},
+            {"pan_tilt": {"axes": ["pan", "zoom"]}},
+            {"pan_tilt": {"axes": ["pan", "pan"]}},
+            {"pan_tilt": {"axes": ["pan"], "max_duration_ms": 501}},
             {"username": "admin"},
             {"unknown": True},
         ):
@@ -66,6 +88,9 @@ class VideoRegistrationTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 validate_connection(spec)
         validate_connection(camera_spec())
+        resized = camera_spec()
+        resized["connection"].update(snapshot_width=1280, snapshot_height=720)
+        validate_connection(resized)
 
     async def test_owner_role_disabled_unknown_and_frame_identity(self):
         devices = {"camera": camera_spec()}

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from pathlib import Path
 import time
 import uuid
 import math
@@ -38,6 +39,77 @@ class VideoCapture:
     device_id: str
 
 
+MAX_VIDEO_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class VideoRecord:
+    device_id: str
+    duration_seconds: int = 10
+
+    def __post_init__(self):
+        if not isinstance(self.device_id, str) or not 0 < len(self.device_id) <= 64:
+            raise ValueError("Invalid camera device ID")
+        if type(self.duration_seconds) is not int or not 1 <= self.duration_seconds <= 60:
+            raise ValueError("Video duration must be between 1 and 60 seconds")
+
+
+@dataclass(frozen=True)
+class VideoClip:
+    """A completed local MP4; large media never traverses the capability socket."""
+
+    device_id: str
+    path: Path
+    width: int
+    height: int
+    duration_seconds: float
+    byte_count: int
+    recorded_at: float
+    generation: int
+    mime_type: str = "video/mp4"
+
+    def __post_init__(self):
+        if (
+            not self.device_id
+            or not isinstance(self.path, Path)
+            or not self.path.is_absolute()
+            or self.mime_type != "video/mp4"
+            or not 0 < self.byte_count <= MAX_VIDEO_BYTES
+            or not 0 < self.width <= 1920
+            or not 0 < self.height <= 1080
+            or not math.isfinite(self.duration_seconds)
+            or not 0 < self.duration_seconds <= 61
+            or not math.isfinite(self.recorded_at)
+            or self.generation < 1
+        ):
+            raise ValueError("Invalid recorded video")
+
+
+@dataclass(frozen=True)
+class CameraMotion:
+    """A bounded directional movement or explicit stop; no angle assumptions."""
+
+    device_id: str
+    direction: str
+    duration_ms: int = 80
+
+    def __post_init__(self):
+        if not isinstance(self.device_id, str) or not 0 < len(self.device_id) <= 64:
+            raise ValueError("Invalid camera device ID")
+        if not isinstance(self.direction, str) or self.direction not in {
+            "left",
+            "right",
+            "up",
+            "down",
+            "stop",
+        }:
+            raise ValueError("Invalid camera movement direction")
+        if type(self.duration_ms) is not int or not 0 <= self.duration_ms <= 500:
+            raise ValueError("Camera movement duration must be bounded to 500 ms")
+        if (self.direction == "stop") != (self.duration_ms == 0):
+            raise ValueError("Stop requires zero duration; movement requires positive duration")
+
+
 @dataclass(frozen=True)
 class VideoFrame:
     """One bounded, fresh JPEG; pixels never belong on the event bus."""
@@ -65,6 +137,7 @@ class VideoFrame:
 
 class VideoInputProvider(Protocol):
     async def capture(self) -> VideoFrame: ...
+    async def record(self, duration_seconds: int) -> VideoClip: ...
     async def close(self) -> None: ...
 
 

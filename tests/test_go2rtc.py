@@ -9,6 +9,7 @@ import unittest
 import aiohttp
 from aiohttp import web
 from PIL import Image
+import yaml
 
 from assistant_runtime.plugins.go2rtc.camera import Go2RTCCamera, GatewayUnavailable
 
@@ -30,12 +31,15 @@ class Go2RTCTest(unittest.IsolatedAsyncioTestCase):
         self.chunked = False
         self.change_source = False
         self.auth = None
+        self.active = False
+        self.config_body = None
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.queries = []
         self.snapshot_requests = 0
         app = web.Application()
         app.router.add_get("/api/streams", self.metadata)
+        app.router.add_get("/api/config", self.configuration)
         app.router.add_get("/api/frame.jpeg", self.snapshot)
         self.runner = web.AppRunner(app, handler_cancellation=True)
         await self.runner.setup()
@@ -59,7 +63,21 @@ class Go2RTCTest(unittest.IsolatedAsyncioTestCase):
             return web.Response(status=401)
         if self.metadata_status != 200:
             return web.Response(status=self.metadata_status, text=self.source)
-        return web.json_response({"producers": [{"url": self.source}], "consumers": []})
+        producer = {"id": self.snapshot_requests, "format_name": "xiaomi/miss", "protocol": "cs2+tcp"}
+        return web.json_response(
+            {"producers": [producer if self.active else {"url": self.source}], "consumers": []}
+        )
+
+    async def configuration(self, request):
+        self.queries.append(dict(request.query))
+        if self.auth and request.headers.get("Authorization") != self.auth:
+            return web.Response(status=401)
+        body = (
+            self.config_body
+            if self.config_body is not None
+            else yaml.safe_dump({"streams": {"camera": self.source}})
+        )
+        return web.Response(text=body, content_type="application/yaml")
 
     async def snapshot(self, request):
         self.queries.append(dict(request.query))
@@ -157,6 +175,64 @@ class Go2RTCTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.camera.capture_count, 0)
         self.change_source = False
         await self.camera.capture()
+
+    async def test_connected_producers_without_urls_keep_the_same_source_identity(self):
+        await self.camera.capture()
+        generation = self.camera.generation
+        self.active = True
+        self.assertTrue((await self.camera.inspect())["capture_verified"])
+        await self.camera.capture()
+        await self.camera.capture()
+        self.assertEqual(self.camera.generation, generation)
+        self.assertTrue((await self.camera.inspect())["capture_verified"])
+
+    async def test_stream_configuration_is_bounded_and_errors_hide_credentials(self):
+        for body in (
+            "streams: [private-source-password",
+            yaml.safe_dump({"streams": {"other": self.source}}),
+            yaml.safe_dump({"streams": {"camera": {"url": self.source}}}),
+            yaml.safe_dump({"streams": {"camera": []}}),
+            yaml.safe_dump({"streams": {"camera": [self.source] * 33}}),
+            yaml.safe_dump({"streams": {"camera": "x" * 65536}}),
+        ):
+            self.config_body = body
+            with self.subTest(size=len(body)), self.assertRaises(ValueError) as failure:
+                await self.camera.capture()
+            self.assertNotIn("private-source-password", str(failure.exception))
+            self.assertFalse(self.camera.operations)
+        self.config_body = yaml.safe_dump({"streams": {"camera": [self.source, "ffmpeg:camera#video=mjpeg"]}})
+        await self.camera.capture()
+
+    async def test_snapshot_dimensions_are_only_sent_for_image_requests(self):
+        await self.camera.close()
+        self.camera = Go2RTCCamera("camera", self.spec(snapshot_width=1280, snapshot_height=720))
+        await self.camera.start()
+        await self.camera.inspect()
+        self.assertTrue(all(query == {"src": "camera"} for query in self.queries))
+        self.queries.clear()
+        await self.camera.capture()
+        self.assertEqual(self.queries[2], {"src": "camera", "width": "1280", "height": "720"})
+        self.assertTrue(all(query == {"src": "camera"} for query in self.queries[:2] + self.queries[3:]))
+
+    async def test_overall_capture_deadline_has_a_caller_visible_error_and_recovers(self):
+        original = self.camera.read
+        self.camera.timeout = 0.05
+
+        async def stalled(endpoint, *args, **kwargs):
+            if endpoint == "/api/frame.jpeg":
+                await asyncio.Event().wait()
+            return await original(endpoint, *args, **kwargs)
+
+        self.camera.read = stalled
+        with self.assertRaisesRegex(GatewayUnavailable, "go2rtc capture timed out"):
+            await self.camera.capture()
+        self.assertFalse(self.camera.lock.locked())
+        self.assertFalse(self.camera.operations)
+        self.assertFalse((await self.camera.inspect())["capture_verified"])
+        self.camera.read = original
+        self.camera.timeout = 8
+        await self.camera.capture()
+        self.assertTrue((await self.camera.inspect())["capture_verified"])
 
     async def test_timeout_closes_request_and_releases_capture(self):
         await self.camera.close()

@@ -53,7 +53,7 @@ class WebPlugin:
                 web.get("/api/events", self.events),
                 web.post("/api/control", self.control),
                 web.post("/api/uploads", self.upload),
-                web.get("/api/uploads/{id}", self.image),
+                web.get("/api/uploads/{id}", self.attachment),
                 web.get("/", self.index),
             ]
         )
@@ -90,7 +90,7 @@ class WebPlugin:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            "default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         if request.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
@@ -202,19 +202,20 @@ class WebPlugin:
                 if len(data) > 10 * 1024 * 1024:
                     raise ValueError("单张图片不能超过 10 MB")
 
-            media = await self.conversation.images.add(data, field.filename)
+            media = await self.conversation.media.add_image(data, field.filename)
             ident = media["id"]
             return web.json_response(
                 {"id": ident, "name": media["name"], "url": f"/api/uploads/{ident}"}, status=201
             )
 
-    async def image(self, request):
+    async def attachment(self, request):
         ident = request.match_info["id"]
         if len(ident) != 32 or any(c not in "0123456789abcdef" for c in ident):
             raise web.HTTPNotFound()
-        if not self.db.execute("SELECT id FROM chat_uploads WHERE id=?", (ident,)).fetchone():
+        row = self.db.execute("SELECT media_type FROM chat_uploads WHERE id=?", (ident,)).fetchone()
+        if not row or row[0] not in {"image/jpeg", "video/mp4"} or not (self.uploads / ident).is_file():
             raise web.HTTPNotFound()
-        return web.FileResponse(self.uploads / ident, headers={"Content-Type": "image/jpeg"})
+        return web.FileResponse(self.uploads / ident, headers={"Content-Type": row[0]})
 
     async def cleanup_uploads(self):
         while True:

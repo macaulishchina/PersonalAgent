@@ -1264,7 +1264,9 @@ apple-home = [
 ]
 camera = [
     { name = "aiohttp" },
+    { name = "imageio-ffmpeg" },
     { name = "pillow" },
+    { name = "pyyaml" },
 ]
 dev = [
     { name = "mypy" },
@@ -1303,6 +1305,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'memory'", specifier = "==4.0.0b1" },
     { name = "hap-python", marker = "extra == 'apple-home'", specifier = "==5.0.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'airplay'", specifier = "==0.6.0" },
+    { name = "imageio-ffmpeg", marker = "extra == 'camera'", specifier = "==0.6.0" },
     { name = "kaldi-native-fbank", marker = "extra == 'voice'", specifier = "==1.22.3" },
     { name = "mcp", marker = "extra == 'memory'", specifier = "==2.3.0" },
     { name = "mem0ai", marker = "extra == 'memory'", specifier = "==1.0.11" },
@@ -1315,6 +1318,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'voice'", specifier = "==1.63.0" },
     { name = "pyatv", marker = "extra == 'airplay'", specifier = "==0.18.0" },
     { name = "pywebrtc-audio", marker = "extra == 'voice'", specifier = "==0.2.0" },
+    { name = "pyyaml", marker = "extra == 'camera'", specifier = ">=6,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.0" },
     { name = "sherpa-onnx", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },

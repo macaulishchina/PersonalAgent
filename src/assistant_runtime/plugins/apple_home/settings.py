@@ -10,7 +10,7 @@ class AppleHomeSettings:
     port: int = 8047
     hap_port: int = 51827
     poll_seconds: int = 60
-    refresh_timeout: int = 6
+    refresh_timeout: int = 10
 
     @classmethod
     def parse(cls, data):
@@ -27,8 +27,8 @@ class AppleHomeSettings:
             raise ValueError("Receiver and HomeKit ports must differ")
         if type(s.poll_seconds) is not int or not 30 <= s.poll_seconds <= 3600:
             raise ValueError("Apple Home poll interval must be 30..3600 seconds")
-        if type(s.refresh_timeout) is not int or not 1 <= s.refresh_timeout <= 8:
-            raise ValueError("Apple Home refresh timeout must be 1..8 seconds")
+        if type(s.refresh_timeout) is not int or not 1 <= s.refresh_timeout <= 10:
+            raise ValueError("Apple Home refresh timeout must be 1..10 seconds")
         return s
 
 

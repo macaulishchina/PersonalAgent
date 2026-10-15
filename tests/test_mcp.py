@@ -20,6 +20,8 @@ from assistant_runtime.kernel.contracts import (
     MemoryRequest,
     SensorReading,
     VideoCapture,
+    CameraMotion,
+    VideoRecord,
 )
 from assistant_runtime.mcp.catalog import MEMORY_TOOLS, DEVICE_TOOLS
 from assistant_runtime.mcp.client import LocalRuntimeClient
@@ -29,6 +31,39 @@ from assistant_runtime.plugins.codex.mcp import server_config
 
 
 class McpTest(unittest.IsolatedAsyncioTestCase):
+    async def test_recording_tool_returns_references_without_loading_video_bytes(self):
+        result = {"video": {"id": "a" * 32}, "attachments": [{"id": "a" * 32, "type": "video/mp4"}]}
+        handler = SimpleNamespace(invoke=AsyncMock(return_value=result), status=AsyncMock())
+        async with Client(device_server(handler)) as client:
+            reply = await client.call_tool("record_video", {"device_id": "camera", "duration_seconds": 2})
+            handler.invoke.assert_awaited_once_with(VideoRecord("camera", 2))
+            self.assertEqual(reply.structured_content, result)
+            self.assertTrue(all(block.type == "text" for block in reply.content))
+            for duration in (0, 61, True):
+                with self.assertRaises(ToolError):
+                    await client.call_tool(
+                        "record_video", {"device_id": "camera", "duration_seconds": duration}
+                    )
+            handler.invoke.assert_awaited_once()
+
+    async def test_camera_motion_tools_are_typed_and_bounded(self):
+        handler = SimpleNamespace(invoke=AsyncMock(return_value={"command_sent": True}), status=AsyncMock())
+        async with Client(device_server(handler)) as client:
+            await client.call_tool("move_camera", {"device_id": "camera", "direction": "left"})
+            handler.invoke.assert_awaited_once_with(CameraMotion("camera", "left", 80))
+            await client.call_tool("stop_camera", {"device_id": "camera"})
+            self.assertEqual(handler.invoke.await_args.args[0], CameraMotion("camera", "stop", 0))
+            for arguments in (
+                {"direction": "zoom"},
+                {"duration_ms": 0},
+                {"duration_ms": 501},
+                {"duration_ms": True},
+            ):
+                values = {"device_id": "camera", "direction": "left", **arguments}
+                with self.assertRaises(ToolError):
+                    await client.call_tool("move_camera", values)
+            self.assertEqual(handler.invoke.await_count, 2)
+
     async def test_separate_inventory_annotations_and_typed_memory_requests(self):
         handler = SimpleNamespace(invoke=AsyncMock(return_value={"ok": True}), status=AsyncMock())
         async with Client(memory_server(handler)) as client:

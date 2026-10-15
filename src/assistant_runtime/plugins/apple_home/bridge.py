@@ -2,11 +2,16 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
+import re
+import time
 
 from pyhap.accessory import Accessory, Bridge
-from pyhap.accessory_driver import AccessoryDriver
+from pyhap.accessory_driver import AccessoryDriver, get_topic
 from pyhap.const import CATEGORY_LIGHTBULB
+
+log = logging.getLogger(__name__)
 
 
 class PrivateBridge(Bridge):
@@ -21,6 +26,18 @@ class RefreshLamp(Accessory):
     def __init__(self, driver, name, aid):
         super().__init__(driver, name, aid=aid)
         self.on = self.add_preload_service("Lightbulb").get_characteristic("On")
+        self.controller_write_count = 0
+        self.last_controller_write_at = None
+        self.last_controller_write_value = None
+        self.on.setter_callback = self.controller_write
+
+    def controller_write(self, value):
+        # Upstream invokes this for controller writes, including an unchanged
+        # value; our internal set_value pulses must not count as inbound control.
+        self.controller_write_count += 1
+        self.last_controller_write_at = time.time()
+        self.last_controller_write_value = bool(value)
+        log.info("HomeKit controller wrote refresh lamp: aid=%s on=%s", self.aid, bool(value))
 
 
 class RefreshBridge:
@@ -37,10 +54,19 @@ class RefreshBridge:
 
     async def start(self):
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        code = self.root / "pairing-code.txt"
+        if code.is_symlink():
+            raise ValueError("HomeKit pairing code cannot be a symlink")
+        pincode = code.read_bytes().strip() if code.exists() else None
+        if pincode is not None and not re.fullmatch(rb"[0-9]{3}-[0-9]{2}-[0-9]{3}", pincode):
+            raise ValueError("Invalid saved HomeKit pairing code")
+        # HAP-python persists pairing keys/clients, but not the setup PIN.
+        # Reuse our private copy so instructions survive service restarts.
         self.driver = AccessoryDriver(
             address=self.settings.host,
             port=self.settings.hap_port,
             persist_file=str(self.root / "hap.state"),
+            pincode=pincode,
             loop=asyncio.get_running_loop(),
         )
         bridge = PrivateBridge(self.driver, "环境读数桥接")
@@ -69,7 +95,6 @@ class RefreshBridge:
         temporary.replace(path)
         self.driver.add_accessory(bridge)
         (self.root / "hap.state").chmod(0o600)
-        code = self.root / "pairing-code.txt"
         code.write_text(self.driver.state.pincode.decode() + "\n")
         code.chmod(0o600)
         try:
@@ -82,6 +107,11 @@ class RefreshBridge:
     def pulse(self, ident):
         if not self.started or not self.paired:
             return False
+        log.info(
+            "HomeKit refresh requested for %s: subscribers=%d",
+            ident,
+            self.refresh_status(ident)["subscriber_count"],
+        )
         lamp = self.lamps[ident]
         lamp.on.set_value(True)
         handle = None
@@ -94,6 +124,19 @@ class RefreshBridge:
         handle = asyncio.get_running_loop().call_later(1, reset)
         self.resets.add(handle)
         return True
+
+    def refresh_status(self, ident):
+        lamp = self.lamps.get(ident)
+        if not self.driver or not lamp:
+            return {"on": False, "subscriber_count": 0}
+        topic = get_topic(lamp.aid, lamp.iid_manager.get_iid(lamp.on))
+        return {
+            "on": bool(lamp.on.value),
+            "subscriber_count": len(self.driver.topics.get(topic, ())),
+            "controller_write_count": lamp.controller_write_count,
+            "last_controller_write_at": lamp.last_controller_write_at,
+            "last_controller_write_value": lamp.last_controller_write_value,
+        }
 
     async def close(self):
         self.started = False

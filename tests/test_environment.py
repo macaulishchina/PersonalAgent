@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 from aiohttp import ClientSession
 from fastmcp import Client
+from pyhap.accessory_driver import get_topic
 
 from assistant_runtime.config import Config
 from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
@@ -109,10 +110,15 @@ class ReadingTest(unittest.TestCase):
         self.assertAlmostEqual(parse_time(sample["observed_at"]), time.time(), delta=1)
 
     def test_strict_source_settings(self):
+        self.assertEqual(AppleHomeSettings.parse({}).refresh_timeout, 10)
+        self.assertEqual(AppleHomeSettings.parse({"refresh_timeout": 10}).refresh_timeout, 10)
         for settings in (
             {"host": "0.0.0.0"},
             {"port": True},
             {"poll_seconds": 1},
+            {"refresh_timeout": 11},
+            {"refresh_timeout": 0},
+            {"refresh_timeout": True},
             {"port": 8047, "hap_port": 8047},
             {"unexpected": 1},
         ):
@@ -211,6 +217,9 @@ class FakeBridge:
         self.pulses += 1
         return True
 
+    def refresh_status(self, ident):
+        return {"on": False, "subscriber_count": 0}
+
     async def close(self):
         self.closed = True
 
@@ -283,6 +292,29 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ["sensor.updated"])
         self.assertEqual((self.plugin.root / "ingest-token.txt").stat().st_mode & 0o777, 0o600)
 
+    async def test_http_diagnostics_include_status_without_credentials_or_payload(self):
+        with self.assertLogs("assistant_runtime.plugins.apple_home.plugin.http", level="INFO") as logs:
+            async with self.client.post(
+                self.url + "?secret=private-query", json={"secret": "private-body"}, headers=self.headers
+            ) as response:
+                self.assertEqual(response.status, 400)
+                await response.read()
+            self.assertEqual((await self.post(self.sample(), {"Authorization": "private-header"}))[0], 401)
+            self.assertEqual((await self.post(self.sample() | {"observed_at": self.plugin.token}))[0], 400)
+            await asyncio.sleep(0)
+        messages = [record.getMessage() for record in logs.records]
+        self.assertEqual(
+            messages,
+            [
+                "Rejected sensor report: Sensor payload requires device_id",
+                "127.0.0.1 400",
+                "127.0.0.1 401",
+                "Rejected sensor report: Sensor timestamp must be ISO 8601 time with timezone",
+                "127.0.0.1 400",
+            ],
+        )
+        self.assertNotIn(self.plugin.token, "\n".join(messages))
+
     async def test_metric_validity_mcp_readback_and_restart_never_rejuvenates(self):
         sample = self.sample() | {"humidity": {"status": "calibrating"}}
         self.assertEqual((await self.post(sample))[0], 200)
@@ -323,6 +355,54 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(time.monotonic() - started, 1.5)
         self.assertEqual(self.plugin.bridge.pulses, 2)
 
+    async def test_timeout_keeps_receiver_alive_and_late_sample_recovers_via_mcp(self):
+        self.plugin.bridge.paired = True
+        handler = SimpleNamespace(invoke=self.directory.handle, status=AsyncMock())
+        async with Client(create_server(handler)) as mcp:
+            started = time.monotonic()
+            result = (await mcp.call_tool("inspect_device", {"device_id": "environment"})).structured_content[
+                "device"
+            ]
+            elapsed = time.monotonic() - started
+            self.assertGreaterEqual(elapsed, 0.9)
+            self.assertLess(elapsed, 2)
+            self.assertEqual(result["data"]["refresh"]["status"], "timeout")
+            self.assertEqual(result["state"], "unavailable")
+            self.assertIsNone(result["readings"]["temperature"]["value"])
+            self.assertTrue(self.plugin.receiver_ready)
+            self.assertFalse(self.runtime.fatal.is_set())
+            # The same receiver accepts a late real-format sample without restart.
+            sample = self.sample()
+            self.assertEqual((await self.post(sample))[0], 200)
+            devices = (await mcp.call_tool("list_devices", {})).structured_content["devices"]
+            result = next(d for d in devices if d["id"] == "environment")
+            self.assertEqual(result["data"]["refresh"]["status"], "received")
+            self.assertEqual(result["state"], "available")
+            self.assertTrue(result["readings"]["temperature"]["fresh"])
+            self.assertEqual(result["readings"]["temperature"]["observed_at"], sample["observed_at"])
+            self.assertEqual(self.plugin.bridge.pulses, 1)
+
+    async def test_timeout_preserves_stale_sample_and_replay_cannot_clear_it(self):
+        self.plugin.bridge.paired = True
+        old = self.sample(time.time() - 360)
+        self.assertEqual((await self.post(old))[0], 200)
+        received = self.plugin.received["environment"]
+        await self.plugin.probe("environment")
+        self.assertIn('"accepted": false', (await self.post(old))[1])
+        result = self.directory.snapshot("environment")
+        self.assertEqual(result["data"]["refresh"]["status"], "timeout")
+        self.assertEqual(result["data"]["last_received_at"], received)
+        self.assertEqual(result["readings"]["temperature"]["status"], "stale")
+        self.assertEqual(result["readings"]["temperature"]["observed_at"], old["observed_at"])
+        self.assertFalse(result["readings"]["temperature"]["fresh"])
+        # A new report can still say that a sensor is calibrating, not usable.
+        await self.post(self.sample() | {"humidity": {"status": "calibrating"}})
+        result = self.directory.snapshot("environment")
+        self.assertEqual(result["data"]["refresh"]["status"], "received")
+        self.assertEqual(result["readings"]["humidity"]["status"], "calibrating")
+        self.assertFalse(result["readings"]["humidity"]["fresh"])
+        self.assertTrue(result["readings"]["temperature"]["fresh"])
+
     async def test_optional_bridge_failure_keeps_directory_alive_and_releases_receiver(self):
         await self.runtime.close()
 
@@ -362,6 +442,7 @@ class UpstreamBridgeTest(unittest.IsolatedAsyncioTestCase):
                 await writer.wait_closed()
                 aid = bridge.lamps["second"].aid
                 mac = bridge.driver.state.mac
+                pincode = bridge.driver.state.pincode
                 self.assertFalse(bridge.pulse("second"))
             finally:
                 await bridge.close()
@@ -375,13 +456,42 @@ class UpstreamBridgeTest(unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertEqual(bridge.lamps["second"].aid, aid)
                 self.assertEqual(bridge.driver.state.mac, mac)
+                self.assertEqual(bridge.driver.state.pincode, pincode)
+                self.assertEqual((root / "pairing-code.txt").read_text().strip().encode(), pincode)
                 self.assertNotEqual(bridge.lamps["first"].aid, aid)
                 bridge.driver.state.paired_clients["fixture"] = b"fixture"
-                self.assertTrue(bridge.pulse("second"))
-                self.assertTrue(bridge.lamps["second"].on.value)
-                await asyncio.sleep(1.1)
-                self.assertFalse(bridge.lamps["second"].on.value)
+                lamp = bridge.lamps["second"]
+                self.assertFalse(bridge.refresh_status("second")["on"])
+                self.assertEqual(bridge.refresh_status("second")["subscriber_count"], 0)
+                self.assertEqual(bridge.refresh_status("second")["controller_write_count"], 0)
+                topic = get_topic(lamp.aid, lamp.iid_manager.get_iid(lamp.on))
+                bridge.driver.async_subscribe_client_topic(("127.0.0.1", 12345), topic, True)
+                with patch.object(bridge.driver.http_server, "push_event", return_value=True) as notify:
+                    self.assertTrue(bridge.pulse("second"))
+                    self.assertTrue(bridge.refresh_status("second")["on"])
+                    self.assertEqual(bridge.refresh_status("second")["subscriber_count"], 1)
+                    await asyncio.sleep(1.1)
+                    self.assertFalse(lamp.on.value)
+                    self.assertEqual([c.args[0]["value"] for c in notify.call_args_list], [True, False])
+                    self.assertEqual(bridge.refresh_status("second")["controller_write_count"], 0)
+                    before_write = time.time()
+                    lamp.on.client_update_value(False)
+                    detail = bridge.refresh_status("second")
+                    self.assertEqual(detail["controller_write_count"], 1)
+                    self.assertFalse(detail["last_controller_write_value"])
+                    self.assertGreaterEqual(detail["last_controller_write_at"], before_write)
             finally:
                 await bridge.close()
                 await bridge.close()
             self.assertEqual(len(json.loads((root / "accessory-ids.json").read_text())), 2)
+
+    async def test_invalid_saved_pin_is_not_replaced_or_used_to_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            code = root / "pairing-code.txt"
+            code.write_text("invalid\n")
+            bridge = RefreshBridge(AppleHomeSettings(hap_port=free_port()), root, {"sensor": "读数"})
+            with self.assertRaisesRegex(ValueError, "Invalid saved HomeKit pairing code"):
+                await bridge.start()
+            self.assertIsNone(bridge.driver)
+            self.assertEqual(code.read_text(), "invalid\n")

@@ -8,7 +8,7 @@ import math
 import json
 import time
 
-from ..kernel.contracts import DeviceQuery, VideoCapture, SensorReading
+from ..kernel.contracts import DeviceQuery, VideoCapture, SensorReading, CameraMotion, VideoRecord
 from ..kernel.runtime import Manifest
 
 
@@ -156,9 +156,10 @@ class DeviceDirectory:
 
 
 class DevicesPlugin:
-    def __init__(self, directory, video=None):
+    def __init__(self, directory, video=None, camera_controls=None):
         self.directory = directory
         self.video = video
+        self.camera_controls = camera_controls
         owners = tuple(
             dict.fromkeys(d["adapter"] for d in directory.config.values() if d.get("enabled", True))
         )
@@ -180,6 +181,20 @@ class DevicesPlugin:
             return result
 
         context.register(DeviceQuery, query)
+        if self.camera_controls is not None:
+
+            async def move(request):
+                result = await self.camera_controls.move(request)
+                logging.getLogger(__name__).info(
+                    "camera_motion id=%s direction=%s duration_ms=%s",
+                    request.device_id,
+                    request.direction,
+                    request.duration_ms,
+                )
+                context.publish("device.camera_command", **result)
+                return result
+
+            context.register(CameraMotion, move)
         if self.video is not None:
 
             async def capture(request):
@@ -203,3 +218,16 @@ class DevicesPlugin:
                 return frame
 
             context.register(VideoCapture, capture)
+
+            async def record(request):
+                clip = await self.video.record(request)
+                context.publish(
+                    "device.recorded",
+                    device_id=clip.device_id,
+                    duration_seconds=clip.duration_seconds,
+                    bytes=clip.byte_count,
+                    recorded_at=clip.recorded_at,
+                )
+                return clip
+
+            context.register(VideoRecord, record)

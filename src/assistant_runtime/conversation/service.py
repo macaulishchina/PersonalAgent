@@ -10,7 +10,7 @@ import uuid
 from ..kernel.runtime import Manifest
 from ..kernel.contracts import Control
 from .store import ConversationStore
-from .media import ImageAttachments, MAX_BYTES
+from .media import MediaAttachments, MAX_BYTES
 
 
 class Conversation:
@@ -19,7 +19,7 @@ class Conversation:
     def __init__(self, host):
         self.host = host
         self.store = ConversationStore(host.store)
-        self.images = ImageAttachments(host.config.state_dir, self.store.db)
+        self.media = MediaAttachments(host.config.state_dir, self.store.db)
         self.image_queue = asyncio.Queue(maxsize=8)
         self.image_pending = set()
         self.context = None
@@ -224,7 +224,7 @@ class Conversation:
         elif kind == "message" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
-            references = self.images.resolve(event.get("attachments", []))
+            references = self.media.resolve(event.get("attachments", []))
             self.store.put(
                 mid,
                 self.session,
@@ -305,13 +305,23 @@ class Conversation:
         metadata.pop("data")
         result = {"frame": {**metadata, "data_base64": base64.b64encode(frame.data).decode()}}
         if self.host.config.web.get("enable"):
-            reference = await self.images.add(
+            reference = await self.media.add_image(
                 frame.data,
                 "摄像头画面.jpg",
                 key=f"capture:{self.session}:{frame.device_id}:{frame.generation}:{frame.captured_at}",
             )
             result["attachments"] = [reference]
         return result
+
+    async def recording_reply(self, clip):
+        metadata = asdict(clip)
+        metadata.pop("path")
+        label = self.host.config.devices[clip.device_id]["label"]
+        try:
+            reference = await self.media.add_video(clip, f"{label} · {clip.duration_seconds:g}秒.mp4")
+        finally:
+            self.media.discard_video(clip)
+        return {"video": {**metadata, "id": reference["id"]}, "attachments": [reference]}
 
     async def save_images(self):
         while True:
@@ -333,7 +343,9 @@ class Conversation:
                             raise ValueError("Invalid provider image")
                         data = await asyncio.to_thread(base64.b64decode, encoded, validate=True)
                         media.append(
-                            await self.images.add(data, f"助手图片 {index + 1}.jpg", key=f"{mid}:{index}")
+                            await self.media.add_image(
+                                data, f"助手图片 {index + 1}.jpg", key=f"{mid}:{index}"
+                            )
                         )
                     except Exception:
                         failed = True
@@ -424,6 +436,8 @@ class Conversation:
                 ).fetchone()
                 if not row:
                     raise ValueError("图片已过期，请重新上传")
+                if row[1] != "image/jpeg":
+                    raise ValueError("当前仅支持发送图片附件")
                 media.append({"id": ident, "name": row[0], "type": row[1]})
             mid = f"web:{request_id}"
             self.store.put(

@@ -2,7 +2,7 @@ name: personal-agent
 
 services:
   go2rtc:
-    image: ghcr.io/alexxit/go2rtc:1.9.14@sha256:675c318b23c06fd862a61d262240c9a63436b4050d177ffc68a32710d9e05bae
+    image: ghcr.io/sincerexia/xiaomi-onvif:0.1.0-beta.2@sha256:8fb5bcb9cbf02c24678fae3d272f35c4b0ddb91b1f4dd4d6a0fbe929b48b8ac8
     container_name: personal-agent-go2rtc
     network_mode: host
     restart: unless-stopped

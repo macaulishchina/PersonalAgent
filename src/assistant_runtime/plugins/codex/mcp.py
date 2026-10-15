@@ -6,8 +6,8 @@ from ...mcp.catalog import MEMORY_TOOLS, DEVICE_TOOLS
 
 
 def server_config(socket, enabled=True):
-    # The user authorized these existing memory/device operations for this project's
-    # assistant. Splitting their schemas does not grant any new capability.
+    # Project-scoped local operations, including the explicitly requested camera
+    # pan/tilt integration. This does not change global Codex permissions.
     return {
         name: {
             "command": sys.executable,

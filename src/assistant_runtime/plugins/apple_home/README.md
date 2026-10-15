@@ -15,7 +15,7 @@ uv sync --locked --extra voice --extra memory --extra web --extra airplay --extr
 Add `apple_home` to `plugins`, and a top-level settings table before device tables:
 
 ```toml
-apple_home = {host = "192.168.1.10", port = 8047, hap_port = 51827, poll_seconds = 60, refresh_timeout = 6}
+apple_home = {host = "192.168.1.10", port = 8047, hap_port = 51827, poll_seconds = 60, refresh_timeout = 10}
 
 [devices.homepod_environment]
 adapter = "apple_home"
@@ -31,13 +31,13 @@ trigger_name = "读取HomePod温湿度"
 
 Set the existing AirPlay endpoint's `physical_id` to `living_homepod` too. These are two functional endpoints of one physical device, with separate owners/availability. One unavailable sensor does not disable playback. The same association also applies to camera/audio endpoints on a USB camera. Neither logical identity nor HomeKit accessory identity depends on registration order.
 
-Use an explicit reachable LAN IP. Apple Home devices/hub must reach the HTTP ingest and HomeKit ports; HomeKit discovery uses mDNS. Neither this adapter nor installation changes the firewall. To enable the feature restart the existing service. Pairing state, secret ingest token and latest readings are private instance data. Do not serve `state/` through a static website.
+Use an explicit reachable LAN IP. Apple Home devices/hub must reach the HTTP ingest and HomeKit ports; HomeKit discovery uses mDNS. Neither this adapter nor installation changes the firewall. To enable the feature restart the existing service. Pairing state, setup code, secret ingest token and latest readings are private instance data. The existing `pairing-code.txt` is reused after restart; read it directly instead of copying a code into another guide. Do not serve `state/` through a static website.
 
 ## One-time Apple Home setup
 
 1. Open `<instance-root>/state/apple-home/pairing-code.txt` locally. In the iPhone/iPad Home app choose **Add Accessory → More Options**, select **环境读数桥接**, and enter that setup code. The refresh accessory is a virtual light, not a replacement for the actual HomePod. Leave the actual HomePod paired as it is.
 2. In **Automation → Add Automation → An Accessory Is Controlled**, choose **读取HomePod温湿度 → Turns On**. For the action choose **Convert to Shortcut**. This is a **Home automation**, running on the home hub, not an iPhone personal automation.
-3. Add two **Get the state of Home** actions: select the real HomePod's **Current Temperature** and **Current Relative Humidity**. Keep those outputs as separate variables. Add **Current Date → Format Date**, using **ISO 8601** (including timezone).
+3. Add two **Get the state of Home** actions: select the real HomePod's **Current Temperature** and **Current Relative Humidity**. Keep those outputs as separate variables. Add **Current Date → Format Date**, using **ISO 8601** (including timezone). If the output omits the timezone, choose **Custom** and use `yyyy-MM-dd'T'HH:mm:ssXXX`; the formatted result must end in an offset such as `+08:00` or `Z`. Insert that formatted output into `observed_at` below.
 4. Add **Get Contents of URL**. URL: `http://SERVER_LAN_IP:8047/readings`. Method: **POST**. Headers: `Authorization: Bearer TOKEN`, where TOKEN is read locally from `state/apple-home/ingest-token.txt`; `Content-Type: application/json`. Request Body: **JSON**, with these four entries:
 
    | Key | Value |
@@ -52,13 +52,23 @@ Use an explicit reachable LAN IP. Apple Home devices/hub must reach the HTTP ing
 
 No shortcut file is supplied: a Home automation must refer to the user's actual Home/accessories, and importing an unsigned shortcut is not a reliable substitute for configuring this Home automation.
 
+### Diagnose readback and automatic refresh
+
+The receiver logs HTTP source/status and fixed validation reasons, without request URLs, headers or measurement payloads. A `400` means authentication passed but the JSON/sample failed validation; the returned `error` gives the same reason. A successful manual test establishes readback, not unattended acquisition. Save both the shortcut editor and the outer automation page, then verify new source timestamps without tapping Test.
+
+`inspect_device` includes `data.refresh_trigger.subscriber_count`. Zero means no controller currently subscribes to that trigger's changes; pairing alone is insufficient. A positive count and the `HomeKit refresh requested` log establish a subscribed trigger, not successful automation execution. When no POST follows, inspect the automation's enabled condition and the active hub under Apple Home settings. HomePod or Apple TV may be the active hub. Apple's [hub troubleshooting](https://support.apple.com/en-us/102557) includes restarting that hub; receiver success must still be verified afterward.
+
+The same diagnostic object reports `controller_write_count`, `last_controller_write_at` and `last_controller_write_value` for inbound trigger-lamp control. These counters reset with the bridge process; internal polling pulses do not increment them. A controller write after an isolated refresh can establish execution of a Home-control action before a failing network action. It is not a sensor report and never renews measurement freshness.
+
+Hub software is part of acceptance. A [first-hand OS 27 reproduction report](https://forums.macrumors.com/threads/significant-bug-in-home-automations-using-shortcuts-that-require-network-connection.2486785/) describes network actions failing silently on the hub while the same automation succeeds in an iPhone manual test. This is a reported compatibility issue, not an Apple-confirmed diagnosis for every installation. When investigating, record the advertised/installed hub version, test a network action before sensor reads, and distinguish iPhone-origin requests from hub-origin requests. Remove temporary diagnostic actions afterward. Do not claim unattended support based on pairing, subscriptions, manual POST success, or synthetic tests; require fresh automatic source timestamps. The same [report’s follow-up](https://forums.macrumors.com/threads/significant-bug-in-home-automations-using-shortcuts-that-require-network-connection.2486785/page-2) includes multiple October 6–7, 2026 user confirmations that URL GET/POST worked again with an Apple TV on tvOS 27.2 beta 3 as the active hub. These are user tests, not a guarantee for a particular installation or a recommendation to install beta firmware. Keep the adapter enabled with bounded timeouts while awaiting hub recovery; verify actual new automatic samples afterward.
+
 ## Contract, freshness and failure
 
 The only HTTP route is authenticated `POST /readings`. It accepts only configured device IDs/metrics plus `observed_at`; it cannot execute assistant tasks. Input is bounded to 8 KiB. Whole reports are validated before replacing state. Non-finite, malformed, out-of-range and unknown values fail; duplicate/older source timestamps do not renew freshness. Structured measurement values also accept `{"value": null, "status": "calibrating"}` or `unavailable`/`error`.
 
 Measurements use the stdlib `SensorReading` contract, exposed under each device's `readings` map with value, unit, source, sample timestamp, status, age and freshness. Device heartbeat age is separate from measurement age. Temperature can be current while humidity is calibrating. In-process monotonic ageing prevents a backwards wall-clock adjustment from rejuvenating old samples. Restoring state preserves the original sample time; an expired value stays explicitly stale. Only the latest readings are stored in SQLite; there is no history service, passive wake, automatic memory capture or unsolicited AI action.
 
-Refresh requests coalesce per endpoint, enforce a five-second minimum interval, and wait at most the configured 1–8 seconds. Background refresh is 30–3600 seconds (default 60). Timeout returns the existing age/validity, never a fabricated successful reading. The optional source retries bridge/listener failures and reports degraded health without stopping voice, tasks or another endpoint. HomeKit keys/IDs survive service restarts; adding another endpoint does not reassign existing accessories.
+Refresh requests coalesce per endpoint, enforce a five-second minimum interval, and wait at most the configured 1–10 seconds (default 10). Background refresh is 30–3600 seconds (default 60). The `data.refresh` object exposes `idle`, `waiting`, `received`, `timeout` or `unavailable`, the configured wait limit and an explanatory message. Timeout returns the existing age/validity, never a fabricated successful reading. The assistant reports the timeout once; any retained values are identified as previous samples with their source time, not as a successful refresh. Do not repeatedly retry within the same answer. The receiver stays running and polling continues after timeout. A newer authenticated report, including a late arrival after timeout, automatically clears the timeout state; each metric still has its own validity/freshness checks. No restart, re-pairing or reconfiguration is needed when the hub starts working again. The optional source retries bridge/listener failures and reports degraded health without stopping voice, tasks or another endpoint. HomeKit keys/IDs survive service restarts; adding another endpoint does not reassign existing accessories.
 
 ## Query and acceptance
 

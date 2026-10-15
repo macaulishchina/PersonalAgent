@@ -88,7 +88,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         cursor = c.store.cursor()
         await asyncio.wait_for(c.image_queue.join(), 2)
         message = c.store.get(before["id"])
-        asset = c.images.folder / message["attachments"][0]["id"]
+        asset = c.media.folder / message["attachments"][0]["id"]
         with Image.open(asset) as image:
             self.assertEqual(image.format, "JPEG")
             self.assertEqual(image.size, (64, 48))
@@ -143,7 +143,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         self.host.config = replace(self.host.config, web={})
         c.provider_event(task_event("item/completed", provider_item([picture()])))
         await asyncio.wait_for(c.image_queue.join(), 2)
-        self.assertFalse(c.images.folder.exists())
+        self.assertFalse(c.media.folder.exists())
 
     async def test_image_recovery_updates_previous_failure_notice(self):
         c = self.host.conversation
@@ -160,7 +160,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
     async def test_durable_reference_supersedes_pending_invalid_image(self):
         c = self.host.conversation
         raw = base64.b64decode(picture()["data"])
-        reference = await c.images.add(raw, "retained.jpg", key="retained")
+        reference = await c.media.add_image(raw, "retained.jpg", key="retained")
         bad = picture() | {"data": "truncated"}
         event = task_event("item/completed", provider_item([bad], "late-ref"))
         c.provider_event(event)
@@ -199,7 +199,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         message = c.store.get("task:session:image-tool")
         self.assertEqual(message["attachments"], [ref])
         self.assertIsNone(c.store.get("image-error:task:session:image-tool"))
-        with Image.open(c.images.folder / ref["id"]) as image:
+        with Image.open(c.media.folder / ref["id"]) as image:
             self.assertEqual(image.size, (640, 480))
         self.assertEqual(c.store.db.execute("SELECT attached FROM chat_uploads").fetchone()[0], 1)
 
@@ -222,14 +222,14 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
 
         raw = base64.b64decode(picture()["data"])
         with patch("assistant_runtime.conversation.media.asyncio.to_thread", side_effect=blocked):
-            task = asyncio.create_task(c.images.add(raw, "cancelled", key="cancel"))
+            task = asyncio.create_task(c.media.add_image(raw, "cancelled", key="cancel"))
             await started.wait()
             task.cancel()
             self.assertFalse(task.done())
             finish.set()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        self.assertFalse(list(c.images.folder.iterdir()))
+        self.assertFalse(list(c.media.folder.iterdir()))
         self.assertEqual(c.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 0)
 
 
@@ -258,4 +258,4 @@ class ReplyImageHttpTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.02)
         sweep.cancel()
         await asyncio.gather(sweep, return_exceptions=True)
-        self.assertTrue((c.images.folder / asset["id"]).exists())
+        self.assertTrue((c.media.folder / asset["id"]).exists())

@@ -124,7 +124,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
         report["inventory"] = inventory
         detail = await request(config, {"command": "devices", "action": "inspect", "device_id": ident})
         assert detail["device"]["state"] == "available", detail
-        assert detail["device"]["capabilities"] == ["video.snapshot"]
+        assert "video.snapshot" in detail["device"]["capabilities"]
         assert detail["device"]["data"]["capturing"] is False
         report["initial_camera"] = detail
         report["adapter"] = detail["device"]["adapter"]

@@ -126,7 +126,7 @@ class NativeVoice:
                     + getattr(self, "memory_context", "")
                     + "\n"
                     + getattr(self, "device_context", "")
-                    + "\n需要最新设备状态或传感器读数时委派 Codex 调用 device MCP 的 list_devices / inspect_device，等待实际结果；每项读数都须有效且未过期，不用记忆或目录心跳猜测当前测量值。用户明确要求看当前画面时，委派 Codex 用 device MCP 的 capture_image 抓取已配置摄像头的一帧并分析，等待实际结果。你没有持续视频输入，不要猜测画面或主动打开摄像头。",
+                    + "\n需要最新设备状态或传感器读数时委派 Codex 调用 device MCP 的 list_devices / inspect_device，等待实际结果；每项读数都须有效且未过期，不用记忆或目录心跳猜测当前测量值。用户明确要求看当前画面时，委派 Codex 用 device MCP 的 capture_image 抓取已配置摄像头的一帧并分析，等待实际结果。你没有持续视频输入，不要猜测画面或主动打开摄像头。用户明确要求摄像头转向或停止转向时，委派 Codex 查询 camera.pan_tilt 能力并调用 move_camera / stop_camera；固定镜头不能转向，默认一次短步，不把指令送达说成精确角度已确认。用户明确要求录一段视频时，委派 Codex 查询 video.record 能力并调用 record_video，默认10秒、最长60秒，返回本机聊天视频附件。不要主动录像或声称已经观看整段视频。",
                     "realtimeEndInstructions": "用户语音会话结束。已开始的任务继续，保存真实工作结果，不重复执行。",
                 },
                 timeout=20,

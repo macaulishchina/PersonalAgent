@@ -14,7 +14,7 @@ voice = ["numpy>=1.26", "sherpa-onnx==1.13.8", "sherpa-onnx-core==1.13.8", "soxr
 web = ["aiohttp>=3.14,<4", "pillow>=12,<13"]
 airplay = ["pyatv==0.18.0", "imageio-ffmpeg==0.6.0"]
 apple-home = ["HAP-python==5.0.0", "aiohttp>=3.14,<4"]
-camera = ["aiohttp>=3.14,<4", "pillow>=12,<13"]
+camera = ["aiohttp>=3.14,<4", "pillow>=12,<13", "PyYAML>=6,<7", "imageio-ffmpeg==0.6.0"]
 memory = [
     "fastembed==0.9.0",
     "fastmcp==4.0.0b1",

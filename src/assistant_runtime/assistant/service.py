@@ -15,7 +15,15 @@ import numpy as np
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.assistant.quiet import QuietHours
 from assistant_runtime.store import Store
-from assistant_runtime.kernel.contracts import Control, MemoryRequest, AudioFrame, DeviceQuery, VideoCapture
+from assistant_runtime.kernel.contracts import (
+    Control,
+    MemoryRequest,
+    AudioFrame,
+    DeviceQuery,
+    VideoCapture,
+    VideoRecord,
+    CameraMotion,
+)
 
 log = logging.getLogger(__name__)
 
@@ -325,6 +333,24 @@ class AssistantService:
             except (RuntimeError, TimeoutError, OSError) as exc:
                 self.route.last_error = type(exc).__name__
 
+    async def _record_for_client(self, reader, recording):
+        async def operation():
+            clip = await self.runtime.invoke(recording, timeout=recording.duration_seconds + 35)
+            return await self.conversation.recording_reply(clip)
+
+        work = asyncio.create_task(operation(), name="requested-video")
+        disconnected = asyncio.create_task(reader.read(1), name="video-caller")
+        try:
+            done, _ = await asyncio.wait((work, disconnected), return_when=asyncio.FIRST_COMPLETED)
+            if disconnected in done:
+                raise ConnectionError("Recording caller disconnected; incomplete recording canceled")
+            return await work
+        finally:
+            for task in (work, disconnected):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(work, disconnected, return_exceptions=True)
+
     async def _connection(self, reader, writer):
         try:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
@@ -339,6 +365,18 @@ class AssistantService:
                 if d.get("action") == "snapshot":
                     frame = await self.runtime.invoke(VideoCapture(d.get("device_id")))
                     result = await self.conversation.capture_reply(frame)
+                elif d.get("action") == "record":
+                    recording = VideoRecord(d.get("device_id"), d.get("duration_seconds", 10))
+                    result = await self._record_for_client(reader, recording)
+                elif d.get("action") in {"move", "stop-camera"}:
+                    stopping = d["action"] == "stop-camera"
+                    result = await self.runtime.invoke(
+                        CameraMotion(
+                            d.get("device_id"),
+                            "stop" if stopping else d.get("direction"),
+                            0 if stopping else d.get("duration_ms", 80),
+                        )
+                    )
                 else:
                     result = await self.runtime.invoke(
                         DeviceQuery(d.get("action", "list"), d.get("device_id"))
@@ -398,9 +436,14 @@ class AssistantService:
         try:
             writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode())
             await writer.drain()
+        except (ConnectionError, OSError):
+            pass
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
     async def run(self):
         server = None

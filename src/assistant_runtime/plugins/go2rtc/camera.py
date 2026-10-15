@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 from PIL import Image
+import yaml
 
 from ...kernel.contracts import VideoFrame
 
@@ -22,7 +23,16 @@ class GatewayUnavailable(RuntimeError):
 
 def validate_connection(spec):
     values = spec["connection"]
-    allowed = {"base_url", "stream", "timeout_seconds", "username", "password_file"}
+    allowed = {
+        "base_url",
+        "stream",
+        "timeout_seconds",
+        "username",
+        "password_file",
+        "snapshot_width",
+        "snapshot_height",
+        "pan_tilt",
+    }
     if set(values) - allowed:
         raise ValueError("Unknown go2rtc connection settings")
     base = values.get("base_url")
@@ -50,6 +60,25 @@ def validate_connection(spec):
     timeout = values.get("timeout_seconds", 8)
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 10:
         raise ValueError("Invalid go2rtc capture timeout")
+    for key, maximum in (("snapshot_width", 1920), ("snapshot_height", 1080)):
+        if key in values and (type(values[key]) is not int or not 0 < values[key] <= maximum):
+            raise ValueError("Invalid go2rtc snapshot dimensions")
+    if "pan_tilt" in values:
+        motion = values["pan_tilt"]
+        if not isinstance(motion, dict) or set(motion) - {"axes", "max_duration_ms"}:
+            raise ValueError("Invalid go2rtc pan/tilt settings")
+        axes = motion.get("axes")
+        if (
+            not isinstance(axes, list)
+            or not axes
+            or len(axes) > 2
+            or any(axis not in ("pan", "tilt") for axis in axes)
+            or len(set(axes)) != len(axes)
+        ):
+            raise ValueError("go2rtc pan/tilt requires verified axes")
+        maximum = motion.get("max_duration_ms", 500)
+        if type(maximum) is not int or not 1 <= maximum <= 500:
+            raise ValueError("Invalid go2rtc pan/tilt maximum duration")
     if ("username" in values) != ("password_file" in values):
         raise ValueError("go2rtc username and password_file must be configured together")
     if "username" in values and (
@@ -75,7 +104,7 @@ def decode_jpeg(data):
 
 
 class Go2RTCCamera:
-    def __init__(self, device_id, spec):
+    def __init__(self, device_id, spec, recording_folder=None):
         validate_connection(spec)
         self.device_id = device_id
         self.options = spec["connection"]
@@ -92,6 +121,13 @@ class Go2RTCCamera:
         self.last_capture = None
         self.capture_generation = None
         self.capture_count = 0
+        self.recording_folder = recording_folder
+        self.recording = False
+
+    async def record(self, duration_seconds):
+        from .recording import record_clip
+
+        return await record_clip(self, self.recording_folder, duration_seconds)
 
     async def start(self):
         headers = {}
@@ -108,25 +144,33 @@ class Go2RTCCamera:
         self.session = aiohttp.ClientSession(
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=self.timeout, connect=min(2, self.timeout)),
-            connector=aiohttp.TCPConnector(limit=2),
+            connector=aiohttp.TCPConnector(limit=4),
             cookie_jar=aiohttp.DummyCookieJar(),
             trust_env=False,
             auto_decompress=False,
         )
 
-    async def read(self, endpoint, limit, image=False):
+    async def read(self, endpoint, limit, image=False, *, method="GET", params=None):
         if self.closed or self.session is None:
             raise RuntimeError("go2rtc camera provider closed or not started")
+        params = dict(params) if params is not None else {"src": self.stream}
+        if image:
+            for key in ("width", "height"):
+                if f"snapshot_{key}" in self.options:
+                    params[key] = self.options[f"snapshot_{key}"]
         try:
-            async with self.session.get(
+            async with self.session.request(
+                method,
                 self.base_url + endpoint,
-                params={"src": self.stream},
+                params=params,
                 allow_redirects=False,
                 headers={"Cache-Control": "no-cache"},
             ) as response:
                 if response.status in {401, 403}:
                     raise GatewayUnavailable("go2rtc access denied")
                 if response.status == 404:
+                    if endpoint == "/api/xiaomi/ptz":
+                        raise GatewayUnavailable("go2rtc pan/tilt API unavailable")
                     raise RuntimeError("Configured go2rtc stream not found")
                 if response.status != 200:
                     # Never copy server error bodies: they can contain source credentials.
@@ -149,11 +193,30 @@ class Go2RTCCamera:
         try:
             metadata = json.loads(data)
             producers = metadata["producers"]
-            urls = [p["url"] for p in producers]
-            if not urls or any(not isinstance(url, str) or not url for url in urls):
+            if (
+                not isinstance(producers, list)
+                or not producers
+                or any(not isinstance(producer, dict) for producer in producers)
+            ):
                 raise ValueError
-        except (ValueError, KeyError, TypeError) as exc:
-            raise ValueError("go2rtc returned invalid stream metadata") from exc
+        except (ValueError, KeyError, TypeError):
+            raise ValueError("go2rtc returned invalid stream metadata") from None
+        # Active producers contain connection statistics instead of source URLs.
+        # Use the declared sources, not mutable connection IDs/ports, for identity.
+        data = await self.read("/api/config", 65536)
+        try:
+            config = yaml.safe_load(data)
+            sources = config["streams"][self.stream]
+            urls = [sources] if isinstance(sources, str) else sources
+            if (
+                not isinstance(urls, list)
+                or not 0 < len(urls) <= 32
+                or any(not isinstance(url, str) or not url for url in urls)
+            ):
+                raise ValueError
+        except (yaml.YAMLError, ValueError, KeyError, TypeError, RecursionError):
+            # YAML diagnostics can include account IDs or camera credentials.
+            raise ValueError("go2rtc returned invalid stream configuration") from None
         identity = hashlib.sha256(json.dumps(urls).encode()).hexdigest()
         if identity != self.identity:
             self.identity = identity
@@ -177,6 +240,8 @@ class Go2RTCCamera:
         return {
             "capturing": self.lock.locked(),
             "capture_mode": "on_request",
+            "recording": self.recording,
+            "recording_limits": {"default_seconds": 10, "max_seconds": 60, "max_bytes": 64 * 1024 * 1024},
             "transport": "go2rtc",
             "stream": self.stream,
             "gateway_reachable": True,
@@ -219,6 +284,8 @@ class Go2RTCCamera:
                 if isinstance(exc, TimeoutError)
                 else str(exc)[:200]
             )
+            if isinstance(exc, TimeoutError):
+                raise GatewayUnavailable(self.last_error) from exc
             raise
         finally:
             self.operations.discard(task)
@@ -228,7 +295,8 @@ class Go2RTCCamera:
         self.generation += 1
         operations = [task for task in self.operations if task is not asyncio.current_task()]
         for task in operations:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         await asyncio.gather(*operations, return_exceptions=True)
         if self.session:
             await self.session.close()

@@ -21,3 +21,11 @@ class VideoInputs:
         if frame.device_id != request.device_id:
             raise RuntimeError("Video frame identity mismatch")
         return frame
+
+    async def record(self, request):
+        if request.device_id not in self.providers:
+            raise ValueError(f"No video input provider registered: {request.device_id}")
+        clip = await self.providers[request.device_id].record(request.duration_seconds)
+        if clip.device_id != request.device_id:
+            raise RuntimeError("Recorded video identity mismatch")
+        return clip

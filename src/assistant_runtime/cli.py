@@ -62,9 +62,21 @@ def main():
         sub.add_parser(name).add_argument("value")
     sub.add_parser("volume").add_argument("value", type=int, choices=range(101), metavar="0..100")
     devices = sub.add_parser("devices")
-    devices.add_argument("action", choices=["list", "inspect", "snapshot"], nargs="?", default="list")
+    devices.add_argument(
+        "action",
+        choices=["list", "inspect", "snapshot", "record", "move", "stop-camera"],
+        nargs="?",
+        default="list",
+    )
     devices.add_argument("device_id", nargs="?")
-    devices.add_argument("--output", help="Explicitly save a requested snapshot to this JPEG path")
+    devices.add_argument(
+        "--output", help="Save a requested snapshot (JPEG) or recorded clip (MP4) to this path"
+    )
+    devices.add_argument("--direction", choices=["left", "right", "up", "down"])
+    devices.add_argument("--duration-ms", type=int, default=80, help="One camera step, 1..500 ms")
+    devices.add_argument(
+        "--duration", dest="duration_seconds", type=int, default=10, help="Video clip, 1..60 seconds"
+    )
     memory = sub.add_parser("memory")
     memory.add_argument("action", choices=["search", "read", "remember", "forget", "export", "import"])
     memory.add_argument(
@@ -111,9 +123,12 @@ def main():
             payload = {k: v for k, v in vars(args).items() if k != "config"}
             output = payload.pop("output", None)
             if args.command == "devices" and (args.action != "list" and not args.device_id):
-                raise ValueError("inspect / snapshot requires a device ID")
-            if output and (args.command != "devices" or args.action != "snapshot"):
-                raise ValueError("--output is only valid for devices snapshot")
+                raise ValueError("Device action requires a device ID")
+            if args.command == "devices" and args.action == "move":
+                if not args.direction or not 1 <= args.duration_ms <= 500:
+                    raise ValueError("move requires --direction and a duration of 1..500 ms")
+            if output and (args.command != "devices" or args.action not in {"snapshot", "record"}):
+                raise ValueError("--output is only valid for devices snapshot / record")
             if "arguments" in payload:
                 payload["arguments"] = json.loads(payload["arguments"])
             if "path" in payload:
@@ -130,6 +145,17 @@ def main():
                     result["saved_to"] = str(path)
                 else:
                     result["saved_to"] = None
+            elif args.command == "devices" and args.action == "record" and output:
+                import shutil
+
+                ident = result["video"]["id"]
+                if len(ident) != 32 or any(c not in "0123456789abcdef" for c in ident):
+                    raise ValueError("Invalid recorded video ID")
+                path = Path(output).expanduser().resolve()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(config.state_dir / "web-uploads" / ident, path)
+                path.chmod(0o600)
+                result["saved_to"] = str(path)
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, RuntimeError, ValueError, TimeoutError, KeyError) as exc:
         print(f"personal-agent: {exc}", file=sys.stderr)

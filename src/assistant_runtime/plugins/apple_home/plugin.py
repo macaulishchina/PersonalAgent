@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import asdict
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -11,8 +12,10 @@ from aiohttp import web
 
 from ...kernel.contracts import DeviceObservation, SensorReading
 from ...kernel.runtime import Manifest
-from .payload import UNITS, parse_payload
+from .payload import UNITS, PayloadError, parse_payload
 from .settings import AppleHomeSettings, endpoint_settings
+
+http_log = logging.getLogger(__name__ + ".http")
 
 
 class AppleHomePlugin:
@@ -34,6 +37,7 @@ class AppleHomePlugin:
         self.error = None
         self.readings, self.received, self.changed, self.refreshing = {}, {}, {}, {}
         self.last_pulse = {}
+        self.refresh_state = {}
         self.context = None
 
     async def start(self, context):
@@ -95,6 +99,18 @@ class AppleHomePlugin:
                 )
             )
         )
+        refresh_status = self.refresh_state.get(ident, "idle")
+        refresh_message = {
+            "idle": "尚未请求刷新",
+            "waiting": "正在等待家庭自动化回传",
+            "received": "已收到回传，请按各项读数的有效性和采样时间使用",
+            "timeout": (
+                f"刷新等待 {self.settings.refresh_timeout} 秒超时，未收到新读数。"
+                "已有值仅为上次读数，请注明采样时间；过期值不能当作当前值。"
+                "后台继续接收，回传恢复后自动更新。"
+            ),
+            "unavailable": "刷新桥接未就绪或未配对，后台将继续尝试恢复",
+        }[refresh_status]
         self.directory.observe(
             "apple_home",
             ident,
@@ -105,6 +121,16 @@ class AppleHomePlugin:
                     "receiver_ready": self.receiver_ready,
                     "refresh_bridge_paired": paired,
                     "trigger_name": self.endpoints[ident][1],
+                    "refresh_trigger": (
+                        self.bridge.refresh_status(ident)
+                        if self.bridge
+                        else {"on": False, "subscriber_count": 0}
+                    ),
+                    "refresh": {
+                        "status": refresh_status,
+                        "timeout_seconds": self.settings.refresh_timeout,
+                        "message": refresh_message,
+                    },
                     "last_received_at": self.received.get(ident),
                     "reading_time_basis": "source_observed_at",
                 },
@@ -131,12 +157,15 @@ class AppleHomePlugin:
             saved = {"received_at": received, "readings": {m: asdict(r) for m, r in readings.items()}}
             self.store.set("sensors.apple_home." + ident, saved)
             self.readings[ident], self.received[ident] = readings, received
+            self.refresh_state[ident] = "received"
             self.observe(ident)
             self.changed[ident].set()
             self.context.publish("sensor.updated", device_id=ident, metrics=list(readings))
             return web.json_response({"accepted": True})
         except (TypeError, ValueError, KeyError) as exc:
-            return web.json_response({"error": str(exc)[:180]}, status=400)
+            reason = str(exc) if isinstance(exc, PayloadError) else "Malformed sensor payload"
+            http_log.warning("Rejected sensor report: %s", reason)
+            return web.json_response({"error": reason}, status=400)
 
     async def serve(self):
         from .bridge import RefreshBridge
@@ -146,7 +175,11 @@ class AppleHomePlugin:
             try:
                 app = web.Application(client_max_size=8192)
                 app.router.add_post("/readings", self.receive)
-                self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=2)
+                # Diagnose failed Apple-side setup without logging URLs, tokens
+                # or sensor payloads. In particular, never use the default %r.
+                self.runner = web.AppRunner(
+                    app, access_log=http_log, access_log_format="%a %s", shutdown_timeout=2
+                )
                 await self.runner.setup()
                 await web.TCPSite(self.runner, self.settings.host, self.settings.port).start()
                 self.receiver_ready = True
@@ -169,16 +202,22 @@ class AppleHomePlugin:
     async def refresh(self, ident):
         self.changed[ident].clear()
         if not self.bridge or not self.bridge.paired:
+            self.refresh_state[ident] = "unavailable"
+            self.observe(ident)
             return
         if time.monotonic() - self.last_pulse.get(ident, 0) < 5:
             return
         self.last_pulse[ident] = time.monotonic()
         if not self.bridge.pulse(ident):
+            self.refresh_state[ident] = "unavailable"
+            self.observe(ident)
             return
+        self.refresh_state[ident] = "waiting"
+        self.observe(ident)
         try:
             await asyncio.wait_for(self.changed[ident].wait(), self.settings.refresh_timeout)
         except TimeoutError:
-            pass
+            self.refresh_state[ident] = "timeout"
         finally:
             self.observe(ident)
 
