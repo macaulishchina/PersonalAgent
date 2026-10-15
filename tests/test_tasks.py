@@ -245,7 +245,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         non_archived, all_ids = set(), set()
         states = ("enabled", "paused", "terminated", "archived")
         for number in range(47):
-            task = await self.create(title=f"plan {number}", trigger={"kind": "interval", "seconds": 3600})
+            task = await self.create(title=f"plan [{number}]", trigger={"kind": "interval", "seconds": 3600})
             state = states[number % len(states)]
             self.plugin.repo.update_definition(task["id"], state=state)
             all_ids.add(task["id"])

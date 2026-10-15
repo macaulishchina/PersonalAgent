@@ -58,7 +58,11 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     await task
                 status = Path(f"/proc/{pid}/stat")
-                self.assertTrue(not status.exists() or status.read_text().rsplit(")", 1)[1].split()[0] == "Z")
+                try:
+                    state = status.read_text().rsplit(")", 1)[1].split()[0]
+                except FileNotFoundError:
+                    state = None
+                self.assertIn(state, (None, "Z", "X"))
                 self.assertIsNone(unrelated.returncode)
             finally:
                 if not task.done():

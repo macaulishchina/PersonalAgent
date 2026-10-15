@@ -121,13 +121,23 @@ def process_tree(parent):
     return owned
 
 
-def signal_descendants(owned, action):
+def live_descendants(owned):
+    result = {}
     for pid, start in owned.items():
         try:
             current = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-            if current[19] == start:
-                os.kill(pid, action)
+            if current[19] == start and current[0] not in {"Z", "X"}:
+                result[pid] = start
         except (OSError, IndexError):
+            pass
+    return result
+
+
+def signal_descendants(owned, action):
+    for pid in live_descendants(owned):
+        try:
+            os.kill(pid, action)
+        except ProcessLookupError:
             pass
 
 
@@ -150,6 +160,11 @@ async def terminate(process):
             pass
         signal_descendants(descendants, signal.SIGKILL)
     await process.wait()
+    deadline = time.monotonic() + 2
+    while live_descendants(descendants):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned child processes did not exit after SIGKILL")
+        await asyncio.sleep(0.01)
 
 
 async def execute(label, args, root, timeout, env=None):
