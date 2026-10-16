@@ -1,16 +1,16 @@
 ---
 name: hisense-tv-guide
-description: 维护并运用用户本人海信85E8N-Ultra电视的持续迭代经验库；适用于海信小聚、Mobile MCP电视控制、HDMI画面中的电视设置、待机唤醒与相关故障。用于这台家用电视，不泛用于其他电视、安卓手机或HomePod等设备。
+description: Use and maintain experience with the user's Hisense 85E8N-Ultra (海信小聚/海信电视), including Mobile MCP control, TV settings over HDMI, standby and wake issues. Specific to this TV, not other TVs, Android phones or HomePod.
 ---
 
-# 海信使用指南
+# Hisense TV guide
 
-先按问题读取[本机经验与证据](references/local-experience.md)的相关段落，区分实测、用户确认和待验证；历史观察不能代替当前状态，也不构成本次设备操作授权。只查阅时无需连接电视。
+Read the relevant sections of [local experience and evidence](references/local-experience.md). Distinguish tested, user-reported and unverified findings. History neither establishes current state nor authorizes device actions; consultation alone needs no TV connection.
 
-实际控制时，发现当前可用的 Mobile MCP 工具，先用 `mobile_list_available_devices` 确认本人本地电视，后续操作携带实际设备 ID；不要将旧 IP 当作一直在线，也不要借付费云设备替代。启动应用前用 `mobile_list_apps` 核对包名；UI 优先 `list_elements`、当前 ref 或 DPAD，避免旧坐标盲点。根据用户意图选片，先核实播放器状态再暂停或继续。
+For authorized control, discover current Mobile MCP tools and identify the user's local TV with `mobile_list_available_devices`; pass its actual device ID. Do not assume an old IP is online or substitute paid cloud devices. Check packages with `mobile_list_apps` before launch. Prefer `list_elements`, current refs or DPAD over stale coordinates. Follow the current viewing request and verify player state before toggling pause/resume.
 
-涉及电源时先读取可用的电源/显示状态，在线不等于亮屏；`POWER` 是切换键。仅在明确请求下待机或唤醒，不自动反复按键。只有工具 ACK 时只说指令已发送；亮屏成功需实际证据。断开的 ADB 不能承担开机控制；本机 WOL 已有一次失败记录，不无条件重复相同尝试。
+For power actions, read available power/display state first: online does not mean screen on, and `POWER` toggles state. Standby/wake requires an explicit request; do not repeat keys automatically. An ACK establishes only that a command was sent; screen-on success needs evidence. Disconnected ADB cannot send a wake command. One local WOL attempt failed; do not repeat it unconditionally.
 
-用户提供的内置语音路径是“海信小聚，请开机”，尚未实测。未来仅在用户明确要求时，使用当时允许的播报工具及明确目标尝试并验证结果；不用 shell 音频或更改固定主语音通道实现。其他 AI 功能按具体需求逐项确认，不推定支持任意指令。
+The built-in voice path, “海信小聚，请开机”, was confirmed by the user to have activated the TV when the assistant spoke the phrase on 2026-10-16. This was an incidental activation, not an independently observed standby-to-screen-on test. Merely quoting the phrase aloud can activate the TV; avoid repeating it during explanations. Deliberate attempts require an explicit request, an allowed speech tool and explicit target. Do not use shell audio or change the fixed main voice route. Verify other AI functions individually rather than assuming arbitrary commands work.
 
-这是持续维护的经验库。用户已授权根据这台电视的实际使用、测试结果和用户纠正，及时增加、修正、合并或删除经验，无须每次询问是否记入。修改前先读现有相关条目，按参考中的[维护方式](references/local-experience.md#维护方式)更新当前有效结论；新证据及设备、软件或配置变化可推翻旧结论。维护知识不授权主动测试，也不建立后台观察或定时更新；用户“太晚了先不测试”的限制本轮继续有效，不连接或操作电视、不播报或发通知。
+This is an evolving notebook. The user authorizes adding, correcting, merging and deleting experience from actual use and corrections without asking each time. Read existing entries and follow [maintenance](references/local-experience.md#maintenance); new evidence or device/software/configuration changes may replace old conclusions. Knowledge maintenance does not authorize tests, background monitoring or scheduled updates. The user's “太晚了先不测试” restriction applies to the current maintenance task: no TV connection/control, speech or notifications.

@@ -119,6 +119,7 @@ class ReadingTest(unittest.TestCase):
             {"refresh_timeout": 11},
             {"refresh_timeout": 0},
             {"refresh_timeout": True},
+            {"log_invalid_values": "yes"},
             {"port": 8047, "hap_port": 8047},
             {"unexpected": 1},
         ):
@@ -304,16 +305,69 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
         messages = [record.getMessage() for record in logs.records]
         self.assertEqual(
-            messages,
-            [
-                "Rejected sensor report: Sensor payload requires device_id",
-                "127.0.0.1 400",
-                "127.0.0.1 401",
-                "Rejected sensor report: Sensor timestamp must be ISO 8601 time with timezone",
-                "127.0.0.1 400",
-            ],
+            [m for m in messages if m.startswith("127.0.0.1")],
+            ["127.0.0.1 400", "127.0.0.1 401", "127.0.0.1 400"],
         )
+        warnings = [m for m in messages if m.startswith("Rejected sensor report")]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("field=device_id: Sensor payload requires device_id", warnings[0])
+        self.assertIn("field=observed_at: Sensor timestamp must be ISO 8601 time with timezone", warnings[1])
+        for secret in ("private-query", "private-body", "private-header"):
+            self.assertNotIn(secret, "\n".join(messages))
         self.assertNotIn(self.plugin.token, "\n".join(messages))
+
+    async def test_invalid_value_diagnostics_identify_field_type_and_bounded_original(self):
+        self.plugin.settings = AppleHomeSettings.parse({**self.config.apple_home, "log_invalid_values": True})
+        cases = (
+            ("temperature", "24 °C\n25 °C"),
+            ("humidity", ["46 %", "47 %"]),
+            ("temperature", "x" * 2000 + "unlogged-tail"),
+            ("temperature", 10**400),
+        )
+        for field, raw in cases:
+            with self.subTest(field=field, raw_type=type(raw).__name__):
+                with self.assertLogs(
+                    "assistant_runtime.plugins.apple_home.plugin.http", level="WARNING"
+                ) as logs:
+                    status, body = await self.post(self.sample() | {field: raw})
+                response = json.loads(body)
+                self.assertEqual(status, 400)
+                self.assertEqual(response["field"], field)
+                self.assertTrue(all(response["report_id"] in r.getMessage() for r in logs.records))
+                details = json.loads(logs.records[1].getMessage().split(": ", 1)[1])
+                self.assertEqual(details["device_id"], "environment")
+                self.assertEqual(details["fields"][field]["type"], type(raw).__name__)
+                self.assertEqual(set(details["fields"]), {"observed_at", "temperature", "humidity"})
+                self.assertLessEqual(len(details["fields"][field]["preview"]), 256)
+                self.assertFalse(any("\n" in r.getMessage() for r in logs.records))
+                if isinstance(raw, str) and len(raw) > 256:
+                    self.assertTrue(details["fields"][field]["truncated"])
+                    self.assertNotIn("unlogged-tail", logs.records[1].getMessage())
+        self.assertIsNone(self.store.get("sensors.apple_home.environment"))
+
+    async def test_value_diagnostics_exclude_unauthorized_unknown_and_unrelated_data(self):
+        self.plugin.settings = AppleHomeSettings.parse({**self.config.apple_home, "log_invalid_values": True})
+        with self.assertLogs("assistant_runtime.plugins.apple_home.plugin.http", level="INFO") as logs:
+            self.assertEqual(
+                (await self.post(self.sample() | {"temperature": "unauthorized-value"}, {}))[0], 401
+            )
+            self.assertEqual(
+                (await self.post(self.sample() | {"device_id": "unknown", "temperature": "unknown-value"}))[
+                    0
+                ],
+                400,
+            )
+            self.assertEqual(
+                (await self.post(self.sample() | {"humidity": self.plugin.token, "secret": "private-body"}))[
+                    0
+                ],
+                400,
+            )
+        messages = "\n".join(r.getMessage() for r in logs.records)
+        for secret in ("unauthorized-value", "unknown-value", "private-body", self.plugin.token):
+            self.assertNotIn(secret, messages)
+        self.assertIn("[redacted]", messages)
+        self.assertEqual(messages.count("Sensor report values id="), 1)
 
     async def test_metric_validity_mcp_readback_and_restart_never_rejuvenates(self):
         sample = self.sample() | {"humidity": {"status": "calibrating"}}

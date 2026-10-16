@@ -11,12 +11,15 @@ class AppleHomeSettings:
     hap_port: int = 51827
     poll_seconds: int = 60
     refresh_timeout: int = 10
+    log_invalid_values: bool = False
 
     @classmethod
     def parse(cls, data):
         if not isinstance(data, dict) or set(data) - cls.__dataclass_fields__.keys():
             raise ValueError("Invalid Apple Home bridge settings")
         s = cls(**data)
+        if type(s.log_invalid_values) is not bool:
+            raise ValueError("Apple Home log_invalid_values must be boolean")
         address = ipaddress.ip_address(s.host)
         if address.is_unspecified or address.is_multicast:
             raise ValueError("Apple Home bridge requires an explicit interface IP")

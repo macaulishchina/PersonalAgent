@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import asdict
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -12,7 +13,7 @@ from aiohttp import web
 
 from ...kernel.contracts import DeviceObservation, SensorReading
 from ...kernel.runtime import Manifest
-from .payload import UNITS, PayloadError, parse_payload
+from .payload import UNITS, PayloadError, diagnostic_fields, parse_payload
 from .settings import AppleHomeSettings, endpoint_settings
 
 http_log = logging.getLogger(__name__ + ".http")
@@ -145,9 +146,12 @@ class AppleHomePlugin:
         expected = "Bearer " + self.token
         if not hmac.compare_digest(request.headers.get("Authorization", "").encode(), expected.encode()):
             raise web.HTTPUnauthorized(text="Sensor source authorization required")
+        report_id = secrets.token_hex(6)
+        data = None
+        endpoints = {i: fields[0] for i, fields in self.endpoints.items()}
         try:
             data = await request.json()
-            ident, readings = parse_payload(data, {i: fields[0] for i, fields in self.endpoints.items()})
+            ident, readings = parse_payload(data, endpoints)
             # Reject reordered/replayed samples without renewing their freshness.
             timestamp = next(iter(readings.values())).observed_at
             old = max((r.observed_at or 0 for r in self.readings[ident].values()), default=0)
@@ -162,10 +166,23 @@ class AppleHomePlugin:
             self.changed[ident].set()
             self.context.publish("sensor.updated", device_id=ident, metrics=list(readings))
             return web.json_response({"accepted": True})
-        except (TypeError, ValueError, KeyError) as exc:
+        except (TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
             reason = str(exc) if isinstance(exc, PayloadError) else "Malformed sensor payload"
-            http_log.warning("Rejected sensor report: %s", reason)
-            return web.json_response({"error": reason}, status=400)
+            field = exc.field if isinstance(exc, PayloadError) else "body"
+            http_log.warning(
+                "Rejected sensor report id=%s source=%s field=%s: %s",
+                report_id,
+                request.remote,
+                field,
+                reason,
+            )
+            if self.settings.log_invalid_values:
+                details = diagnostic_fields(data, endpoints, self.token)
+                if details:
+                    http_log.warning(
+                        "Sensor report values id=%s: %s", report_id, json.dumps(details, ensure_ascii=True)
+                    )
+            return web.json_response({"error": reason, "field": field, "report_id": report_id}, status=400)
 
     async def serve(self):
         from .bridge import RefreshBridge
@@ -176,7 +193,7 @@ class AppleHomePlugin:
                 app = web.Application(client_max_size=8192)
                 app.router.add_post("/readings", self.receive)
                 # Diagnose failed Apple-side setup without logging URLs, tokens
-                # or sensor payloads. In particular, never use the default %r.
+                # or complete sensor payloads. Invalid-value previews are opt-in.
                 self.runner = web.AppRunner(
                     app, access_log=http_log, access_log_format="%a %s", shutdown_timeout=2
                 )

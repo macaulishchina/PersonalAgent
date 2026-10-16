@@ -54,7 +54,25 @@ No shortcut file is supplied: a Home automation must refer to the user's actual 
 
 ### Diagnose readback and automatic refresh
 
-The receiver logs HTTP source/status and fixed validation reasons, without request URLs, headers or measurement payloads. A `400` means authentication passed but the JSON/sample failed validation; the returned `error` gives the same reason. A successful manual test establishes readback, not unattended acquisition. Save both the shortcut editor and the outer automation page, then verify new source timestamps without tapping Test.
+The receiver logs HTTP source/status, a report ID, failing field and fixed validation
+reason, without request URLs, headers or complete payloads. A `400` means authentication
+passed but the JSON/sample failed validation; the returned `error`, `field` and
+`report_id` identify the rejection. This distinguishes a rejected report from a later
+refresh timeout; neither implies an Apple-side action caused the malformed value.
+
+For an authorized diagnosis, set `apple_home.log_invalid_values=true` in the instance
+configuration and restart the service. Only rejected, authenticated reports for a
+configured device get value diagnostics: source `observed_at` and configured metrics,
+with original JSON-decoded type, presence, collection/string length and a maximum
+256-character escaped preview per field. The ingest token is redacted even if it
+appears as a sensor value; unrelated body keys are excluded. These private journal
+entries help distinguish strings, arrays and structured values without changing
+validation or accepting partial readings. The option defaults to false; disable it
+after diagnosis to stop storing value previews. Successful reports are not dumped.
+
+A successful manual test establishes readback, not unattended acquisition. Save both
+the shortcut editor and the outer automation page, then verify new source timestamps
+without tapping Test.
 
 `inspect_device` includes `data.refresh_trigger.subscriber_count`. Zero means no controller currently subscribes to that trigger's changes; pairing alone is insufficient. A positive count and the `HomeKit refresh requested` log establish a subscribed trigger, not successful automation execution. When no POST follows, inspect the automation's enabled condition and the active hub under Apple Home settings. HomePod or Apple TV may be the active hub. Apple's [hub troubleshooting](https://support.apple.com/en-us/102557) includes restarting that hub; receiver success must still be verified afterward.
 

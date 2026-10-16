@@ -1,50 +1,48 @@
-# 本机经验与证据
+# Local experience and evidence
 
-整理日期：2026-10-15（UTC）。下列状态均为历史记录，不表示当前在线或亮屏。IP、MAC 为本项目本地实例数据；完整有线 MAC 留在下述本地证据，不复制到可共享技能中。
+Compiled: 2026-10-15 (UTC). All states below are historical, not current connectivity or display status. IP/MAC information belongs to this local instance; the full wired MAC stays in the local evidence below, not this shareable skill.
 
-## 维护方式
+## Maintenance
 
-用户已授权在实际使用、测试结果和用户纠正中及时维护本库，无须逐次询问是否记入。先读相关现有条目，再增加、修正、合并或删除，保留当前最有用的结论、适用条件、日期和来源；新证据或设备、软件、配置变化可替换旧结论，不拘泥于旧失败，也不只追加历史。
+The user authorizes maintaining this notebook from actual use, test results and corrections without asking each time. Read relevant entries before adding, correcting, merging or deleting. Keep useful current conclusions, conditions, dates and sources; new evidence or device/software/configuration changes can replace old conclusions, including failures.
 
-区分用户提供、实测和待验证；新结果出现时据证据升级或修正状态，不将结论写得比证据更肯定。不把检查范围内未发现某项设置写成硬件永远不支持。
+Distinguish **tested**, **user-reported** and **unverified**. Upgrade or correct status only with evidence. Failure to find a setting within an inspected scope does not prove permanent hardware limitations. Remove obsolete, wrong, duplicate or user-retracted guidance; retain brief historical qualifications only when useful for decisions, rather than accumulating a changelog. Do not delete unrelated raw test artifacts or user files. Maintenance does not authorize tests or background/scheduled observation; device actions still require current authorization and the no-testing restriction below.
 
-过时、错误、重复或用户要求删除的经验可从有效指南移除；只有仍影响决策时才保留简短限定，不积累废弃条目或另建庞大变更日志。维护指南不删除无关原始测试产物或用户文件。知识维护不构成主动测试授权，不建立后台观察或定时更新；设备操作仍需当次授权并遵守下述“不测试”限制。
+## Identity and tools
 
-## 身份与工具
+- **Tested, 2026-10-15:** Hisense **85E8N-Ultra**, Android 11. `VIDAA_TV` is a generic model identifier, not the retail model. Mobile MCP then had authorized wired target `110.0.0.2:5555`; the TV's eth0 was `110.0.0.2/24`. **User-confirmed:** wired IP `110.0.0.2`. Enumerate local devices again before connecting.
+- **Tested, 2026-10-15, evidence A:** `@mobilenext/mobile-mcp` **1.0.11**, successful initialize and tools/list, 33 tools. **Environment reported in the handoff:** Mobile MCP was natively loaded; the earlier installation report's “未热加载” described that earlier session. Discover actual tools rather than copying schemas or assuming reinstall/restart is necessary. Tool count does not establish TV support for every action.
+- **Tested, evidence B/C:** the wired MAC came from the TV's eth0 and matched across checks, not a guessed neighbor-cache entry. Read B's `device-network-evidence.txt` for the full value. Historical broadcast `110.0.0.255` does not guarantee future routing.
 
-- **实测，2026-10-15**：海信 **85E8N-Ultra**，Android 11；通用型号 `VIDAA_TV` 不是销售型号。Mobile MCP 当时已授权有线目标 `110.0.0.2:5555`，本机 eth0 为 `110.0.0.2/24`。**用户确认**有线 IP 为 `110.0.0.2`。连接前仍先枚举本地设备。
-- **实测，2026-10-15，证据 A**：`@mobilenext/mobile-mcp` 版本 **1.0.11**，initialize 和 tools/list 成功，33 个工具。**本次任务提供的环境事实**：Mobile MCP 已原生加载；早期安装报告中的“未热加载”是当次会话状态。未来应发现实际工具，不复制整套 schema 或重装、重启来假定可用。33 个工具不等于所有操作都已适配电视。
-- **实测，证据 B/C**：有线 MAC 来自电视自身 eth0，前后核对一致；完整值查 B 的 `device-network-evidence.txt`，不是从邻居缓存猜测。历史广播为 `110.0.0.255`，不作为未来网络路径恒定的保证。
+## HDMI settings, apps and playback
 
-## HDMI设置、应用与播放
+Prior tested experience supplied in the user's handoff, compiled 2026-10-15. No separate playback acceptance file was supplied; this was not retested during compilation.
 
-以下为用户本次交接的既有实测经验，整理于2026-10-15；未提供独立播放验收文件，不扩写为本次复测。
+- From HDMI video, launching `com.android.tv.settings` exposed “图像设置” without returning home or changing input. Evidence B also records opening system menus from the signal screen. This controls the TV's Android system, not the external HDMI box. HDMI-CEC device coordination differs from Ethernet WOL.
+- Tested apps: 影视仓 `com.huawei.himovceif`, system settings `com.android.tv.settings`, 当贝桌面 `com.dangbei1.tvlauncher`. Check current installation with `mobile_list_apps` before direct launch; use current elements/refs or DPAD, not old coordinates.
+- Previously resumed 《现在就出发第四季》 from 影视仓 history. This is a past action, not a permanent preference; follow the current viewing request.
+- In that player, `DPAD_CENTER` toggled pause/resume and `VOLUME_DOWN` lowered volume one step. Verify the current player/state first; do not generalize to other apps.
 
-- HDMI画面可直接 launch `com.android.tv.settings` 并读到“图像设置”，无需回桌面或切换输入。证据 B 另记录从信号画面直接进入系统菜单。操作的是电视本机 Android，不等于控制 HDMI 外接盒子。HDMI-CEC 是外接设备联动，与以太网 WOL 不同。
-- 已实测应用：影视仓 `com.huawei.himovceif`、系统设置 `com.android.tv.settings`、当贝桌面 `com.dangbei1.tvlauncher`。先用 `mobile_list_apps` 核对当前安装，再直接 launch；界面优先读元素并使用当前 ref/DPAD，不复用旧坐标。
-- 曾从影视仓历史继续《现在就出发第四季》。这只是一次历史，不是用户永久偏好；选片服从当次意图。
-- 该播放器实测 `DPAD_CENTER` 可暂停/继续，`VOLUME_DOWN` 可降低一档。先确认当前播放器与状态，避免切换到相反状态；不自动推广到其他 app。
+## AI voice path: user-confirmed activation
 
-## 用户提供的AI语音路径：待验证
+**User-reported, 2026-10-15:** built-in AI wake word “**海信小聚**”; the user says “**海信小聚，请开机**” can turn the TV on. **User-confirmed, 2026-10-16:** while the assistant explained and spoke this phrase, the user observed that the TV had already heard it and awakened. Accept this feedback instead of repeatedly claiming no activation occurred. This establishes user-observed voice activation, not an independently instrumented standby-to-screen-on test or support for all commands. Merely reading the phrase aloud can trigger the TV, so do not repeat it unnecessarily in spoken explanations.
 
-**用户提供，2026-10-15；尚未实测**：电视内置 AI 唤醒词为“**海信小聚**”；用户表示“**海信小聚，请开机**”可以触发开启，另有其他功能，但尚未列出或验证。这是下一条可尝试路径，不是助手成功唤醒的证据，也不能从一个开机口令推出所有指令均支持。
+The user originally said “太晚了先不测试”; this restricted that maintenance task, not all future requests. Deliberate attempts require a current explicit request and an allowed speech tool and target. Successful audio output alone does not prove the TV woke; distinguish the user's observed confirmation from tool evidence. Do not bypass tools through shell playback or changes to fixed main voice bindings.
 
-本次用户说“太晚了先不测试”，因此整理技能期间不做任何设备测试或发声。该时间限制不是对未来的永久禁令；之后仅在用户明确要求时，确认允许的播报工具与目标，发出所需口令并如实验证。工具发声成功不等于电视已开机；不借 shell 播放或更改固定主语音绑定来绕过工具能力。
+## Standby, menu inspection and failed WOL
 
-## 待机、菜单检查与WOL失败
+**Tested, 2026-10-15, evidence B/C:**
 
-**实测，2026-10-15，证据 B/C**：
+- `POWER` is a toggle, not idempotent power-on. The standby test verified Awake / Display ON, sent POWER once, then verified Asleep / Display OFF. ADB briefly remained available before disconnecting. Online does not establish screen-on; disconnected ADB cannot send a wake key. Only standby/wake on explicit request; no automatic repeated POWER presses.
+- Within inspected network, 通用→开关机, AI and casting menus, no network wake/standby, quick boot or phone power-on option was found. Far-field voice was enabled in AI settings; this does not prove standby voice wake works. Help for “遥控器待机：直接待机” only explains whether pressing standby opens a standby-choice screen; it is not a WOL switch. These are scoped inspection findings, not permanent hardware limits.
+- **One failed short-standby WOL attempt:** after verifying Awake, sent POWER once and verified Asleep / Display OFF. Sent one **102-byte UDP magic packet** using the verified wired MAC and then-correct broadcast route: host `110.0.0.82`, interface `enp1s0`, destination `110.0.0.255:9`. After about **31.713 seconds (about 32 seconds)**, endpoint networking and ADB had not recovered, Mobile MCP did not list the target, and screen-on was not established.
+- sendto returning 102 bytes proves local submission only. Do not repeat identical WOL unconditionally or infer deep/long standby or cold-boot behavior from this single short test. Recovery in that recorded state required the remote, or future verification of the voice path; this is not a live state assessment.
 
-- `POWER` 是切换键，不是幂等开机。待机测试曾先确认 Awake / Display ON；一次 POWER 后核实 Asleep / Display OFF。待机后短时 ADB 仍可用，随后连接消失；所以在线不能证明屏幕亮，断开的 ADB 也不能用来发开机键。只有明确操作请求才待机/唤醒，不自动反复 POWER。
-- 在网络、通用→开关机、AI和投屏菜单的检查范围内，未找到网络唤醒、网络待机、快速开机或手机开机选项。AI设置当时显示远场语音开启，不能据此证明待机语音开机有效。“遥控器待机：直接待机”的帮助仅说明按待机键时是否弹出待机选择界面，不是 WOL 开关。上述结论是检查范围内未发现，不是硬件永久不支持。
-- **一次短时待机 WOL 测试失败**：确认 Awake 后只发送一次 POWER，核实 Asleep / 显示 OFF；用已核实有线 MAC、当时正确的广播路径发送一次 **102字节 UDP magic packet**。发送绑定主机 `110.0.0.82`，经 `enp1s0` 到 `110.0.0.255:9`。之后约 **31.713秒（约32秒）**观察终点网络和 ADB 未恢复，Mobile MCP 未列出目标，未证明屏幕亮起。
-- sendto 返回102字节仅是本地提交成功，不能说唤醒成功。不无条件重复相同 WOL；不能从此次短时测试推断深待机、长时间待机或断电开机能力。此记录下恢复需遥控器，或未来另行验证内置语音路径；这不是对当前状态的实时判断。
+## Local evidence index
 
-## 本地证据索引
+Existing files dated 2026-10-15 (UTC); read only relevant content, without accessing devices:
 
-均为2026-10-15（UTC）的既有文件，只需读取相关内容，无需访问设备：
-
-- **A 安装验收**：[mobile-mcp-install-report.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/dcbcee82e88e443f9ca76ae3c6ab84df/e2c84fdf2ac84e3ea4f90c488365f14b/artifacts/mobile-mcp-install-report.md)，验证时间17:42:50 UTC。
-- **B 型号、菜单与有线身份**：[wake-check.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/102cbfc6e7f6475683d2a78e11c0f36e/31234fc833fe489ebc0364118e368e2c/artifacts/wake-check.md)；[device-network-evidence.txt](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/102cbfc6e7f6475683d2a78e11c0f36e/31234fc833fe489ebc0364118e368e2c/artifacts/device-network-evidence.txt)含完整有线 MAC，仅本地按需读取。
-- **C 待机WOL实测**：[wake-test.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/1ab09a327ffb4727990bedbdbc0ab879/b8a5d36ea83344beb449125a6b01dacf/artifacts/wake-test.md)，测试18:05–18:06 UTC（北京时间10月16日02:05–02:06）。
-- **用户陈述/交接来源**：本次2026-10-15任务消息；包括有线 IP 确认、内置 AI 唤醒词与口令、已加载环境及应用播放实测摘要。未将陈述升级为本次实时验证。
+- **A — installation acceptance:** [mobile-mcp-install-report.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/dcbcee82e88e443f9ca76ae3c6ab84df/e2c84fdf2ac84e3ea4f90c488365f14b/artifacts/mobile-mcp-install-report.md), verified at 17:42:50 UTC.
+- **B — model, menus and wired identity:** [wake-check.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/102cbfc6e7f6475683d2a78e11c0f36e/31234fc833fe489ebc0364118e368e2c/artifacts/wake-check.md); [device-network-evidence.txt](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/102cbfc6e7f6475683d2a78e11c0f36e/31234fc833fe489ebc0364118e368e2c/artifacts/device-network-evidence.txt) contains the full wired MAC; read locally only as needed.
+- **C — standby WOL test:** [wake-test.md](/home/macaulish/workspace/dell-voice-assistant/state/work/tasks/1ab09a327ffb4727990bedbdbc0ab879/b8a5d36ea83344beb449125a6b01dacf/artifacts/wake-test.md), tested at 18:05–18:06 UTC (Beijing time October 16, 02:05–02:06).
+- **User statements/handoff:** task messages dated 2026-10-15, covering wired IP confirmation, AI wake word/command, loaded environment and app/playback test summaries. These statements were not upgraded to live verification.

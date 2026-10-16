@@ -1,6 +1,7 @@
 """Normalize Apple Home measurement values at the adapter boundary."""
 
 from datetime import datetime
+import json
 import math
 import re
 import time
@@ -12,7 +13,11 @@ VALUE = re.compile(r"^([+-]?\d+(?:[.,]\d+)?)\s*(°?[CF]|℃|℉|%|摄氏度|华�
 
 
 class PayloadError(ValueError):
-    """A fixed diagnostic message safe to return and log without input values."""
+    """Fixed validation reason and field, without embedding untrusted input."""
+
+    def __init__(self, message, field=None):
+        super().__init__(message)
+        self.field = field
 
 
 def parse_time(value):
@@ -77,12 +82,51 @@ def normalize(metric, raw, observed_at):
 
 def parse_payload(data, expected):
     if not isinstance(data, dict) or not isinstance(data.get("device_id"), str):
-        raise PayloadError("Sensor payload requires device_id")
+        raise PayloadError("Sensor payload requires device_id", "device_id")
     ident = data["device_id"]
     if ident not in expected:
-        raise PayloadError("Unknown sensor endpoint")
+        raise PayloadError("Unknown sensor endpoint", "device_id")
     metrics = expected[ident]
     if set(data) != {"device_id", "observed_at", *metrics}:
-        raise PayloadError("Payload must contain only configured metrics, device_id and observed_at")
-    observed = parse_time(data["observed_at"])
-    return ident, {metric: normalize(metric, data[metric], observed) for metric in metrics}
+        raise PayloadError(
+            "Payload must contain only configured metrics, device_id and observed_at", "fields"
+        )
+    try:
+        observed = parse_time(data["observed_at"])
+    except (ValueError, TypeError, OverflowError) as exc:
+        reason = str(exc) if isinstance(exc, PayloadError) else "Invalid sensor timestamp"
+        raise PayloadError(reason, "observed_at") from None
+    readings = {}
+    for metric in metrics:
+        try:
+            readings[metric] = normalize(metric, data[metric], observed)
+        except (ValueError, TypeError, OverflowError) as exc:
+            reason = str(exc) if isinstance(exc, PayloadError) else "Invalid Apple Home measurement"
+            raise PayloadError(reason, metric) from None
+    return ident, readings
+
+
+def diagnostic_fields(data, expected, token):
+    """Bounded previews of known sensor fields, never the complete request body."""
+    if not isinstance(data, dict) or not isinstance(data.get("device_id"), str):
+        return {}
+    ident = data["device_id"]
+    if ident not in expected:
+        return {}
+    fields = {}
+    for key in ("observed_at", *expected[ident]):
+        raw = data.get(key)
+        try:
+            preview = json.dumps(raw, ensure_ascii=True)
+        except (ValueError, TypeError, RecursionError):
+            preview = "<unrepresentable>"
+        if token:
+            preview = preview.replace(token, "[redacted]")
+        fields[key] = {
+            "type": type(raw).__name__,
+            "present": key in data,
+            "length": len(raw) if isinstance(raw, (str, list, dict)) else None,
+            "preview": preview[:256],
+            "truncated": len(preview) > 256,
+        }
+    return {"device_id": ident, "fields": fields}

@@ -1,14 +1,14 @@
 ---
 name: camera-device-guide
-description: 查阅、运用并持续维护本项目家中摄像头的截图、录像、云台和设备工具实测经验；不用于相册照片学习、电视屏幕截图或一般图片生成。
+description: Use and maintain local home camera (摄像头/云台) experience with snapshots, recording, pan/tilt and device tools. Not for photo-library learning, TV screenshots or general image generation.
 ---
 
-# 相机设备使用指南
+# Camera device guide
 
-这是可迭代的经验小本本。处理家中摄像头问题时，按需读取[本机经验与证据](references/local-experience.md)相关段落；历史映射、画质与成功记录不能代替当前发现和真实图片。只查经验无需连接设备。
+This is an evolving notebook. For home camera requests, read relevant sections of [local experience and evidence](references/local-experience.md). Historical mappings, image quality and successes do not establish current discovery or replace actual images. Consultation alone needs no device connection.
 
-设备操作依当次用户请求进行，先发现当前端点及实际工具能力。截图所有摄像头指每个已发现的 snapshot 端点各抓一张，不是每个 physical_id 只抓一张；不附带转向或录像。相机操作不改变固定主语音绑定。
+Act on the current user request after discovering current endpoints and implemented tools. “Snapshot all cameras” means one image per discovered snapshot endpoint, not one per physical_id; it does not include movement or recording. Camera actions must not change fixed main voice bindings.
 
-用户已授权在实际使用或纠正后维护本库，无须逐次询问是否记录。先读现有条目，再增加、修正、合并或删除；区分实测、用户说明和推测，未知保持未知。保留有用的当前条件、结果、日期与来源，新证据或设备/软件变化可推翻旧结论；清理错误、重复、过时及用户要求移除的经验，只保留仍有决策价值的历史限定，不无限追加日志。
+The user authorizes maintaining experience after actual use or corrections without asking each time. Read existing entries before adding, correcting, merging or deleting. Distinguish tested, user-reported and unverified/inferred findings; keep unknowns unknown. Retain useful conditions, results, dates and sources. New evidence or device/software changes may replace prior conclusions; remove wrong, duplicate, obsolete or user-retracted content, keeping history only when it still informs decisions.
 
-维护经验不授权主动测试、后台监看或定时观察。某次失败只约束其适用条件，不扩写成普遍禁令。
+Knowledge maintenance does not authorize device tests, background monitoring or scheduled observation. A failure applies to its observed conditions, not a universal prohibition.

@@ -20,6 +20,8 @@ minimum_volume = 80
 # Optional Apple Home sensor source: install apple-home extra, add apple_home to plugins.
 # Use an explicit reachable LAN IP; pair the virtual bridge and configure Home automation.
 # apple_home = {host = "192.168.1.10", port = 8047, hap_port = 51827, poll_seconds = 60, refresh_timeout = 6}
+# For authorized format diagnosis only: add log_invalid_values = true to apple_home.
+# Logs bounded previews of rejected known sensor fields; disable after diagnosis.
 memory_enabled = true
 memory_auto_capture = true
 # root = "/absolute/path/to/instance"
