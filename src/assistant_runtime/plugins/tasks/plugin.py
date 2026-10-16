@@ -15,6 +15,8 @@ from ...kernel.contracts import TaskRequest, DeviceQuery, NotificationRequest
 from .settings import TaskSettings
 from .repository import TaskRepository, ACTIVE, TERMINAL, one_shot
 from .schedules import next_time, trigger
+from .event_inbox import EventInbox, subscription, validate_subscription
+from .trace import TaskTrace
 
 
 PLAN_LABELS = {
@@ -59,6 +61,8 @@ class TasksPlugin:
         self.manifest = Manifest("tasks", ("conversation", host.config.bindings["brain"], "notifications"))
         self.settings = TaskSettings.parse(host.config.tasks)
         self.repo = TaskRepository(host.store.db)
+        self.event_inbox = EventInbox(self)
+        self.trace = TaskTrace(self.repo)
         self.scheduler = None
         self.launching = set()
         self.started = False
@@ -89,6 +93,14 @@ class TasksPlugin:
         context.spawn(self.worker(), "dispatch-and-deliver")
         context.spawn(self.finalize_finished(), "finalize-executions")
         context.spawn(self.watch_events(), "event-rules")
+        event_queue = context.runtime.subscribe("task-event-inbox", 32)
+
+        async def unsubscribe():
+            context.runtime.unsubscribe("task-event-inbox")
+
+        context.own(unsubscribe)
+        context.spawn(self.event_inbox.listen(event_queue), "event-hints")
+        context.spawn(self.event_inbox.run(), "event-inbox")
 
     def schedule(self, d):
         ident = d["id"]
@@ -194,6 +206,9 @@ class TasksPlugin:
 
     def provider_update(self, ident, state, **data):
         run = self.repo.run(ident)
+        trace = data.pop("tool_trace", None)
+        if trace:
+            self.trace.append(ident, trace)
         if run["state"] in TERMINAL | {"paused"}:
             identifiers = {k: v for k, v in data.items() if k in {"thread_id", "turn_id"}}
             if identifiers:
@@ -269,6 +284,10 @@ class TasksPlugin:
         trigger(tr, self.settings.timezone, time.time())
         if tr["kind"] == "event":
             self.validate_event(tr.get("event", {}))
+        if subscription(s):
+            tr["event"] = validate_subscription(tr["event"])
+            if "notify_completion" not in value:
+                s["notify_completion"] = False
         s.setdefault("auto_archive", one_shot(s))
         if type(s["auto_archive"]) is not bool or (s["auto_archive"] and not one_shot(s)):
             raise ValueError("auto_archive requires a one-shot, non-Goal task")
@@ -329,6 +348,9 @@ class TasksPlugin:
         return s
 
     def validate_event(self, e):
+        if isinstance(e, dict) and e.get("source") == "records":
+            validate_subscription(e)
+            return
         if not isinstance(e, dict) or set(e) - {
             "source",
             "id",
@@ -366,8 +388,13 @@ class TasksPlugin:
 
     async def _request(self, request):
         a, args, caller = request.action, request.arguments, request.caller_run
-        if caller and a not in {"create", "list", "get", "models", "artifacts"}:
+        if caller and a not in {"create", "list", "get", "models", "artifacts", "event_inbox", "trace"}:
             raise ValueError("Background executions cannot manage other tasks")
+        if a in {"event_inbox", "trace"}:
+            if a == "event_inbox":
+                self.repo.definition(args["task_id"])
+                return self.event_inbox.describe(args["task_id"])
+            return self.trace.read(args)
         if a == "models":
             return {"models": await self.executor.models(), "configuration": self.settings.execution}
         if a == "list":
@@ -392,6 +419,8 @@ class TasksPlugin:
                 result[ident] = {
                     "task_id": run["task_id"],
                     "state": run["state"],
+                    "events_management": run["state"] in {"running", "waiting_user"}
+                    and "events_management" in run["data"]["spec"].get("resources", []),
                     "mcp_management": run["state"] in {"running", "waiting_user"}
                     and "mcp_management" in run["data"]["spec"].get("resources", []),
                     "duration_seconds": run["data"].get("duration_seconds")
@@ -410,6 +439,7 @@ class TasksPlugin:
                 "active_runs": active,
                 "before": before,
                 "updates": updates,
+                "event_inbox": self.event_inbox.describe(ident) if subscription(definition["spec"]) else None,
             }
         if a == "create":
             request_id = str(args["request_id"])
@@ -425,6 +455,7 @@ class TasksPlugin:
                     raise ValueError("Task request ID reused with different contents")
                 return self.repo.definition(old[0])
             spec = await self.validate_spec(args["spec"], caller)
+            event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
             now, ident = time.time(), uuid.uuid4().hex
             at = next_time(spec["trigger"], self.settings.timezone, now)
             with self.repo.db:
@@ -432,6 +463,14 @@ class TasksPlugin:
                     "INSERT OR IGNORE INTO job_definitions(id,request_id,fingerprint,state,spec,next_at,created,updated) VALUES(?,?,?,'enabled',?,?,?,?)",
                     (ident, request_id, fingerprint, json.dumps(spec, ensure_ascii=False), at, now, now),
                 )
+                if (
+                    subscription(spec)
+                    and self.repo.db.execute(
+                        "SELECT id FROM job_definitions WHERE request_id=?", (request_id,)
+                    ).fetchone()[0]
+                    == ident
+                ):
+                    self.event_inbox.reset(self.repo.definition(ident), event_cursor, "created")
             saved = self.repo.db.execute(
                 "SELECT id,fingerprint FROM job_definitions WHERE request_id=?", (request_id,)
             ).fetchone()
@@ -498,6 +537,7 @@ class TasksPlugin:
             ]:
                 combined.pop("auto_archive", None)
             spec = await self.validate_spec(combined)
+            event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
             if self.repo.definition(d["id"])["revision"] != d["revision"]:
                 raise ValueError("Task changed; read latest revision")
             # Editing a child must preserve its lineage for recursive termination.
@@ -505,7 +545,10 @@ class TasksPlugin:
                 if key in d["spec"]:
                     spec[key] = d["spec"][key]
             d = self.repo.update_definition(
-                d["id"], spec=spec, next_at=next_time(spec["trigger"], self.settings.timezone, time.time())
+                d["id"],
+                spec=spec,
+                next_at=next_time(spec["trigger"], self.settings.timezone, time.time()),
+                on_update=lambda saved: self.event_inbox.reset(saved, event_cursor),
             )
         elif a in {"pause", "resume", "archive", "terminate"}:
             state = {
@@ -514,11 +557,17 @@ class TasksPlugin:
                 "archive": "archived",
                 "terminate": "terminated",
             }[a]
-            d = self.repo.update_definition(d["id"], state=state)
+            event_cursor = await self.event_inbox.tail() if a == "resume" and subscription(d["spec"]) else 0
+            if self.repo.definition(d["id"])["revision"] != d["revision"]:
+                raise ValueError("Task changed; read latest revision")
+            changes = {"state": state}
             if a == "resume":
-                d = self.repo.update_definition(
-                    d["id"], next_at=next_time(d["spec"]["trigger"], self.settings.timezone, time.time())
-                )
+                changes["next_at"] = next_time(d["spec"]["trigger"], self.settings.timezone, time.time())
+            d = self.repo.update_definition(
+                d["id"],
+                **changes,
+                on_update=lambda saved: self.event_inbox.reset(saved, event_cursor, "subscription_" + a),
+            )
             if a in {"terminate", "archive"}:
                 for run in self.repo.active_runs(d["id"]):
                     if run["state"] in ACTIVE:
@@ -575,6 +624,9 @@ class TasksPlugin:
         try:
             if self.repo.run(ident)["state"] != "queued":
                 return
+            if not await self.event_inbox.prepare(run):
+                return
+            run = self.repo.run(ident)
             directory = self.host.workfiles.area(self.owner(run))
             if run["data"]["spec"]["execution"]["kind"] == "reminder":
                 self.repo.update_run(ident, "dispatching")
@@ -622,6 +674,7 @@ class TasksPlugin:
                 if (
                     r["state"] == "queued"
                     and r["id"] not in self.launching
+                    and r["data"].get("event_retry_at", 0) <= time.time()
                     and len(busy) < self.settings.concurrency
                     and not used.intersection(r["data"]["spec"]["resources"])
                 ):
@@ -726,6 +779,8 @@ class TasksPlugin:
                 if d["state"] != "enabled" or d["spec"]["trigger"]["kind"] != "event":
                     continue
                 e = d["spec"]["trigger"]["event"]
+                if e["source"] == "records":
+                    continue
                 row = self.repo.db.execute(
                     "SELECT data FROM job_event_cursor WHERE task_id=?", (d["id"],)
                 ).fetchone()

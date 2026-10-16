@@ -145,6 +145,7 @@ class CodexBackend:
                     self.config.socket,
                     tasks="tasks" in self.config.plugins,
                     notifications="notifications" in self.config.plugins,
+                    events="events" in self.config.plugins,
                 ),
             },
         }

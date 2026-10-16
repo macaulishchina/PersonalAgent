@@ -191,6 +191,13 @@ export function TaskPanel({
           {r.data.spec.execution.reasoning_effort || ""}
         </small>
       )}
+      {r.data.trigger_context?.kind === "durable_events" && (
+        <p className="task-hint">
+          事件触发 · 合并 {r.data.trigger_context.count} 条观察
+          {r.data.trigger_context.invalidated_before_dispatch > 0 &&
+            ` · 启动前已排除 ${r.data.trigger_context.invalidated_before_dispatch} 条失效观察`}
+        </p>
+      )}
       <p>{runSummary(r)}</p>
       {r.data.artifacts?.map((f: any) => (
         <p key={f.name}>
@@ -437,6 +444,13 @@ export function TaskPanel({
               <p>{d.spec.prompt}</p>
             </details>
             {d.next_at && <small>下次计划触发：{dateLabel(d.next_at)}</small>}
+            {data.event_inbox && (
+              <p className="task-hint">
+                待处理事件：{data.event_inbox.pending_count} 条
+                {data.event_inbox.subscription?.error &&
+                  " · 事件读取异常，正在重试"}
+              </p>
+            )}
             <p className="task-hint">
               后续运行的自动结果通知：
               {d.spec.notify_completion === false

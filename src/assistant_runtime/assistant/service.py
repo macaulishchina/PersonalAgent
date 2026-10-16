@@ -121,7 +121,17 @@ class AssistantService:
                 await self.player.stop()
                 await self.voice.close()
 
-    async def wake(self, preroll=()):
+    def _record_wake(self, kind, correlation, **data):
+        reporter = getattr(self, "wake_reporter", None)
+        if reporter:
+            reporter.offer(
+                type="wake." + kind,
+                subject="assistant",
+                event_id=correlation + ":" + kind,
+                data={"correlation": correlation, **data},
+            )
+
+    async def wake(self, preroll=(), *, source="other", keyword=None):
         if self.active or self.quiet_active():
             return
         if getattr(self, "memory", None):
@@ -131,26 +141,39 @@ class AssistantService:
         self.last_activity = self.last_wake = time.monotonic()
         self.last_error = None
         self.wake_count += 1
+        import uuid
+
+        correlation = uuid.uuid4().hex
+        self._record_wake("accepted", correlation, entrance=source, keyword=keyword)
         self.player.manual_muted = False
         await self._cue()
-        self.connect_task = self.context.spawn(self._connect(tuple(preroll)), "voice-connect")
+        self.connect_task = self.context.spawn(self._connect(tuple(preroll), correlation), "voice-connect")
         log.info("wake_detected connecting_native_voice")
+        return True
 
-    async def _connect(self, preroll):
+    async def _connect(self, preroll, correlation=None):
         async with self.transition:
             try:
                 self.voice.device_context = self.devices.context_text()
                 self.voice.memory_context = self.memory.context_text() if self.memory else ""
                 await self.voice.open(preroll)
                 if not self.active or self.quiet_active():
+                    if correlation:
+                        self._record_wake("cancelled", correlation)
                     await self.voice.close()
                     return
                 self.mode = "active"
                 self.last_error = None
+                if correlation:
+                    self._record_wake("connected", correlation)
                 log.info("native_voice_ready auth=chatgpt transport=webrtc")
             except asyncio.CancelledError:
+                if correlation:
+                    self._record_wake("cancelled", correlation)
                 raise
             except Exception as exc:
+                if correlation:
+                    self._record_wake("failed", correlation, error=type(exc).__name__)
                 self.last_error = "Native voice startup failed: " + type(exc).__name__ + ": " + str(exc)[:180]
                 log.warning("%s", self.last_error)
                 self.active = False
@@ -193,7 +216,7 @@ class AssistantService:
                 keyword = await self.recognizer.detect(wake_samples)
                 if keyword and not self.active:
                     log.info("keyword_detected phrase=%s", keyword)
-                    await self.wake(tuple(self.preroll))
+                    await self.wake(tuple(self.preroll), source="keyword", keyword=keyword)
                     self.preroll.clear()
             else:
                 self.voice.feed(pcm)
@@ -393,7 +416,7 @@ class AssistantService:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
             action = d["command"]
             if action == "wake":
-                await self.wake()
+                await self.wake(source="cli")
             elif action in {"sleep", "stop", "cancel", "volume", "progress"}:
                 await self.runtime.invoke(Control(action, d.get("value")))
             elif action == "gesture":
@@ -448,6 +471,17 @@ class AssistantService:
                 writer.close()
                 await writer.wait_closed()
                 return
+            elif action == "events":
+                from ..kernel.contracts import EventRequest
+
+                result = await self.runtime.invoke(
+                    EventRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=15
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
             elif action == "notifications":
                 from ..kernel.contracts import NotificationRequest
 
@@ -496,7 +530,7 @@ class AssistantService:
                 await writer.wait_closed()
                 return
             elif action in {"say", "text", "inject-wav"}:
-                await self.wake()
+                await self.wake(source="cli:" + action)
                 if self.connect_task:
                     await asyncio.shield(self.connect_task)
                 if self.mode != "active":

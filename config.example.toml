@@ -17,6 +17,11 @@ minimum_volume = 80
 # Set enable = false to disable silence while retaining the schedule.
 # Optional shared chat: voice profile, add "web" to plugins, build frontend first.
 # web = {enable = true, host = "127.0.0.1", port = 8046}
+# Optional recording: install events extra and add "events" to plugins.
+# For managed source collection also add "observations"; Reyee requires the reyee extra.
+# Source config: .agents/observations/sources.json; credentials: state/observations/.
+# Event records: state/events/. No global polling; each producer chooses its acquisition.
+# events = {quota_bytes = 2147483648, queue_size = 128, query_seconds = 2.0}
 # Optional Apple Home sensor source: install apple-home extra, add apple_home to plugins.
 # Use an explicit reachable LAN IP; pair the virtual bridge and configure Home automation.
 # apple_home = {host = "192.168.1.10", port = 8047, hap_port = 51827, poll_seconds = 60, refresh_timeout = 6}

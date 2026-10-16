@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Page = {
   tasks?: any[];
   task?: any;
+  event_inbox?: {
+    pending_count: number;
+    subscription: { error: string | null } | null;
+  } | null;
   runs: any[];
   active_runs?: any[];
   updates?: any[];

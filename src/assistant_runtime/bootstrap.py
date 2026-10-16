@@ -29,6 +29,26 @@ def compose(service):
 
         return IntegrationsPlugin(service, service.mcp_registry, lambda: service.backend.integrations)
 
+    def events():
+        from .plugins.events.plugin import EventsPlugin
+
+        return EventsPlugin(service)
+
+    def observations():
+        from .plugins.observations.plugin import ObservationsPlugin
+        from .plugins.reyee.events import ReyeeEvents
+        from .plugins.adb_tv.events import TelevisionEvents
+        from .assistant.wake_events import WakeEvents
+
+        return ObservationsPlugin(
+            service,
+            {
+                "wake": WakeEvents(service),
+                "reyee": ReyeeEvents(config.state_dir / "observations"),
+                "adb_tv": TelevisionEvents(),
+            },
+        )
+
     def notifications():
         from .plugins.notifications.plugin import NotificationsPlugin
 
@@ -91,6 +111,8 @@ def compose(service):
         "web": web,
         "tasks": tasks,
         "notifications": notifications,
+        "events": events,
+        "observations": observations,
         "integrations": integrations,
         "apple_home": apple_home,
         "codex": lambda: CodexPlugin(
@@ -176,9 +198,9 @@ class AssistantPlugin:
         context.register(Control, self.service.control)
 
         async def trigger(request):
-            await self.service.wake()
+            accepted = await self.service.wake(source=request.source)
             context.publish("assistant.triggered", source=request.source)
-            return {"accepted": True}
+            return {"accepted": bool(accepted)}
 
         context.register(Trigger, trigger)
         context.spawn(self.service._events(), "voice-events")

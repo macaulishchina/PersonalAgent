@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "revision": 3,
+  "sources": {
+    "wake": {
+      "adapter": "wake",
+      "config": {},
+      "enabled": true
+    },
+    "home_lan": {
+      "adapter": "reyee",
+      "config": {
+        "url": "http://110.0.0.1",
+        "credential": "reyee_admin",
+        "interval": 30
+      },
+      "enabled": true
+    },
+    "living_tv": {
+      "adapter": "adb_tv",
+      "config": {
+        "address": "110.0.0.2:5555",
+        "interval": 5
+      },
+      "enabled": true
+    }
+  }
+}

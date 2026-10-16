@@ -163,7 +163,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
                 s.player = SimpleNamespace(input_speaking=False)
                 s.voice = SimpleNamespace(feed=Mock())
 
-                async def activate(preroll):
+                async def activate(preroll, *, source, keyword):
                     s.active = True
 
                 s.wake = AsyncMock(side_effect=activate)
@@ -174,7 +174,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
 
                 s.route = SimpleNamespace(frames=frames, raw_frame=pcm)
                 await s._capture()
-                s.wake.assert_awaited_once_with((pcm,))
+                s.wake.assert_awaited_once_with((pcm,), source="keyword", keyword=phrase)
                 s.recognizer.detect.assert_awaited_once()
                 s.voice.feed.assert_called_once_with(pcm)
 

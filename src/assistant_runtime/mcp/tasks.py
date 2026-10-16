@@ -8,7 +8,7 @@ from .memory import READ, WRITE
 def create_server(client, caller_run=None):
     server = FastMCP(
         "tasks",
-        instructions="Manage durable background work without blocking the conversation. Create only user-authorized work. Get models before selecting execution.model and reasoning_effort; explain selection in execution.reason. The host may enforce fixed settings. Use stable UUID request_id for idempotent creation. Triggers: immediate; date with timezone-aware ISO at; interval with seconds; cron with expression/timezone; event with source(device/task), id, metric, operator(eq/gt/lt), value, duration_seconds, cooldown_seconds, hysteresis. Execution kind: codex or reminder (no model). long_term uses a persistent Goal. Query run_id before steering/canceling; pause_task changes future scheduling only. Child tasks inherit scope. Never claim actions completed from memory.",
+        instructions="Manage durable background work without blocking the conversation. Create only user-authorized work. Get models before selecting execution.model and reasoning_effort; explain selection in execution.reason. The host may enforce fixed settings. Use stable UUID request_id for idempotent creation. Triggers: immediate; date with timezone-aware ISO at; interval with seconds; cron with expression/timezone; event with source(device/task), id, metric, operator(eq/gt/lt), value, duration_seconds, cooldown_seconds, hysteresis; or event with source=records, types (1..16 exact names), optional source_id/subject, merge_seconds (default 3), cooldown_seconds (30), max_age_seconds (300), capacity (128). Durable records subscriptions consume only new observations; no historical replay on create/resume/update. Baselines/corrections/deletions are not triggers. Query get_task_event_inbox and get_task_execution_trace to explain trigger decisions and execution. Execution kind: codex or reminder (no model). long_term uses a persistent Goal. Query run_id before steering/canceling; pause_task changes future scheduling only. Child tasks inherit scope. Never claim actions completed from memory.",
     )
 
     async def call(action, **arguments):
@@ -30,10 +30,10 @@ def create_server(client, caller_run=None):
         workspace: str | None = None,
         resources: list[str] | None = None,
         notify_voice: bool = False,
-        notify_completion: bool = True,
+        notify_completion: bool | None = None,
         auto_archive: bool | None = None,
     ) -> dict:
-        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent."""
+        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent."""
         spec = {
             "title": title,
             "prompt": prompt,
@@ -42,8 +42,9 @@ def create_server(client, caller_run=None):
             "long_term": long_term,
             "resources": resources or [],
             "notify_voice": notify_voice,
-            "notify_completion": notify_completion,
         }
+        if notify_completion is not None:
+            spec["notify_completion"] = notify_completion
         if auto_archive is not None:
             spec["auto_archive"] = auto_archive
         if workspace:
@@ -76,6 +77,16 @@ def create_server(client, caller_run=None):
     async def get_task(task_id: str, before: str | None = None, limit: int = 20) -> dict:
         """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers."""
         return await call("get", task_id=task_id, before=before, limit=limit)
+
+    @server.tool(annotations=READ)
+    async def get_task_event_inbox(task_id: str) -> dict:
+        """Bounded pending event references, subscription cursor/health, decision counters and recent skip/assignment reasons. No raw event payload copy."""
+        return await call("event_inbox", task_id=task_id)
+
+    @server.tool(annotations=READ)
+    async def get_task_execution_trace(run_id: str, after: int = 0, limit: int = 50) -> dict:
+        """Trigger event references, run/provider identity and paginated tool metadata (max 100/page, 500/run). Tool completion is not proof of a physical outcome; inspect device operation IDs. No arguments, commands or output content is stored here."""
+        return await call("trace", run_id=run_id, after=after, limit=limit)
 
     @server.tool(annotations=WRITE)
     async def update_task(task_id: str, revision: int, changes: dict) -> dict:

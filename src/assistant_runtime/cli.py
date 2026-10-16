@@ -90,6 +90,27 @@ def main():
     devices.add_argument(
         "--duration", dest="duration_seconds", type=int, default=10, help="Video clip, 1..60 seconds"
     )
+    events = sub.add_parser("events", help="Query records and manage trusted event sources")
+    events.add_argument(
+        "action",
+        choices=[
+            "capabilities",
+            "sources",
+            "configure",
+            "enable",
+            "remove",
+            "verify",
+            "status",
+            "query",
+            "get",
+            "changes",
+            "record",
+            "correct",
+            "delete",
+            "stats",
+        ],
+    )
+    events.add_argument("arguments", nargs="?", default="{}", help="JSON event arguments")
     notifications = sub.add_parser("notifications")
     notifications.add_argument("action", choices=["list", "get", "publish", "update", "read", "retry"])
     notifications.add_argument("arguments", nargs="?", default="{}", help="JSON notification arguments")
@@ -113,6 +134,8 @@ def main():
             "supplement",
             "artifacts",
             "workfiles",
+            "event_inbox",
+            "trace",
         ],
     )
     tasks.add_argument("arguments", nargs="?", default="{}", help="JSON task arguments")

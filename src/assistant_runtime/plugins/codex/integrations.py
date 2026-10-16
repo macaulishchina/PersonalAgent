@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 
+from ...mcp.catalog import SERVICES
 from .mcp import server_config
 
 
@@ -58,6 +59,7 @@ class CodexIntegrations:
                 tasks="tasks" in cfg.plugins and context != "maintenance",
                 task_run=task_run,
                 notifications="notifications" in cfg.plugins,
+                events="events" in cfg.plugins,
                 integrations="integrations" in cfg.plugins,
                 manage_integrations=manage_integrations,
             )
@@ -122,9 +124,7 @@ class CodexIntegrations:
             "failed_revision": self.failed_revision,
             "last_apply_error": self.last_error,
             "background_policy": "snapshot_at_execution_start",
-            "inherited_user_servers": sorted(
-                set(self.inherited) - {"memory", "device", "tasks", "notifications", "integrations"}
-            ),
+            "inherited_user_servers": sorted(set(self.inherited) - SERVICES.keys()),
             "inherit_user_servers": self.registry.settings.inherit_user_servers,
         }
 

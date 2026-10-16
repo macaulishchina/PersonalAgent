@@ -20,6 +20,8 @@ TASK_TOOLS = (
     "create_task",
     "list_tasks",
     "get_task",
+    "get_task_event_inbox",
+    "get_task_execution_trace",
     "update_task",
     "run_task",
     "pause_task",
@@ -52,3 +54,31 @@ INTEGRATION_TOOLS = (
     "reload_mcp_configuration",
     "begin_mcp_login",
 )
+
+
+EVENT_TOOLS = (
+    "event_capabilities",
+    "list_event_sources",
+    "event_status",
+    "query_events",
+    "get_event",
+    "event_changes",
+    "event_statistics",
+    "record_event",
+    "correct_event",
+    "delete_event",
+    "configure_event_source",
+    "set_event_source_enabled",
+    "remove_event_source",
+    "verify_event_source",
+)
+
+# One service descriptor catalogue shared by provider registration and exclusion.
+SERVICES = {
+    "memory": {"tools": MEMORY_TOOLS, "task_context": False},
+    "device": {"tools": DEVICE_TOOLS, "task_context": False},
+    "tasks": {"tools": TASK_TOOLS, "task_context": True},
+    "notifications": {"tools": NOTIFICATION_TOOLS, "task_context": True},
+    "integrations": {"tools": INTEGRATION_TOOLS, "task_context": True},
+    "events": {"tools": EVENT_TOOLS, "task_context": True},
+}

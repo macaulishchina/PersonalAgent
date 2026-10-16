@@ -315,6 +315,17 @@ account catalog at creation according to fixed configuration or initiating-agent
 User-authorized goals may derive scoped children, not new unapproved goals. Memory is
 shared through the existing provider and scope/source policy, never used as execution proof.
 
+Durable record subscriptions are another tasks trigger, not a separate automation
+engine. `tasks/event_inbox.py` consumes EventRequest changes and commits cursor, bounded
+pending references, decisions and automatic run creation in one host SQLite transaction.
+New subscriptions/edits/resumes start at the current tail. Baselines/manual revisions do
+not trigger work; pending/queued facts are invalidated or expired before dispatch. Merge,
+cooldown and single active execution bound AI work; overflow and uncertainty are visible.
+Existing device-threshold and task-completion triggers remain separate supported modes.
+Task trace associates event references, immutable run snapshots and provider tool metadata;
+it does not copy raw event/tool payloads or assert exactly-once physical effects.
+Provider-specific tool parsing stays in Codex; tasks MCP/CLI own inbox/trace queries.
+
 `workfiles.py` is application-wide directory ownership and retention. It registers private
 scratch/artifact areas for main conversations and each task run. Only ended scratch areas
 expire; no repository traversal cleanup. Artifacts are downloadable via authenticated
@@ -343,3 +354,29 @@ lookups batched per inbox page. Task event publication and automatic completion 
 are distinct. Timing becoming available does not create a content correction, reset read
 state or replay chat/context/voice deliveries. Web refreshes pending execution metadata
 without replacing paginated inbox contents.
+
+
+## Durable event observations
+
+The optional `events` plugin owns only independent SQLite records, validation, bounded
+admission, deduplication, revisions/tombstones, quota and queries. It never owns device
+protocols, credentials or polling. `Context.event_reporter` supplies a source-bound
+kernel contract: `report` confirms durable commit, `offer` confirms bounded admission
+only. Advanced producers may atomically checkpoint observations and declare gaps.
+Failure is explicit and cannot block the real-time audio path. The kernel imports no
+plugin; its lossy event bus carries only committed-update/capacity hints.
+
+`plugins/observations` manages revisioned source configuration and lifecycle through
+`ObservationRequest`. Injected producers choose business hooks, subscriptions or their
+own bounded polling. Wake business facts remain assistant-owned; Reyee and television
+protocols/comparison state live under their own plugin families. There is no global
+hardware polling loop or blanket AOP instrumentation. Source changes stop/drain only
+the target instance, preserving identity/history and observation gaps.
+
+The independent events MCP/CLI is a facade: `EventRequest` owns record CRUD/query, source
+management forwards to `ObservationRequest`. Main and background use the shared MCP
+catalogue and authorization rules. Source definitions live in tracked
+`.agents/observations/sources.json`; credentials in private `state/observations/`;
+records remain in `state/events/`. Recording itself starts no model, notification or
+memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
+and [source onboarding](src/assistant_runtime/plugins/observations/README.md).

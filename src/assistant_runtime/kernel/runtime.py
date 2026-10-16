@@ -7,6 +7,7 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from .contracts import API_VERSION, Event
+from .event_reporting import EventReporter, EventSink, identifier
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,26 @@ class Context:
         task.add_done_callback(done)
         return task
 
+    def event_reporter(self, source=None):
+        source = identifier(source or self.name)
+        if source not in self.runtime.event_owners and len(self.runtime.event_owners) >= 256:
+            raise ValueError("Event source binding limit reached")
+        owner = self.runtime.event_owners.setdefault(source, self.name)
+        if owner != self.name:
+            raise ValueError("Event source already belongs to another plugin")
+        return EventReporter(self, source)
+
+    def register_event_sink(self, sink):
+        if self.runtime.event_sink is not None:
+            raise ValueError("Event recording already has an owner")
+        self.runtime.event_sink = sink
+
+        async def unregister():
+            if self.runtime.event_sink is sink:
+                self.runtime.event_sink = None
+
+        self.own(unregister)
+
     def get(self, key, default=None):
         return self.runtime.store.get(f"plugin.{self.name}.{key}", default)
 
@@ -78,6 +99,8 @@ class Context:
 
 class Runtime:
     def __init__(self, store, bindings=None):
+        self.event_sink: EventSink | None = None
+        self.event_owners: dict[str, str] = {}
         self.store = store
         self.bindings = bindings or {}
         self.plugins: dict[str, Any] = {}

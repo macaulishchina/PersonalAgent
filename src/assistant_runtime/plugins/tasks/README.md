@@ -199,3 +199,106 @@ runs stay available. An explicit continuation restores an archived thread; backg
 archiving never launches another model turn or changes delivery/read receipts. Existing
 ended project executions are swept into this policy; unrelated/foreground threads are
 not enumerated. Artifacts and execution records remain available in Web.
+
+
+## Durable event-driven AI work
+
+This extends `tasks`; there is no separate automation plugin or workflow language.
+Business interpretation remains in the authorized AI objective. The existing `events`
+capability supplies facts; task inboxes store only references and execution state.
+Enable `events` before creating a durable subscription. Existing calendars, device
+threshold triggers and task-completion triggers retain their semantics.
+
+```json
+{
+  "kind": "event",
+  "event": {
+    "source": "records",
+    "source_id": "living_presence",
+    "types": ["presence.changed"],
+    "subject": "living_room",
+    "merge_seconds": 3,
+    "cooldown_seconds": 30,
+    "max_age_seconds": 300,
+    "capacity": 128
+  }
+}
+```
+
+Use `create_task` with this trigger and a user-authorized objective, such as reviewing
+current conditions before deciding whether action is needed. `types` is required
+(1–16 exact type names); source_id and subject are optional exact filters. These are
+routing selectors, not a device-condition expression language. Discover real source
+identities/types through events MCP. This example does not install a presence sensor.
+Subscriptions default to silent completion (`notify_completion=false`) unless explicitly
+chosen otherwise; meaningful alerts use the existing notifications capability.
+
+### Receipt, batching and lifecycle
+
+- Creating, editing or resuming starts at the recorder's current change cursor; it
+  never replays earlier history. Pausing/editing/archiving clears pending references
+  with recorded reasons. Already assigned runs retain their immutable snapshot;
+  pause does not cancel them, while archive/terminate uses existing cancellation.
+- Each page of changes, inbox decisions and resulting run insertion share one host
+  SQLite transaction. Stable occurrence IDs and the cursor prevent duplicate automatic
+  dispatch after a crash or lost hint. The event database is read through `EventRequest`,
+  never directly. The lossy bus accelerates reads; a one-second fallback reads the
+  durable log. This is not hardware polling. Recorder failure backs off five seconds
+  per subscription and leaves unrelated tasks/voice running.
+- Only new records labeled `observation` at revision 1 trigger work. Baselines, gaps,
+  manual statements, summaries, corrections and deletions do not. Corrections/deletions
+  invalidate waiting references; queued runs reread current revisions before dispatch.
+  Changes arriving after execution starts do not undo physical effects; the AI must
+  query current facts/state before acting.
+- A batch closes after `merge_seconds` from its first receipt (default 3, range 0–60),
+  not after endless trailing quiet. `cooldown_seconds` is the minimum dispatch spacing
+  (default 30, range 0–86400). One active/paused/waiting/unknown execution blocks another
+  for that task. New events accumulate independently rather than steering a running turn.
+- Event lifetime uses occurrence time or observation-interval end: `max_age_seconds`
+  defaults to 300, range 1–86400; merge must be shorter. More than five seconds in the
+  future is rejected as clock uncertainty. Expired pending/queued events do not launch
+  work. Explicit continuation remains a user decision and keeps its original context.
+- Each inbox holds at most `capacity` pending references (default 128, range 1–256),
+  each execution consumes at most 32, and at most 64 subscriptions may be enabled.
+  When full, newer arrivals are counted as overflow; accepted pending work is retained.
+  Counts persist; the last 100 decisions are retained, with 20 shown by inbox queries.
+  No raw sensor payload is duplicated. An overflow or gap means incomplete evidence.
+- Event-log cursor regression is reported as unhealthy; it is never silently reset to
+  replay old actions. Explicit pause/resume establishes a new tail after investigation.
+
+### AI context and tracing
+
+An event execution snapshots `trigger_context`: subscription, referenced event IDs and
+change cursors, observation times, batch count and previous run identity when present.
+Dispatch adds `valid_events` and an invalidated count. The Codex adapter supplies this
+as data beside the original objective, with task/run IDs. AI can use existing events,
+memory, devices and tasks MCPs to fetch facts, examine previous outcomes and decide
+what to do. New events do not expand authorization, change model selection, switch
+fixed voice routes, or authorize child recurring tasks.
+
+`get_task` includes the bounded inbox and run contexts. `get_task_event_inbox(task_id)`
+shows cursor/health, pending references and received/assigned/expired/overflow/
+invalidated/lifecycle-discard counters. `get_task_execution_trace(run_id, after, limit)`
+links trigger references to run state, provider thread/turn and tool metadata. CLI:
+
+```sh
+personal-agent --config config.toml tasks event_inbox '{"task_id":"..."}'
+personal-agent --config config.toml tasks trace '{"run_id":"...","limit":50}'
+```
+
+Trace stores at most 500 entries per run, paged 50 by default, maximum 100. Repeated
+provider call IDs/phases deduplicate; truncation is explicit. It retains server/tool,
+phase/status and reported device/operation IDs, never complete arguments, shell commands
+or tool output. A completed tool call is provider evidence, not proof that hardware
+changed. Native operation IDs can be checked through devices MCP; external tools may
+lack this guarantee. Unknown executions are reconciled or explicitly continued, never
+silently recreated. Raw provider-specific parsing stays inside `plugins/codex`.
+
+The existing task panel displays the merged trigger count and current pending count;
+it keeps its existing paging and controls. Complete trace inspection is MCP/CLI-first.
+
+Tests: `scripts/check.py --group tasks --group events --group codex`. Coverage includes
+transaction rollback, duplicate reports, real runtime/SQLite restart, pagination,
+coalescing, overflow, expiration, mutation invalidation, paused subscriptions, stale
+in-flight reads, unknown executions, and trace redaction/limits. Simulated sensor events
+are not evidence that a physical presence sensor has been connected or validated.

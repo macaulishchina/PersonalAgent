@@ -393,3 +393,19 @@ class BrainPlugin(Protocol):
     voice: VoiceSession
 
     def diagnostics(self) -> dict: ...
+
+
+@dataclass(frozen=True)
+class EventRequest:
+    action: str
+    arguments: dict = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
+class ObservationRequest:
+    """Source lifecycle/configuration, separate from durable record operations."""
+
+    action: str
+    arguments: dict = field(default_factory=dict)
+    caller_run: str | None = None

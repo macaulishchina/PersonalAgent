@@ -406,7 +406,7 @@ class TaskRepository:
                 )
         return self.run(ident)
 
-    def update_definition(self, ident, **changes):
+    def update_definition(self, ident, *, on_update=None, **changes):
         d = self.definition(ident)
         d.update(changes)
         with self.db:
@@ -414,4 +414,6 @@ class TaskRepository:
                 "UPDATE job_definitions SET state=?,spec=?,next_at=?,updated=?,revision=revision+1 WHERE id=?",
                 (d["state"], json.dumps(d["spec"], ensure_ascii=False), d["next_at"], time.time(), ident),
             )
+            if on_update:
+                on_update(self.definition(ident))
         return self.definition(ident)

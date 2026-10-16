@@ -28,7 +28,8 @@ GROUPS = {
         "video",
         "video_recording",
     },
-    "tasks": {"notifications", "tasks"},
+    "events": {"events", "event_sources", "event_reporting"},
+    "tasks": {"notifications", "tasks", "task_events"},
     "memory": {"mem0", "memory"},
     "web": {"reply_images", "reply_videos", "web"},
 }

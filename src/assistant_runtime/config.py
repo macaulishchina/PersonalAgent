@@ -35,6 +35,7 @@ class Config:
     quiet_hours: dict[str, str | bool] = field(default_factory=dict)
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
+    events: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     work_files: dict = field(default_factory=dict)
@@ -82,6 +83,9 @@ class Config:
 
         from assistant_runtime.plugins.notifications.settings import NotificationSettings
 
+        from assistant_runtime.plugins.events.settings import EventSettings
+
+        EventSettings.parse(self.events)
         NotificationSettings.parse(self.notifications)
         TaskSettings.parse(self.tasks)
         WebSettings.parse(self.web)

@@ -2,7 +2,7 @@
 
 import sys
 
-from ...mcp.catalog import MEMORY_TOOLS, DEVICE_TOOLS, TASK_TOOLS, NOTIFICATION_TOOLS, INTEGRATION_TOOLS
+from ...mcp.catalog import SERVICES
 
 
 def server_config(
@@ -13,6 +13,7 @@ def server_config(
     notifications=False,
     integrations=False,
     manage_integrations=False,
+    events=False,
 ):
     # Project-scoped local operations, including the explicitly requested camera
     # pan/tilt integration. This does not change global Codex permissions.
@@ -20,11 +21,7 @@ def server_config(
         name: {
             "command": sys.executable,
             "args": ["-m", "assistant_runtime.mcp", name, "--socket", str(socket)]
-            + (
-                ["--task-run", task_run]
-                if name in {"tasks", "notifications", "integrations"} and task_run
-                else []
-            )
+            + (["--task-run", task_run] if SERVICES[name]["task_context"] and task_run else [])
             + (
                 ["--manage-integrations"]
                 if name == "integrations" and task_run and manage_integrations
@@ -38,11 +35,13 @@ def server_config(
             "startup_timeout_sec": 30,
             "tool_timeout_sec": 200 if name == "integrations" else 100,
         }
-        for name, tools in (
-            ("memory", MEMORY_TOOLS),
-            ("device", DEVICE_TOOLS),
-            *(([("tasks", TASK_TOOLS)]) if tasks or task_run else []),
-            *(([("notifications", NOTIFICATION_TOOLS)]) if notifications else []),
-            *(([("integrations", INTEGRATION_TOOLS)]) if integrations else []),
-        )
+        for name, descriptor in SERVICES.items()
+        if name in {"memory", "device"}
+        or {
+            "tasks": tasks or bool(task_run),
+            "notifications": notifications,
+            "integrations": integrations,
+            "events": events,
+        }.get(name, False)
+        for tools in (descriptor["tools"],)
     }
