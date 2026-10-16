@@ -11,6 +11,13 @@ API_VERSION = 1
 
 
 @dataclass(frozen=True)
+class MediaRequest:
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
 class IntegrationRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)

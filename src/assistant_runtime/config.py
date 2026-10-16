@@ -36,6 +36,7 @@ class Config:
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
+    media: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     work_files: dict = field(default_factory=dict)
@@ -84,7 +85,9 @@ class Config:
         from assistant_runtime.plugins.notifications.settings import NotificationSettings
 
         from assistant_runtime.plugins.events.settings import EventSettings
+        from assistant_runtime.plugins.media.settings import MediaSettings
 
+        MediaSettings.parse(self.media)
         EventSettings.parse(self.events)
         NotificationSettings.parse(self.notifications)
         TaskSettings.parse(self.tasks)

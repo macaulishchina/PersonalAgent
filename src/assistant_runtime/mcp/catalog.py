@@ -74,6 +74,22 @@ EVENT_TOOLS = (
 )
 
 # One service descriptor catalogue shared by provider registration and exclusion.
+MEDIA_TOOLS = (
+    "media_status",
+    "search_media",
+    "inspect_media_share",
+    "list_media_files",
+    "transfer_media",
+    "download_media",
+    "get_media_operation",
+    "list_media_operations",
+    "cancel_media_operation",
+    "resume_media_operation",
+    "verify_media_operation",
+    "begin_media_login",
+    "get_media_login",
+)
+
 SERVICES = {
     "memory": {"tools": MEMORY_TOOLS, "task_context": False},
     "device": {"tools": DEVICE_TOOLS, "task_context": False},
@@ -81,4 +97,5 @@ SERVICES = {
     "notifications": {"tools": NOTIFICATION_TOOLS, "task_context": True},
     "integrations": {"tools": INTEGRATION_TOOLS, "task_context": True},
     "events": {"tools": EVENT_TOOLS, "task_context": True},
+    "media": {"tools": MEDIA_TOOLS, "task_context": True},
 }

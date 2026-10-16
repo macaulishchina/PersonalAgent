@@ -419,6 +419,7 @@ class TasksPlugin:
                 result[ident] = {
                     "task_id": run["task_id"],
                     "state": run["state"],
+                    "resources": run["data"]["spec"].get("resources", []),
                     "events_management": run["state"] in {"running", "waiting_user"}
                     and "events_management" in run["data"]["spec"].get("resources", []),
                     "mcp_management": run["state"] in {"running", "waiting_user"}

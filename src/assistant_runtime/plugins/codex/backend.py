@@ -146,6 +146,7 @@ class CodexBackend:
                     tasks="tasks" in self.config.plugins,
                     notifications="notifications" in self.config.plugins,
                     events="events" in self.config.plugins,
+                    media="media" in self.config.plugins,
                 ),
             },
         }

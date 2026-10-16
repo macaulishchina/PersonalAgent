@@ -60,6 +60,7 @@ class CodexIntegrations:
                 task_run=task_run,
                 notifications="notifications" in cfg.plugins,
                 events="events" in cfg.plugins,
+                media="media" in cfg.plugins,
                 integrations="integrations" in cfg.plugins,
                 manage_integrations=manage_integrations,
             )

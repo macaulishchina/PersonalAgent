@@ -59,6 +59,11 @@ def compose(service):
 
         return TasksPlugin(service)
 
+    def media():
+        from .plugins.media.plugin import MediaPlugin
+
+        return MediaPlugin(service)
+
     service.voice_io = VoiceBinding(config.input_device, config.default_output)
     service.devices = DeviceDirectory(config.devices, service.voice_io)
     from .devices.resources import DeviceResources
@@ -110,6 +115,7 @@ def compose(service):
         "go2rtc": go2rtc,
         "web": web,
         "tasks": tasks,
+        "media": media,
         "notifications": notifications,
         "events": events,
         "observations": observations,

@@ -1,0 +1,30 @@
+# Public search only. Aliyun credentials remain in the assistant's private state.
+services:
+  pansou:
+    image: ghcr.io/fish2018/pansou@sha256:d371fe5caa87794414dd54cda063fcfc456d5013e18b65dbf1f6ca17f6299492
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8888"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 96
+    dns:
+      - 223.5.5.5
+    environment:
+      CACHE_PATH: /tmp/cache
+      CHANNELS: Aliyun_4K_Movies,shareAliyun,alyp_1,Oscar_4Kmovies
+      ENABLED_PLUGINS: pansearch,zhizhen,labi,shandian,duoduo,muou,hunhepan
+      PLUGIN_TIMEOUT: "20"
+      PLUGIN_BATCH_TIMEOUT_SECONDS: "8"
+      ASYNC_RESPONSE_TIMEOUT: "8"
+      ASYNC_MAX_BACKGROUND_WORKERS: "4"
+      ASYNC_MAX_BACKGROUND_TASKS: "32"
+      GOMAXPROCS: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"

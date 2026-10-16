@@ -30,6 +30,7 @@ GROUPS = {
     },
     "events": {"events", "event_sources", "event_reporting"},
     "tasks": {"notifications", "tasks", "task_events"},
+    "media": {"media", "media_providers", "media_downloads"},
     "memory": {"mem0", "memory"},
     "web": {"reply_images", "reply_videos", "web"},
 }

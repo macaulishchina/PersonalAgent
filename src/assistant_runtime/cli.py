@@ -114,6 +114,28 @@ def main():
     notifications = sub.add_parser("notifications")
     notifications.add_argument("action", choices=["list", "get", "publish", "update", "read", "retry"])
     notifications.add_argument("arguments", nargs="?", default="{}", help="JSON notification arguments")
+    media = sub.add_parser("media", help="Search, acquire and inspect media; plans remain in tasks")
+    media.add_argument(
+        "action",
+        choices=[
+            "status",
+            "search",
+            "inspect",
+            "files",
+            "transfer",
+            "download",
+            "get",
+            "list",
+            "cancel",
+            "resume",
+            "verify",
+            "login",
+            "login_status",
+        ],
+    )
+    media.add_argument(
+        "arguments", nargs="?", default="{}", help="JSON media arguments; never pass account credentials"
+    )
     tasks = sub.add_parser("tasks")
     tasks.add_argument(
         "action",
@@ -206,6 +228,13 @@ def main():
             if "path" in payload:
                 payload["path"] = str(Path(payload["path"]).resolve())
             result = asyncio.run(request(config, payload))
+            if args.command == "media" and "qr_base64" in result:
+                from .plugins.media.private import save_bytes
+
+                image = base64.b64decode(result.pop("qr_base64"), validate=True)
+                path = config.state_dir / "media" / "login-qr.png"
+                save_bytes(path, image)
+                result["qr_path"] = str(path)
             if args.command == "devices" and args.action == "snapshot":
                 image = base64.b64decode(result["frame"].pop("data_base64"), validate=True)
                 result["frame"]["bytes"] = len(image)

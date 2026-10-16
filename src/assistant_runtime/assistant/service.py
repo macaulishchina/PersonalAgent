@@ -471,6 +471,17 @@ class AssistantService:
                 writer.close()
                 await writer.wait_closed()
                 return
+            elif action == "media":
+                from ..kernel.contracts import MediaRequest
+
+                result = await self.runtime.invoke(
+                    MediaRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
             elif action == "events":
                 from ..kernel.contracts import EventRequest
 

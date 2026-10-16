@@ -331,6 +331,26 @@ scratch/artifact areas for main conversations and each task run. Only ended scra
 expire; no repository traversal cleanup. Artifacts are downloadable via authenticated
 registered-run routes. Media still uses the existing bounded attachment owner.
 
+## Media acquisition
+
+The optional `plugins/media/` owns public-share acquisition and independent media MCP/CLI.
+It reuses tasks for tracking plans, notifications for delivery and the standard event
+reporter for observations. PanSou, Aliyun and OpenList remain separate adapters; the
+kernel only adds `MediaRequest`. Provider auth runs in bounded owned SDK subprocesses;
+one credential lease/lock owns refresh and atomic replacement. Credentials stay private,
+never in MCP, event records, config examples or shared Codex settings. Host SQLite owns
+operation IDs, intent snapshots, hash/size verification and the durable notice outbox.
+Original-file downloads use a separate owned worker with bounded HTTP streaming and
+off-loop disk IO. A required mounted filesystem, private staging outside the published
+library and atomic no-clobber publication prevent accidental SSD writes or incomplete
+playable entries. Complete checksum validation precedes local completion; signed URLs
+are short-lived internal capabilities and never enter receipts/MCP. Copy and download
+have separate operation identities, recovery and completion evidence.
+Submitted/unknown writes reconcile on restart instead of replay. Background writes
+require an active task and its explicit `media:TARGET` resource; interactive login stays
+in the main conversation. Cloud completion, OpenList availability and physical playback
+are different evidence. See the [media plugin](src/assistant_runtime/plugins/media/README.md).
+
 ## Durable notifications
 
 `plugins/notifications/` owns the stable inbox, producer-scoped event identity, revisions,

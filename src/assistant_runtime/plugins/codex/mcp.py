@@ -14,6 +14,7 @@ def server_config(
     integrations=False,
     manage_integrations=False,
     events=False,
+    media=False,
 ):
     # Project-scoped local operations, including the explicitly requested camera
     # pan/tilt integration. This does not change global Codex permissions.
@@ -42,6 +43,7 @@ def server_config(
             "notifications": notifications,
             "integrations": integrations,
             "events": events,
+            "media": media,
         }.get(name, False)
         for tools in (descriptor["tools"],)
     }

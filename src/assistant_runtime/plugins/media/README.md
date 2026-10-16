@@ -1,0 +1,226 @@
+# Media acquisition
+
+Optional `media` plugin + independent `media` MCP/CLI. Requires `notifications`.
+PanSou searches public candidates; the Aliyun adapter owns share/auth protocol;
+OpenList supplies read verification. Plans and AI decisions remain in tasks.
+There is no media scheduler, arbitrary-URL downloader, TV controller or new model endpoint.
+
+## Setup
+
+Install the `media` extra into the project's existing `.venv`. Run the official
+PanSou service with `docker compose -p personal-agent-media-search -f deploy/media.compose.yaml up -d`.
+Its port is loopback-only, resources/logs are bounded and its disposable cache is tmpfs.
+The image digest is the tested upstream artifact; upgrade deliberately and reverify.
+Search coverage is partial, source labels are untrusted and no result means only
+that these sources found nothing. Requery after cache expiry for late source results.
+
+Enable `media` alongside `notifications`. Minimal instance example:
+
+```toml
+[media]
+search_url = "http://127.0.0.1:8888"
+openlist_url = "http://192.168.1.10:5244"
+timeout_seconds = 15
+queue_capacity = 128
+max_operations = 10000
+
+[media.targets.movies]
+drive_id = "RESOURCE_DRIVE_ID"
+folder_id = "MOVIES_FOLDER_ID"
+openlist_path = "/阿里云盘/影视/电影"
+
+[media.local_targets.movies]
+path = "/mnt/P/openlist/media/电影"
+staging_path = "/mnt/P/openlist/temp/media-downloads"
+mount_path = "/mnt/P"
+```
+
+Targets are explicit account/drive/folder bindings. Only configured targets may
+receive transfers; arbitrary filesystem or cloud paths cannot be tool arguments.
+`scripts/prepare_media.py --config config.toml --create-targets` creates/reuses
+only `影视/电影` and `影视/电视剧` on the resource drive and prints configuration.
+`--apply-config` applies it with a private prior-config backup. It preserves unrelated
+settings and refuses to replace existing media configuration. Run before enabling
+media, or stop its service; an exclusive credential-owner lease prevents two writers.
+An optional `--import-aliyun-auth PRIVATE_FILE` imports an existing aligo Web session
+once. Never import an OpenList OAuth refresh token. Credentials must stay out of Git.
+
+Login uses `begin_media_login` then `get_media_login(login_id)` for a native QR image.
+CLI: `personal-agent --config config.toml media login`, followed by `login_status`
+with the returned login ID. CLI saves the QR privately at `state/media/login-qr.png`.
+Tokens never cross MCP. The session expires; starting again replaces only a terminal
+login. An account identity binding prevents accidental account switching.
+
+OpenList uses explicit `state/media/credentials/openlist.json` with either
+`{"username":"SERVICE_ACCOUNT","password":"PRIVATE"}` or `{"token":"PRIVATE"}`.
+Use a dedicated read-only account. If its user base path is restricted, add
+`"base_path":"/阿里云盘/影视"`; the adapter maps configured absolute paths to that root.
+It never reads OpenList's database, resets users or borrows its mount OAuth credentials.
+Missing/expired OpenList credentials do not undo confirmed cloud acquisitions.
+
+## Local original-file library
+
+Infuse should mount only the existing OpenList local directory (`/本地影视` in this
+instance). A cloud save is a separate operation from a local download. Select a file
+with `list_media_files`, or use `saved_file_id` from a completed transfer, then call
+`download_media(request_id, target, file_id)`. Only direct children of the configured
+cloud folder are eligible; folder downloads and arbitrary signed URLs are not tool input.
+The plugin requests the original download URL, never video preview/transcoding output.
+
+Create the configured library/staging directories beforehand. Both must be on the
+configured dedicated mount, staging outside the published library. Missing mounts,
+symlinks, changed destination bindings and insufficient capacity stop work. The default
+free-space reserve is 1 GiB (`download_min_free_bytes`). One owned download worker bounds
+concurrency, memory, open files and disk IO; cloud copies and foreground tools continue.
+
+Download receipts have `kind=download`, a separate UUID/operation ID and
+`queued → checking → downloading → verifying → completed` phases. Progress reports real
+downloaded/total bytes, percentage and transfer rate, normally checkpointed every two
+seconds. `verifying` means all bytes arrived and the whole-file checksum is being checked;
+100% of bytes alone is not completion. Only SHA-1/SHA-256 originals with known size/hash
+are eligible. No hash means explicit refusal rather than a false integrity claim.
+
+Network failures retry with bounded backoff (at most eight consecutive attempts per
+explicit run); each attempt obtains a fresh signed URL for the same file identity.
+Resume validates exact HTTP Range/total size and metadata. An ignored/incorrect Range
+is rejected without appending its response. Provider auth recovery reuses the single
+account owner; failed login waits in `waiting_auth`, retaining partial bytes. URLs and
+provider auth headers never enter receipts, logs, notifications or the download server.
+Slow disk reads/writes/hashing run off the main loop; shutdown drains in-flight IO
+before descriptor cleanup and preserves partials for restart. Capacity/path/identity
+failures require explicit `resume_media_operation` after correction.
+
+Verified files publish atomically without overwriting. A crash after publication but
+before the SQLite acknowledgment rechecks the existing file's full hash and completes
+without downloading again. Conflicting files are retained. Cancellation stops within
+the current bounded network read (up to 30 seconds), removes owned partials when the
+disk is available and never deletes published files. Failed-operation partials remain
+private for diagnosis/resume; corrupt completed bytes are discarded. Keep operations
+and partials together during backup/cleanup; do not delete receipt state behind a worker.
+
+Local completion commits the receipt and notification outbox together. `local_path`,
+checksum evidence, elapsed time and byte totals show local readiness, not TV playback.
+Original download success does not imply the provider grants every file/account the
+same throughput or download permission. OpenList credentials are optional for this path.
+
+## Ownership and reliability
+
+`MediaRequest` and the bounded local IPC are the only framework seam. MCP only maps
+schemas/results, including QR images; SDK work runs in killed/reaped, deadline-bound
+child processes in the one project environment. aligo's legacy default config path
+is confined to the private worker directory; stdout/stderr never expose SDK logs.
+Application protocol reads/writes are bounded; a copy is submitted once without
+SDK HTTP retry loops. One account lock/lease serializes refreshes and atomically
+saves rotated credentials. OpenList and Aliyun have separate authentication owners.
+
+Explicit access-token expiry permits one refresh, session expiry one session repair.
+Permission/share errors do not trigger login. Refresh failure blocks further refresh
+attempts until a user-confirmed login; pending work enters `waiting_auth` and releases
+the worker. One transition-scoped durable notice requests login, not one per task.
+QR authorization is main-conversation-only; a wrong-account login leaves the old
+credentials intact. Transient/uncertain token rotation is not blindly replayed.
+Before refresh, a private durable barrier records a fingerprint of the current token
+pair. Restart cannot reuse that pair after an interrupted/failed refresh. An atomically
+saved new token pair permits recovery after a lost acknowledgment; SDK device metadata
+alone never clears the barrier. Login IO failures become terminal retryable login
+states. Credential/QR writes use private atomic files, and shutdown drains owned IO
+before releasing the credential lease.
+
+The host SQLite owns `media_operations`, account readiness and an outbox. Source
+passwords stay private and are excluded from public operation projections. Operations:
+
+`queued → checking → submitting → verifying → completed`
+
+Also `waiting_auth`, `uncertain`, `failed`, `cancelled`. Completion means the target
+contains the expected filename/size and either matching content hash or the provider's
+returned destination file ID, not that the TV played it. Aliyun may omit share hashes;
+without a copy receipt/hash, a same-name/same-size file alone cannot establish identity.
+Receipts retain IDs, bounded stages, elapsed time and distinct OpenList evidence.
+No estimated transfer percentage is invented for a server-side cloud copy.
+
+- A canonical UUID `request_id` deduplicates lost transport replies; changed payloads
+  using that UUID fail. A source file/target is reused across different UUIDs.
+- Tracking additionally deduplicates stable collection + season + episode + destination,
+  even when public share URLs change. It does not automatically upgrade/replace quality.
+  Confirmed pre-submit failures permit a new request/source; uncertain work retains its claim.
+- The target must still be a folder; changed target configuration stops new writes.
+  Only individual video files with known sizes/identities may be acquired. Browse
+  share folders first. Same-name differing content fails without rename/overwrite/delete.
+- A submitted receipt is committed before network IO. Crash/lost response enters
+  verification, never copy replay. Missing files are rechecked with bounded backoff;
+  after the observation window, uncertainty requires explicit reconciliation.
+- Cancellation before submission stops work; after submission it cannot roll back
+  the provider. Continue checking and report confirmed saved files. Never delete them.
+- Rows/queues/pages are bounded. History uses keyset cursors, 20 by default/max 50;
+  a cursor cannot be reused under another collection filter. Target conflict scans
+  stop at 1000 entries instead of assuming an incomplete list proved absence.
+- Confirmed completion + notification outbox commit in one transaction. Publish retries
+  use stable identities and do not repeat copy. Auth/attention notices are deduplicated.
+  OpenList read checks and event observations do not initiate AI inference.
+
+## Tasks and permissions
+
+Main conversation uses media tools within user intent. Background reads require an
+active task execution; transfer/resume/cancel also require `resources=["media:TARGET"]`.
+Background management is limited to that task definition's operations. No interactive
+login, target configuration, arbitrary credential input or unrelated account changes.
+Task traces already record MCP calls; each operation also records its originating run
+ID, linking receipts back to that execution. Pausing/terminating a tracking plan stops
+future checks; separately cancel pending media operations when that is also intended.
+
+For tracking, create a normal interval/cron task with the authorized series, year,
+season, preferred quality/language and target in its objective. Set
+`notify_completion=false`; Media sends verified acquisition and auth/attention notices.
+Each run searches, inspects actual files and submits only missing episodes using
+stable collection/season/episode fields. Finish the AI run after submitting and retaining
+operation IDs; media owns long copy/auth waits. Do not create a permanent waiting Goal,
+another watcher, duplicate completion notices or a second progress database in memory.
+
+## Validation
+
+`scripts/check.py --group media` covers durable retry/conflict/pagination, restart
+reconciliation, cancellation before/after copy, task scope, native MCP QR images,
+refresh serialization, wrong-account preservation and sanitized provider failures.
+HTTP fixtures test source-domain filtering and OpenList reauthentication/Range reads.
+Download fixtures stream real HTTP bodies to actual local files, testing Range resume,
+expired URLs, ignored ranges, corruption, disk safety, shutdown and crash publication.
+These fixtures do not establish real provider or television behavior.
+
+Explicit installed-service acceptance (not an automatic parallel test):
+
+```sh
+.venv/bin/python scripts/verify_media.py --config config.toml --query 流浪地球
+# One authorized cloud copy; retain the printed request/operation IDs if interrupted:
+.venv/bin/python scripts/verify_media.py --config config.toml \
+  --share-url https://www.alipan.com/s/SHARE_ID --file-id VIDEO_ID --target movies
+# Explicitly download an original already in the configured cloud folder:
+.venv/bin/python scripts/verify_media.py --config config.toml \
+  --download-file-id SAVED_FILE_ID --target movies
+```
+
+Real protocol acceptance on 2026-10-16 confirmed account readiness, share file
+metadata, capacity, destination metadata and listing through the isolated adapter.
+The earlier manual integration confirmed one 13.94 GB MKV save and OpenList HTTP 206
+with its MKV header. That manual result alone does not certify this installed plugin,
+all search sources, a full film playback, or an ongoing series tracking plan.
+
+Installed-plugin acceptance on the same date discovered all 12 tools over independent
+stdio MCP, returned a bounded page of real public search results, and saved the
+13,942,852,762-byte movie to the configured movies folder. The destination file ID,
+name and size matched the copy receipt; the operation completed in 3.545 seconds.
+A real subscription-backed temporary task successfully called `media_status` and
+`list_media_files`; its provider tool trace confirmed both calls and the task archived.
+The full project gate passed 404 tests without skips plus frontend/static checks.
+Installed OpenList verification is awaiting a configured dedicated read-only account;
+that credential step and real TV playback are not claimed by this acceptance.
+
+Local-download extension acceptance on 2026-10-16 discovered 13 MCP tools and started
+an actual original-file download through the installed service. After 2,620,616 bytes,
+a standby service restart resumed the same operation at exactly that file offset.
+Cancellation then removed the owned partial without publishing any library file.
+Status requests during downloading took approximately 1–2 ms. This provider session
+delivered about 25 KB/s, so the 13.94 GB acceptance film was not fully downloaded.
+Whole-file completion/hash/publication are covered by real-HTTP local fixtures; a full
+cloud film download and TV playback are not claimed. The expanded full gate passed
+419 tests, zero skips, plus static checks and the frontend build. Configured local
+destinations are under `/mnt/P/openlist/media`; staging is outside that library.

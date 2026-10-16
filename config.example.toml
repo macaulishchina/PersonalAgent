@@ -119,3 +119,18 @@ inherit_user_servers = false
 # Non-secret definitions in .agents/mcp/servers.json belong in Git.
 # Credentials use environment references; runtime files remain in ignored state/.
 # registry_path = "/absolute/private/path/servers.json"
+
+# Optional Media MCP: install media extra; enable media alongside notifications.
+# Search service: deploy/media.compose.yaml. Aliyun/OpenList auth stays under state/media/credentials/.
+# Run scripts/prepare_media.py for actual stable destination IDs, never guess them.
+# [media]
+# search_url = "http://127.0.0.1:8888"
+# openlist_url = "http://192.168.1.10:5244"
+# [media.targets.movies]
+# drive_id = "RESOURCE_DRIVE_ID"
+# folder_id = "MOVIES_FOLDER_ID"
+# openlist_path = "/阿里云盘/影视/电影"
+# [media.local_targets.movies]
+# path = "/mnt/P/openlist/media/电影"
+# staging_path = "/mnt/P/openlist/temp/media-downloads"
+# mount_path = "/mnt/P"
