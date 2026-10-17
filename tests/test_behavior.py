@@ -55,6 +55,27 @@ class PersistenceTest(unittest.TestCase):
 
 
 class TaskTest(unittest.IsolatedAsyncioTestCase):
+    async def test_scoped_cancel_does_not_interrupt_a_new_turn_or_follow_a_changed_thread(self):
+        b = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
+        b.thread_id, b.active_turn, b.last_turn = "original", "current", "current"
+        b.command_items = {"current": {"owned"}}
+        b.client.request = AsyncMock()
+        self.assertFalse(await b.cancel(expected_turn="previous"))
+        b.client.request.assert_not_awaited()
+
+        async def response(method, params):
+            if method == "turn/interrupt":
+                b.thread_id, b.active_turn = "new-thread", "new-turn"
+                b.command_items = {}
+            if method == "thread/backgroundTerminals/list":
+                return {"data": [{"itemId": "owned", "processId": "owned-process"}]}
+            return {}
+
+        b.client.request.side_effect = response
+        self.assertTrue(await b.cancel(expected_turn="current"))
+        self.assertEqual(b.active_turn, "new-turn")
+        self.assertTrue(all(c.args[1]["threadId"] == "original" for c in b.client.request.await_args_list))
+
     async def test_cancel_terminates_only_the_current_tasks_shells(self):
         b = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
         b.thread_id, b.active_turn, b.last_turn = "thread", "current", "current"

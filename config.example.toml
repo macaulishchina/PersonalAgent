@@ -90,6 +90,24 @@ memory_auto_capture = true
 # stream = "office_camera"
 # timeout_seconds = 8
 
+# Optional semantic support: install decisions extra (included in the default plugins).
+# TYPESAFE_API_KEY is read privately from the process environment or instance .env.
+# Authorize external text/context processing explicitly before setting consent true.
+# Disable enabled and restart to use only the original logic. Failed/unknown calls count.
+[decisions]
+enabled = true
+external_data_consent = false
+mode = "active"
+model = "jev-1.13.0"
+queue_size = 32
+daily_limit = 100
+retention = 2000
+timeout_seconds = 8
+active_timeout_seconds = 1.5
+max_age_seconds = 30
+# [decisions.thresholds] can override per-kind selected-option probabilities.
+# voice_intent = 0.98; event_relevance = 0.98; model_profile = 0.90; selection = 0.90
+
 # Optional durable background tasks: install tasks extra and add "tasks" to plugins.
 [tasks]
 timezone = "Asia/Shanghai"

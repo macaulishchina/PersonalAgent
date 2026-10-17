@@ -173,6 +173,11 @@ def main():
         choices=["list", "get", "configure", "enable", "remove", "verify", "apply", "reload", "login"],
     )
     mcp.add_argument("arguments", nargs="?", default="{}", help="JSON MCP management arguments")
+    decisions = sub.add_parser("decisions", help="Inspect semantic support and evaluate effect-free fixtures")
+    decisions.add_argument("action", choices=["status", "list", "get", "label", "evaluate", "reload"])
+    decisions.add_argument(
+        "arguments", nargs="?", default="{}", help="JSON decision arguments; no credentials"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:

@@ -11,6 +11,35 @@ API_VERSION = 1
 
 
 @dataclass(frozen=True)
+class DecisionSample:
+    """Ephemeral shadow input. No result may authorize or dispatch work."""
+
+    kind: str
+    reference: str
+    state: dict[str, Any]
+    baseline: str | None = None
+    observed_at: float = field(default_factory=time.time)
+
+
+@dataclass(frozen=True)
+class DecisionRequest:
+    """Local decision management; never a device/action interface."""
+
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DecisionQuery:
+    """A bounded suggestion. Authorization and effect verification remain with callers."""
+
+    kind: str
+    reference: str
+    state: dict[str, Any]
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
 class MediaRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)

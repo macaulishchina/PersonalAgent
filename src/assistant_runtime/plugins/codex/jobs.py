@@ -107,6 +107,7 @@ class CodexJobs:
                     notifications="notifications" in cfg.plugins,
                     events="events" in cfg.plugins,
                     media="media" in cfg.plugins,
+                    decisions="decisions" in cfg.plugins,
                 ),
             },
         }

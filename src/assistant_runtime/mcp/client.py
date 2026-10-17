@@ -17,10 +17,14 @@ from ..kernel.contracts import (
     IntegrationRequest,
     EventRequest,
     MediaRequest,
+    DecisionRequest,
+    DecisionQuery,
 )
 
 Request = (
-    MediaRequest
+    DecisionQuery
+    | DecisionRequest
+    | MediaRequest
     | EventRequest
     | IntegrationRequest
     | NotificationRequest
@@ -47,7 +51,16 @@ class LocalRuntimeClient:
         self.socket, self.timeout = str(socket), timeout
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, MediaRequest):
+        if isinstance(request, DecisionQuery):
+            payload = {
+                "command": "decisions",
+                "action": "judge",
+                "arguments": {"kind": request.kind, "reference": request.reference, "state": request.state},
+                "caller_run": request.caller_run,
+            }
+        elif isinstance(request, DecisionRequest):
+            payload = {"command": "decisions", **asdict(request)}
+        elif isinstance(request, MediaRequest):
             payload = {"command": "media", **asdict(request)}
         elif isinstance(request, EventRequest):
             payload = {"command": "events", **asdict(request)}

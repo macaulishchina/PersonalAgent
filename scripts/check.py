@@ -29,6 +29,7 @@ GROUPS = {
         "video_recording",
     },
     "events": {"events", "event_sources", "event_reporting"},
+    "decisions": {"decisions"},
     "tasks": {"notifications", "tasks", "task_events", "task_models"},
     "media": {"media", "media_providers", "media_downloads"},
     "memory": {"mem0", "memory"},

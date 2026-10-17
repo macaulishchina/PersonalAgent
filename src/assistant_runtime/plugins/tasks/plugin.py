@@ -351,9 +351,50 @@ class TasksPlugin:
         elif requested.get("kind") == "reminder":
             s["execution"] = {"kind": "reminder"}
         else:
-            s["execution"] = await self.model_policy.resolve(
-                self.executor, requested, self.settings.execution
-            )
+            from ...kernel.contracts import DecisionQuery
+            from ...kernel.decisions import decide
+
+            advice = None
+            if (
+                self.host.config.decisions.get("external_data_consent", False)
+                and all(v == "auto" for v in self.settings.execution.values())
+                and all(requested.get(k) in (None, "auto") for k in ("model", "reasoning_effort", "profile"))
+            ):
+                objective = s["title"] + "\n" + s["prompt"]
+                advice = await decide(
+                    self.host.runtime,
+                    DecisionQuery(
+                        "model_profile",
+                        "task-model:" + hashlib.sha256(objective.encode()).hexdigest(),
+                        {"objective": objective},
+                    ),
+                )
+            proposed = requested
+            if advice and advice["status"] == "ok" and advice["choice"] in {"fast", "balanced", "deep"}:
+                proposed = {
+                    **requested,
+                    "profile": advice["choice"],
+                    "reason": "Jev任务档位建议；目标、现有流程与验收要求见任务说明",
+                }
+            try:
+                s["execution"] = await self.model_policy.resolve(
+                    self.executor, proposed, self.settings.execution
+                )
+            except Exception:
+                if proposed is requested:
+                    raise
+                advice = {
+                    "status": "fallback",
+                    "reason": "suggested_profile_unavailable",
+                    "receipt_id": advice.get("receipt_id"),
+                }
+                s["execution"] = await self.model_policy.resolve(
+                    self.executor, requested, self.settings.execution
+                )
+            if advice:
+                s["execution"]["selection"]["decision_support"] = advice
+            if caller and self.repo.run(caller)["state"] not in {"running", "waiting_user"}:
+                raise ValueError("Parent execution ended during task model selection")
         return s
 
     def validate_event(self, e):

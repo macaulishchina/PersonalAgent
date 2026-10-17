@@ -91,6 +91,8 @@ MEDIA_TOOLS = (
     "get_media_login",
 )
 
+DECISION_TOOLS = ("decision_support_status", "judge_options")
+
 SERVICES = {
     "memory": {"tools": MEMORY_TOOLS, "task_context": False},
     "device": {"tools": DEVICE_TOOLS, "task_context": False},
@@ -99,4 +101,5 @@ SERVICES = {
     "integrations": {"tools": INTEGRATION_TOOLS, "task_context": True},
     "events": {"tools": EVENT_TOOLS, "task_context": True},
     "media": {"tools": MEDIA_TOOLS, "task_context": True},
+    "decisions": {"tools": DECISION_TOOLS, "task_context": True},
 }

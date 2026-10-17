@@ -3,7 +3,8 @@
 import asyncio
 import time
 
-from ...kernel.contracts import EventRequest
+from ...kernel.contracts import EventRequest, DecisionSample, DecisionQuery
+from ...kernel.decisions import decide, fallback
 from ...kernel.event_reporting import identifier
 
 
@@ -155,12 +156,14 @@ class EventInbox:
                 if not self.current(task, revision):
                     continue
                 with self.db:
-                    self.ingest(self.repo.definition(task), page, details)
+                    samples = self.ingest(self.repo.definition(task), page, details)
                     self.db.execute(
                         "UPDATE job_subscriptions SET cursor=?,error=NULL WHERE task_id=? AND revision=?",
                         (page["next"], task, revision),
                     )
                     self.dispatch(self.repo.definition(task))
+                for sample in samples:
+                    self.plugin.context.publish("decision.observed", sample=sample)
                 more |= page["has_more"]
             except asyncio.CancelledError:
                 raise
@@ -181,6 +184,7 @@ class EventInbox:
 
     def ingest(self, definition, page, details):
         task, now = definition["id"], time.time()
+        samples = []
         config = subscription(definition["spec"])
         # Release expired capacity before considering newly arriving events.
         for (ident,) in self.db.execute(
@@ -223,6 +227,14 @@ class EventInbox:
             if inserted:
                 count += 1
                 self.decision(task, ident, "received", now)
+                samples.append(
+                    DecisionSample(
+                        "event_relevance",
+                        f"task:{task}:{definition['revision']}:event:{ident}",
+                        {"objective": definition["spec"]["prompt"], "event": record},
+                    ),
+                )
+        return samples
 
     def dispatch(self, definition):
         task, now = definition["id"], time.time()
@@ -271,12 +283,14 @@ class EventInbox:
             return True
         try:
             valid = []
+            records = []
             for ref in context["events"]:
                 if ref["expires_at"] <= time.time():
                     continue
                 item = await self.call("get", id=ref["id"], limit=1)
                 if item.get("record") and item["revision"] == 1 and ref["expires_at"] > time.time():
                     valid.append(ref)
+                    records.append(item["record"])
         except Exception:
             current = self.repo.run(run["id"])
             if current["state"] == "queued":
@@ -284,6 +298,34 @@ class EventInbox:
                     run["id"], event_retry_at=time.time() + 5, progress="等待事件服务恢复，尚未启动执行。"
                 )
             return False
+        advice = None
+        if valid and self.plugin.host.config.decisions.get("external_data_consent", False):
+            advice = await decide(
+                self.plugin.host.runtime,
+                DecisionQuery(
+                    "event_relevance",
+                    "event-run:" + run["id"],
+                    {"objective": run["data"]["spec"]["prompt"], "event": {"batch": records}},
+                ),
+            )
+            refreshed = []
+            try:
+                for ref in valid:
+                    item = await self.call("get", id=ref["id"], limit=1)
+                    if item.get("record") and item["revision"] == 1 and ref["expires_at"] > time.time():
+                        refreshed.append(ref)
+            except Exception:
+                current = self.repo.run(run["id"])
+                if current["state"] == "queued":
+                    self.repo.update_run(
+                        run["id"],
+                        event_retry_at=time.time() + 5,
+                        progress="等待事件服务恢复，尚未启动执行。",
+                    )
+                return False
+            if refreshed != valid:
+                advice = fallback("events_changed")
+            valid = refreshed
         current = self.repo.run(run["id"])
         if current["state"] != "queued":
             return False
@@ -295,6 +337,15 @@ class EventInbox:
                 progress="触发事件已过期、更正或删除，本次未启动。",
             )
             return False
+        if advice and advice["status"] == "ok" and advice["choice"] == "irrelevant":
+            self.repo.update_run(
+                run["id"],
+                "missed",
+                skip_reason="semantic_irrelevant",
+                decision_support=advice,
+                progress="触发事件与任务授权目标无关，本次未启动；原始事件已保留。",
+            )
+            return False
         self.repo.update_run(
             run["id"],
             trigger_context={
@@ -303,6 +354,7 @@ class EventInbox:
                 "invalidated_before_dispatch": len(context["events"]) - len(valid),
             },
             event_retry_at=0,
+            decision_support=advice,
         )
         return True
 

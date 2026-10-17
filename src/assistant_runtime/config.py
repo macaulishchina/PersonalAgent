@@ -37,6 +37,7 @@ class Config:
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
+    decisions: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
@@ -50,6 +51,7 @@ class Config:
     unit_name: str = "personal-agent.service"
     plugins: list[str] = field(
         default_factory=lambda: [
+            "decisions",
             "pipewire",
             "keyword",
             "codex",
@@ -87,7 +89,9 @@ class Config:
 
         from assistant_runtime.plugins.events.settings import EventSettings
         from assistant_runtime.plugins.media.settings import MediaSettings
+        from assistant_runtime.plugins.decisions.settings import DecisionSettings
 
+        DecisionSettings.parse(self.decisions)
         MediaSettings.parse(self.media)
         EventSettings.parse(self.events)
         NotificationSettings.parse(self.notifications)

@@ -63,6 +63,7 @@ class AssistantService:
         self.last_speech = 0.0
         self.dialogue = Dialogue(config.voice_follow_up_seconds)
         self.reconnect_task = None
+        self.voice_decision_task = None
         from assistant_runtime.bootstrap import compose
 
         self.runtime = compose(self)
@@ -266,8 +267,45 @@ class AssistantService:
                         self.input_count += 1
                         self.last_activity = time.monotonic()
                         cmd = parse_command(text, self.config.wake_words)
+                        from ..kernel.contracts import DecisionSample
+
+                        self.context.publish(
+                            "decision.observed",
+                            sample=DecisionSample(
+                                "voice_intent",
+                                f"voice:{self.backend.session_id}:{event['epoch']}:{event.get('message_id') or time.time_ns()}",
+                                {"utterance": text, "execution_active": bool(self.backend.busy)},
+                                cmd.kind if cmd else None,
+                            ),
+                        )
                         if cmd:
                             await self.control(cmd)
+                        elif (
+                            self.config.decisions.get("external_data_consent", False)
+                            and len(text) <= 80
+                            and any(
+                                word in text
+                                for word in ("结束", "退下", "安静", "停", "别说", "取消", "不用", "陪", "聊")
+                            )
+                        ):
+                            # No new external route is enabled before consent.
+                            pending = getattr(self, "voice_decision_task", None)
+                            if pending and not pending.done():
+                                pending.cancel()
+                            self.voice_decision_task = self.context.spawn(
+                                self._voice_decision(
+                                    text,
+                                    event["epoch"],
+                                    self.input_count,
+                                    getattr(self.backend, "active_turn", None),
+                                    getattr(
+                                        getattr(self, "conversation", None),
+                                        "voice_revision",
+                                        self.input_count,
+                                    ),
+                                ),
+                                "voice-decision",
+                            )
                     elif role == "assistant" and not self.backend.busy:
                         self.dialogue.replied()
                 elif event["kind"] == "user_turn":
@@ -285,6 +323,38 @@ class AssistantService:
                     self.reconnect_task = self.context.spawn(self._reconnect(), "voice-reconnect")
             finally:
                 self.events.task_done()
+
+    async def _voice_decision(self, text, epoch, revision, turn, focus):
+        from ..kernel.contracts import DecisionQuery
+        from ..kernel.decisions import decide
+
+        result = await decide(
+            self.runtime,
+            DecisionQuery(
+                "voice_intent",
+                f"voice-control:{self.backend.session_id}:{epoch}:{revision}",
+                {"utterance": text, "execution_active": bool(turn)},
+            ),
+        )
+        if (
+            result["status"] != "ok"
+            or not self.active
+            or self.quiet_active()
+            or self.voice.epoch != epoch
+            or self.input_count != revision
+            or getattr(getattr(self, "conversation", None), "voice_revision", self.input_count) != focus
+        ):
+            return
+        choice = result["choice"]
+        if choice in {"sleep", "stop", "chat"}:
+            await self.control(Control(choice))
+        elif (
+            choice == "cancel"
+            and turn
+            and self.backend.active_turn == turn
+            and any(word in text for word in ("任务", "执行"))
+        ):
+            await self.control(Control("cancel", turn))
 
     async def _reconnect(self):
         try:
@@ -335,7 +405,11 @@ class AssistantService:
             self.context.spawn(notify_stop(), "notify-stop")
         elif cmd.kind == "cancel":
             await self.player.stop()
-            cancelled = await self.backend.cancel()
+            cancelled = (
+                await self.backend.cancel(expected_turn=cmd.value)
+                if cmd.value is not None
+                else await self.backend.cancel()
+            )
             await self.speak("已请求取消当前任务。" if cancelled else "当前没有正在执行的任务。")
         elif cmd.kind == "volume":
             await self.route.set_volume(cmd.value)
@@ -511,6 +585,20 @@ class AssistantService:
                 result = await self.runtime.invoke(
                     MediaRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
                 )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "decisions":
+                from ..kernel.contracts import DecisionRequest, DecisionQuery
+
+                request = (
+                    DecisionQuery(**d.get("arguments", {}), caller_run=d.get("caller_run"))
+                    if d["action"] == "judge"
+                    else DecisionRequest(d["action"], d.get("arguments", {}))
+                )
+                result = await self.runtime.invoke(request)
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
                 writer.close()

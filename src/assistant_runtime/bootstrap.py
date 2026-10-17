@@ -64,6 +64,11 @@ def compose(service):
 
         return MediaPlugin(service)
 
+    def decisions():
+        from .plugins.decisions.plugin import DecisionsPlugin
+
+        return DecisionsPlugin(service)
+
     service.voice_io = VoiceBinding(config.input_device, config.default_output)
     service.devices = DeviceDirectory(config.devices, service.voice_io)
     from .devices.resources import DeviceResources
@@ -116,6 +121,7 @@ def compose(service):
         "web": web,
         "tasks": tasks,
         "media": media,
+        "decisions": decisions,
         "notifications": notifications,
         "events": events,
         "observations": observations,

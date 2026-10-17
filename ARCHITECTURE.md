@@ -55,6 +55,25 @@ Disconnect recovery runs as a tracked task, leaving the event consumer available
 
 ## Shared conversation and Web entrance
 
+Optional `plugins/decisions/` owns bounded semantic support through `DecisionQuery`.
+`kernel.decisions.decide` returns an explicit original-workflow fallback when the
+plugin/provider is disabled, unavailable, uncertain or past its deadline. The plugin
+executes no actions. After explicit external-context consent, owners may adopt a
+closed-set recommendation: the assistant supplements unhandled short voice controls,
+tasks may select an automatic model profile or skip a clearly unrelated inbox batch,
+and independent decisions MCP offers evidence-based choices to main/background agents.
+Owners retain authorization, current-state revalidation and execution receipts. Exact
+rules and known local controls bypass inference. Native automatic handoff is not a
+pre-execution approval boundary; this integration does not claim to intercept it.
+`DecisionRequest` exposes local status, paging, manual samples and labels. Optional
+shadow mode observes bounded `DecisionSample` publications without affecting work.
+The provider reads its own secret without changing child environments; private,
+off-loop receipts retain hashes/references, versioned answers, token usage and HTTP
+latency, not another copy of conversation/event text. Bounded deadlines, durable daily
+budgets, auth suspension, backoff and no uncertain replay isolate this paid dependency.
+The global switch defaults on; new instances must explicitly consent before active
+context leaves the host. See `plugins/decisions/README.md` for use rules and acceptance.
+
 `conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. Foreground Codex handles conversational delegation; the optional tasks plugin owns durable background work through an injected executor adapter.
 
 Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.

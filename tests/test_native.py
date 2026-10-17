@@ -247,14 +247,15 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_final_media_transcript_once_and_stale_connection_ignored(self):
         events = AsyncMock()
         voice = NativeVoice(None, None, None, events)
-        final = {"type": "turn.done", "turn": {"role": "user", "transcript": "结束对话"}}
+        final = {"type": "turn.done", "turn": {"id": "final", "role": "user", "transcript": "结束对话"}}
         voice.media_event(final, voice.epoch - 1)
         events.assert_not_called()
         voice.media_event(final, voice.epoch)
         await asyncio.gather(*voice.tasks)
         transcripts = [c.args[0] for c in events.await_args_list if c.args[0]["kind"] == "transcript"]
         self.assertEqual(
-            transcripts, [{"kind": "transcript", "epoch": 0, "role": "user", "text": "结束对话"}]
+            transcripts,
+            [{"kind": "transcript", "epoch": 0, "role": "user", "text": "结束对话", "message_id": "final"}],
         )
         await voice.notification("thread/realtime/transcript/done", {"role": "user", "text": "结束对话"})
         self.assertEqual(events.await_count, 1)  # final text only, no provider event or sideband duplicates

@@ -81,6 +81,7 @@ class NativeVoice:
                             "epoch": epoch,
                             "role": turn["role"],
                             "text": turn["transcript"],
+                            "message_id": ident,
                         }
                     )
                 )
