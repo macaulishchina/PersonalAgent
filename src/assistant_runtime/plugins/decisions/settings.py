@@ -12,7 +12,6 @@ class DecisionSettings:
     mode: str = "active"
     model: str = "jev-1.13.0"
     queue_size: int = 32
-    daily_limit: int = 100
     retention: int = 2000
     timeout_seconds: float = 8
     max_age_seconds: int = 30
@@ -41,7 +40,6 @@ class DecisionSettings:
             raise ValueError("Invalid Jev model")
         for key, low, high in (
             ("queue_size", 1, 128),
-            ("daily_limit", 0, 10000),
             ("retention", 100, 10000),
             ("max_age_seconds", 1, 300),
         ):

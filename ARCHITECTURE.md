@@ -69,8 +69,9 @@ pre-execution approval boundary; this integration does not claim to intercept it
 shadow mode observes bounded `DecisionSample` publications without affecting work.
 The provider reads its own secret without changing child environments; private,
 off-loop receipts retain hashes/references, versioned answers, token usage and HTTP
-latency, not another copy of conversation/event text. Bounded deadlines, durable daily
-budgets, auth suspension, backoff and no uncertain replay isolate this paid dependency.
+latency, not another copy of conversation/event text. Bounded deadlines, auth suspension,
+backoff and no uncertain replay isolate this paid dependency. Usage counts are
+informational; the framework imposes no daily or lifetime call-count cap.
 The global switch defaults on; new instances must explicitly consent before active
 context leaves the host. See `plugins/decisions/README.md` for use rules and acceptance.
 

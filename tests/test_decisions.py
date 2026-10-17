@@ -152,8 +152,7 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(self.plugin.enqueue(oversized, "assistant")["accepted"])
 
-    async def test_budget_survives_restart_and_uncertain_attempt_is_not_retried(self):
-        self.plugin.settings.daily_limit = 1
+    async def test_usage_survives_restart_and_uncertain_attempt_is_not_retried(self):
         self.provider.release.clear()
         self.plugin.enqueue(sample(), "assistant")
         await self.provider.entered.wait()
@@ -161,7 +160,6 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.provider.closed)
         provider = FakeProvider()
         plugin = DecisionsPlugin(SimpleNamespace(config=self.config), provider)
-        plugin.settings.daily_limit = 1
         self.runtime = Runtime(self.store)
         self.runtime.add(plugin)
         await self.runtime.start()
@@ -169,9 +167,9 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         plugin.enqueue(sample("two"), "assistant")
         await asyncio.wait_for(plugin.queue.join(), 2)
         rows = await plugin.request(DecisionRequest("list"))
-        self.assertEqual([r["state"] for r in rows["items"]], ["budget_skipped", "unknown"])
-        self.assertEqual(provider.calls, [])
-        self.assertEqual((await plugin.request(DecisionRequest("status")))["attempts_today"], 1)
+        self.assertEqual([r["state"] for r in rows["items"]], ["completed", "unknown"])
+        self.assertEqual([call["reference"] for call in provider.calls], ["two"])
+        self.assertEqual((await plugin.request(DecisionRequest("status")))["attempts_today"], 2)
 
     async def test_authentication_failure_suspends_until_explicit_reload_without_replay(self):
         self.provider.failure = DecisionError("authentication_failed")
@@ -318,16 +316,12 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.calls), 1)
         self.assertTrue(self.plugin.diagnostics()["active_enabled"])
 
-    async def test_low_probability_uncertain_budget_and_errors_fall_back(self):
+    async def test_low_probability_uncertain_and_errors_fall_back(self):
         self.provider.probability = 0.8
         self.assertEqual((await self.query("low"))["reason"], "low_confidence")
         self.provider.probability = 1
         self.provider.choice = "uncertain"
         self.assertEqual((await self.query("unknown"))["reason"], "low_confidence")
-        self.plugin.settings.daily_limit = 2
-        self.assertEqual((await self.query("budget"))["reason"], "budget_skipped")
-        self.assertEqual(len(self.provider.calls), 2)
-        self.plugin.settings.daily_limit = 100
         self.provider.failure = DecisionError("authentication_failed")
         self.assertEqual((await self.query("auth"))["reason"], "authentication_failed")
         self.assertEqual((await self.query("blocked"))["reason"], "credential_unavailable")
@@ -335,6 +329,15 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         await self.plugin.reload()
         self.assertEqual((await self.query("auth"))["reason"], "authentication_failed")
         self.assertEqual(len(self.provider.calls), 3)  # Reload never replays a failed identity.
+
+    async def test_usage_count_is_informational_and_does_not_limit_calls(self):
+        for index in range(121):
+            result = await self.query(f"usage:{index}")
+            self.assertEqual(result["status"], "ok")
+        status = await self.plugin.request(DecisionRequest("status"))
+        self.assertEqual(len(self.provider.calls), 121)
+        self.assertEqual(status["attempts_today"], 121)
+        self.assertNotIn("daily_limit", status)
 
     async def test_disabled_no_consent_and_missing_plugin_preserve_original_route(self):
         self.plugin.settings.mode = "active"
@@ -568,7 +571,7 @@ class ContractTest(unittest.TestCase):
     def test_configuration_and_question_contract_are_strict(self):
         for values in (
             {"mode": "invalid"},
-            {"daily_limit": True},
+            {"daily_limit": 100},
             {"timeout_seconds": float("nan")},
             {"api_key": "never-in-config"},
             {"endpoint": "http://elsewhere"},

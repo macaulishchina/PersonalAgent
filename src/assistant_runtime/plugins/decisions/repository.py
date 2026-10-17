@@ -1,4 +1,4 @@
-"""Bounded private receipts and durable attempt budgets on one owned IO thread."""
+"""Bounded private receipts and usage statistics on one owned IO thread."""
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -75,9 +75,6 @@ class Receipts:
         with self.db:
             if self.db.execute("SELECT 1 FROM receipts WHERE id=?", (job["id"],)).fetchone():
                 return False
-            count = self.db.execute("SELECT count FROM attempts WHERE day=?", (day,)).fetchone()
-            if skip is None and (count[0] if count else 0) >= self.settings.daily_limit:
-                skip = "budget_skipped"
             state = skip or "dispatching"
             self.db.execute(
                 "DELETE FROM receipts WHERE seq NOT IN (SELECT seq FROM receipts ORDER BY seq DESC LIMIT ?)",
@@ -185,5 +182,5 @@ class Receipts:
             "records": len(rows),
             "groups": groups,
             "attempts_today": count[0] if count else 0,
-            "budget_day": self.day(),
+            "attempt_day": self.day(),
         }

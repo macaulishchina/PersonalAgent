@@ -319,7 +319,6 @@ class DecisionsPlugin:
             "error": self.error,
             "queue_depth": self.queue.qsize(),
             "queue_capacity": self.settings.queue_size,
-            "daily_limit": self.settings.daily_limit,
             "active_timeout_seconds": self.settings.active_timeout_seconds,
             "thresholds": self.settings.thresholds,
             "retry_in_seconds": max(0, round(self.retry_at - time.monotonic())),

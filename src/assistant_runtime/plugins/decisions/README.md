@@ -19,7 +19,6 @@ model = "jev-1.13.0"
 active_timeout_seconds = 1.5
 timeout_seconds = 8
 queue_size = 32
-daily_limit = 100
 retention = 2000
 max_age_seconds = 30
 
@@ -36,7 +35,10 @@ and candidate options to `api.typesafe.ai`. Credentials and raw audio/video are 
 valid inputs. The global `enabled` switch defaults on; consent defaults off for new
 instances. Set `enabled=false` and restart to use original logic everywhere. Removing
 the plugin also leaves those paths usable. `mode="shadow"` restores observation-only
-operation; active callers receive fallback. `daily_limit=0` prohibits paid attempts.
+operation; active callers receive fallback. There is no local daily or lifetime
+call-count cap. To stop external requests, use the enabled switch.
+When upgrading an older instance, remove the retired `daily_limit` setting from its
+configuration; there is no replacement quota setting.
 
 Put `TYPESAFE_API_KEY=...` in the root `.env` (mode 600), or the service environment.
 Environment takes precedence. Dotenv interpolation is disabled; variables are never
@@ -110,8 +112,9 @@ outstanding requests, and caller cancellation does not wait for slow SQLite; shu
 queues close after pending IO and drains the executor. Overflow is a coverage gap,
 not a failure of primary work. Queued input is volatile and not replayed after restart.
 
-Intent and UTC-day attempt count commit before HTTP. Failed/timed-out/unconfirmed calls
-consume budget. No automatic HTTP retries occur. Auth failures suspend until explicit
+Intent and UTC-day attempt count commit before HTTP. The count includes failed,
+timed-out and unconfirmed calls and is informational only, never an admission limit.
+No automatic HTTP retries occur. Auth failures suspend until explicit
 reload/restart; other failures back off up to 15 minutes. Restart marks unfinished
 intents unknown. Same source/reference/input digest/question version/model deduplicates
 within retained receipts; changed input is a new judgment. A failed identity is not
@@ -119,7 +122,7 @@ retried after reload. Unknown outcomes never imply permission to replay an actio
 
 The newest 2000 receipts are retained (100..10000 configurable); SQLite has a 128 MiB
 page ceiling. The existing private filename is `state/decisions/shadow.sqlite3` in either
-mode, preserving earlier receipts and budget. Paging/results are bounded. Statistics
+mode, preserving earlier receipts and usage counts. Paging/results are bounded. Statistics
 cover retained receipts, not lifetime usage. `source:kind` separates manual fixtures
 from live cohorts; baseline-parser agreement is distinct from labelled accuracy.
 Latency is HTTP time, not evidence of faster end-to-end tasks. New active cohorts need
@@ -144,7 +147,7 @@ List defaults to 20, maximum 100, with a before cursor. Labels stay local.
 Use `scripts/check.py --group decisions --group tasks --group codex` during development,
 then the full check before deployment. Tests exercise real runtime/storage/inbox and
 local HTTP framing, deadlines, cancellation, missing/disabled service, privacy guards,
-coalescing, quota, restart, model fallbacks and concurrent event invalidation. Fake
+coalescing, calls beyond the former daily cap, restart, model fallbacks and concurrent event invalidation. Fake
 providers establish contracts, not live-provider success. Explicit paid acceptance:
 
 ```sh

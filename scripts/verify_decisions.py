@@ -98,9 +98,6 @@ async def verify(config):
         or initial["execution_enabled"]
     ):
         raise RuntimeError("An available, consented, effect-free judgment capability is required")
-    active_count = 4 if initial["mode"] == "active" else 0
-    if initial["attempts_today"] + len(CASES) + active_count > initial["daily_limit"]:
-        raise RuntimeError("Synthetic acceptance would exceed the configured daily attempt budget")
     receipt = {"synthetic": True, "started_at": time.time(), "cases": [], "active": []}
     run = uuid.uuid4().hex
     try:
