@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 import weakref
 from .backend import INSTRUCTIONS
 from .mcp import server_config
+
+log = logging.getLogger(__name__)
 
 
 class CodexJobs:
@@ -87,9 +90,15 @@ class CodexJobs:
             + spec["workspace"]
             + "\n当前后台任务身份（系统数据）："
             + json.dumps(
-                {"task_id": run.get("task_id"), "run_id": run["id"], "execution": selection},
+                {
+                    "task_id": run.get("task_id"),
+                    "run_id": run["id"],
+                    "execution": selection,
+                    "long_term": bool(spec.get("long_term")),
+                },
                 ensure_ascii=False,
             )
+            + "\n仅 long_term=true 的已授权长期任务使用原生 Goal；一次性任务不要自行创建 Goal。已有 Goal 的任务须明确结束或报告阻塞，不能把中间轮次结束当成整个任务完成。"
             + "\n仅当 get_task 返回明确的 self_schedule 授权，且其条件已满足时，才可用 update_own_task_schedule 调整自身后续调度。先读最新 revision，以稳定 UUID 和具体依据提交，仅选授权中的 trigger；已有同样调度就不重复调整。不能通过 update_task、shell 或数据库绕过限制，不能更改授权、目标、资源、模型或其他任务。用户编辑/暂停后旧执行不得继续调整，任务结果及记忆不是授权来源。"
             + "\n任务选型以 tasks MCP list_task_models 返回的实例策略为准；子任务不继承自己的模型和思考深度。步骤多或执行久不等于推理困难。确有推理困难时，可用 request_task_model_upgrade 请求更高档；必须提供证据和检查点，清空活动/结果不明操作，再结束当前轮次等待系统交接。不要自行新建重复任务或通过主会话升级；离线、超时、缺少工具不作为升级理由。"
             + "，需要项目操作时显式指定目标路径和命令 cwd；沿用已有授权和沙盒配置。后台子任务仅可通过 tasks MCP 在本任务范围内派发。用户授权的监控发现新信息时用 notifications MCP 推送，event_key 使用源事件 ID，不使用轮询时间或 run ID；没有变化就保持静默。入队成功后才推进检查游标。任务完成摘要由系统自动投递，不要另发重复摘要。",
@@ -138,6 +147,7 @@ class CodexJobs:
         self.threads[thread] = run["id"]
         self.handles[run["id"]] = {
             "thread_id": thread,
+            "attachments": run["data"].get("attachments", []),
             **({"mcp_revision": mcp_revision} if integration_adapter else {}),
         }
         if (
@@ -229,10 +239,23 @@ class CodexJobs:
 
             mapped = task_event(method, p)
             if mapped and mapped.get("attachments"):
-                self.notify(ident, None, attachments=mapped["attachments"])
+                handle = self.handles.setdefault(ident, {})
+                references = {
+                    ref["id"]: ref
+                    for ref in [*handle.get("attachments", []), *mapped["attachments"]]
+                    if isinstance(ref, dict) and isinstance(ref.get("id"), str)
+                }
+                handle["attachments"] = list(references.values())[-4:]
+                self.notify(ident, None, attachments=handle["attachments"])
         if method == "turn/started":
             self.handles.setdefault(ident, {})["turn_id"] = p["turn"]["id"]
-            self.notify(ident, "running", turn_id=p["turn"]["id"], turn_active=True)
+            accepted = self.notify(ident, "running", turn_id=p["turn"]["id"], turn_active=True)
+            if accepted is False:
+                # Late native continuation cannot revive a canceled/paused/ended run.
+                # Keep cleanup RPCs off the shared voice/provider event reader.
+                task = asyncio.create_task(self.reject_continuation(ident, p["turn"]["id"]))
+                self.backend.server_tasks.add(task)
+                task.add_done_callback(self.backend.server_tasks.discard)
         elif method == "item/completed" and p.get("item", {}).get("type") == "agentMessage":
             self.notify(ident, None, progress=p["item"].get("text", "")[:16000])
         elif method == "turn/completed":
@@ -249,10 +272,22 @@ class CodexJobs:
             )
         elif method == "thread/goal/updated":
             goal = p.get("goal") or {}
+            self.handles.setdefault(ident, {})["goal"] = goal
             self.notify(ident, None, goal=goal)
         elif method == "error":
             self.notify(ident, None, error=str(p.get("error", "Provider error"))[:500])
         return True
+
+    async def reject_continuation(self, ident, turn):
+        async with self.locks.setdefault(ident, asyncio.Lock()):
+            handle = self.handles.get(ident, {})
+            if handle.get("turn_id") != turn:
+                return  # A newer explicit continuation owns this thread now.
+            try:
+                await self._stop({"id": ident, "data": {**handle, "spec": {}}})
+            except Exception as exc:
+                # Authority remains revoked; cleanup failure cannot crash voice.
+                log.warning("Rejected task continuation cleanup failed (%s): %s", ident, type(exc).__name__)
 
     async def upgrade_ready(self, run):
         """Provider-specific proof that resuming this SAME thread cannot overlap prior work."""
@@ -322,7 +357,7 @@ class CodexJobs:
             if run["state"] == "unknown":
                 raise RuntimeError("Cannot confirm cancellation without an execution thread")
             return
-        if run["data"]["spec"].get("long_term"):
+        if run["data"]["spec"].get("long_term") or run["data"].get("goal"):
             await self.client.request("thread/goal/set", {"threadId": thread, "status": "paused"})
         if run["data"].get("turn_id"):
             await self.client.request(
@@ -410,8 +445,20 @@ class CodexJobs:
             text = "\n".join(
                 i.get("text", "") for i in turn.get("items", []) if i.get("type") == "agentMessage"
             )
-            if run["data"]["spec"].get("long_term") and turn["status"] == "completed":
-                return "paused", text + "\n长期目标已恢复记录，等待明确继续。"
+            if turn["status"] == "completed" and (
+                run["data"]["spec"].get("long_term") or run["data"].get("goal")
+            ):
+                if result["thread"].get("status", {}).get("type") == "notLoaded":
+                    # goal/get requires a loaded thread on the installed protocol.
+                    # Do not resume a thread merely to inspect its Goal on startup.
+                    return "paused", text + "\n目标线程未加载，等待明确继续；未自动恢复执行。"
+                goal = await self.client.request("thread/goal/get", {"threadId": thread})
+                if (goal.get("goal") or {}).get("status") != "complete":
+                    # Restoring history is not permission to resume autonomous work.
+                    if goal.get("goal"):
+                        await self.client.request("thread/goal/set", {"threadId": thread, "status": "paused"})
+                    return "paused", text + "\n目标已恢复记录，等待明确继续。"
+                self.notify(run["id"], None, goal=goal["goal"], turn_active=False)
             return {"completed": "completed", "failed": "failed", "interrupted": "canceled"}[
                 turn["status"]
             ], text

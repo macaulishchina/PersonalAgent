@@ -83,7 +83,7 @@ class MediaPlugin:
         action, args = request.action, request.arguments
         allowed = {
             "status": set(),
-            "search": {"query", "before", "limit"},
+            "search": {"query", "before", "limit", "search_id", "refresh"},
             "inspect": {"share_url", "password", "parent_file_id", "marker"},
             "files": {"target", "marker"},
             "transfer": {
@@ -109,7 +109,13 @@ class MediaPlugin:
             raise ValueError("Unknown media action or arguments")
         owner = await self.authorize(request.caller_run)
         if action == "search":
-            return await self.search.search(args.get("query"), args.get("before", 0), args.get("limit", 20))
+            return await self.search.search(
+                args.get("query"),
+                args.get("before", 0),
+                args.get("limit", 20),
+                search_id=args.get("search_id"),
+                refresh=args.get("refresh", False),
+            )
         if action == "status":
             try:
                 await self.provider.call("status")

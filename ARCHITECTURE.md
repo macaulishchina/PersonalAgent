@@ -107,6 +107,14 @@ Requested capture replies register complete pixels with the conversation media o
 
 The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
 
+Background captures retain up to four deduplicated registered media references per
+run, pinned independently of notification settings. Task queries project the selected
+page's newest run attachments at the top level for conversation delivery and keep
+each run's own references for task details. Historical task replies can restore those
+references without recapturing; an empty newer run never borrows older media. Both
+views use the same authenticated media component and a native modal image preview
+above mobile drawers. Text and arbitrary paths never become media capabilities.
+
 Task and notification views share one persistent native dialog. On desktop it is a
 nonmodal side panel; the original composer shortcuts remain clickable and switch the
 view directly. The panel ends above those shortcuts; outside pointer interaction closes
@@ -350,6 +358,10 @@ page plus bounded known unfinished tasks/runs, and aborts obsolete queries on na
 older pages do not multiply polling requests. Closed/hidden views do not poll.
 No uncertain action is automatically replayed. A Goal's completion differs from an
 ordinary turn completing; external processes require their own checkpoints and identity.
+An actual native Goal created during a one-shot also retains that run's existing
+authority across intermediate turns. It does not expand scope or create a new task.
+Completion waits for the Goal and final turn; cancellation pauses the actual Goal,
+late continuation cannot reactivate ended work, and restart never replays it.
 
 `tasks` MCP is independent of memory/device. CLI and authenticated Web share TaskRequest;
 existing foreground cancellation controls remain distinct. Task models resolve from the

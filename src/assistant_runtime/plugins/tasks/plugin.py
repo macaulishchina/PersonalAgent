@@ -233,6 +233,10 @@ class TasksPlugin:
             if identifiers:
                 self.repo.update_run(ident, **identifiers)
             return False
+        if "attachments" in data:
+            # Pin only registered media while the producing run still owns it.
+            # Quiet/no-notification tasks must not lose their images to upload expiry.
+            data["attachments"] = self.host.conversation.media.resolve(data["attachments"])
         state, data = self.upgrades.boundary(run, state, data)
         if "provider_selection" in data and run["data"].get("model_selections"):
             history = [dict(item) for item in run["data"]["model_selections"]]
@@ -241,11 +245,15 @@ class TasksPlugin:
         goal = data.get("goal", run["data"].get("goal", {}))
         if state == "completed" and run["state"] == "waiting_user":
             state = "waiting_user"
-        if state == "completed" and run["data"]["spec"].get("long_term"):
+        if state == "completed" and (run["data"]["spec"].get("long_term") or goal):
+            # A native Goal can be created during an ordinary one-shot, too.
+            # Turn completion must not release its resources between continuations.
             state = "completed" if goal.get("status") == "complete" else "running"
-        if data.get("goal"):
+            if goal.get("status") in {"blocked", "paused", "budgetLimited", "usageLimited"}:
+                state = "waiting_user"
+        if data.get("goal") and state not in {"failed", "canceled", "unknown", "paused"}:
             status = goal.get("status")
-            if status in {"complete", "completed"} and not run["data"].get("turn_active"):
+            if status == "complete" and not data.get("turn_active", run["data"].get("turn_active")):
                 state = "completed"
             elif status in {"blocked", "paused", "budgetLimited", "usageLimited"}:
                 state = "waiting_user"
@@ -478,12 +486,20 @@ class TasksPlugin:
             ident = args["task_id"]
             definition = self.repo.definition(ident)
             runs, active, before, updates = self.repo.run_page(ident, args)
+            for run in [*runs, *active, *updates]:
+                references = run["data"].get("attachments")
+                if references:
+                    run["data"]["attachments"] = self.host.conversation.media.resolve(references)
             return {
                 "task": definition,
                 "runs": runs,
                 "active_runs": active,
                 "before": before,
                 "updates": updates,
+                # Only the selected page's newest run supplies the tool reply's
+                # media. Never substitute an older run's picture for an empty one.
+                "attachments": runs[0]["data"].get("attachments", []) if runs else [],
+                "attachment_run_id": runs[0]["id"] if runs else None,
                 "event_inbox": self.event_inbox.describe(ident) if subscription(definition["spec"]) else None,
             }
         if a == "create":

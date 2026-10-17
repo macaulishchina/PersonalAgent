@@ -69,7 +69,7 @@ class ModelUpgrades:
         policy = self.plugin.model_policy
         if run["state"] != "running" or not run["data"].get("turn_active") or not run["data"].get("turn_id"):
             raise ValueError("Upgrade requires a running provider turn")
-        if run["data"]["spec"].get("long_term"):
+        if run["data"]["spec"].get("long_term") or run["data"].get("goal"):
             raise ValueError(
                 "Native Goal tasks do not support automatic model handoff; use explicit task management"
             )
@@ -129,6 +129,9 @@ class ModelUpgrades:
     def boundary(self, run, state, data):
         upgrade = pending(run)
         if not upgrade:
+            return state, data
+        if data.get("goal") or run["data"].get("goal"):
+            data["model_upgrades"] = replace(run, phase="blocked", error="native_goal_started")
             return state, data
         if (
             upgrade["phase"] == "dispatching"

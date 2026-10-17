@@ -12,7 +12,38 @@ PanSou service with `docker compose -p personal-agent-media-search -f deploy/med
 Its port is loopback-only, resources/logs are bounded and its disposable cache is tmpfs.
 The image digest is the tested upstream artifact; upgrade deliberately and reverify.
 Search coverage is partial, source labels are untrusted and no result means only
-that these sources found nothing. Requery after cache expiry for late source results.
+that these sources found nothing. Search remains Aliyun-only; refresh does not enable
+additional providers, accounts or sources.
+
+## Search and late results
+
+`search_media(query, limit=20)` returns an immutable `search_id` snapshot. Page with
+its `next` as `before`, together with the same `query` and `search_id`. Snapshots
+expire after five minutes or bounded cache eviction (32 snapshots); restart from the
+first page if expired. Pagination never silently switches to a newer result set.
+Head requests reuse results for 30 seconds; identical concurrent queries share one
+fetch. Up to three distinct queries fetch concurrently, with at most eight requests
+waiting/working. Cancellation releases admission; failed refresh retains old pages.
+
+PanSou returns quickly while slow sources enrich its backend cache. If results are
+insufficient, wait `refresh_after_seconds` (currently 8), then call
+`search_media(query, refresh=true)` without `before`/`search_id`. This bypasses only
+our head cache and reads enriched backend results into a NEW snapshot. It does not
+send PanSou's force-rescan flag, which would restart upstream work. Use at most two
+follow-ups per search attempt within its time budget; no permanent polling or model
+waiting loop. A few title/alias/date queries may run concurrently when needed.
+
+Candidates prefer link-specific titles over channel collection titles, retain the
+original context title and publication timestamp, and rank title matches first.
+Unmatched candidates remain available because filenames can provide better evidence.
+These are untrusted hints, not year/episode verification or proof of video availability.
+`source_health` is a bounded best-effort summary of RECENT searches, not this query's
+completion evidence. Health failure does not discard results; raw provider error
+strings are not forwarded. Zero yield alone does not prove a source is broken.
+`complete=false` describes partial public coverage; it does not claim that all
+configured sources have or have not finished. Distinguish source errors, invalid
+shares and missing matching files. No Aliyun match does not establish absence on
+other netdisks or across the Internet.
 
 Enable `media` alongside `notifications`. Minimal instance example:
 

@@ -1290,6 +1290,64 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.provider_update(run["id"], None, goal={"status": "complete"})
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "completed")
 
+    async def test_background_media_is_pinned_even_without_completion_notifications(self):
+        from assistant_runtime.conversation.media import MediaAttachments
+        from test_reply_images import picture
+        import base64
+
+        self.host.conversation.media = MediaAttachments(self.config.state_dir, self.store.db)
+        media = self.host.conversation.media
+        ref = await media.add_image(base64.b64decode(picture()["data"]), "snapshot.jpg")
+        task = await self.create(notify_completion=False)
+        run = self.plugin.repo.enqueue(task, "image", "running")
+        self.plugin.provider_update(run["id"], None, attachments=[ref, {"id": "../../config.toml"}])
+        self.assertEqual(self.plugin.repo.run(run["id"])["data"]["attachments"], [ref])
+        self.assertEqual(self.store.db.execute("SELECT attached FROM chat_uploads").fetchone()[0], 1)
+        self.plugin.provider_update(run["id"], "completed")
+        self.assertFalse(self.plugin.provider_update(run["id"], None, attachments=[]))
+        self.assertEqual(self.plugin.repo.run(run["id"])["data"]["attachments"], [ref])
+
+    async def test_one_shot_native_goal_keeps_media_authority_between_turns(self):
+        from assistant_runtime.plugins.media.plugin import MediaPlugin
+
+        task = await self.create(resources=["media:series"])
+        run = self.plugin.repo.enqueue(task, "native-goal", "running")
+        self.plugin.repo.update_run(run["id"], turn_id="first", turn_active=True)
+        media = MediaPlugin(self.host)
+        runner = CodexJobs(SimpleNamespace(client=SimpleNamespace()), self.plugin.provider_update)
+        runner.threads["thread"] = run["id"]
+        runner.handles[run["id"]] = {"turn_id": "first"}
+
+        async def event(method, **params):
+            return await runner.event({"method": method, "params": {"threadId": "thread", **params}})
+
+        await event("thread/goal/updated", goal={"status": "active"})
+        await event("turn/completed", turn={"id": "first", "status": "completed"})
+        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
+        await asyncio.sleep(0.6)  # Give delivery/archive workers a chance to observe the boundary.
+        self.assertEqual(self.plugin.repo.definition(task["id"])["state"], "enabled")
+        self.assertIsNone(self.plugin.repo.finalization(run["id"]))
+        self.assertEqual(await media.authorize(run["id"], "series"), "task:" + task["id"])
+        with self.assertRaisesRegex(ValueError, "media:movies"):
+            await media.authorize(run["id"], "movies")
+        await event("turn/started", turn={"id": "second"})
+        await event("thread/goal/updated", goal={"status": "complete"})
+        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
+        await event("turn/completed", turn={"id": "second", "status": "completed"})
+        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "completed")
+        with self.assertRaisesRegex(ValueError, "active"):
+            await media.authorize(run["id"])
+
+    async def test_one_shot_goal_limit_waits_and_does_not_mask_failure(self):
+        for status in ("paused", "blocked", "usageLimited", "budgetLimited"):
+            task = await self.create()
+            run = self.plugin.repo.enqueue(task, status, "running")
+            self.plugin.provider_update(run["id"], None, goal={"status": status}, turn_active=True)
+            self.plugin.provider_update(run["id"], "completed", turn_active=False)
+            self.assertEqual(self.plugin.repo.run(run["id"])["state"], "waiting_user")
+            self.plugin.provider_update(run["id"], "failed", goal={"status": "complete"}, turn_active=False)
+            self.assertEqual(self.plugin.repo.run(run["id"])["state"], "failed")
+
     def test_timezone_and_dst_use_calendar_trigger(self):
         now = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc).timestamp()
         expected = datetime(2026, 10, 15, 1, 0, tzinfo=timezone.utc).timestamp()

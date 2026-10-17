@@ -8,13 +8,20 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+import uuid
 
 from aiohttp import ClientSession
+from fastmcp import Client
 from PIL import Image
 
 from assistant_runtime.plugins.codex.conversation import task_event
 from assistant_runtime.kernel.contracts import VideoFrame
+from assistant_runtime.kernel.contracts import TaskRequest
+from assistant_runtime.mcp.tasks import create_server
+from assistant_runtime.plugins.tasks.plugin import TasksPlugin
+from assistant_runtime.plugins.tasks.repository import TaskRepository
 from test_conversation import fixture, Owned
 import test_web
 
@@ -39,6 +46,19 @@ def provider_item(blocks, ident="image-tool"):
 
 
 class ProviderImageTest(unittest.TestCase):
+    def test_historical_task_results_restore_only_the_selected_runs_media(self):
+        ref = {"id": "a" * 32, "name": "snapshot.jpg", "type": "image/jpeg"}
+        value = {"runs": [{"data": {"attachments": [ref]}}, {"data": {"attachments": [{"id": "b" * 32}]}}]}
+        event = provider_item([{"type": "text", "text": json.dumps(value)}])
+        event["item"].update(server="tasks", tool="get_task")
+        self.assertEqual(task_event("item/completed", event)["attachments"], [ref])
+        event["item"]["server"] = "other"
+        self.assertNotIn("attachments", task_event("item/completed", event))
+        event["item"]["server"] = "tasks"
+        value["runs"][0]["data"]["attachments"] = []
+        event["item"]["result"]["content"][0]["text"] = json.dumps(value)
+        self.assertNotIn("attachments", task_event("item/completed", event))
+
     def test_direct_and_wrapped_content_share_the_same_image_contract(self):
         native = picture()
         wrapped = {"type": "text", "text": json.dumps({"content": [native], "isError": False})}
@@ -237,6 +257,58 @@ class ReplyImageHttpTest(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = test_web.WebTest.asyncSetUp
     asyncTearDown = test_web.WebTest.asyncTearDown
     login = test_web.WebTest.login
+
+    async def test_background_task_picture_crosses_mcp_and_survives_reload_without_recapture(self):
+        await self.login()
+        c = self.host.conversation
+        ref = await c.media.add_image(base64.b64decode(picture()["data"]), "snapshot.jpg")
+        owner = object.__new__(TasksPlugin)
+        owner.host = self.host
+        owner.repo = TaskRepository(self.host.store.db)
+        ident = uuid.uuid4().hex
+        spec = {
+            "title": "requested snapshot",
+            "prompt": "snapshot",
+            "trigger": {"kind": "immediate"},
+            "notify_completion": False,
+        }
+        self.host.store.db.execute(
+            "INSERT INTO job_definitions(id,request_id,fingerprint,state,spec,created,updated) VALUES(?,?,?,'archived',?,?,?)",
+            (ident, str(uuid.uuid4()), "snapshot", json.dumps(spec), 1, 1),
+        )
+        run = owner.repo.enqueue(
+            owner.repo.definition(ident),
+            "snapshot",
+            "completed",
+            {"attachments": [ref, {"id": "../../config.toml"}], "progress": "captured"},
+        )
+        # Exercise the actual task facade rather than inventing foreground image bytes.
+        async with Client(create_server(SimpleNamespace(invoke=owner.request))) as mcp:
+            response = await mcp.call_tool("get_task", {"task_id": ident})
+        value = response.structured_content
+        self.assertEqual(value["attachments"], [ref])
+        self.assertEqual(value["attachment_run_id"], run["id"])
+        event = provider_item([{"type": "text", "text": json.dumps(value)}], ident="get-snapshot")
+        event["item"].update(server="tasks", tool="get_task")
+        c.provider_event(task_event("item/completed", event))
+        message = c.store.get("task:session:get-snapshot")
+        self.assertEqual(message["attachments"], [ref])
+        response = await self.client.get(self.base + "/api/uploads/" + ref["id"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, "image/jpeg")
+        response = await self.client.get(self.base + "/api/messages")
+        saved = next(m for m in (await response.json())["messages"] if m["id"] == message["id"])
+        self.assertEqual(saved["attachments"], [ref])
+        before = (message["ordinal"], message["updated"])
+        c.provider_event(task_event("item/completed", event), restored=True)
+        replay = c.store.get(message["id"])
+        self.assertEqual((replay["ordinal"], replay["updated"]), before)
+        self.assertEqual(self.host.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 1)
+        self.assertEqual(self.host.store.db.execute("SELECT attached FROM chat_uploads").fetchone()[0], 1)
+        newer = owner.repo.enqueue(owner.repo.definition(ident), "empty-later", "completed")
+        empty = await owner.request(TaskRequest("get", {"task_id": ident}))
+        self.assertEqual(empty["attachment_run_id"], newer["id"])
+        self.assertEqual(empty["attachments"], [])
 
     async def test_reply_attachment_is_authorized_replays_after_reload_and_is_not_expired(self):
         await self.login()

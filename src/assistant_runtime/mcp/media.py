@@ -56,9 +56,20 @@ def create_server(client, caller_run=None):
         query: Annotated[str, Field(min_length=1, max_length=150)],
         before: int = 0,
         limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20,
+        search_id: Annotated[str, Field(max_length=64)] | None = None,
+        refresh: bool = False,
     ) -> dict:
-        """Search public Aliyun share candidates. Coverage is partial; candidates may be invalid or mismatched."""
-        return await call("search", query=query, before=before, limit=limit)
+        """Search public Aliyun candidates; inspect actual files before transfer.
+
+        Page with returned search_id and next as before. If results are insufficient,
+        wait refresh_after_seconds and call refresh=true without search_id/before to
+        read slow sources' enriched backend cache into a NEW snapshot (at most two
+        follow-ups per search attempt). No forced rescan. Partial coverage or a failing
+        source is not proof of absence. Source health describes recent searches only.
+        """
+        return await call(
+            "search", query=query, before=before, limit=limit, search_id=search_id, refresh=refresh
+        )
 
     @server.tool(annotations=READ)
     async def inspect_media_share(

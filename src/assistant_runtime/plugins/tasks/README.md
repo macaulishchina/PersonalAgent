@@ -4,6 +4,18 @@ Trusted local plugin for independent background work on the existing ChatGPT sub
 Enable `notifications` and `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
 Requires the conversation and configured brain capabilities. Does not activate the microphone.
 
+Requested media belongs to the producing run. Provider callbacks accumulate up to
+four deduplicated registered references; the conversation media owner validates and
+pins them even when completion notifications are disabled. `get_task` exposes each
+run's validated references and top-level `attachments` from the newest run on that
+page, identified by `attachment_run_id`. An empty newer run never inherits an older
+picture. Main conversation tool replies and task details render those references
+through the same authenticated media viewer, outside collapsed tool text. Image
+preview uses a native modal above the mobile task dialog. Raw pixels do not enter
+task JSON/SSE or notification prose. Prose saying "sent" is not delivery evidence.
+Recorded task replies can restore missing conversation attachments from their
+existing registered references without rerunning tasks or capturing another image.
+
 ## Configuration
 
 ```toml
@@ -94,6 +106,18 @@ history alongside tool metadata. Total execution time is not claimed as model re
 time: queueing, tools, user waits and other orchestration also contribute.
 
 ## Controlled model upgrades
+
+Provider turn completion is not native Goal completion. Even if an ordinary run
+creates a Goal during execution, intermediate turns keep that SAME run and its
+existing resource grants active; no definition, scope or grant is expanded. Only
+Goal completion plus an ended turn permits completion/delivery/archival. Goal
+blocked/paused/usage/budget limits await user input. Ordinary one-shots should not
+create native Goals; configured long-term work uses them explicitly. Pause/cancel
+also pauses any actual native Goal before interrupting the turn. Late continuation
+cannot revive terminal/paused runs and is stopped by the provider adapter. Recovery
+reads current Goal status and pauses unfinished Goals without replaying work.
+Native Goals also prevent automatic model handoff, including Goals created after
+a handoff was requested.
 
 `request_task_model_upgrade` / CLI `tasks upgrade_model` applies to an active non-Goal
 Codex execution. It changes only that run, not future recurring runs or the definition.

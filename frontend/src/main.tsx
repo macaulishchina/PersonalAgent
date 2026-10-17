@@ -21,8 +21,8 @@ import {
 } from "lucide-react";
 import "./style.css";
 import { ActivityPanel, type PanelSection } from "./activity";
+import { MessageMedia, ImagePreview, type Attachment } from "./message-media";
 
-type Attachment = { id: string; name: string; type?: string; url?: string };
 type Message = {
   id: string;
   ordinal: number;
@@ -257,46 +257,6 @@ function ToolActivity({
       <span className="tool-label">{label}</span>
       <span className="tool-status">{status}</span>
     </span>
-  );
-}
-function MessageMedia({
-  attachments,
-  onOpen,
-}: {
-  attachments: Attachment[];
-  onOpen: (url: string) => void;
-}) {
-  if (!attachments.length) return null;
-  return (
-    <div className="message-media">
-      {attachments.map((a) =>
-        a.type === "video/mp4" ? (
-          <figure className="message-video" key={a.id}>
-            <video
-              src={"/api/uploads/" + a.id}
-              controls
-              playsInline
-              preload="metadata"
-              aria-label={a.name || "摄像头录像"}
-            />
-            <figcaption>
-              <span>{a.name}</span>
-              <a href={"/api/uploads/" + a.id} download={a.name}>
-                下载
-              </a>
-            </figcaption>
-          </figure>
-        ) : (
-          <button
-            key={a.id}
-            aria-label={"查看图片 " + a.name}
-            onClick={() => onOpen("/api/uploads/" + a.id)}
-          >
-            <img src={"/api/uploads/" + a.id} alt={a.name} loading="lazy" />
-          </button>
-        ),
-      )}
-    </div>
   );
 }
 function MessageEntry({
@@ -670,14 +630,6 @@ function App() {
     window.addEventListener("scroll", scroll, { passive: true });
     return () => window.removeEventListener("scroll", scroll);
   }, []);
-  useEffect(() => {
-    if (!zoom) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setZoom(null);
-    };
-    document.addEventListener("keydown", key);
-    return () => document.removeEventListener("keydown", key);
-  }, [zoom]);
   async function login(e: React.FormEvent) {
     e.preventDefault();
     setSending(true);
@@ -854,6 +806,7 @@ function App() {
           unreadCount={state.notifications_unread || 0}
           api={api}
           nonce={nonce}
+          onOpenMedia={setZoom}
           onReference={(notice) => {
             setNotificationContext(notice);
             window.setTimeout(() => input.current?.focus(), 180);
@@ -1145,20 +1098,7 @@ function App() {
           </div>
         </>
       )}
-      {zoom && (
-        <div
-          className="lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label="查看图片"
-          onClick={() => setZoom(null)}
-        >
-          <button aria-label="关闭图片">
-            <X size={24} />
-          </button>
-          <img src={zoom} alt="图片预览" />
-        </div>
-      )}
+      {zoom && <ImagePreview url={zoom} onClose={() => setZoom(null)} />}
     </>
   );
 }

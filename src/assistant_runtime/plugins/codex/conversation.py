@@ -45,7 +45,7 @@ def tool_name(item):
     return actions[name].get(action, name)
 
 
-def image_content(result):
+def image_content(result, *, task_result=False):
     """Normalize native and JSON-wrapped MCP media; preserve durable asset refs."""
     images, attachments = [], []
 
@@ -54,6 +54,13 @@ def image_content(result):
             return
         if isinstance(value.get("attachments"), list):
             attachments.extend(value["attachments"][:4])
+        elif task_result and isinstance(value.get("runs"), list) and value["runs"]:
+            # Restore already-recorded get_task replies from their run-owned refs,
+            # without recapturing or treating prose/paths as media.
+            run = value["runs"][0]
+            data = run.get("data") if isinstance(run, dict) else None
+            if isinstance(data, dict) and isinstance(data.get("attachments"), list):
+                attachments.extend(data["attachments"][:4])
         if value.get("type") == "image":
             images.append(
                 {
@@ -120,7 +127,9 @@ def task_event(method, params):
     )
     event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
     if kind == "mcpToolCall" and method == "item/completed":
-        images, attachments = image_content(item.get("result"))
+        images, attachments = image_content(
+            item.get("result"), task_result=item.get("server") == "tasks" and item.get("tool") == "get_task"
+        )
         if images:
             event["images"] = images
         if attachments:

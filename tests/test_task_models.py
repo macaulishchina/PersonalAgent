@@ -195,6 +195,20 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         goal = await self.make_running(long_term=True)
         with self.assertRaisesRegex(ValueError, "Goal"):
             await self.upgrade(goal)
+        self.plugin.provider_update(run["id"], None, goal={"status": "active"})
+        with self.assertRaisesRegex(ValueError, "Goal"):
+            await self.upgrade(self.plugin.repo.run(run["id"]))
+
+    async def test_goal_created_after_upgrade_request_blocks_handoff(self):
+        run = await self.make_running()
+        await self.upgrade(run)
+        self.plugin.provider_update(run["id"], None, goal={"status": "active"})
+        self.plugin.provider_update(run["id"], "completed", turn_active=False)
+        current = self.plugin.repo.run(run["id"])
+        self.assertEqual(current["state"], "running")
+        self.assertEqual(current["data"]["model_upgrades"][-1]["error"], "native_goal_started")
+        await self.plugin.upgrades.apply(run["id"])
+        self.assertEqual(self.executor.launch.await_count, 1)
 
     async def test_failed_turn_and_user_pause_do_not_handoff(self):
         run = await self.make_running()

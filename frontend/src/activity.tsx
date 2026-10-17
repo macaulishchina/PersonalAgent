@@ -11,6 +11,7 @@ export function ActivityPanel({
   nonce,
   unreadCount,
   onReference,
+  onOpenMedia,
 }: {
   section: PanelSection | null;
   onClose: () => void;
@@ -18,6 +19,7 @@ export function ActivityPanel({
   nonce: () => string;
   unreadCount: number;
   onReference: (notice: { id: string; title: string }) => void;
+  onOpenMedia: (url: string) => void;
 }) {
   const lastSection = useRef<PanelSection>("tasks");
   if (section) lastSection.current = section;
@@ -41,6 +43,7 @@ export function ActivityPanel({
             onClose={onClose}
             api={api}
             nonce={nonce}
+            onOpenMedia={onOpenMedia}
           />
         </section>
         <section

@@ -4,6 +4,7 @@ import { RUN_LABELS, planLabel, runSummary } from "./task-presentation";
 import { formatDuration } from "./duration";
 import { PanelHeader } from "./panel-header";
 import { useTaskFeed } from "./task-feed";
+import { MessageMedia } from "./message-media";
 
 function EndTaskButton({
   active,
@@ -73,11 +74,13 @@ export function TaskPanel({
   onClose,
   api,
   nonce,
+  onOpenMedia,
 }: {
   open: boolean;
   onClose: () => void;
   api: (path: string, options?: RequestInit) => Promise<any>;
   nonce: () => string;
+  onOpenMedia: (url: string) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const backButton = useRef<HTMLButtonElement>(null);
@@ -199,6 +202,10 @@ export function TaskPanel({
         </p>
       )}
       <p>{runSummary(r)}</p>
+      <MessageMedia
+        attachments={r.data.attachments || []}
+        onOpen={onOpenMedia}
+      />
       {r.data.artifacts?.map((f: any) => (
         <p key={f.name}>
           <a

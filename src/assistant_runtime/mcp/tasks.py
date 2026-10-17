@@ -90,7 +90,7 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def get_task(task_id: str, before: str | None = None, limit: int = 20) -> dict:
-        """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers."""
+        """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers. Top-level attachments are registered media from attachment_run_id (the page's newest run), displayed by the conversation UI. An empty attachment list is not a delivered picture; do not claim one was sent from prose alone. Older run media stays associated with that run."""
         return await call("get", task_id=task_id, before=before, limit=limit)
 
     @server.tool(annotations=READ)

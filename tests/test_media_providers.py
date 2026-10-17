@@ -349,6 +349,187 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(MediaError, "search_invalid_response"):
                 await PanSou(session, url).search("movie")
 
+    async def test_search_refresh_reads_late_results_without_mutating_old_pages(self):
+        rows = [{"title": "movie", "links": [{"url": "https://www.alipan.com/s/public123"}]}]
+        requests_seen = []
+
+        async def search(request):
+            requests_seen.append(await request.json())
+            return web.json_response({"code": 0, "data": {"results": rows}})
+
+        async def health(request):
+            return web.json_response(
+                {
+                    "liveness": {
+                        "failing_plugins": [{"name": "offline", "last_error": "private-url-and-credential"}],
+                        "zero_yield_plugins": [{"name": "quiet"}],
+                    }
+                }
+            )
+
+        app = web.Application()
+        app.router.add_post("/api/search", search)
+        app.router.add_get("/api/health", health)
+        url = await self.serve(app)
+        async with aiohttp.ClientSession() as session:
+            adapter = PanSou(session, url)
+            first = await adapter.search("movie", limit=1)
+            rows.insert(
+                0, {"title": "movie latest", "links": [{"url": "https://www.alipan.com/s/latest123"}]}
+            )
+            cached = await adapter.search("movie")
+            self.assertEqual(cached["search_id"], first["search_id"])
+            refreshed = await adapter.search("movie", refresh=True, limit=1)
+            self.assertNotEqual(first["search_id"], refreshed["search_id"])
+            self.assertIn("latest123", refreshed["items"][0]["share_url"])
+            old = await adapter.search("movie", search_id=first["search_id"])
+            self.assertEqual(old["items"], first["items"])
+            page = await adapter.search("movie", search_id=refreshed["search_id"], before=refreshed["next"])
+            self.assertIn("public123", page["items"][0]["share_url"])
+            self.assertEqual(len(requests_seen), 2)
+            self.assertTrue(all("refresh" not in r for r in requests_seen))
+            self.assertEqual(refreshed["source_health"]["failing_plugins"], ["offline"])
+            self.assertNotIn("private-url", json.dumps(refreshed))
+            self.assertFalse(refreshed["complete"])
+            for kwargs in ({"before": 1}, {"search_id": first["search_id"], "refresh": True}, {"refresh": 1}):
+                with self.assertRaises(ValueError):
+                    await adapter.search("movie", **kwargs)
+            with self.assertRaisesRegex(ValueError, "query changed"):
+                await adapter.search("other", search_id=first["search_id"])
+            adapter.snapshots[first["search_id"]]["created"] -= 301
+            with self.assertRaisesRegex(ValueError, "expired"):
+                await adapter.search("movie", search_id=first["search_id"])
+
+    async def test_search_ranks_link_titles_without_hiding_ambiguous_candidates(self):
+        app = web.Application()
+
+        async def search(request):
+            return web.json_response(
+                {
+                    "code": 0,
+                    "data": {
+                        "results": [
+                            {
+                                "title": "other movie",
+                                "links": [{"url": "https://www.alipan.com/s/unrelated"}],
+                            },
+                            {
+                                "title": "channel collection",
+                                "unique_id": "source-one",
+                                "links": [
+                                    {
+                                        "url": "https://www.alipan.com/s/matched123",
+                                        "work_title": "节目 2026 更新10.16",
+                                        "datetime": "2026-10-16T12:00:00Z",
+                                    }
+                                ],
+                            },
+                            {
+                                "title": "wrong duplicate title",
+                                "links": [{"url": "https://www.alipan.com/s/matched123"}],
+                            },
+                        ]
+                    },
+                }
+            )
+
+        app.router.add_post("/api/search", search)
+        url = await self.serve(app)
+        async with aiohttp.ClientSession() as session:
+            result = await PanSou(session, url).search("节目 20261016")
+        self.assertEqual(len(result["items"]), 2)
+        match, ambiguous = result["items"]
+        self.assertTrue(match["title_match"])
+        self.assertEqual(match["title"], "节目 2026 更新10.16")
+        self.assertEqual(match["published_at"], "2026-10-16T12:00:00Z")
+        self.assertFalse(ambiguous["title_match"])
+        self.assertEqual(result["source_health"]["state"], "unavailable")
+
+    async def test_search_coalesces_same_query_and_runs_other_queries_concurrently(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        seen = []
+
+        async def search(request):
+            seen.append((await request.json())["kw"])
+            if len(seen) == 2:
+                entered.set()
+            await release.wait()
+            return web.json_response({"code": 0, "data": {"results": []}})
+
+        app = web.Application()
+        app.router.add_post("/api/search", search)
+        url = await self.serve(app)
+        async with aiohttp.ClientSession() as session:
+            adapter = PanSou(session, url)
+            tasks = [asyncio.create_task(adapter.search(q)) for q in ("one", "one", "two")]
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                release.set()
+                first, duplicate, other = await asyncio.gather(*tasks)
+                self.assertCountEqual(seen, ["one", "two"])
+                self.assertEqual(first["search_id"], duplicate["search_id"])
+                self.assertNotEqual(first["search_id"], other["search_id"])
+                self.assertEqual(adapter.pending, 0)
+            finally:
+                release.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def test_search_failed_refresh_keeps_snapshot_and_cancellation_releases_admission(self):
+        adapter = PanSou(None, "http://unused")
+        adapter.fetch = AsyncMock(return_value=[])
+        adapter.health = AsyncMock(return_value={"state": "unavailable"})
+        first = await adapter.search("movie")
+        adapter.fetch.side_effect = MediaError("search_unavailable")
+        with self.assertRaisesRegex(MediaError, "search_unavailable"):
+            await adapter.search("movie", refresh=True)
+        self.assertEqual((await adapter.search("movie", search_id=first["search_id"]))["items"], [])
+        self.assertEqual(adapter.pending, 0)
+        entered = asyncio.Event()
+
+        async def hold(query):
+            entered.set()
+            await asyncio.Future()
+
+        adapter.fetch.side_effect = hold
+        task = asyncio.create_task(adapter.search("movie", refresh=True))
+        await entered.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(adapter.pending, 0)
+        adapter.pending = 8
+        with self.assertRaisesRegex(MediaError, "search_busy"):
+            await adapter.search("other")
+
+    async def test_search_mcp_routes_refresh_and_snapshot_identity(self):
+        local = SimpleNamespace(invoke=AsyncMock(return_value={"items": []}))
+        async with Client(create_server(local, "run")) as client:
+            await client.call_tool("search_media", {"query": "movie", "refresh": True})
+            request = local.invoke.await_args.args[0]
+            self.assertEqual(request.caller_run, "run")
+            self.assertEqual(
+                request.arguments,
+                {
+                    "query": "movie",
+                    "before": 0,
+                    "limit": 20,
+                    "search_id": None,
+                    "refresh": True,
+                },
+            )
+
+    async def test_search_snapshot_storage_is_bounded(self):
+        adapter = PanSou(None, "http://unused")
+        adapter.fetch = AsyncMock(return_value=[])
+        adapter.health = AsyncMock(return_value={"state": "unavailable"})
+        first = await adapter.search("first")
+        for n in range(35):
+            await adapter.search(str(n))
+        self.assertEqual(len(adapter.snapshots), 32)
+        self.assertLessEqual(len(adapter.latest), 33)
+        with self.assertRaisesRegex(ValueError, "expired"):
+            await adapter.search("first", search_id=first["search_id"])
+
     async def test_openlist_reauthenticates_once_and_never_sends_token_to_download(self):
         calls = []
         app = web.Application()

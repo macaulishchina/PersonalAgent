@@ -594,10 +594,18 @@ p {
   inset: 0;
   background: #111d;
   z-index: 20;
-  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
   align-items: center;
   justify-content: center;
   padding: 45px;
+}
+.lightbox[open] {
+  display: flex;
 }
 .lightbox img {
   max-width: 100%;
