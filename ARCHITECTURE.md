@@ -61,6 +61,23 @@ Messages and events are committed together in SQLite. Streaming deltas and final
 
 Live native voice and task inference have distinct context windows even on one provider thread. The conversation owner explicitly transfers confirmed voice messages through the provider's context-only import method, and Web messages/results through its live context adapter. A local playback gate enforces silent Web replies because the experimental native interface may generate audio even for assistant-role context updates. Physical voice user turns restore playback. Background task delivery is client-managed so Web tasks do not acquire automatic spoken results. Temporary sync failures are visible; context sync never invokes another task.
 
+Foreground results are turn-owned receipts, never shared mutable progress. Empty or
+commentary-only completion cannot reuse a previous answer. Conversation durably binds
+output to an execution, voice epoch and input revision; old/superseded/quiet/interrupted
+results stay in history. Eligible final prose enters the provider's speech append once,
+without another prompt to infer a result. Output acceptance is not proof of playout;
+lost acknowledgements remain unknown. Native delegation filler and speculative output
+while awaiting execution are suppressed. Native client-managed handoff controls result
+forwarding, not pre-execution approval; WebRTC audio has no reliable per-answer identity.
+
+Assistant attention defaults to a short request with an 8-second follow-up window after
+the reply. Explicit chat selects continuous mode for one activation. Accepted user input,
+reply completion and actual output drive deadlines; raw VAD cannot hold the session open.
+Local explicit exits invalidate output and close the connection without canceling durable
+background tasks. Directed-speech admission and verified device takeover remain separate
+boundaries, not implied by a voice transcript. See `plugins/codex/README.md` for protocol
+limits and explicit subscription/device acceptance.
+
 Requested capture replies register complete pixels with the conversation media owner before crossing the provider boundary; the device MCP passes generic attachment references alongside native image content. This avoids relying on the provider's truncated display/history bytes. Reply image content and references are translated inside the Codex adapter, including JSON-wrapped MCP results in resumed history. The conversation owner uses an owned bounded queue and off-loop image decoding to register private attachments in the same media store as uploads; original image bytes never enter SSE or transcript text. Stable per-message/content identities prevent duplicate assets on replay. Restoration using registered references or retained complete bytes can fill an existing message's missing attachment without a new capture/task or changing its position/time. The UI displays media outside collapsed tool details. Only explicit image content is accepted: model text cannot turn arbitrary filesystem paths or external URLs into served files. With Web disabled, this path does not begin storing camera images.
 
 The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
@@ -312,6 +329,16 @@ ordinary turn completing; external processes require their own checkpoints and i
 `tasks` MCP is independent of memory/device. CLI and authenticated Web share TaskRequest;
 existing foreground cancellation controls remain distinct. Task models resolve from the
 account catalog at creation according to fixed configuration or initiating-agent choice.
+Tasks owns one versioned model policy with configurable fast/balanced/deep profiles.
+Missing/auto choices resolve through that policy instead of inheriting main/parent models;
+explicit agent choices require reasoning grounded in uncertainty and acceptance checks.
+The executor validates concrete account support and reports provider-confirmed selections.
+Per-run segment receipts retain selection provenance and bounded upgrade history.
+An owned handoff worker accepts scoped, budgeted upgrade requests with checkpoints,
+waits for clean turn completion and executor proof of idle thread/no live commands, then
+continues the same independent thread without replaying effects or publishing an interim
+completion. Ambiguous dispatch stays unknown. Native Goals and custom/fixed selections
+remain under explicit task management. No extra routing model or automation plugin is used.
 User-authorized goals may derive scoped children, not new unapproved goals. Memory is
 shared through the existing provider and scope/source policy, never used as execution proof.
 

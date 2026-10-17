@@ -15,17 +15,89 @@ misfire_seconds = 300
 model = "auto"
 reasoning_effort = "auto"
 
+[tasks.model_policy]
+default_profile = "fast"
+max_upgrades = 1
+[tasks.model_policy.profiles.fast]
+model = "gpt-6-luna"
+reasoning_effort = "low"
+[tasks.model_policy.profiles.balanced]
+model = "gpt-6.1-sol"
+reasoning_effort = "low"
+[tasks.model_policy.profiles.deep]
+model = "gpt-6.1-sol"
+reasoning_effort = "medium"
+
 [work_files]
 retention_days = 7
 # root = "/absolute/private/instance/work"
 ```
 
 `auto` is an application policy, never sent as a model name to Codex. The initiating
-model selects concrete values from `list_task_models`, with an `execution.reason`.
-Missing selections inherit the initiating context; fixed instance settings override
-requests. The resolved model/effort is stored with the definition and each run.
+model reads `list_task_models` for current models, supported efforts, profile availability
+and shared guidance. Choose the lightest suitable profile using uncertainty, existing
+procedures and acceptance checks; step count or wall time alone does not imply difficult
+reasoning. There is no classifier model call, task-keyword routing or model per button.
+Use `execution={"profile":"fast","reason":"known steps; read back the resulting state"}`.
+Concrete model/effort choices remain supported with a nonempty reason (max 400 chars).
+Missing/auto values use the configured profile, never the foreground or parent model.
+Fixed instance settings override requests. The resolved model/effort is stored with the definition and each run.
 Unsupported models/efforts fail explicitly. Repeated executions reuse saved choices while settings remain auto; fixed instance settings are applied again before every execution and saved in its run snapshot.
 Foreground and Mem0 retain their existing independent model settings.
+
+Profiles are instance-owned opaque model IDs; partial overrides merge into the three
+defaults above. Unavailable choices fail, without paid API fallback or silent replacement.
+Codex owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
+Existing saved concrete selections are not silently changed by a new default policy.
+Unrelated definition edits preserve selection provenance. Selection metadata supplied
+by clients is discarded/recomputed; the host records version, profile, origin of each
+field (`agent`, `profile_default`, `instance_fixed`), reason and resolved values.
+
+Runs retain the most recent 16 `model_selections` segments with monotonic segment numbers.
+Provider-confirmed model/effort are recorded separately when available, never inferred
+from tool latency. `get_task_execution_trace` returns these receipts and bounded upgrade
+history alongside tool metadata. Total execution time is not claimed as model reasoning
+time: queueing, tools, user waits and other orchestration also contribute.
+
+## Controlled model upgrades
+
+`request_task_model_upgrade` / CLI `tasks upgrade_model` applies to an active non-Goal
+Codex execution. It changes only that run, not future recurring runs or the definition.
+Background callers can target only their own run. Fixed model/effort settings prohibit
+automatic upgrades. `max_upgrades` defaults to one, permits 0..3; accepted requests consume
+the budget even if a handoff is subsequently blocked. Custom choices outside the configured
+profiles and native long-term Goals require explicit task management instead. Goal's
+autonomous continuation lifecycle is not silently interrupted or raced by a model handoff.
+The Codex adapter also rejects a configured higher profile that would reduce or retain
+the reasoning effort of the same model.
+
+Request a higher profile with a stable UUID, concrete `reason` and `evidence`, and a cause
+of `reasoning_limit`, `conflicting_evidence` or `unfamiliar_workflow`. Offline devices,
+timeouts, missing capabilities and uncertain actions are not upgrade causes. Checkpoint:
+
+```json
+{"completed":["Verified completed work and stable operation IDs"],
+ "next_step":"Verify current state, then perform only the remaining action",
+ "active_operations":[],"uncertain_operations":[]}
+```
+
+Reconcile uncertain actions and wait for active external operations before requesting;
+never put passwords/tokens in the checkpoint. The agent finishes its current turn after
+the request. Request acceptance is not an immediate model switch or task completion.
+The host persists `requested → ready → dispatching → applied` receipts, waits for a clean
+completed turn, verifies an idle independent provider thread, its matching latest completed
+turn and no live background terminals, then resumes that SAME thread using history and
+the checkpoint. The run retains workspace/resources, completion round and operation IDs;
+no new task definition, foreground turn, speech or intermediate completion notice is created.
+Old completion events cannot end the new segment.
+
+User cancellation/pause wins before dispatch. Failed/interrupted turns and failed preflight
+block handoff; no terminal is killed merely to make a model switch possible. A lost dispatch
+acknowledgment or restart during unconfirmed dispatch becomes `unknown`, never automatically
+replayed. A durable `ready` checkpoint can re-enter read-only preflight after restart; if
+proof is unavailable it pauses for explicit reconciliation. The framework verifies provider
+lifecycle, while external side-effect certainty still requires honest operation receipts
+and checkpoint evidence. A stronger model must not repeat an acknowledged device action.
 
 ## Task definitions and runs
 
@@ -116,6 +188,11 @@ rejects symlink traversal and does not scan user projects, secrets or model dire
 
 Run `python scripts/check.py` for scheduling, idempotency, cancellation, event freshness,
 model choice, concurrent resources, recovery, file boundaries and the existing suites.
+`--group tasks --group codex` includes profile defaults, no parent inheritance, fixed
+overrides/provenance, UUID idempotency, upgrade boundaries, live terminals, cancellation,
+lost acknowledgments, restart recovery and late prior-turn events. Provider fixtures do
+not establish real subscription model-switch success; perform explicit scratch-only live
+acceptance before claiming deployment verification. No TV/camera interaction is needed.
 Run `python scripts/verify_tasks.py --config config.toml` against the installed service
 for a silent reminder, real Codex artifact, long-term Goal and cancellation. It writes
 only to managed task areas and saves private evidence under `state/acceptance/tasks/`.

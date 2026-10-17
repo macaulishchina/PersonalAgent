@@ -3,6 +3,7 @@
 import copy
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
@@ -30,6 +31,7 @@ class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.runner.catalog = [
             {"id": "test", "model": "test", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
         ]
+        self.runner.catalog_at = time.monotonic()
         self.run = {
             "id": "run",
             "state": "completed",

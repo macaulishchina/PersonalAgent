@@ -17,6 +17,8 @@ from .repository import TaskRepository, ACTIVE, TERMINAL, one_shot
 from .schedules import next_time, trigger
 from .event_inbox import EventInbox, subscription, validate_subscription
 from .trace import TaskTrace
+from .selection import ModelPolicy
+from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
 
 
 PLAN_LABELS = {
@@ -60,9 +62,12 @@ class TasksPlugin:
         self.host = host
         self.manifest = Manifest("tasks", ("conversation", host.config.bindings["brain"], "notifications"))
         self.settings = TaskSettings.parse(host.config.tasks)
+        self.model_policy = ModelPolicy.parse(self.settings.model_policy)
         self.repo = TaskRepository(host.store.db)
         self.event_inbox = EventInbox(self)
         self.trace = TaskTrace(self.repo)
+        self.upgrades = ModelUpgrades(self)
+        self.upgrading = set()
         self.scheduler = None
         self.launching = set()
         self.started = False
@@ -79,11 +84,22 @@ class TasksPlugin:
         self.scheduler.start(paused=True)
         for run in self.repo.pending():
             if run["state"] in {"dispatching", "running", "waiting_user"}:
+                upgrade = pending_upgrade(run)
+                if upgrade and upgrade["phase"] == "dispatching":
+                    self.repo.update_run(
+                        run["id"],
+                        "unknown",
+                        model_upgrades=replace_upgrade(run, phase="unknown", error="restart_during_handoff"),
+                        progress="模型交接时服务中断，请核对后明确继续；未重放。",
+                    )
+                    continue
+                if upgrade and upgrade["phase"] == "ready":
+                    continue  # No new turn was sent; worker performs read-only preflight first.
                 try:
                     state, text = await self.executor.reconcile(run)
                 except Exception:
                     state, text = "unknown", "无法核对上次执行结果，未自动重做"
-                self.repo.update_run(run["id"], state, progress=text)
+                self.provider_update(run["id"], state, progress=text, turn_active=False)
         self.repo.seed_finalizations()
         self.archive_finished()
         for definition in self.repo.definitions():
@@ -214,6 +230,11 @@ class TasksPlugin:
             if identifiers:
                 self.repo.update_run(ident, **identifiers)
             return False
+        state, data = self.upgrades.boundary(run, state, data)
+        if "provider_selection" in data and run["data"].get("model_selections"):
+            history = [dict(item) for item in run["data"]["model_selections"]]
+            history[-1]["provider"] = data["provider_selection"]
+            data["model_selections"] = history
         goal = data.get("goal", run["data"].get("goal", {}))
         if state == "completed" and run["state"] == "waiting_user":
             state = "waiting_user"
@@ -308,14 +329,8 @@ class TasksPlugin:
                 raise ValueError("Subtask limit reached")
             s["parent_id"], s["depth"] = parent["task_id"], p.get("depth", 0) + 1
             s["authorization"] = p["authorization"]
-            fallback = p["execution"]
         else:
             s.pop("parent_id", None)
-            fallback = {
-                "model": self.host.backend.resolved_model or self.host.config.codex_model,
-                "reasoning_effort": self.host.backend.resolved_reasoning_effort
-                or self.host.config.codex_reasoning_effort,
-            }
         requested = s["execution"]
         if not isinstance(requested, dict) or set(requested) - {
             "model",
@@ -323,6 +338,8 @@ class TasksPlugin:
             "reason",
             "kind",
             "device_id",
+            "profile",
+            "selection",
         }:
             raise ValueError("Invalid task execution")
         if requested.get("kind", "codex") not in {"codex", "reminder", "device_query"}:
@@ -334,17 +351,9 @@ class TasksPlugin:
         elif requested.get("kind") == "reminder":
             s["execution"] = {"kind": "reminder"}
         else:
-            choices = {}
-            for key in ("model", "reasoning_effort"):
-                configured = self.settings.execution[key]
-                choices[key] = configured if configured != "auto" else requested.get(key, fallback[key])
-                if choices[key] == "auto":
-                    choices[key] = fallback[key]
-            s["execution"] = {
-                "kind": "codex",
-                **await self.executor.select(choices["model"], choices["reasoning_effort"]),
-                "reason": str(requested.get("reason", "继承发起会话配置"))[:400],
-            }
+            s["execution"] = await self.model_policy.resolve(
+                self.executor, requested, self.settings.execution
+            )
         return s
 
     def validate_event(self, e):
@@ -380,7 +389,7 @@ class TasksPlugin:
                 raise ValueError("Invalid event timing/hysteresis")
 
     async def request(self, request):
-        if request.action in {"continue", "cancel_run", "pause_run", "supplement"}:
+        if request.action in {"continue", "cancel_run", "pause_run", "supplement", "upgrade_model"}:
             lock = self.run_locks.setdefault(request.arguments["run_id"], asyncio.Lock())
             async with lock:
                 return await self._request(request)
@@ -388,15 +397,31 @@ class TasksPlugin:
 
     async def _request(self, request):
         a, args, caller = request.action, request.arguments, request.caller_run
-        if caller and a not in {"create", "list", "get", "models", "artifacts", "event_inbox", "trace"}:
+        if caller and a not in {
+            "create",
+            "list",
+            "get",
+            "models",
+            "artifacts",
+            "event_inbox",
+            "trace",
+            "upgrade_model",
+        }:
             raise ValueError("Background executions cannot manage other tasks")
+        if a == "upgrade_model":
+            return await self.upgrades.request(args, caller)
         if a in {"event_inbox", "trace"}:
             if a == "event_inbox":
                 self.repo.definition(args["task_id"])
                 return self.event_inbox.describe(args["task_id"])
             return self.trace.read(args)
         if a == "models":
-            return {"models": await self.executor.models(), "configuration": self.settings.execution}
+            models = await self.executor.models()
+            return {
+                "models": models,
+                "configuration": self.settings.execution,
+                "model_policy": self.model_policy.describe(models),
+            }
         if a == "list":
             definitions, before, removed, updates = self.repo.definition_page(args)
             return {
@@ -518,7 +543,12 @@ class TasksPlugin:
                 if run["state"] in TERMINAL:
                     return run
                 target = "paused" if a == "pause_run" else "canceled"
-                self.repo.update_run(run["id"], target)
+                changes = (
+                    {"model_upgrades": replace_upgrade(run, phase="blocked", error="user_stopped_execution")}
+                    if pending_upgrade(run)
+                    else {}
+                )
+                self.repo.update_run(run["id"], target, **changes)
                 try:
                     await self.executor.stop(run, pause=a == "pause_run")
                 except Exception:
@@ -532,12 +562,19 @@ class TasksPlugin:
             if args.get("revision") != d["revision"]:
                 raise ValueError("Task changed; read latest revision")
             combined = {**d["spec"], **args["changes"]}
+            if "execution" not in args["changes"] and combined["execution"].get("profile") == "custom":
+                combined["execution"] = {k: v for k, v in combined["execution"].items() if k != "profile"}
             combined.pop("depth", None)
             if {"trigger", "long_term"}.intersection(args["changes"]) and "auto_archive" not in args[
                 "changes"
             ]:
                 combined.pop("auto_archive", None)
             spec = await self.validate_spec(combined)
+            if "execution" not in args["changes"] and all(
+                spec["execution"].get(k) == d["spec"]["execution"].get(k)
+                for k in ("model", "reasoning_effort")
+            ):
+                spec["execution"] = d["spec"]["execution"]
             event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
             if self.repo.definition(d["id"])["revision"] != d["revision"]:
                 raise ValueError("Task changed; read latest revision")
@@ -640,9 +677,17 @@ class TasksPlugin:
                 self.repo.update_run(ident, "completed", progress=json.dumps(result, ensure_ascii=False))
             else:
                 spec = json.loads(json.dumps(run["data"]["spec"]))
-                for key, value in self.settings.execution.items():
-                    if value != "auto":
-                        spec["execution"][key] = value
+                if any(
+                    value != "auto" and value != spec["execution"].get(key)
+                    for key, value in self.settings.execution.items()
+                ):
+                    requested = {
+                        k: v for k, v in spec["execution"].items() if k not in {"selection", "profile"}
+                    }
+                    requested["reason"] = "执行前应用实例固定配置"
+                    spec["execution"] = await self.model_policy.resolve(
+                        self.executor, requested, self.settings.execution
+                    )
                 await self.executor.select(spec["execution"]["model"], spec["execution"]["reasoning_effort"])
                 if self.repo.run(ident)["state"] != "queued":
                     return
@@ -660,6 +705,16 @@ class TasksPlugin:
     async def worker(self):
         while True:
             runs = self.repo.pending()
+            for r in runs:
+                upgrade = pending_upgrade(r)
+                if (
+                    r["state"] == "running"
+                    and upgrade
+                    and upgrade["phase"] == "ready"
+                    and r["id"] not in self.upgrading
+                ):
+                    self.upgrading.add(r["id"])
+                    self.context.spawn(self.upgrade_run(r["id"]), "model-handoff:" + r["id"])
             busy = [
                 r
                 for r in runs
@@ -747,6 +802,12 @@ class TasksPlugin:
                     )
             self.archive_finished({r["task_id"] for r in runs if r["state"] in TERMINAL})
             await asyncio.sleep(0.5)
+
+    async def upgrade_run(self, ident):
+        try:
+            await self.upgrades.apply(ident)
+        finally:
+            self.upgrading.discard(ident)
 
     async def finalize_once(self, ident):
         lock = self.run_locks.setdefault(ident, asyncio.Lock())

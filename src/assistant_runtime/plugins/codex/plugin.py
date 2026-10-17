@@ -15,6 +15,7 @@ class CodexPlugin:
             config, self.backend, lambda pcm: on_audio(AudioFrame(pcm, 24000, self.voice.epoch)), on_event
         )
         self.backend.on_realtime = self.voice.notification
+        self.backend.on_execution_started = self.voice.execution_started
         self.backend.voice_active = lambda: self.voice.opened
 
     async def start(self, context):
@@ -42,6 +43,12 @@ class CodexPlugin:
             "voice_auth": "chatgpt",
             "transport": "webrtc",
             "webrtc_engine": "chromium",
+            "voice_protocol": {
+                "client_managed_results": True,
+                "pre_execution_approval": False,
+                "per_answer_pcm_id": False,
+                "delegation_ack_filler": False,
+            },
             "voice_connect_ms": self.voice.open_timing_ms,
             "native_output_frames": self.voice.output_frames,
             "rtp_inbound": [

@@ -143,6 +143,7 @@ def main():
             "list",
             "get",
             "models",
+            "upgrade_model",
             "create",
             "update",
             "run",

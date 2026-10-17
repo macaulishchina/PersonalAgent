@@ -17,7 +17,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
     "core": {"behavior", "conversation", "quiet", "runtime", "voice_binding", "wake_words"},
-    "codex": {"codex_config", "integrations", "job_lifecycle", "mcp", "native"},
+    "codex": {"codex_config", "integrations", "job_lifecycle", "mcp", "native", "voice_lifecycle"},
     "devices": {
         "audio_outputs",
         "camera_motion",
@@ -29,7 +29,7 @@ GROUPS = {
         "video_recording",
     },
     "events": {"events", "event_sources", "event_reporting"},
-    "tasks": {"notifications", "tasks", "task_events"},
+    "tasks": {"notifications", "tasks", "task_events", "task_models"},
     "media": {"media", "media_providers", "media_downloads"},
     "memory": {"mem0", "memory"},
     "web": {"reply_images", "reply_videos", "web"},

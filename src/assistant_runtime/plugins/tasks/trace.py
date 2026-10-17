@@ -67,4 +67,8 @@ class TaskTrace:
             "next": rows[limit - 1][0] if len(rows) > limit else None,
             "truncated": bool(truncated),
             "outcome_scope": "provider_reported",
+            "model_selections": run["data"].get("model_selections", []),
+            "model_upgrades": [
+                {k: v for k, v in u.items() if k != "request"} for u in run["data"].get("model_upgrades", [])
+            ],
         }

@@ -370,6 +370,30 @@ class TaskRepository:
         data = {**r["data"], **changes}
         now = time.time()
         target = state or r["state"]
+        if (
+            target == "dispatching"
+            and r["state"] != "dispatching"
+            and data["spec"]["execution"].get("kind") == "codex"
+        ):
+            execution = data["spec"]["execution"]
+            history = data.get("model_selections", [])
+            data["model_selections"] = [
+                *history,
+                {
+                    "segment": history[-1]["segment"] + 1 if history else 1,
+                    "at": now,
+                    "model": execution["model"],
+                    "reasoning_effort": execution["reasoning_effort"],
+                    "selection": execution.get(
+                        "selection",
+                        {
+                            "version": 0,
+                            "source": "legacy_saved",
+                            "reason": execution.get("reason", "既有任务保存的具体选型"),
+                        },
+                    ),
+                },
+            ][-16:]
         timed = {"dispatching", "running", "waiting_user"}
         # Durable wall-clock segments: queue, explicit pauses and uncertain states
         # do not consume execution time. Never derive duration from updated (delivery

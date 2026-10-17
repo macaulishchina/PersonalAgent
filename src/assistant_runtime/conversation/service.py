@@ -11,6 +11,7 @@ from ..kernel.runtime import Manifest
 from ..kernel.contracts import Control, NotificationRequest
 from .store import ConversationStore
 from .media import MediaAttachments, MAX_BYTES
+from .feedback import Feedback, spoken_result
 
 
 class Conversation:
@@ -32,6 +33,9 @@ class Conversation:
         self.web_dispatching = False
         self.last_state = None
         self.tasks = set()
+        self.feedback = Feedback(self.store.db)
+        self.feedback_lock = asyncio.Lock()
+        self.voice_revision = 0
         host.backend.on_conversation = self.provider_event
         host.voice.on_conversation = self.media_event
         host.backend.on_conversation_done = self.task_done
@@ -45,6 +49,7 @@ class Conversation:
         self.context = context
         context.spawn(self.save_images(), "reply-images")
         self.store.recover(self.session)
+        self.feedback.recover(self.session)
         self.web_turns = {
             row[0]
             for row in self.store.db.execute(
@@ -118,6 +123,8 @@ class Conversation:
     def media_event(self, data, epoch):
         kind = data.get("kind")
         if kind == "closed":
+            self.feedback.close(self.session, epoch)
+            self.voice_revision += 1
             for (mid,) in self.store.db.execute(
                 "SELECT id FROM chat_messages WHERE session_id=? AND source='voice' AND status='streaming'",
                 (self.session,),
@@ -137,6 +144,8 @@ class Conversation:
             return
         message_id = f"voice:{self.session}:{epoch}:{ident}"
         old = self.store.get(message_id)
+        if data.get("role") == "user" and old is None:
+            self.voice_revision += 1
         if kind == "interrupted":
             if old:
                 self.store.put(
@@ -199,6 +208,14 @@ class Conversation:
         if not getattr(self.host.backend, "session_id", None):
             return
         kind, turn = event["kind"], event.get("turn_id")
+        if kind == "turn_started" and not restored:
+            self.feedback.bind(
+                turn,
+                self.session,
+                getattr(self.host.voice, "epoch", 0),
+                self.voice_revision,
+                "web" if self.web_dispatching or turn in self.web_turns else "voice",
+            )
         if kind == "turn_started" and self.web_dispatching:
             self.web_turns.add(turn)
             if self.dispatch_message:
@@ -385,28 +402,59 @@ class Conversation:
         self.store.put(
             "notice:" + uuid.uuid4().hex, self.session, text=text, status="complete", turn_id=turn_id
         )
-        if turn_id not in self.web_turns and not self.web_dispatching and self.host.voice.opened:
+        if self.feedback_allowed(turn_id) and turn_id not in self.web_turns and not self.web_dispatching:
             await self.host.voice.say(text)
 
     async def task_done(self, turn_id, text, status):
         try:
             await self.deliver_result(turn_id, text, status)
         except Exception:
-            self.sync_error = "任务结果已保存，语音上下文同步失败；可在网页查看结果。"
+            self.sync_error = "任务结果已保存，语音交付未确认；未自动重播，可在网页查看结果。"
             self.store.emit(self.session, "notice", {"text": self.sync_error})
+        finally:
+            receipt = self.feedback.get(turn_id)
+            if receipt and receipt["state"] != "unknown":
+                self.host.voice.finish_execution(turn_id)
 
     async def deliver_result(self, turn_id, text, status):
-        if not self.host.voice.opened:
-            return
-        if status != "completed":
-            text = f"任务状态：{status}。" + text
-        if turn_id in self.web_turns:
-            # An assistant item is quiet context, not another user request.
-            await self.host.voice.append_context("网页任务的实际回复（仅同步上下文，无需播报）：\n" + text)
-        else:
-            await self.host.voice.instruct(
-                "刚才委派给 Codex 的任务已结束。根据下列真实状态和结果简短回应用户，不重复执行：\n" + text
-            )
+        async with self.feedback_lock:
+            receipt = self.feedback.get(turn_id)
+            if not receipt or receipt["state"] != "bound":
+                return
+            if not self.feedback_allowed(turn_id):
+                self.feedback.finish(turn_id, "superseded")
+                return
+            spoken = spoken_result(text, status)
+            if not spoken:
+                self.feedback.finish(turn_id, "empty" if not text.strip() else "interrupted")
+                return
+            # Commit intent BEFORE the RPC: a lost acknowledgement is uncertain,
+            # never a reason to speak the same result again.
+            self.feedback.finish(turn_id, "dispatching")
+            try:
+                if receipt["source"] == "web":
+                    await self.host.voice.append_context(
+                        "网页任务的实际回复（仅同步上下文，无需播报）：\n" + text
+                    )
+                else:
+                    await self.host.voice.say(spoken, execution_id=turn_id)
+            except Exception:
+                self.feedback.finish(turn_id, "unknown")
+                raise
+            self.feedback.finish(turn_id, "context" if receipt["source"] == "web" else "submitted")
+
+    def feedback_allowed(self, turn):
+        receipt = self.feedback.get(turn)
+        voice = self.host.voice
+        return bool(
+            receipt
+            and receipt["state"] in {"bound", "dispatching"}
+            and voice.opened
+            and not getattr(voice, "closing", False)
+            and not self.host.quiet_active()
+            and receipt["epoch"] == getattr(voice, "epoch", 0)
+            and receipt["revision"] == self.voice_revision
+        )
 
     async def submit(self, request_id, text, attachments, notification_id=None):
         if not isinstance(request_id, str):

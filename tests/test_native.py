@@ -128,6 +128,46 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_execution_suppresses_speculation_and_only_matching_result_releases_output(self):
+        output = Mock()
+        backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))
+        voice = NativeVoice(None, backend, output, AsyncMock())
+        voice.opened = True
+        voice.execution_started("execution")
+        voice.deliver_audio(b"old speculation", voice.epoch)
+        output.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "does not belong"):
+            await voice.say("旧结果", execution_id="other")
+        await voice.say("实际返回错误", execution_id="execution")
+        self.assertEqual(backend.client.request.await_args.args[1]["text"], "实际返回错误")
+        voice.deliver_audio(b"result", voice.epoch)
+        output.assert_called_once_with(b"result")
+        voice.execution_started("newer")
+        voice.finish_execution("execution")
+        self.assertTrue(voice.awaiting_result)
+
+    async def test_failed_speech_submission_does_not_unmute_speculation(self):
+        output = Mock()
+        backend = SimpleNamespace(
+            thread_id="main", client=SimpleNamespace(request=AsyncMock(side_effect=TimeoutError()))
+        )
+        voice = NativeVoice(None, backend, output, AsyncMock())
+        voice.opened = True
+        voice.execution_started("execution")
+        with self.assertRaises(TimeoutError):
+            await voice.say("结果", execution_id="execution")
+        voice.deliver_audio(b"late", voice.epoch)
+        output.assert_not_called()
+
+    async def test_duplicate_final_media_turn_is_committed_once(self):
+        events = AsyncMock()
+        voice = NativeVoice(None, None, None, events)
+        event = {"type": "turn.done", "turn": {"id": "same", "role": "user", "transcript": "退下"}}
+        voice.media_event(event, voice.epoch)
+        voice.media_event(event, voice.epoch)
+        await asyncio.gather(*voice.tasks)
+        self.assertEqual(events.await_count, 1)
+
     async def test_voice_remains_active_until_stop_and_transport_cleanup_finish(self):
         started, release = asyncio.Event(), asyncio.Event()
 
@@ -304,6 +344,7 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
         s.voice = SimpleNamespace(close=AsyncMock())
         s.backend = SimpleNamespace(busy=True, cancel=AsyncMock())
         s.transition = asyncio.Lock()
+        s.standby_ready = asyncio.Event()
         await s.sleep()
         s.backend.cancel.assert_not_called()
         s.voice.close.assert_awaited_once()
@@ -357,8 +398,12 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
             await s.events.put({"kind": "user_turn", "epoch": 1})
             await asyncio.wait_for(s.events.join(), 0.1)
             self.assertEqual(s.native_interruptions, 1)
-            self.assertFalse(s.player.manual_muted)
+            self.assertTrue(s.player.manual_muted)  # delayed events cannot undo an explicit stop
             self.assertTrue(s.recovering)
+            s.last_speech = time.monotonic()
+            await s.events.put({"kind": "user_turn", "epoch": 1})
+            await asyncio.wait_for(s.events.join(), 0.1)
+            self.assertFalse(s.player.manual_muted)
         finally:
             run.cancel()
             for task in pending:

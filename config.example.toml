@@ -10,6 +10,8 @@ assistant_name = "个人助理"
 realtime_voice = "cove"
 wake_words = ["嘟嘟", "你好嘟嘟"]
 idle_seconds = 60
+# Short requests by default; explicitly ask to chat for continuous conversation.
+voice_follow_up_seconds = 8
 minimum_volume = 80
 # Optional daily silence: suppress keyword/gesture wake and all voice feedback.
 # Background tasks keep running. At end, standby resumes; it does not speak.
@@ -94,10 +96,23 @@ timezone = "Asia/Shanghai"
 concurrency = 2
 misfire_seconds = 300
 [tasks.execution]
-# auto: initiating model chooses concrete values from the account model catalog.
+# auto: initiating model chooses a policy profile or concrete values with a reason.
+# Missing choices use the fast profile, never inherit foreground/parent settings.
 # Fixed values here override task-level suggestions; never modifies global Codex config.
 model = "auto"
 reasoning_effort = "auto"
+[tasks.model_policy]
+default_profile = "fast"
+max_upgrades = 1
+[tasks.model_policy.profiles.fast]
+model = "gpt-6-luna"
+reasoning_effort = "low"
+[tasks.model_policy.profiles.balanced]
+model = "gpt-6.1-sol"
+reasoning_effort = "low"
+[tasks.model_policy.profiles.deep]
+model = "gpt-6.1-sol"
+reasoning_effort = "medium"
 [work_files]
 retention_days = 7
 # root = "/absolute/private/instance/work"

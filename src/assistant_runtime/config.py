@@ -32,6 +32,7 @@ class Config:
     assistant_name: str = "个人助理"
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
+    voice_follow_up_seconds: int = 8
     quiet_hours: dict[str, str | bool] = field(default_factory=dict)
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
@@ -105,6 +106,8 @@ class Config:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a nonempty string")
             setattr(self, name, value.strip())
+        if type(self.voice_follow_up_seconds) is not int or not 1 <= self.voice_follow_up_seconds <= 30:
+            raise ValueError("voice_follow_up_seconds must be 1..30")
 
         if not isinstance(self.devices, dict) or len(self.devices) > 32:
             raise ValueError("devices must be a table with at most 32 entries")

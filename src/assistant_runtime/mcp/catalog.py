@@ -17,6 +17,7 @@ DEVICE_TOOLS = (
 )
 TASK_TOOLS = (
     "list_task_models",
+    "request_task_model_upgrade",
     "create_task",
     "list_tasks",
     "get_task",

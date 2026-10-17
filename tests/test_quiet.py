@@ -110,6 +110,7 @@ class QuietSessionTest(unittest.IsolatedAsyncioTestCase):
         service.voice.close = AsyncMock()
         service.backend = SimpleNamespace(busy=True, cancel=AsyncMock())
         service.transition = asyncio.Lock()
+        service.standby_ready = asyncio.Event()
         await service._enforce_quiet()
         self.assertFalse(service.active)
         service.player.stop.assert_awaited_once()

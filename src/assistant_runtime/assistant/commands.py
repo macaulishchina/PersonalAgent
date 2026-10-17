@@ -27,6 +27,12 @@ def parse_command(text, wake_words=()):
             s = s[len(word) :]
             break
     s = re.sub(r"^(请|麻烦)", "", s)
+    if s in {"陪我聊聊", "我们聊聊天", "进入连续对话", "连续聊天"}:
+        return Control("chat")
+    if re.fullmatch(
+        r"(?:嗯)?(?:好的|好了|好)?(?:还是)?(?:你)?(?:先)?退下(?:退下)?(?:吧)?(?:你)?(?:啥都听不懂)?", s
+    ):
+        return Control("sleep")
     if s in {"停", "停止", "停一下", "别说了", "停止播放", "暂停播报", "停止播报", "暂停播放"}:
         return Control("stop")
     if s in {"取消任务", "取消当前任务", "停止任务", "终止任务", "不用做了"}:

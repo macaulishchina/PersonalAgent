@@ -65,6 +65,9 @@ class CodexBackend:
         self.resolved_memory_reasoning_effort = None
         self.active_turn = self.active_task = None
         self.progress = ""
+        from .turns import Turns
+
+        self.turns = Turns()
         self.muted_turns = set()
         self.awaiting_new_message = set()
         self.buffers = {}
@@ -83,6 +86,7 @@ class CodexBackend:
         self.memory_model_calls = 0
         self.server_tasks = set()
         self.on_task_done = None
+        self.on_execution_started = None
         self.on_conversation = None
         self.on_conversation_done = None
         self.on_conversation_notice = None
@@ -105,7 +109,7 @@ class CodexBackend:
             "developerInstructions": f"你的名字是{self.config.assistant_name}。\n"
             + INSTRUCTIONS
             + (
-                "\n多步骤研究、代码和耗时工作必须用 tasks MCP 的 create_task 委派后台，自己不要重复执行；普通问答直接回答。创建前用 list_task_models 查询可用模型；execution 的 model/reasoning_effort 按任务难度选择具体值并给出 reason。创建 request_id 为稳定 UUID，重试复用同一 ID。任务进展、补充、取消通过 tasks MCP 定向操作。后台任务只在用户授权范围内创建，新目标先建议。简单提醒用 execution.kind=reminder。"
+                "\n多步骤研究、代码和耗时工作必须用 tasks MCP 的 create_task 委派后台，自己不要重复执行；普通问答直接回答。创建前用 list_task_models 读取可用模型及统一选型策略。execution 优先选择满足验收要求的最轻 profile，并在 reason 说明任务的不确定性、已有流程和验证方法。不要因为自己用了高配置，就给子任务继承同样配置；步骤多、执行久不等于推理困难。任务可在轮次结束且确认没有活动/不明副作用后请求受控升级，不创建重复任务。创建 request_id 为稳定 UUID，重试复用同一 ID。任务进展、补充、取消通过 tasks MCP 定向操作。后台任务只在用户授权范围内创建，新目标先建议。简单提醒用 execution.kind=reminder。"
                 if "tasks" in self.config.plugins
                 else ""
             )
@@ -347,7 +351,7 @@ class CodexBackend:
 
     async def _speech(self, text, turn):
         if self.config.backend == "native":
-            return  # Codex realtime forwards its own task results to voice.
+            return  # Conversation submits the eligible final result once.
         text = re.sub(r"```.*?```", "代码已保存在项目中。", text, flags=re.S)
         text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
         text = re.sub(r"[\*`#]", "", text).strip()
@@ -407,10 +411,20 @@ class CodexBackend:
                     await self.on_realtime(method, p)
                 continue
             if method == "turn/started":
-                if self.config.backend == "native" and self.active_task is None:
+                ident = p["turn"]["id"]
+                if ident in self.turns.records:
+                    continue
+                if self.config.backend == "native" and (
+                    self.active_task is None or self.active_turn is not None and self.active_turn != ident
+                ):
                     self.active_task = uuid.uuid4().hex
                     self.store.create_task(self.active_task, self.last_user_text)
-                self.active_turn = p["turn"]["id"]
+                self.turns.start(ident, self.active_task)
+                self.progress = ""
+                self.buffers.clear()
+                self.active_turn = ident
+                if self.on_execution_started:
+                    self.on_execution_started(ident)
                 self.last_turn = self.active_turn
                 self.command_items.setdefault(self.active_turn, set())
                 if len(self.command_items) > 20:
@@ -423,6 +437,8 @@ class CodexBackend:
                     self.awaiting_new_message.discard(turn)
                     self.muted_turns.discard(turn)
             elif method == "item/started":
+                if p.get("turnId", self.active_turn) != self.active_turn:
+                    continue
                 kind = p.get("item", {}).get("type")
                 if kind == "commandExecution":
                     self.progress = "正在执行本地命令。"
@@ -431,6 +447,8 @@ class CodexBackend:
                 elif kind == "fileChange":
                     self.progress = "正在修改本地文件。"
             elif method == "item/agentMessage/delta":
+                if p.get("turnId", self.active_turn) != self.active_turn:
+                    continue
                 ident = p.get("itemId", "message")
                 value = self.buffers.get(ident, "") + p.get("delta", "")
                 # Speak complete short sentences while the answer is still arriving.
@@ -441,19 +459,31 @@ class CodexBackend:
             elif method == "item/completed":
                 item = p.get("item", {})
                 if item.get("type") == "agentMessage":
+                    ident = p.get("turnId", self.active_turn)
+                    record = self.turns.active(ident)
+                    if not record or ident != self.active_turn or not record.message(item):
+                        continue
                     tail = self.buffers.pop(item.get("id"), "")
                     await self._speech(tail, p.get("turnId", self.active_turn))
                     text = item.get("text", "")
-                    self.progress = text[:600]
+                    self.progress = record.progress[:600]
                     self.store.transcript("assistant", text)
                     if self.active_task:
                         self.store.update_task(self.active_task, "running", result=text)
             elif method == "turn/completed":
                 turn = p["turn"]
                 ident = turn["id"]
+                record = self.turns.active(ident)
+                if not record:
+                    continue
+                for item in turn.get("items", []):
+                    if item.get("type") == "agentMessage":
+                        record.message(item)
+                record.status = turn["status"]
+                self.store.update_task(record.task_id, turn["status"], ident, result=record.result)
                 if self.on_conversation_done:
                     task = asyncio.create_task(
-                        self.on_conversation_done(ident, self.progress, turn["status"])
+                        self.on_conversation_done(ident, record.result, turn["status"])
                     )
                     self.server_tasks.add(task)
                     task.add_done_callback(self.server_tasks.discard)
@@ -461,14 +491,14 @@ class CodexBackend:
                     self.store.update_task(self.active_task, turn["status"])
                     self.active_task = self.active_turn = None
                     self.pending_question = None
-                    self.progress = "任务已经结束。" + self.progress
-                    if turn["status"] == "completed":
+                    self.progress = "任务已经结束。" + (record.result or "本轮没有文字结果。")
+                    if turn["status"] == "completed" and record.result:
                         self.store.transcript(
                             "verified",
                             "Codex 已完成任务，provider turn="
                             + ident
                             + "。最终报告（模型报告，不是额外事实核验）："
-                            + self.progress[:1500],
+                            + record.result[:1500],
                         )
                     if self.on_task_done:
                         self.on_task_done()
@@ -477,7 +507,6 @@ class CodexBackend:
                     await self._speech("这次任务没有完成，错误原因已经记录。", ident)
                 self.muted_turns.discard(ident)
                 self.awaiting_new_message.discard(ident)
-                self.buffers.clear()
             elif method == "error":
                 self.last_error = str(p.get("error", "Codex error"))[:500]
                 log.warning("codex_error_received")

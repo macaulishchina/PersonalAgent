@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
+from .selection import ModelPolicy
 
 
 @dataclass
@@ -10,6 +11,7 @@ class TaskSettings:
     concurrency: int = 2
     misfire_seconds: int = 300
     execution: dict = field(default_factory=lambda: {"model": "auto", "reasoning_effort": "auto"})
+    model_policy: dict = field(default_factory=dict)
 
     @classmethod
     def parse(cls, data):
@@ -26,4 +28,5 @@ class TaskSettings:
         result.execution = {"model": "auto", "reasoning_effort": "auto", **result.execution}
         if any(not isinstance(v, str) or not v.strip() for v in result.execution.values()):
             raise ValueError("Task execution settings must be nonempty strings")
+        ModelPolicy.parse(result.model_policy)
         return result

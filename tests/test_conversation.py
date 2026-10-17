@@ -55,9 +55,11 @@ def fixture(root):
         backend=backend,
         voice=SimpleNamespace(
             opened=False,
+            epoch=1,
             append_context=AsyncMock(),
             instruct=AsyncMock(),
             say=AsyncMock(),
+            finish_execution=Mock(),
             silence_web_reply=Mock(),
         ),
         mode="standby",
@@ -234,16 +236,20 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         c = self.host.conversation
         self.host.voice.opened = True
         c.web_turns.add("web")
+        c.provider_event({"kind": "turn_started", "turn_id": "web"})
         await c.task_done("web", "图片里是蓝色圆形", "completed")
         self.host.voice.append_context.assert_awaited_once()
         self.host.voice.instruct.assert_not_awaited()
+        c.provider_event({"kind": "turn_started", "turn_id": "voice"})
         await c.task_done("voice", "真实结果", "completed")
-        self.host.voice.instruct.assert_awaited_once()
+        self.host.voice.say.assert_awaited_once_with("真实结果", execution_id="voice")
+        self.host.voice.instruct.assert_not_awaited()
 
     async def test_web_question_is_visible_without_voice_and_result_sync_error_is_visible(self):
         c = self.host.conversation
         self.host.voice.opened = True
         c.web_turns.add("web")
+        c.provider_event({"kind": "turn_started", "turn_id": "web"})
         await c.provider_notice("需要补充哪个文件名？", "web")
         self.host.voice.say.assert_not_awaited()
         self.assertEqual(c.store.history(c.session)[-1]["text"], "需要补充哪个文件名？")

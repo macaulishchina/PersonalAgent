@@ -16,7 +16,13 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def list_task_models() -> dict:
-        """Available subscription models, reasoning levels and enforced task settings."""
+        """Available subscription models/efforts, enforced settings and unified profile policy.
+
+        Choose the lightest suitable profile using uncertainty, known procedures and acceptance
+        checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep,
+        reason:...}; concrete model/effort overrides are allowed with a reason and validated.
+        Missing/auto fields use instance profiles, never inherit the foreground/parent model.
+        """
         return await call("models")
 
     @server.tool(annotations=WRITE)
@@ -137,6 +143,31 @@ def create_server(client, caller_run=None):
     async def supplement_task(run_id: str, text: str) -> dict:
         """Send a correction or answer to this running/waiting task only."""
         return await call("supplement", run_id=run_id, text=text)
+
+    @server.tool(annotations=WRITE)
+    async def request_task_model_upgrade(
+        run_id: str, request_id: str, profile: str, cause: str, reason: str, evidence: str, checkpoint: dict
+    ) -> dict:
+        """Request a bounded higher-profile handoff for THIS active run, then finish the current turn.
+
+        Reuse UUID after a lost reply. No immediate switch or replay. cause: reasoning_limit,
+        conflicting_evidence, unfamiliar_workflow. Offline devices, timeouts and missing tools
+        need repair, not upgrades. checkpoint={completed:[facts/operation IDs], next_step:text,
+        uncertain_operations:[], active_operations:[]}; reconcile/wait before requesting, never
+        include credentials. Background caller may target only itself. Native Goal runs and
+        instance-fixed settings do not permit automatic handoffs. Host waits for a clean completed
+        turn, no active tools/terminals, then resumes the same thread with checkpoint/history.
+        """
+        return await call(
+            "upgrade_model",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            cause=cause,
+            reason=reason,
+            evidence=evidence,
+            checkpoint=checkpoint,
+        )
 
     @server.tool(annotations=READ)
     async def list_task_artifacts(run_id: str) -> dict:

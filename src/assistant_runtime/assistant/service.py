@@ -14,6 +14,7 @@ import numpy as np
 
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.assistant.quiet import QuietHours
+from assistant_runtime.assistant.dialogue import Dialogue
 from assistant_runtime.store import Store
 from assistant_runtime.kernel.contracts import (
     Control,
@@ -51,6 +52,8 @@ class AssistantService:
         self.preroll = deque(maxlen=50)  # approximately one second, memory only
         self.tasks = []
         self.transition = asyncio.Lock()
+        self.standby_ready = asyncio.Event()
+        self.standby_ready.set()
         self.notification_output = False
         self.last_wake = None
         self.last_output = None
@@ -58,6 +61,7 @@ class AssistantService:
         self.input_rms = 0
         self.native_interruptions = 0
         self.last_speech = 0.0
+        self.dialogue = Dialogue(config.voice_follow_up_seconds)
         self.reconnect_task = None
         from assistant_runtime.bootstrap import compose
 
@@ -134,11 +138,16 @@ class AssistantService:
     async def wake(self, preroll=(), *, source="other", keyword=None):
         if self.active or self.quiet_active():
             return
+        if self.mode == "closing":
+            await self.standby_ready.wait()
+        if self.active or self.quiet_active():
+            return
         if getattr(self, "memory", None):
             self.memory.preempt()
         self.active = True
         self.mode = "connecting"
         self.last_activity = self.last_wake = time.monotonic()
+        self.dialogue.wake()
         self.last_error = None
         self.wake_count += 1
         import uuid
@@ -182,23 +191,34 @@ class AssistantService:
                 await self._cue(error=True)
 
     async def sleep(self):
+        if self.mode == "closing":
+            await self.standby_ready.wait()
+            return
         self.active = False
-        self.mode = "standby"
-        if getattr(self, "memory", None):
-            self.memory.enqueue()
-        reconnect = getattr(self, "reconnect_task", None)
-        if reconnect and reconnect is not asyncio.current_task() and not reconnect.done():
-            reconnect.cancel()
-            await asyncio.gather(reconnect, return_exceptions=True)
-        self.recovering = False
-        self.preroll.clear()
-        self.recognizer.reset_keyword()
-        if self.connect_task and not self.connect_task.done():
-            self.connect_task.cancel()
-            await asyncio.gather(self.connect_task, return_exceptions=True)
-        await self.player.stop()
-        async with self.transition:
-            await self.voice.close()
+        self.mode = "closing"
+        self.standby_ready.clear()
+        try:
+            # Silence locally before memory work, provider shutdown or reconnect cleanup.
+            await self.player.stop()
+            if getattr(self, "memory", None):
+                self.memory.enqueue()
+            reconnect = getattr(self, "reconnect_task", None)
+            if reconnect and reconnect is not asyncio.current_task() and not reconnect.done():
+                reconnect.cancel()
+                await asyncio.gather(reconnect, return_exceptions=True)
+            self.recovering = False
+            self.preroll.clear()
+            self.recognizer.reset_keyword()
+            if self.connect_task and not self.connect_task.done():
+                self.connect_task.cancel()
+                await asyncio.gather(self.connect_task, return_exceptions=True)
+        finally:
+            try:
+                async with self.transition:
+                    await self.voice.close()
+            finally:
+                self.mode = "standby"
+                self.standby_ready.set()
         log.info("session_standby background_task=%s", self.backend.busy)
 
     async def _capture(self):
@@ -224,9 +244,9 @@ class AssistantService:
             speech = self.recognizer.vad.is_speech_detected()
             self.player.input_speaking = speech
             if speech and self.active:
-                self.last_speech = self.last_activity = time.monotonic()
+                self.last_speech = time.monotonic()
                 # Room echo also passes a simple VAD. Let native voice identify
-                # a user turn before flushing playback; VAD only tracks idle.
+                # a user turn before flushing playback. VAD never renews attention.
             while not self.recognizer.vad.empty():
                 self.recognizer.vad.pop()  # no utterance ASR in the native route
 
@@ -240,6 +260,7 @@ class AssistantService:
                     role, text = event["role"], event["text"]
                     self.store.transcript(role, text)
                     if role == "user":
+                        self.dialogue.user()
                         self.last_input = text
                         self.backend.last_user_text = text
                         self.input_count += 1
@@ -247,12 +268,14 @@ class AssistantService:
                         cmd = parse_command(text, self.config.wake_words)
                         if cmd:
                             await self.control(cmd)
+                    elif role == "assistant" and not self.backend.busy:
+                        self.dialogue.replied()
                 elif event["kind"] == "user_turn":
-                    self.player.manual_muted = False
                     # Data-channel events can arrive seconds after their
                     # audio. A stale turn must not cut a newer answer.
                     if time.monotonic() - self.last_speech < 1:
-                        await self.player.stop(suppress=False)
+                        self.player.manual_muted = False
+                        await self.player.stop()
                     self.native_interruptions += 1
                     self.last_activity = time.monotonic()
                     log.info("native_user_turn playback_flushed")
@@ -286,13 +309,17 @@ class AssistantService:
             self.recovering = False
 
     async def control(self, cmd):
-        if cmd.kind not in {"sleep", "stop", "cancel", "volume", "progress"}:
+        if cmd.kind not in {"sleep", "stop", "cancel", "volume", "progress", "chat"}:
             raise ValueError(
                 "Voice input/output are fixed by startup configuration; runtime switching is disabled"
             )
         self.last_activity = time.monotonic()
         if cmd.kind == "sleep":
             await self.sleep()
+        elif cmd.kind == "chat":
+            self.dialogue.continuous = True
+            self.dialogue.user()
+            await self.speak("好，我们聊聊。")
         elif cmd.kind == "stop":
             await self.player.stop()
             self.player.manual_muted = True
@@ -347,6 +374,10 @@ class AssistantService:
             **self.brain_plugin.diagnostics(),
             **self.audio_plugin.diagnostics(),
             "mode": self.mode,
+            "voice_dialogue": {
+                "mode": "continuous" if self.dialogue.continuous else "short",
+                "follow_up_seconds": self.dialogue.follow_up_seconds,
+            },
             "microphone_enabled": not self.no_mic,
             "capture_recent": self.last_frame is not None and time.monotonic() - self.last_frame < 3,
             "voice_io": {
@@ -378,10 +409,13 @@ class AssistantService:
             await self._enforce_quiet()
             if (
                 self.active
-                and not self.backend.busy
-                and not self.player.playing
-                and not self.recognizer.vad.is_speech_detected()
-                and time.monotonic() - self.last_activity >= self.config.idle_seconds
+                and self.mode == "active"
+                and self.dialogue.expired(
+                    busy=self.backend.busy,
+                    playing=self.player.playing,
+                    last_output=self.last_output,
+                    timeout=self.config.idle_seconds,
+                )
             ):
                 await self.sleep()
             try:

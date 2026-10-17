@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from pathlib import Path
 import weakref
 from .backend import INSTRUCTIONS
@@ -14,26 +15,37 @@ class CodexJobs:
         self.threads = {}
         self.questions = {}
         self.catalog = []
+        self.catalog_at = 0.0
+        self.catalog_lock = asyncio.Lock()
         self.locks = weakref.WeakValueDictionary()
         self.handles = {}
 
-    async def models(self):
-        if not self.catalog:
+    async def models(self, refresh=False):
+        async with self.catalog_lock:
+            if not refresh and self.catalog and time.monotonic() - self.catalog_at < 300:
+                return self.catalog
+            collected = []
             cursor = None
-            while True:
+            for _ in range(10):
                 page = await self.client.request(
                     "model/list",
                     {"limit": 100, "includeHidden": False, **({"cursor": cursor} if cursor else {})},
                 )
-                self.catalog.extend(page.get("data", []))
+                collected.extend(page.get("data", []))
                 cursor = page.get("nextCursor")
                 if not cursor:
                     break
+            else:
+                raise ValueError("Model catalog pagination limit exceeded")
+            self.catalog, self.catalog_at = collected, time.monotonic()
         return self.catalog
 
     async def select(self, model, effort):
         models = await self.models()
         selected = next((m for m in models if model in (m["id"], m["model"])), None)
+        if not selected:
+            models = await self.models(refresh=True)
+            selected = next((m for m in models if model in (m["id"], m["model"])), None)
         if not selected:
             raise ValueError("Task model is not available: " + model)
         if effort not in [e["reasoningEffort"] for e in selected.get("supportedReasoningEfforts", [])]:
@@ -73,6 +85,12 @@ class CodexJobs:
             + str(directory / "artifacts")
             + "。本轮默认工作目录是自己的 scratch，不在用户项目根目录创建临时文件。用户授权的目标工作区为 "
             + spec["workspace"]
+            + "\n当前后台任务身份（系统数据）："
+            + json.dumps(
+                {"task_id": run.get("task_id"), "run_id": run["id"], "execution": selection},
+                ensure_ascii=False,
+            )
+            + "\n任务选型以 tasks MCP list_task_models 返回的实例策略为准；子任务不继承自己的模型和思考深度。步骤多或执行久不等于推理困难。确有推理困难时，可用 request_task_model_upgrade 请求更高档；必须提供证据和检查点，清空活动/结果不明操作，再结束当前轮次等待系统交接。不要自行新建重复任务或通过主会话升级；离线、超时、缺少工具不作为升级理由。"
             + "，需要项目操作时显式指定目标路径和命令 cwd；沿用已有授权和沙盒配置。后台子任务仅可通过 tasks MCP 在本任务范围内派发。用户授权的监控发现新信息时用 notifications MCP 推送，event_key 使用源事件 ID，不使用轮询时间或 run ID；没有变化就保持静默。入队成功后才推进检查游标。任务完成摘要由系统自动投递，不要另发重复摘要。",
             "config": {
                 "model_reasoning_effort": selection["reasoning_effort"],
@@ -94,6 +112,9 @@ class CodexJobs:
         }
         existing = run["data"].get("thread_id")
         if existing:
+            history = run["data"].get("model_upgrades", [])
+            if history and history[-1]["phase"] == "dispatching":
+                await self.upgrade_ready(run)
             summary = await self.client.request("thread/read", {"threadId": existing, "includeTurns": False})
             if summary["thread"].get("status", {}).get("type") == "active":
                 raise RuntimeError("Prior execution is still active; continuation not replayed")
@@ -105,6 +126,12 @@ class CodexJobs:
             {**params, **({"threadId": existing} if existing else {})},
             timeout=60,
         )
+        for field, expected in (
+            ("model", selection["model"]),
+            ("reasoningEffort", selection["reasoning_effort"]),
+        ):
+            if result.get(field) is not None and result[field] != expected:
+                raise RuntimeError("Provider resolved a different task model/effort; no turn was started")
         thread = result["thread"]["id"]
         self.threads[thread] = run["id"]
         self.handles[run["id"]] = {
@@ -116,6 +143,10 @@ class CodexJobs:
                 run["id"],
                 "dispatching",
                 thread_id=thread,
+                provider_selection={
+                    "model": result.get("model"),
+                    "reasoning_effort": result.get("reasoningEffort"),
+                },
                 **({"mcp_revision": mcp_revision} if getattr(self.backend, "integrations", None) else {}),
             )
             is False
@@ -160,6 +191,10 @@ class CodexJobs:
         ident = self.threads.get(thread)
         if not ident:
             return False
+        incoming = p.get("turnId") or p.get("turn", {}).get("id")
+        expected = self.handles.get(ident, {}).get("turn_id")
+        if method != "turn/started" and incoming and expected and incoming != expected:
+            return True  # Late events from a prior model segment cannot finish this one.
         if "id" in event:
             if method == "item/tool/requestUserInput":
                 self.questions[ident] = event
@@ -194,6 +229,7 @@ class CodexJobs:
             if mapped and mapped.get("attachments"):
                 self.notify(ident, None, attachments=mapped["attachments"])
         if method == "turn/started":
+            self.handles.setdefault(ident, {})["turn_id"] = p["turn"]["id"]
             self.notify(ident, "running", turn_id=p["turn"]["id"], turn_active=True)
         elif method == "item/completed" and p.get("item", {}).get("type") == "agentMessage":
             self.notify(ident, None, progress=p["item"].get("text", "")[:16000])
@@ -202,13 +238,55 @@ class CodexJobs:
             state = {"completed": "completed", "interrupted": "canceled", "failed": "failed"}.get(
                 status, "unknown"
             )
-            self.notify(ident, state, provider_error=p["turn"].get("error"), turn_active=False)
+            self.notify(
+                ident,
+                state,
+                turn_id=p["turn"]["id"],
+                provider_error=p["turn"].get("error"),
+                turn_active=False,
+            )
         elif method == "thread/goal/updated":
             goal = p.get("goal") or {}
             self.notify(ident, None, goal=goal)
         elif method == "error":
             self.notify(ident, None, error=str(p.get("error", "Provider error"))[:500])
         return True
+
+    async def upgrade_ready(self, run):
+        """Provider-specific proof that resuming this SAME thread cannot overlap prior work."""
+        upgrades = run["data"].get("model_upgrades", [])
+        if upgrades:
+            prior, target = upgrades[-1]["from"], upgrades[-1]["to"]
+            efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+            if (
+                prior["model"] == target["model"]
+                and prior["reasoning_effort"] in efforts
+                and target["reasoning_effort"] in efforts
+                and efforts.index(target["reasoning_effort"]) <= efforts.index(prior["reasoning_effort"])
+            ):
+                raise ValueError("Configured upgrade would not increase reasoning effort for this model")
+        thread = run["data"].get("thread_id")
+        if not thread or thread == getattr(self.backend, "thread_id", None):
+            raise ValueError("Model handoff requires an independent execution thread")
+        summary = (await self.client.request("thread/read", {"threadId": thread, "includeTurns": False}))[
+            "thread"
+        ]
+        if summary.get("status", {}).get("type") not in {"idle", "notLoaded"}:
+            raise RuntimeError("Provider thread is not confirmed idle")
+        turns = await self.client.request(
+            "thread/turns/list",
+            {"threadId": thread, "limit": 1, "sortDirection": "desc", "itemsView": "summary"},
+        )
+        latest = turns.get("data", [])
+        if (
+            not latest
+            or latest[0].get("id") != run["data"].get("turn_id")
+            or latest[0].get("status") != "completed"
+        ):
+            raise RuntimeError("Latest provider turn does not confirm the handoff checkpoint")
+        terminals = await self.client.request("thread/backgroundTerminals/list", {"threadId": thread})
+        if terminals.get("data") or terminals.get("nextCursor"):
+            raise RuntimeError("Background terminals must finish before a model handoff")
 
     async def supplement(self, run, text):
         ident = run["id"]
