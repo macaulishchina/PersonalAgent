@@ -33,7 +33,7 @@ from assistant_runtime.plugins.codex.mcp import server_config
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.decisions.jev import DecisionError, JevProvider, answer, credential
 from assistant_runtime.plugins.decisions.plugin import DecisionsPlugin
-from assistant_runtime.plugins.decisions.questions import prepare, question
+from assistant_runtime.plugins.decisions.questions import VERSIONS, prepare, question
 from assistant_runtime.plugins.decisions.settings import DecisionSettings
 from assistant_runtime.store import Store
 
@@ -42,6 +42,21 @@ def sample(reference="one", **changes):
     return DecisionSample(
         "voice_intent", reference, {"utterance": "退下吧", "execution_active": False}, **changes
     )
+
+
+def model_state(objective="科研文献检索与归纳"):
+    return {
+        "objective": objective,
+        "options": {
+            f"{profile}_{effort}": {"profile": profile, "model": model, "reasoning_effort": effort}
+            for profile, model, effort in (
+                ("fast", "gpt-6-luna", "low"),
+                ("balanced", "gpt-6.1-sol", "low"),
+                ("deep", "gpt-6.1-sol", "medium"),
+                ("ultra", "gpt-6-astra", "high"),
+            )
+        },
+    }
 
 
 class FakeProvider:
@@ -64,6 +79,12 @@ class FakeProvider:
     async def close(self):
         self.closed = True
 
+    async def warmup(self):
+        pass
+
+    def diagnostics(self):
+        return {}
+
     async def evaluate(self, job):
         self.calls.append(copy.deepcopy(job))
         self.entered.set()
@@ -71,7 +92,7 @@ class FakeProvider:
         if self.failure:
             raise self.failure
         choice = self.choice or ("sleep" if job["kind"] == "voice_intent" else "uncertain")
-        return {
+        result = {
             "model": "jev-1.13.0",
             "choice": choice,
             "confidence": 0.9,
@@ -83,6 +104,16 @@ class FakeProvider:
             },
             "usage": {"input_tokens": 100, "output_tokens": 20},
         }
+        if job["kind"] == "model_profile":
+            result["fields"] = {}
+            for field in ("profile", "reasoning_effort"):
+                probabilities = {"uncertain": result["probabilities"]["uncertain"]}
+                for ident, option in job["input"]["options"].items():
+                    value = option[field]
+                    probabilities[value] = probabilities.get(value, 0) + result["probabilities"][ident]
+                winner = max(probabilities, key=probabilities.get)
+                result["fields"][field] = {"choice": winner, "probabilities": probabilities}
+        return result
 
 
 class ShadowTest(unittest.IsolatedAsyncioTestCase):
@@ -330,6 +361,19 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.query("auth"))["reason"], "authentication_failed")
         self.assertEqual(len(self.provider.calls), 3)  # Reload never replays a failed identity.
 
+    async def test_ultra_advice_uses_normal_confidence_gate(self):
+        self.plugin.settings.mode = "active"
+        self.provider.choice = "ultra_high"
+        for reference, probability, expected in (("low", 0.89, "fallback"), ("high", 0.99, "ok")):
+            self.provider.probability = probability
+            result = await self.runtime.invoke(
+                DecisionQuery(
+                    "model_profile", reference, model_state("极复杂的原创理论证明，需要验证交叉约束")
+                )
+            )
+            self.assertEqual(result["status"], expected)
+            self.assertEqual(result["choice"], "ultra_high" if expected == "ok" else None)
+
     async def test_usage_count_is_informational_and_does_not_limit_calls(self):
         for index in range(121):
             result = await self.query(f"usage:{index}")
@@ -484,11 +528,24 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         (self.root / ".env").write_text('TYPESAFE_API_KEY="test-local-key"\nOTHER_SECRET=do-not-export\n')
         self.seen = []
+        self.connections = []
+        self.warmup_entered = asyncio.Event()
+        self.warmup_release = asyncio.Event()
+        self.warmup_release.set()
         self.status = 200
         self.mode = "normal"
 
         async def handle(request):
-            self.seen.append((request.headers.get("Authorization"), await request.json()))
+            self.connections.append((request.method, id(request.transport)))
+            self.seen.append(
+                (
+                    request.headers.get("Authorization"),
+                    await request.json() if request.can_read_body else None,
+                )
+            )
+            if request.method == "GET":
+                self.warmup_entered.set()
+                await self.warmup_release.wait()
             if self.mode == "timeout":
                 await asyncio.sleep(0.3)
             if self.mode == "redirect":
@@ -511,6 +568,23 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
                     "usage": {"input_tokens": 123, "output_tokens": 45},
                 }
             ).encode()
+            payload = self.seen[-1][1]
+            if payload and set(payload["questions"]) == {"profile", "effort"}:
+                data = json.loads(body)
+                data["answers"] = {
+                    key: {
+                        "type": "choice",
+                        "choice": value,
+                        "confidence": 0.99,
+                        "probabilities": {
+                            name: float(name == value) for name in payload["questions"][key]["criteria"]
+                        },
+                    }
+                    for key, value in (("profile", "ultra"), ("effort", "high"))
+                }
+                if self.mode == "missing_effort":
+                    data["answers"].pop("effort")
+                body = json.dumps(data).encode()
             if self.mode == "chunked":
                 response = web.StreamResponse()
                 await response.prepare(request)
@@ -523,18 +597,23 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
 
         app = web.Application()
         app.router.add_post("/", handle)
+        app.router.add_get("/models", handle)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await self.site.start()
         address = self.site._server.sockets[0].getsockname()
-        self.provider = JevProvider(self.root, DecisionSettings(timeout_seconds=0.1))
+        self.provider = JevProvider(
+            self.root, DecisionSettings(timeout_seconds=0.1, external_data_consent=True)
+        )
         self.provider.endpoint = f"http://127.0.0.1:{address[1]}/"
+        self.provider.models_endpoint = self.provider.endpoint + "models"
         with patch.dict(os.environ, {}, clear=True):
             self.provider.reload()
         await self.provider.start()
 
     async def asyncTearDown(self):
+        self.warmup_release.set()
         await self.provider.close()
         await self.runner.cleanup()
         self.temp.cleanup()
@@ -549,6 +628,22 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("TYPESAFE_API_KEY", os.environ)
         self.assertNotIn("OTHER_SECRET", os.environ)
         self.assertEqual(payload["model"], "jev-1.13.0")
+
+    async def test_one_http_request_carries_two_small_questions_and_validates_both_answers(self):
+        job = prepare(DecisionSample("model_profile", "batch", model_state()), "tasks", "jev-1.13.0")
+        result = await self.provider.evaluate(job)
+        self.assertEqual(len(self.seen), 1)
+        questions = self.seen[0][1]["questions"]
+        self.assertEqual(set(questions), {"profile", "effort"})
+        self.assertEqual(result["choice"], "ultra_high")
+        self.assertEqual(result["fields"]["profile"]["choice"], "ultra")
+        self.assertEqual(result["fields"]["reasoning_effort"]["choice"], "high")
+        self.assertEqual(result["usage"], {"input_tokens": 123, "output_tokens": 45})
+        self.assertNotIn("usage", result["fields"]["profile"])
+        self.mode = "missing_effort"
+        with self.assertRaisesRegex(DecisionError, "invalid_response"):
+            await self.provider.evaluate(job)
+        self.assertEqual(len(self.seen), 2)
 
     async def test_auth_rate_limit_timeout_redirect_and_oversized_response_are_bounded(self):
         job = prepare(sample(), "test", "jev-1.13.0")
@@ -568,6 +663,32 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ContractTest(unittest.TestCase):
+    def test_execution_options_are_closed_bounded_and_not_arbitrary_model_output(self):
+        for mutation in (
+            lambda state: state.pop("options"),
+            lambda state: state.update(options={}),
+            lambda state: state["options"]["fast_low"].update(reasoning_effort="invented"),
+            lambda state: state["options"]["fast_low"].update(profile="ultra"),
+            lambda state: state["options"]["fast_low"].update(extra="unsupported"),
+        ):
+            state = model_state()
+            mutation(state)
+            with self.assertRaises(ValueError):
+                prepare(DecisionSample("model_profile", "invalid", state), "tasks", "jev-1.13.0")
+
+    def test_new_model_profile_question_invalidates_only_its_old_cache(self):
+        model_sample = DecisionSample("model_profile", "same", model_state())
+        current = prepare(model_sample, "tasks", "jev-1.13.0")
+        voice = prepare(sample(), "assistant", "jev-1.13.0")
+        with patch.dict(VERSIONS, {"model_profile": 3}):
+            old = prepare(model_sample, "tasks", "jev-1.13.0")
+            self.assertEqual(prepare(sample(), "assistant", "jev-1.13.0")["id"], voice["id"])
+        self.assertNotEqual(current["id"], old["id"])
+        self.assertEqual(current["question_version"], 5)
+        self.assertEqual(
+            set(current["choices"]), {"fast_low", "balanced_low", "deep_medium", "ultra_high", "uncertain"}
+        )
+
     def test_configuration_and_question_contract_are_strict(self):
         for values in (
             {"mode": "invalid"},
@@ -796,19 +917,180 @@ class ModelIngressTest(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = fixtures.TasksTest.asyncTearDown
     create = fixtures.TasksTest.create
 
+    def register_advice(self, choice):
+        self.config.decisions = {"external_data_consent": True}
+        judge = AsyncMock(return_value={"status": "ok", "choice": choice, "receipt_id": "joint"})
+        self.runtime.register("tasks", DecisionQuery, judge)
+        return judge
+
+    async def test_partial_confidence_adopts_only_the_trusted_unresolved_field(self):
+        judge = self.register_advice("ultra_high")
+        judge.return_value["field_choices"] = {"profile": "ultra", "reasoning_effort": None}
+        selected = (await self.create())["spec"]["execution"]
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("ultra", "high"))
+        self.assertEqual(
+            selected["selection"]["sources"], {"model": "jev", "reasoning_effort": "profile_default"}
+        )
+        self.assertIsNone(selected["selection"]["decision_support"]["recommended"]["reasoning_effort"])
+        judge.return_value["field_choices"] = {"profile": None, "reasoning_effort": "high"}
+        selected = (await self.create())["spec"]["execution"]
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("fast", "high"))
+        self.assertEqual(selected["selection"]["sources"]["model"], "profile_default")
+
+    async def test_unresolved_field_without_confidence_or_incompatible_pair_falls_back(self):
+        judge = self.register_advice("deep_high")
+        judge.return_value["field_choices"] = {"profile": "deep", "reasoning_effort": None}
+        selected = (await self.create(execution={"profile": "deep", "reason": "模型已明确"}))["spec"][
+            "execution"
+        ]
+        self.assertEqual(selected["reasoning_effort"], "medium")
+        self.assertEqual(selected["selection"]["decision_support"]["reason"], "low_confidence")
+        judge.return_value["field_choices"] = {"profile": "fast", "reasoning_effort": "ultra"}
+        selected = (await self.create())["spec"]["execution"]
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("fast", "low"))
+
+    async def test_joint_advice_can_vary_effort_without_losing_profile(self):
+        judge = self.register_advice("deep_high")
+        definition = await self.create()
+        execution = definition["spec"]["execution"]
+        self.assertEqual((execution["profile"], execution["reasoning_effort"]), ("deep", "high"))
+        self.assertEqual(execution["selection"]["sources"], {"model": "jev", "reasoning_effort": "jev"})
+        self.assertEqual(judge.await_count, 1)
+        options = judge.await_args.args[0].state["options"]
+        self.assertNotIn("balanced_high", options)  # Same concrete execution as deep_high.
+        self.assertIn("ultra_high", options)
+        self.assertEqual(options["ultra_high"]["model"], "gpt-6-astra")
+
+    async def test_explicit_profile_only_allows_effort_advice(self):
+        judge = self.register_advice("deep_high")
+        definition = await self.create(execution={"profile": "deep", "reason": "困难推理但不需要 Astra"})
+        selected = definition["spec"]["execution"]
+        self.assertEqual(selected["profile"], "deep")
+        self.assertEqual(selected["reasoning_effort"], "high")
+        self.assertEqual(
+            selected["selection"]["sources"], {"model": "profile_default", "reasoning_effort": "jev"}
+        )
+        self.assertTrue(
+            all(o["profile"] == "deep" for o in judge.await_args.args[0].state["options"].values())
+        )
+
+    async def test_explicit_effort_is_preserved_while_profile_is_suggested(self):
+        judge = self.register_advice("deep_high")
+        definition = await self.create(execution={"reasoning_effort": "high", "reason": "需要困难推理"})
+        selected = definition["spec"]["execution"]
+        self.assertEqual(selected["selection"]["sources"]["reasoning_effort"], "agent")
+        self.assertEqual(selected["reasoning_effort"], "high")
+        self.assertTrue(
+            all(o["reasoning_effort"] == "high" for o in judge.await_args.args[0].state["options"].values())
+        )
+
+    async def test_fixed_model_and_custom_agent_model_only_receive_supported_effort_advice(self):
+        judge = self.register_advice("ultra_medium")
+        self.plugin.settings.execution = {"model": "gpt-6-astra", "reasoning_effort": "auto"}
+        definition = await self.create()
+        selected = definition["spec"]["execution"]
+        self.assertEqual((selected["model"], selected["reasoning_effort"]), ("gpt-6-astra", "medium"))
+        self.assertEqual(selected["profile"], "ultra")
+        self.assertEqual(selected["selection"]["sources"]["model"], "instance_fixed")
+        self.assertTrue(
+            all(o["model"] == "gpt-6-astra" for o in judge.await_args.args[0].state["options"].values())
+        )
+        self.plugin.settings.execution["model"] = "auto"
+        self.executor.models.return_value.append(
+            {
+                "model": "custom",
+                "supportedReasoningEfforts": [{"reasoningEffort": e} for e in ("low", "high")],
+            }
+        )
+        judge.return_value["choice"] = "custom_high"
+        definition = await self.create(execution={"model": "custom", "reason": "用户指定独立研究模型"})
+        selected = definition["spec"]["execution"]
+        self.assertEqual(
+            (selected["model"], selected["profile"], selected["reasoning_effort"]),
+            ("custom", "custom", "high"),
+        )
+
+    async def test_fixed_effort_is_preserved_while_profile_is_suggested(self):
+        judge = self.register_advice("deep_high")
+        self.plugin.settings.execution = {"model": "auto", "reasoning_effort": "high"}
+        definition = await self.create()
+        selected = definition["spec"]["execution"]
+        self.assertEqual(selected["selection"]["sources"]["reasoning_effort"], "instance_fixed")
+        self.assertEqual(selected["reasoning_effort"], "high")
+        self.assertTrue(
+            all(o["reasoning_effort"] == "high" for o in judge.await_args.args[0].state["options"].values())
+        )
+
+    async def test_disabled_shadow_catalog_failure_and_invalid_choice_keep_original_fields(self):
+        judge = self.register_advice("ultra_high")
+        explicit = {"profile": "deep", "reason": "只使用当前指定模型"}
+        for config in ({"enabled": False}, {"mode": "shadow"}, {"external_data_consent": False}):
+            self.config.decisions = {"external_data_consent": True, **config}
+            selected = (await self.create(execution=explicit))["spec"]["execution"]
+            self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("deep", "medium"))
+        judge.assert_not_awaited()
+        self.config.decisions = {"external_data_consent": True}
+        self.executor.models.side_effect = TimeoutError()
+        selected = (await self.create(execution=explicit))["spec"]["execution"]
+        self.assertEqual(selected["selection"]["decision_support"]["reason"], "model_catalog_unavailable")
+        self.executor.models.side_effect = None
+        selected = (await self.create(execution=explicit))["spec"]["execution"]
+        self.assertEqual(selected["selection"]["decision_support"]["reason"], "invalid_execution_option")
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("deep", "medium"))
+
+    async def test_single_supported_choice_is_local_and_invalid_explicit_effort_is_not_hidden(self):
+        judge = self.register_advice("deep_high")
+        self.executor.models.return_value = [
+            {"model": "gpt-6.1-sol", "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]}
+        ]
+        selected = (await self.create(execution={"profile": "deep", "reason": "已确定模型"}))["spec"][
+            "execution"
+        ]
+        self.assertEqual(selected["reasoning_effort"], "medium")
+        self.assertEqual(selected["selection"]["sources"]["reasoning_effort"], "catalog_only_option")
+        judge.assert_not_awaited()
+        self.executor.select.side_effect = ValueError("Unsupported reasoning effort")
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            await self.create(
+                execution={"profile": "deep", "reasoning_effort": "invalid", "reason": "explicit"}
+            )
+
     async def test_auto_selection_records_advice_but_explicit_and_fixed_choices_bypass(self):
         self.config.decisions = {"external_data_consent": True}
-        judge = AsyncMock(return_value={"status": "ok", "choice": "balanced", "receipt_id": "receipt"})
+        judge = AsyncMock(return_value={"status": "ok", "choice": "balanced_low", "receipt_id": "receipt"})
         self.runtime.register("tasks", DecisionQuery, judge)
         definition = await self.create()
         execution = definition["spec"]["execution"]
         self.assertEqual(execution["profile"], "balanced")
         self.assertEqual(execution["selection"]["decision_support"]["receipt_id"], "receipt")
-        await self.create(execution={"profile": "deep", "reason": "需要诊断冲突证据"})
+        await self.create(
+            execution={"profile": "deep", "reasoning_effort": "medium", "reason": "需要诊断冲突证据"}
+        )
         self.plugin.settings.execution = {"model": "fixed", "reasoning_effort": "low"}
         definition = await self.create()
         self.assertEqual(definition["spec"]["execution"]["model"], "fixed")
         self.assertEqual(judge.await_count, 1)
+
+    async def test_ultra_advice_reaches_task_policy_and_explicit_ultra_bypasses_judgment(self):
+        self.config.decisions = {"external_data_consent": True}
+        judge = AsyncMock(return_value={"status": "ok", "choice": "ultra_high", "receipt_id": "research"})
+        self.runtime.register("tasks", DecisionQuery, judge)
+        definition = await self.create()
+        selected = definition["spec"]["execution"]
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("ultra", "high"))
+        self.assertEqual(selected["selection"]["decision_support"]["receipt_id"], "research")
+        await self.create(
+            execution={
+                "profile": "ultra",
+                "reasoning_effort": "high",
+                "reason": "极复杂的跨学科原创证明，需要高强度推理",
+            }
+        )
+        self.assertEqual(judge.await_count, 1)
+
+        self.executor.select.side_effect = ValueError("Research effort unavailable")
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            await self.create(execution={"profile": "ultra", "reason": "明确指定科研推理档位"})
 
     async def test_timeout_and_unavailable_suggestion_use_original_policy(self):
         self.config.decisions = {"external_data_consent": True}
@@ -819,7 +1101,7 @@ class ModelIngressTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             definition["spec"]["execution"]["selection"]["decision_support"]["reason"], "timeout"
         )
-        judge.return_value = {"status": "ok", "choice": "balanced", "receipt_id": "receipt"}
+        judge.return_value = {"status": "ok", "choice": "balanced_low", "receipt_id": "receipt"}
 
         async def select(model, effort):
             if model == "gpt-6.1-sol":
@@ -831,5 +1113,5 @@ class ModelIngressTest(unittest.IsolatedAsyncioTestCase):
         execution = definition["spec"]["execution"]
         self.assertEqual(execution["profile"], "fast")
         self.assertEqual(
-            execution["selection"]["decision_support"]["reason"], "suggested_profile_unavailable"
+            execution["selection"]["decision_support"]["reason"], "suggested_execution_unavailable"
         )

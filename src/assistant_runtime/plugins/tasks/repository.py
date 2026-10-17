@@ -430,14 +430,26 @@ class TaskRepository:
                 )
         return self.run(ident)
 
-    def update_definition(self, ident, *, on_update=None, **changes):
+    def update_definition(self, ident, *, on_update=None, expected_revision=None, **changes):
         d = self.definition(ident)
+        expected = d["revision"] if expected_revision is None else expected_revision
+        if d["revision"] != expected:
+            raise ValueError("Task changed; read latest revision")
         d.update(changes)
         with self.db:
-            self.db.execute(
-                "UPDATE job_definitions SET state=?,spec=?,next_at=?,updated=?,revision=revision+1 WHERE id=?",
-                (d["state"], json.dumps(d["spec"], ensure_ascii=False), d["next_at"], time.time(), ident),
+            cursor = self.db.execute(
+                "UPDATE job_definitions SET state=?,spec=?,next_at=?,updated=?,revision=revision+1 WHERE id=? AND revision=?",
+                (
+                    d["state"],
+                    json.dumps(d["spec"], ensure_ascii=False),
+                    d["next_at"],
+                    time.time(),
+                    ident,
+                    expected,
+                ),
             )
+            if cursor.rowcount != 1:
+                raise ValueError("Task changed; read latest revision")
             if on_update:
                 on_update(self.definition(ident))
         return self.definition(ident)

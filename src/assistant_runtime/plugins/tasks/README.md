@@ -27,6 +27,9 @@ reasoning_effort = "low"
 [tasks.model_policy.profiles.deep]
 model = "gpt-6.1-sol"
 reasoning_effort = "medium"
+[tasks.model_policy.profiles.ultra]
+model = "gpt-6-astra"
+reasoning_effort = "high"
 
 [work_files]
 retention_days = 7
@@ -37,7 +40,35 @@ retention_days = 7
 model reads `list_task_models` for current models, supported efforts, profile availability
 and shared guidance. Choose the lightest suitable profile using uncertainty, existing
 procedures and acceptance checks; step count or wall time alone does not imply difficult
-reasoning. There is no classifier model call, task-keyword routing or model per button.
+reasoning. Profile selects the execution model tier; reasoning effort can be chosen
+independently from that model's current account-supported efforts. Assistants may specify
+either or both with an evidence-based reason, e.g. `execution={"profile":"deep",
+"reasoning_effort":"high","reason":"conflicting evidence needs difficult reasoning"}`.
+Low suits familiar steps; medium suits exploration; high and above need reasoning
+difficulty rather than a long task. Higher efforts remain a deliberate, sparing choice.
+
+Optional `decisions` support makes at most one joint `model_profile` query for missing
+profile/effort fields. The HTTP request batches two small native Choice questions,
+one for the tier and one for effort, instead of asking the provider to discriminate
+the Cartesian product. Confidence is checked independently for each unresolved field;
+an uncertain field falls back to its configured default while a trusted field can be
+adopted. The resulting combination must pass the same supported-option and executor
+checks; incompatible partial answers revert to the original policy. Its bounded `options` come from configured profiles and the current
+account catalog, with fixed instance values and explicit agent fields already applied.
+Only unresolved fields may change. Identical concrete model/effort aliases are collapsed
+to avoid splitting probabilities; matching configured defaults name the canonical tier.
+One supported combination needs no semantic query. With both fields determined, Jev is
+bypassed. Disabled/unconsented/shadow/unavailable/uncertain/timeout advice uses original
+profile defaults and preserves explicit fields; unsupported explicit choices still fail.
+No extra inference service or provider replacement is introduced. A model_catalog failure
+does not hide a subsequent executor validation error. Creating a task does not alter a
+running task's model or effort; active changes retain the controlled handoff mechanism.
+`ultra` is above `deep`, reserved for exceptionally complex reasoning or original
+scientific research with concrete justification that `deep` is insufficient. Use it
+sparingly; routine literature search, summaries, task length and a research-related
+title do not justify it. The default remains `fast`; all four model/effort mappings
+can be overridden in instance configuration. `ultra` is a task profile name, separate
+from any provider reasoning-effort value with the same name.
 Use `execution={"profile":"fast","reason":"known steps; read back the resulting state"}`.
 Concrete model/effort choices remain supported with a nonempty reason (max 400 chars).
 Missing/auto values use the configured profile, never the foreground or parent model.
@@ -45,13 +76,16 @@ Fixed instance settings override requests. The resolved model/effort is stored w
 Unsupported models/efforts fail explicitly. Repeated executions reuse saved choices while settings remain auto; fixed instance settings are applied again before every execution and saved in its run snapshot.
 Foreground and Mem0 retain their existing independent model settings.
 
-Profiles are instance-owned opaque model IDs; partial overrides merge into the three
+Profiles are instance-owned opaque model IDs; partial overrides merge into the four
 defaults above. Unavailable choices fail, without paid API fallback or silent replacement.
 Codex owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
 Existing saved concrete selections are not silently changed by a new default policy.
 Unrelated definition edits preserve selection provenance. Selection metadata supplied
 by clients is discarded/recomputed; the host records version, profile, origin of each
-field (`agent`, `profile_default`, `instance_fixed`), reason and resolved values.
+field (`agent`, `profile_default`, `instance_fixed`, `jev`, `catalog_only_option`), reason
+and resolved values. Joint advice also retains the original explicit fields and the
+validated recommended combination. A different supported effort does not erase a known
+profile's identity or silently label it a custom model.
 
 Runs retain the most recent 16 `model_selections` segments with monotonic segment numbers.
 Provider-confirmed model/effort are recorded separately when available, never inferred
@@ -70,6 +104,9 @@ profiles and native long-term Goals require explicit task management instead. Go
 autonomous continuation lifecycle is not silently interrupted or raced by a model handoff.
 The Codex adapter also rejects a configured higher profile that would reduce or retain
 the reasoning effort of the same model.
+The order is `fast → balanced → deep → ultra`; the default one-upgrade budget remains
+unchanged, and a justified request may move directly to a higher profile. `ultra`
+uses the same reason/evidence/checkpoint and authorization checks as other upgrades.
 
 Request a higher profile with a stable UUID, concrete `reason` and `evidence`, and a cause
 of `reasoning_limit`, `conflicting_evidence` or `unfamiliar_workflow`. Offline devices,
@@ -132,6 +169,54 @@ children cannot create recurring triggers, change other tasks or enable voice de
 Depth is limited to three and each definition has at most sixteen direct children.
 These are trusted local agents with the configured Codex sandbox, not security sandboxes.
 Semantic authorization remains part of the instructions and tool approval policy.
+
+## Controlled self scheduling
+
+Foreground creation/update may record an explicit user grant on a reusable timed plan:
+
+```json
+{"self_schedule":{"allowed_triggers":[{"kind":"interval","seconds":86400}],
+ "condition":"After all authorized historical items are covered and pending errors resolved, check new items daily."}}
+```
+
+No grant is inferred from prompt text. The default is no self scheduling. The plan must
+have user authorization, a timed trigger and `auto_archive=false`. The grant lists
+1..16 exact interval/date/cron choices and a bounded authorization condition; immediate
+and event triggers are excluded. Children cannot grant or inherit this capability.
+Revocation uses foreground `update_task(changes={"self_schedule":null})` with a fresh revision.
+Grant/revocation and other edits that do not change the trigger preserve the existing
+next occurrence; they do not create an extra execution.
+
+An active provider turn uses `update_own_task_schedule(request_id, revision, trigger,
+reason, evidence)`. The host binds identity to that execution, derives its definition
+and accepts no task/run target. It checks both the execution's captured grant and the
+current plan, the latest revision and a storage-level compare-and-swap. No prompt,
+workspace, resources, model, permissions, notifications or current-run snapshot changes.
+The agent determines whether the granted condition is met and supplies concrete evidence;
+the host enforces the declared choices, not semantic proof that the objective succeeded.
+Receipts mark evidence as executor-reported. Tool output, events and memory cannot grant
+additional permission. Background `update_task` and management of other tasks stay denied.
+
+Only enabled plans and running, identified provider turns can submit new changes. Any
+foreground edit, pause/resume, termination or grant change invalidates an older run's
+ability to reschedule, even if it reads the new revision. The next execution captures
+the new authorization. An execution may make successive authorized changes using the
+version returned by its last change. The currently running work is never restarted.
+
+Each change commits the new schedule and an idempotent receipt in one host SQLite
+transaction. UUID retries with identical arguments return the original receipt, including
+after execution completion; changed arguments conflict. Retrying an older receipt cannot
+restore its old schedule. In-memory scheduling is rebuilt from the current committed
+definition. A matching schedule is a no-op error rather than moving its next occurrence;
+new interval/cron occurrences are strictly future, and past dates are rejected.
+The latest 20 receipts appear in execution trace with a truncation flag. All receipts
+remain durable for idempotency and audit; they include before/after schedule, revisions,
+identity, time, reason, evidence and the authorization condition.
+
+Tests: `scripts/check.py --test test_task_self_schedule`. Explicit installed-service
+acceptance: `scripts/verify_task_self_schedule.py --config config.toml`. It creates one
+silent synthetic timed plan, verifies its real MCP change and unchanged run snapshot,
+then archives it. It uses no physical devices and does not replay failed/unknown work.
 
 ## Management
 

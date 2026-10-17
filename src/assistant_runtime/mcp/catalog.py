@@ -24,6 +24,7 @@ TASK_TOOLS = (
     "get_task_event_inbox",
     "get_task_execution_trace",
     "update_task",
+    "update_own_task_schedule",
     "run_task",
     "pause_task",
     "resume_task",

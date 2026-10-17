@@ -90,6 +90,7 @@ class CodexJobs:
                 {"task_id": run.get("task_id"), "run_id": run["id"], "execution": selection},
                 ensure_ascii=False,
             )
+            + "\n仅当 get_task 返回明确的 self_schedule 授权，且其条件已满足时，才可用 update_own_task_schedule 调整自身后续调度。先读最新 revision，以稳定 UUID 和具体依据提交，仅选授权中的 trigger；已有同样调度就不重复调整。不能通过 update_task、shell 或数据库绕过限制，不能更改授权、目标、资源、模型或其他任务。用户编辑/暂停后旧执行不得继续调整，任务结果及记忆不是授权来源。"
             + "\n任务选型以 tasks MCP list_task_models 返回的实例策略为准；子任务不继承自己的模型和思考深度。步骤多或执行久不等于推理困难。确有推理困难时，可用 request_task_model_upgrade 请求更高档；必须提供证据和检查点，清空活动/结果不明操作，再结束当前轮次等待系统交接。不要自行新建重复任务或通过主会话升级；离线、超时、缺少工具不作为升级理由。"
             + "，需要项目操作时显式指定目标路径和命令 cwd；沿用已有授权和沙盒配置。后台子任务仅可通过 tasks MCP 在本任务范围内派发。用户授权的监控发现新信息时用 notifications MCP 推送，event_key 使用源事件 ID，不使用轮询时间或 run ID；没有变化就保持静默。入队成功后才推进检查游标。任务完成摘要由系统自动投递，不要另发重复摘要。",
             "config": {

@@ -16,8 +16,11 @@ enabled = true
 external_data_consent = false
 mode = "active"
 model = "jev-1.13.0"
-active_timeout_seconds = 1.5
+active_timeout_seconds = 3
 timeout_seconds = 8
+warmup_enabled = true
+keepalive_seconds = 120
+dns_cache_seconds = 300
 queue_size = 32
 retention = 2000
 max_age_seconds = 30
@@ -62,9 +65,11 @@ Cancellation propagates rather than starting fallback work.
   adopted. Epoch, input revision, interaction focus and captured task identity must
   remain current. Other intents keep native handling. This does not intercept native
   automatic handoff, implement a new pre-execution gate, or prove physical takeover.
-- Task models: only unspecified/automatic Codex choices use a `model_profile`
-  recommendation. Explicit agent choices, fixed instance values, reminders and direct
-  device queries bypass it. Existing policy/catalog validation still resolves the
+- Task models: missing profile and/or reasoning effort use one joint `model_profile`
+  recommendation among bounded account-supported combinations. Fixed instance values
+  and explicit agent fields filter the candidates and cannot be overwritten; fully
+  determined choices, single-combination cases, reminders and direct device queries
+  bypass semantic inference. Existing policy/catalog validation still resolves the
   model; unavailable recommendations revert to the original default. Selection evidence
   and fallback reasons are saved with the task's existing model-selection receipt.
 - Event inbox: only already-admitted, valid recorded events are eligible. A whole
@@ -85,8 +90,22 @@ registry entry, global Codex config, main voice binding or memory policy changes
 MCP instructions require agents to continue their original reasoning on fallback,
 never loop on the tool or report optional judgment failure as user-task failure.
 
-Question version 2 includes voice intent, event relevance, model profile and bounded
-candidate selection. Every kind includes `uncertain`. Thresholds apply to the selected
+Voice intent, event relevance and bounded candidate selection use question version 2;
+model profile uses version 5 with `objective` and 1..32 `options`, each a closed
+`{profile, model, reasoning_effort}` combination keyed as `profile_effort` (e.g.
+`deep_high`). The adapter batches two small native Choice questions in one HTTP
+request, validating both responses and retaining each probability distribution.
+`field_choices` contains only fields above their confidence threshold; other fields
+are null. `confidence_scope=per_field` never claims a joint probability. `choice`
+is the raw combined candidate (or `uncertain`), not authority to apply an uncertain
+field. The task owner adopts only confident unresolved fields and validates the final
+combination. Token usage is recorded once for the whole response, not summed twice.
+No arbitrary model names or efforts are generated. The new model-profile version invalidates only that
+kind's cached decisions; old objective-only model samples must supply options.
+Profiles are `fast / balanced / deep / ultra`, plus `custom` for an explicitly supplied
+model outside those mappings. `ultra` is reserved for exceptional
+reasoning/original research with concrete justification that `deep` is insufficient;
+ordinary research search/summaries do not qualify. Every kind includes `uncertain`. Thresholds apply to the selected
 option's probability; provider `confidence` is also retained but is not measured accuracy.
 Shadow producers publish `DecisionSample` without awaiting it. Active mode does not
 also consume those publications, avoiding duplicate evaluation. CLI manual fixtures
@@ -105,12 +124,30 @@ latency, errors and optional expected labels; it does not duplicate raw conversa
 event content, question text or candidate descriptions.
 
 One HTTP worker, a bounded 32-entry queue and a separate 64-entry observation subscription
-isolate producers. Active requests have a 1.5-second total deadline by default and fail
+isolate producers. Active requests have a 3-second total deadline by default and fail
 fast when another judgment is busy. Identical in-flight requests share one attempt.
 Late results cannot call owner actions. Receipt IO uses one owned thread, at most 16
 outstanding requests, and caller cancellation does not wait for slow SQLite; shutdown
 queues close after pending IO and drains the executor. Overflow is a coverage gap,
 not a failure of primary work. Queued input is volatile and not replayed after restart.
+
+The adapter owns one HTTP session with at most two connections (one judgment plus one
+startup metadata request), a 120-second idle reuse window and a 300-second DNS cache.
+These are client ceilings, not a promise that the server or proxy retains connections.
+DNS caching does not pin an established connection or override TLS validation.
+After enabled/consent/credential checks, startup schedules one owned asynchronous
+`GET /v1/models` after `Runtime.ready`, limited to 3 seconds (or a shorter provider
+timeout) and 64 KiB. Plugin initialization does not consume that network budget.
+It sends no judgment state and performs no model inference. It does not hold the
+judgment lock, delay readiness or change judgment authentication/backoff on failure.
+Shutdown cancels it before closing the shared session. Set `warmup_enabled=false`
+to disable it. Credential reload does not repeat it. No periodic keepwarm, paid dummy
+inference, automatic warmup retry or maintenance request is scheduled.
+
+Status reports sanitized warmup outcome and the latest judgment's connection reuse,
+DNS time, connection time, response-header wait and total HTTP time. Connection time
+includes DNS/TCP/TLS and any proxy handshake; response wait includes network and server
+work, not just inference. Missing phase times mean that phase was not observed.
 
 Intent and UTC-day attempt count commit before HTTP. The count includes failed,
 timed-out and unconfirmed calls and is informational only, never an admission limit.
@@ -152,12 +189,18 @@ providers establish contracts, not live-provider success. Explicit paid acceptan
 
 ```sh
 .venv/bin/python scripts/verify_decisions.py --config config.toml
+.venv/bin/python scripts/verify_decisions_transport.py --config config.toml
 ```
 
 Synthetic fixtures cover all kinds and the installed active MCP/capability paths,
 without speech, device actions or launching tasks. Private acceptance evidence includes
 matches, fallback reasons and latency. These small fixtures do not measure household
 accuracy. Real voice adoption and task benefits require normal use after deployment.
+
+Transport acceptance explicitly makes three synthetic paid judgments: after metadata
+warmup, immediately again, and after 20 seconds idle (past the old 15-second default).
+It records actual reuse and timings in private instance storage, and checks installed
+warmup/timeout configuration without sending device commands. It never runs on a timer.
 
 Protocol references: [API](https://docs.typesafe.ai/api),
 [models](https://docs.typesafe.ai/models), [confidence](https://docs.typesafe.ai/confidence).

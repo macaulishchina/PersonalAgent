@@ -108,6 +108,50 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         trace = await self.plugin.request(TaskRequest("trace", {"run_id": run["id"]}))
         self.assertEqual(trace["model_selections"], run["data"]["model_selections"])
 
+    async def test_ultra_requires_reason_and_uses_instance_mapping_without_becoming_default(self):
+        with self.assertRaisesRegex(ValueError, "execution.reason"):
+            await self.create(execution={"profile": "ultra"})
+        self.plugin.model_policy = ModelPolicy.parse(
+            {"profiles": {"ultra": {"model": "research-model", "reasoning_effort": "xhigh"}}}
+        )
+        definition = await self.create(
+            execution={
+                "profile": "ultra",
+                "reason": "原创跨领域证明，需同时验证多层相互依赖的假设，deep 不足",
+            }
+        )
+        execution = definition["spec"]["execution"]
+        self.assertEqual((execution["model"], execution["reasoning_effort"]), ("research-model", "xhigh"))
+        self.assertEqual(execution["selection"]["profile"], "ultra")
+        self.assertEqual((await self.create())["spec"]["execution"]["profile"], "fast")
+        self.assertEqual(self.plugin.model_policy.max_upgrades, 1)
+
+        self.executor.select.side_effect = ValueError("Configured research model unavailable")
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            await self.create(execution={"profile": "ultra", "reason": "已有具体研究推理需求"})
+
+    async def test_deep_to_ultra_handoff_preserves_definition_and_cannot_downgrade(self):
+        run = await self.make_running(execution={"profile": "deep", "reason": "需要诊断相互冲突的证据"})
+        await self.upgrade(
+            run,
+            profile="ultra",
+            cause="reasoning_limit",
+            reason="已验证该问题需要原创多层证明，deep 的方法不足",
+            evidence="现有方法不能同时满足两个已验证约束，需要重新构造并验证理论模型",
+        )
+        self.plugin.provider_update(run["id"], "completed", turn_active=False)
+        await self.plugin.upgrades.apply(run["id"])
+        dispatched = self.executor.launch.await_args.args[0]
+        selected = dispatched["data"]["spec"]["execution"]
+        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("ultra", "high"))
+        self.assertEqual(dispatched["id"], run["id"])
+        self.assertEqual(dispatched["data"]["thread_id"], "provider-thread")
+        definition = self.plugin.repo.definition(run["task_id"])
+        self.assertEqual(definition["spec"]["execution"]["profile"], "deep")
+        highest = await self.make_running(execution={"profile": "ultra", "reason": "复杂原创科研证明"})
+        with self.assertRaisesRegex(ValueError, "higher"):
+            await self.upgrade(highest, profile="deep")
+
     async def test_request_is_idempotent_and_waits_for_clean_boundary(self):
         run = await self.make_running()
         args = self.arguments(run)
@@ -310,6 +354,10 @@ class PolicySettingsTest(unittest.TestCase):
     def test_profile_settings_are_strict_and_instance_overrides_are_partial(self):
         p = ModelPolicy.parse({"profiles": {"fast": {"model": "custom-fast"}}})
         self.assertEqual(p.profiles["fast"], {"model": "custom-fast", "reasoning_effort": "low"})
+        self.assertEqual(p.profiles["ultra"], {"model": "gpt-6-astra", "reasoning_effort": "high"})
+        configured = ModelPolicy.parse({"profiles": {"ultra": {"reasoning_effort": "xhigh"}}})
+        self.assertEqual(configured.profiles["ultra"]["reasoning_effort"], "xhigh")
+        self.assertEqual(configured.profiles["deep"]["reasoning_effort"], "medium")
         for data in (
             {"max_upgrades": True},
             {"max_upgrades": 4},

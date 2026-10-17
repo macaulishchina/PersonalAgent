@@ -15,7 +15,10 @@ class DecisionSettings:
     retention: int = 2000
     timeout_seconds: float = 8
     max_age_seconds: int = 30
-    active_timeout_seconds: float = 1.5
+    active_timeout_seconds: float = 3
+    warmup_enabled: bool = True
+    keepalive_seconds: int = 120
+    dns_cache_seconds: int = 300
     thresholds: dict = field(
         default_factory=lambda: {
             "voice_intent": 0.98,
@@ -33,6 +36,7 @@ class DecisionSettings:
         if (
             type(result.enabled) is not bool
             or type(result.external_data_consent) is not bool
+            or type(result.warmup_enabled) is not bool
             or result.mode not in {"shadow", "active"}
         ):
             raise ValueError("Invalid decision enabled/mode")
@@ -42,6 +46,8 @@ class DecisionSettings:
             ("queue_size", 1, 128),
             ("retention", 100, 10000),
             ("max_age_seconds", 1, 300),
+            ("keepalive_seconds", 15, 600),
+            ("dns_cache_seconds", 0, 3600),
         ):
             if type(getattr(result, key)) is not int or not low <= getattr(result, key) <= high:
                 raise ValueError("Invalid decision " + key)

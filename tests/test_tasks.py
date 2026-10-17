@@ -41,7 +41,17 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.config = Config(root=self.root, workspace=str(self.root), plugins=["codex", "tasks"])
         self.chat = ConversationStore(self.store)
         self.executor = SimpleNamespace(
-            models=AsyncMock(return_value=[{"model": "test-model"}]),
+            models=AsyncMock(
+                return_value=[
+                    {
+                        "model": model,
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": effort} for effort in ("low", "medium", "high")
+                        ],
+                    }
+                    for model in ("gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra")
+                ]
+            ),
             select=AsyncMock(side_effect=lambda model, effort: {"model": model, "reasoning_effort": effort}),
             launch=AsyncMock(),
             finalize=AsyncMock(),

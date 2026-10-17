@@ -19,8 +19,14 @@ def create_server(client, caller_run=None):
         """Available subscription models/efforts, enforced settings and unified profile policy.
 
         Choose the lightest suitable profile using uncertainty, known procedures and acceptance
-        checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep,
+        checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep|ultra,
         reason:...}; concrete model/effort overrides are allowed with a reason and validated.
+        Profile and reasoning_effort are independent: select either or both using this catalog.
+        Leave a field missing/auto for one optional joint Jev suggestion; it cannot overwrite
+        an explicit field or instance-fixed value. Defaults are fallbacks, not effort locks.
+        Reserve ultra for exceptionally complex reasoning or original scientific research with
+        concrete justification that deep is insufficient; ordinary research search/summaries
+        do not qualify. Use it sparingly.
         Missing/auto fields use instance profiles, never inherit the foreground/parent model.
         """
         return await call("models")
@@ -38,8 +44,9 @@ def create_server(client, caller_run=None):
         notify_voice: bool = False,
         notify_completion: bool | None = None,
         auto_archive: bool | None = None,
+        self_schedule: dict | None = None,
     ) -> dict:
-        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent."""
+        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. No grant is inferred from a prompt; children cannot receive this permission."""
         spec = {
             "title": title,
             "prompt": prompt,
@@ -53,6 +60,8 @@ def create_server(client, caller_run=None):
             spec["notify_completion"] = notify_completion
         if auto_archive is not None:
             spec["auto_archive"] = auto_archive
+        if self_schedule is not None:
+            spec["self_schedule"] = self_schedule
         if workspace:
             spec["workspace"] = workspace
         return await call("create", request_id=request_id, spec=spec)
@@ -91,13 +100,40 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def get_task_execution_trace(run_id: str, after: int = 0, limit: int = 50) -> dict:
-        """Trigger event references, run/provider identity and paginated tool metadata (max 100/page, 500/run). Tool completion is not proof of a physical outcome; inspect device operation IDs. No arguments, commands or output content is stored here."""
+        """Trigger event references, run/provider identity, latest 20 schedule-change receipts and paginated tool metadata (max 100/page, 500/run). Tool completion and executor-reported schedule evidence are not proof of a physical outcome. Tool arguments, commands and output are not copied into trace metadata."""
         return await call("trace", run_id=run_id, after=after, limit=limit)
 
     @server.tool(annotations=WRITE)
     async def update_task(task_id: str, revision: int, changes: dict) -> dict:
-        """Change future executions with optimistic revision checking; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Active executions keep their creation-time settings; use supplement for active work."""
+        """Foreground management only; background callers must use update_own_task_schedule for preauthorized scheduling. Change future executions with optimistic revision checking; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Explicit user authorization may grant/revoke self_schedule. Active executions keep their creation-time settings; use supplement for active work."""
         return await call("update", task_id=task_id, revision=revision, changes=changes)
+
+    @server.tool(annotations=WRITE)
+    async def update_own_task_schedule(
+        request_id: str,
+        revision: int,
+        trigger: dict,
+        reason: str,
+        evidence: str,
+    ) -> dict:
+        """Change only this execution's future schedule, within explicit self_schedule authorization.
+
+        Read your own get_task for its current revision and self_schedule grant. Only use a
+        preauthorized trigger after its condition is met; provide concrete evidence, never
+        treat a tool response as proof of the goal. The host derives identity from the bound
+        background run; no task/run target is accepted. No prompt, model, resources, policy,
+        notification or current-run changes. User edits/pause/end block old executions.
+        Reuse the same canonical UUID and identical arguments after a lost response; never
+        generate a new request ID to bypass a conflict. Confirm next_at from the receipt.
+        """
+        return await call(
+            "reschedule_self",
+            request_id=request_id,
+            revision=revision,
+            trigger=trigger,
+            reason=reason,
+            evidence=evidence,
+        )
 
     @server.tool(annotations=WRITE)
     async def run_task(task_id: str, request_id: str) -> dict:
@@ -152,7 +188,9 @@ def create_server(client, caller_run=None):
 
         Reuse UUID after a lost reply. No immediate switch or replay. cause: reasoning_limit,
         conflicting_evidence, unfamiliar_workflow. Offline devices, timeouts and missing tools
-        need repair, not upgrades. checkpoint={completed:[facts/operation IDs], next_step:text,
+        do not justify upgrades. For ultra, explain why deep is insufficient for this unusually
+        complex reasoning/research problem. Ordinary research search/summaries do not qualify.
+        checkpoint={completed:[facts/operation IDs], next_step:text,
         uncertain_operations:[], active_operations:[]}; reconcile/wait before requesting, never
         include credentials. Background caller may target only itself. Native Goal runs and
         instance-fixed settings do not permit automatic handoffs. Host waits for a clean completed

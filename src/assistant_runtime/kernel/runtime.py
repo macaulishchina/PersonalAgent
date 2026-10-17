@@ -110,6 +110,7 @@ class Runtime:
         self.dropped: dict[str, int] = {}
         self.started: list[str] = []
         self.fatal = asyncio.Event()
+        self.ready = asyncio.Event()
 
     def add(self, plugin):
         m = plugin.manifest
@@ -183,6 +184,7 @@ class Runtime:
         return result
 
     async def start(self):
+        self.ready.clear()
         try:
             for name in self.order():
                 context = self.contexts[name] = Context(self, name)
@@ -196,11 +198,13 @@ class Runtime:
                     context.state = "failed"
                     if self.plugins[name].manifest.critical:
                         raise
+            self.ready.set()
         except BaseException:
             await self.close()
             raise
 
     async def close(self):
+        self.ready.clear()
         for name in reversed(self.started):
             try:
                 await self.contexts[name].close()

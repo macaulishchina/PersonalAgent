@@ -102,8 +102,11 @@ model = "jev-1.13.0"
 queue_size = 32
 retention = 2000
 timeout_seconds = 8
-active_timeout_seconds = 1.5
+active_timeout_seconds = 3
 max_age_seconds = 30
+warmup_enabled = true # One asynchronous metadata GET at startup; no inference keepwarm.
+keepalive_seconds = 120
+dns_cache_seconds = 300
 # [decisions.thresholds] can override per-kind selected-option probabilities.
 # voice_intent = 0.98; event_relevance = 0.98; model_profile = 0.90; selection = 0.90
 
@@ -130,6 +133,10 @@ reasoning_effort = "low"
 [tasks.model_policy.profiles.deep]
 model = "gpt-6.1-sol"
 reasoning_effort = "medium"
+[tasks.model_policy.profiles.ultra]
+# Rare exceptional reasoning/original research; explain why deep is insufficient.
+model = "gpt-6-astra"
+reasoning_effort = "high"
 [work_files]
 retention_days = 7
 # root = "/absolute/private/instance/work"

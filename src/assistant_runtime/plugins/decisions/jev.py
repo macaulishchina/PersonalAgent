@@ -1,13 +1,16 @@
 """TypeSafe HTTP adapter. Secrets, native question fields and errors stay here."""
 
+import asyncio
 import json
 import math
 import os
 from pathlib import Path
+import time
 
 import aiohttp
 from dotenv import dotenv_values
 from .errors import DecisionError
+from .questions import execution_questions
 
 
 def credential(root):
@@ -72,11 +75,14 @@ def answer(payload, criteria, requested):
 
 class JevProvider:
     endpoint = "https://api.typesafe.ai/v1/systemone"
+    models_endpoint = "https://api.typesafe.ai/v1/models"
 
     def __init__(self, root, settings):
         self.root, self.settings = root, settings
         self.key = None
         self.session = None
+        self.timings = {}
+        self.warmup_result = {"state": "not_started" if settings.warmup_enabled else "disabled"}
 
     def reload(self):
         self.key = None
@@ -86,8 +92,34 @@ class JevProvider:
             raise DecisionError("credential_unavailable") from None
 
     async def start(self):
+        trace = aiohttp.TraceConfig()
+
+        def mark(name):
+            async def record(session, context, params):
+                context.trace_request_ctx[name] = time.monotonic()
+
+            return record
+
+        for signal, name in (
+            (trace.on_dns_resolvehost_start, "dns_start"),
+            (trace.on_dns_resolvehost_end, "dns_end"),
+            (trace.on_connection_create_start, "connect_start"),
+            (trace.on_connection_create_end, "connect_end"),
+            (trace.on_connection_reuseconn, "reused"),
+            (trace.on_request_headers_sent, "sent"),
+            (trace.on_request_end, "received"),
+        ):
+            signal.append(mark(name))
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.settings.timeout_seconds), trust_env=True
+            connector=aiohttp.TCPConnector(
+                keepalive_timeout=self.settings.keepalive_seconds,
+                ttl_dns_cache=self.settings.dns_cache_seconds,
+                limit=2,
+                limit_per_host=2,
+            ),
+            timeout=aiohttp.ClientTimeout(total=self.settings.timeout_seconds),
+            trust_env=True,
+            trace_configs=[trace],
         )
 
     async def close(self):
@@ -95,19 +127,52 @@ class JevProvider:
         if self.session:
             await self.session.close()
 
-    async def evaluate(self, job):
-        if not self.key:
-            raise DecisionError("credential_missing")
+    def diagnostics(self):
+        return {
+            "keepalive_seconds": self.settings.keepalive_seconds,
+            "dns_cache_seconds": self.settings.dns_cache_seconds,
+            "warmup": dict(self.warmup_result),
+            "last_judgment": self.timings.get("judgment"),
+        }
+
+    async def warmup(self):
+        # One metadata GET per process, never model inference or a recurring timer.
+        # It shares the pool, but not the judgment lock or its single worker slot.
+        if not self.settings.warmup_enabled or self.warmup_result["state"] != "not_started":
+            return
+        if not self.settings.enabled or not self.settings.external_data_consent or not self.key:
+            self.warmup_result = {"state": "skipped"}
+            return
+        self.warmup_result = {"state": "running"}
         try:
-            async with self.session.post(
-                self.endpoint,
+            await self._request(
+                "GET",
+                self.models_endpoint,
+                "warmup",
+                timeout=aiohttp.ClientTimeout(total=min(3, self.settings.timeout_seconds)),
+            )
+        except asyncio.CancelledError:
+            self.warmup_result = {"state": "cancelled", **self.timings.get("warmup", {})}
+            raise
+        except DecisionError as exc:
+            # Metadata availability cannot suspend or back off real judgments.
+            self.warmup_result = {"state": "failed", "error": str(exc), **self.timings.get("warmup", {})}
+        else:
+            self.warmup_result = {"state": "completed", **self.timings["warmup"]}
+
+    async def _request(self, method, url, kind, **kwargs):
+        stamps = {}
+        started = time.monotonic()
+        try:
+            if not self.key:
+                raise DecisionError("credential_missing")
+            async with self.session.request(
+                method,
+                url,
                 headers={"Authorization": "Bearer " + self.key},
-                json={
-                    "model": self.settings.model,
-                    "state": job["input"],
-                    "questions": {"decision": job["question"]},
-                },
                 allow_redirects=False,
+                trace_request_ctx=stamps,
+                **kwargs,
             ) as response:
                 if response.status in {401, 403}:
                     raise DecisionError("authentication_failed")
@@ -120,11 +185,7 @@ class JevProvider:
                     body.extend(chunk)
                     if len(body) > 65536:
                         raise DecisionError("response_too_large")
-                try:
-                    payload = json.loads(body)
-                except (ValueError, UnicodeError):
-                    raise DecisionError("invalid_response") from None
-                return answer(payload, job["question"]["criteria"], self.settings.model)
+                return body
         except DecisionError:
             raise
         except TimeoutError:
@@ -132,3 +193,63 @@ class JevProvider:
         except Exception:
             # Provider bodies, URLs, exception strings and tokens never enter logs.
             raise DecisionError("transport_failed") from None
+        finally:
+
+            def elapsed(before, after):
+                return (
+                    round((stamps[after] - stamps[before]) * 1000)
+                    if before in stamps and after in stamps
+                    else None
+                )
+
+            self.timings[kind] = {
+                "total_ms": round((time.monotonic() - started) * 1000),
+                "reused_connection": "reused" in stamps,
+                "dns_ms": elapsed("dns_start", "dns_end"),
+                "connection_ms": elapsed("connect_start", "connect_end"),
+                "response_headers_ms": elapsed("sent", "received"),
+            }
+
+    async def evaluate(self, job):
+        questions = (
+            execution_questions(job) if job["kind"] == "model_profile" else {"decision": job["question"]}
+        )
+        try:
+            body = await self._request(
+                "POST",
+                self.endpoint,
+                "judgment",
+                json={
+                    "model": self.settings.model,
+                    "state": job["input"],
+                    "questions": questions,
+                },
+            )
+        finally:
+            if "judgment" in self.timings:
+                self.timings["judgment"]["receipt_id"] = job["id"]
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeError):
+            raise DecisionError("invalid_response") from None
+        if job["kind"] != "model_profile":
+            return answer(payload, job["question"]["criteria"], self.settings.model)
+        fields = {}
+        for native, field in (("profile", "profile"), ("effort", "reasoning_effort")):
+            try:
+                item = payload["answers"][native]
+            except (KeyError, TypeError):
+                raise DecisionError("invalid_response") from None
+            fields[field] = answer(
+                {**payload, "answers": {"decision": item}}, questions[native]["criteria"], self.settings.model
+            )
+        choice = fields["profile"]["choice"] + "_" + fields["reasoning_effort"]["choice"]
+        usage = fields["profile"]["usage"]
+        for field in fields.values():
+            field.pop("usage")
+        return {
+            "model": fields["profile"]["model"],
+            "choice": choice if choice in job["input"]["options"] else "uncertain",
+            "fields": fields,
+            "usage": usage,
+        }

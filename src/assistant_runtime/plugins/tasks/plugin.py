@@ -18,7 +18,9 @@ from .schedules import next_time, trigger
 from .event_inbox import EventInbox, subscription, validate_subscription
 from .trace import TaskTrace
 from .selection import ModelPolicy
+from .model_advice import select_execution
 from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
+from .self_schedule import SelfSchedule, policy as schedule_policy
 
 
 PLAN_LABELS = {
@@ -67,6 +69,7 @@ class TasksPlugin:
         self.event_inbox = EventInbox(self)
         self.trace = TaskTrace(self.repo)
         self.upgrades = ModelUpgrades(self)
+        self.self_schedule = SelfSchedule(self)
         self.upgrading = set()
         self.scheduler = None
         self.launching = set()
@@ -264,6 +267,7 @@ class TasksPlugin:
             "authorization",
             "misfire_seconds",
             "auto_archive",
+            "self_schedule",
         }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Unknown task specification fields")
@@ -312,6 +316,10 @@ class TasksPlugin:
         s.setdefault("auto_archive", one_shot(s))
         if type(s["auto_archive"]) is not bool or (s["auto_archive"] and not one_shot(s)):
             raise ValueError("auto_archive requires a one-shot, non-Goal task")
+        if s.get("self_schedule") is not None:
+            if caller:
+                raise ValueError("Background executions cannot grant self scheduling to children")
+            s["self_schedule"] = schedule_policy(s["self_schedule"], s, self.settings.timezone)
         if caller:
             parent = self.repo.run(caller)
             p = parent["data"]["spec"]
@@ -351,48 +359,7 @@ class TasksPlugin:
         elif requested.get("kind") == "reminder":
             s["execution"] = {"kind": "reminder"}
         else:
-            from ...kernel.contracts import DecisionQuery
-            from ...kernel.decisions import decide
-
-            advice = None
-            if (
-                self.host.config.decisions.get("external_data_consent", False)
-                and all(v == "auto" for v in self.settings.execution.values())
-                and all(requested.get(k) in (None, "auto") for k in ("model", "reasoning_effort", "profile"))
-            ):
-                objective = s["title"] + "\n" + s["prompt"]
-                advice = await decide(
-                    self.host.runtime,
-                    DecisionQuery(
-                        "model_profile",
-                        "task-model:" + hashlib.sha256(objective.encode()).hexdigest(),
-                        {"objective": objective},
-                    ),
-                )
-            proposed = requested
-            if advice and advice["status"] == "ok" and advice["choice"] in {"fast", "balanced", "deep"}:
-                proposed = {
-                    **requested,
-                    "profile": advice["choice"],
-                    "reason": "Jev任务档位建议；目标、现有流程与验收要求见任务说明",
-                }
-            try:
-                s["execution"] = await self.model_policy.resolve(
-                    self.executor, proposed, self.settings.execution
-                )
-            except Exception:
-                if proposed is requested:
-                    raise
-                advice = {
-                    "status": "fallback",
-                    "reason": "suggested_profile_unavailable",
-                    "receipt_id": advice.get("receipt_id"),
-                }
-                s["execution"] = await self.model_policy.resolve(
-                    self.executor, requested, self.settings.execution
-                )
-            if advice:
-                s["execution"]["selection"]["decision_support"] = advice
+            s["execution"] = await select_execution(self, requested, s["title"] + "\n" + s["prompt"])
             if caller and self.repo.run(caller)["state"] not in {"running", "waiting_user"}:
                 raise ValueError("Parent execution ended during task model selection")
         return s
@@ -430,6 +397,12 @@ class TasksPlugin:
                 raise ValueError("Invalid event timing/hysteresis")
 
     async def request(self, request):
+        if request.action == "reschedule_self":
+            if not request.caller_run:
+                raise ValueError("Self scheduling requires the bound background execution identity")
+            lock = self.run_locks.setdefault(request.caller_run, asyncio.Lock())
+            async with lock:
+                return await self._request(request)
         if request.action in {"continue", "cancel_run", "pause_run", "supplement", "upgrade_model"}:
             lock = self.run_locks.setdefault(request.arguments["run_id"], asyncio.Lock())
             async with lock:
@@ -447,15 +420,20 @@ class TasksPlugin:
             "event_inbox",
             "trace",
             "upgrade_model",
+            "reschedule_self",
         }:
-            raise ValueError("Background executions cannot manage other tasks")
+            raise ValueError(
+                "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
+            )
+        if a == "reschedule_self":
+            return self.self_schedule.request(args, caller)
         if a == "upgrade_model":
             return await self.upgrades.request(args, caller)
         if a in {"event_inbox", "trace"}:
             if a == "event_inbox":
                 self.repo.definition(args["task_id"])
                 return self.event_inbox.describe(args["task_id"])
-            return self.trace.read(args)
+            return {**self.trace.read(args), **self.self_schedule.history(args["run_id"])}
         if a == "models":
             models = await self.executor.models()
             return {
@@ -626,7 +604,9 @@ class TasksPlugin:
             d = self.repo.update_definition(
                 d["id"],
                 spec=spec,
-                next_at=next_time(spec["trigger"], self.settings.timezone, time.time()),
+                next_at=next_time(spec["trigger"], self.settings.timezone, time.time())
+                if "trigger" in args["changes"]
+                else d["next_at"],
                 on_update=lambda saved: self.event_inbox.reset(saved, event_cursor),
             )
         elif a in {"pause", "resume", "archive", "terminate"}:

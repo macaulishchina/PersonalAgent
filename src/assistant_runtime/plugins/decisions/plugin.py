@@ -58,6 +58,19 @@ class DecisionsPlugin:
         context.register(DecisionQuery, self.judge)
         context.spawn(self.listen(), "samples")
         context.spawn(self.worker(), "evaluate")
+        if (
+            self.settings.enabled
+            and self.settings.external_data_consent
+            and self.settings.warmup_enabled
+            and not self.auth_blocked
+        ):
+            context.spawn(self.warmup(), "warmup")
+
+    async def warmup(self):
+        # Other plugin startup can occupy the loop/default executor. Begin the
+        # network budget only after their startup phase has finished.
+        await self.context.runtime.ready.wait()
+        await self.provider.warmup()
 
     async def reload(self):
         if not self.settings.enabled or self.provider is None:
@@ -204,6 +217,27 @@ class DecisionsPlugin:
         answer = row["answer"]
         choice = answer["choice"]
         threshold = self.settings.thresholds[row["kind"]]
+        if row["kind"] == "model_profile":
+            fields = {
+                key: value["choice"]
+                if value["choice"] != "uncertain" and value["probabilities"][value["choice"]] >= threshold
+                else None
+                for key, value in answer["fields"].items()
+            }
+            if not any(fields.values()):
+                return fallback("low_confidence", row["id"])
+            return {
+                "status": "ok",
+                "choice": choice,
+                "field_choices": fields,
+                "field_probabilities": {
+                    key: value["probabilities"] for key, value in answer["fields"].items()
+                },
+                "receipt_id": row["id"],
+                "model": answer["model"],
+                "probability_threshold": threshold,
+                "confidence_scope": "per_field",
+            }
         if choice == "uncertain" or answer["probabilities"].get(choice, 0) < threshold:
             return fallback("low_confidence", row["id"])
         return {
@@ -320,6 +354,7 @@ class DecisionsPlugin:
             "queue_depth": self.queue.qsize(),
             "queue_capacity": self.settings.queue_size,
             "active_timeout_seconds": self.settings.active_timeout_seconds,
+            "transport": self.provider.diagnostics() if self.provider is not None else None,
             "thresholds": self.settings.thresholds,
             "retry_in_seconds": max(0, round(self.retry_at - time.monotonic())),
             "session_counts": dict(self.counts),

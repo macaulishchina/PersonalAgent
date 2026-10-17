@@ -24,6 +24,57 @@ class Plugin:
 
 
 class RuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_readiness_follows_startup_and_clears_before_cleanup(self):
+        runtime = Runtime(None)
+        entered, release, warmed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        class Starting:
+            manifest = Manifest("starting")
+
+            async def start(self, context):
+                async def after_ready():
+                    await runtime.ready.wait()
+                    warmed.set()
+
+                async def cleanup():
+                    self_test.assertFalse(runtime.ready.is_set())
+
+                context.spawn(after_ready())
+                context.own(cleanup)
+                entered.set()
+                await release.wait()
+
+        self_test = self
+        runtime.add(Starting())
+        startup = asyncio.create_task(runtime.start())
+        try:
+            await entered.wait()
+            self.assertFalse(runtime.ready.is_set())
+            self.assertFalse(warmed.is_set())
+            release.set()
+            await startup
+            await asyncio.wait_for(warmed.wait(), 0.5)
+            self.assertTrue(runtime.ready.is_set())
+        finally:
+            startup.cancel()
+            await asyncio.gather(startup, return_exceptions=True)
+            await runtime.close()
+        self.assertFalse(runtime.ready.is_set())
+
+    async def test_failed_critical_startup_never_signals_readiness(self):
+        runtime = Runtime(None)
+
+        class Broken:
+            manifest = Manifest("broken", critical=True)
+
+            async def start(self, context):
+                raise RuntimeError("unavailable")
+
+        runtime.add(Broken())
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            await runtime.start()
+        self.assertFalse(runtime.ready.is_set())
+
     async def test_slow_subscriber_does_not_block_others(self):
         r = Runtime(None)
         slow = r.subscribe("slow", 1)

@@ -3,12 +3,18 @@
 from dataclasses import dataclass, field
 import time
 
-PROFILES = ("fast", "balanced", "deep")
+PROFILES = ("fast", "balanced", "deep", "ultra")
 GUIDANCE = (
     "Choose the lightest profile that can meet the task's acceptance checks. "
     "fast: clear objective, familiar steps and easy verification; "
     "balanced: unfamiliar interfaces or coordination across tools; "
     "deep: conflicting evidence, unexplained failures or complex diagnosis. "
+    "ultra: use sparingly for exceptionally complex reasoning or original scientific research, "
+    "only when there is concrete justification that deep is insufficient. "
+    "Routine literature search, summaries and a research-related title do not justify ultra. "
+    "Profile selects the execution model tier; reasoning_effort can be chosen independently "
+    "from that model's supported efforts. Low suits known steps; medium suits exploration; "
+    "high or above needs difficult reasoning, not a long task. Prefer the lightest adequate effort. "
     "Task length and number of steps do not by themselves require deeper reasoning. "
     "Explain uncertainty, available procedure and verification in execution.reason. "
     "Never inherit the parent/main model merely because it created the task. "
@@ -25,6 +31,7 @@ class ModelPolicy:
             "fast": {"model": "gpt-6-luna", "reasoning_effort": "low"},
             "balanced": {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
             "deep": {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
+            "ultra": {"model": "gpt-6-astra", "reasoning_effort": "high"},
         }
     )
 
@@ -77,8 +84,10 @@ class ModelPolicy:
             },
         }
 
-    async def resolve(self, executor, requested, fixed):
-        profile = requested.get("profile", self.default_profile)
+    def validate(self, requested, fixed):
+        profile = requested.get("profile")
+        if profile in (None, "auto"):
+            profile = self.default_profile
         if profile not in PROFILES:
             raise ValueError("Unknown task execution profile")
         reason = requested.get("reason")
@@ -89,6 +98,60 @@ class ModelPolicy:
             raise ValueError("Task model reason must be 1..400 characters")
         if explicit and not reason and all(v == "auto" for v in fixed.values()):
             raise ValueError("Explain task uncertainty and verification in execution.reason")
+        for key in ("model", "reasoning_effort"):
+            value = requested.get(key)
+            if value not in (None, "auto") and (
+                not isinstance(value, str) or not 1 <= len(value.strip()) <= 160
+            ):
+                raise ValueError("Invalid task " + key)
+        return profile
+
+    def options(self, models, requested, fixed):
+        """Only configured tiers/account-supported efforts, preserving explicit fields."""
+        self.validate(requested, fixed)
+        catalog = {alias: row for row in models for alias in (row.get("id"), row["model"]) if alias}
+        model = fixed["model"] if fixed["model"] != "auto" else requested.get("model")
+        effort = (
+            fixed["reasoning_effort"]
+            if fixed["reasoning_effort"] != "auto"
+            else requested.get("reasoning_effort")
+        )
+        profile = requested.get("profile")
+        profiles = [profile] if profile not in (None, "auto") else list(PROFILES)
+        if model not in (None, "auto") and profile in (None, "auto"):
+            profiles = [p for p in PROFILES if self.profiles[p]["model"] == model] or ["custom"]
+        result = {}
+        for tier in profiles:
+            selected_model = model if model not in (None, "auto") else self.profiles[tier]["model"]
+            supported = catalog.get(selected_model, {}).get("supportedReasoningEfforts", [])
+            for item in supported:
+                value = item["reasoningEffort"]
+                if value not in {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
+                    continue
+                if effort not in (None, "auto", value):
+                    continue
+                result[tier + "_" + value] = {
+                    "profile": tier,
+                    "model": selected_model,
+                    "reasoning_effort": value,
+                }
+        # Identical model/effort aliases would split judgment probability. Prefer
+        # the tier whose configured default matches, then the higher tier name.
+        unique = {}
+        for ident, option in result.items():
+            tier, effort = option["profile"], option["reasoning_effort"]
+            identity = (catalog[option["model"]]["model"], effort)
+            score = (
+                self.profiles.get(tier, {}).get("reasoning_effort") == effort,
+                PROFILES.index(tier) if tier in PROFILES else -1,
+            )
+            if identity not in unique or score > unique[identity][0]:
+                unique[identity] = (score, ident, option)
+        return {ident: option for _, ident, option in unique.values()}
+
+    async def resolve(self, executor, requested, fixed):
+        profile = self.validate(requested, fixed)
+        reason = requested.get("reason")
         reason = reason or (
             "使用实例固定配置"
             if any(v != "auto" for v in fixed.values())
@@ -98,7 +161,7 @@ class ModelPolicy:
         for key in ("model", "reasoning_effort"):
             if fixed[key] != "auto":
                 choices[key], sources[key] = fixed[key], "instance_fixed"
-            elif requested.get(key, "auto") != "auto":
+            elif requested.get(key) not in (None, "auto"):
                 choices[key], sources[key] = requested[key], "agent"
             else:
                 choices[key], sources[key] = self.profiles[profile][key], "profile_default"
@@ -106,7 +169,18 @@ class ModelPolicy:
                 raise ValueError("Invalid task model selection")
         resolved = await executor.select(choices["model"], choices["reasoning_effort"])
         matched = [p for p in PROFILES if self.profiles[p] == resolved]
-        actual = profile if self.profiles[profile] == resolved else matched[0] if matched else "custom"
+        model_matched = [
+            p for p in PROFILES if self.profiles[p]["model"] in (choices["model"], resolved["model"])
+        ]
+        actual = (
+            profile
+            if self.profiles[profile]["model"] in (choices["model"], resolved["model"])
+            else matched[0]
+            if matched
+            else model_matched[-1]
+            if model_matched
+            else "custom"
+        )
         selection = {
             "version": 1,
             "at": time.time(),

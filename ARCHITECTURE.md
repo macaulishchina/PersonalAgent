@@ -72,6 +72,11 @@ off-loop receipts retain hashes/references, versioned answers, token usage and H
 latency, not another copy of conversation/event text. Bounded deadlines, auth suspension,
 backoff and no uncertain replay isolate this paid dependency. Usage counts are
 informational; the framework imposes no daily or lifetime call-count cap.
+One provider-owned HTTP pool retains idle connections for up to 120 seconds. A single
+owned, asynchronous startup metadata GET warms that pool after consent/credential
+checks and `Runtime.ready`; it performs no inference, does not gate readiness or serialize judgments,
+and is cancelled on shutdown. There is no recurring keepwarm. Active fallback retains
+a 3-second total deadline, including receipt IO, independently of prewarming.
 The global switch defaults on; new instances must explicitly consent before active
 context leaves the host. See `plugins/decisions/README.md` for use rules and acceptance.
 
@@ -349,7 +354,20 @@ ordinary turn completing; external processes require their own checkpoints and i
 `tasks` MCP is independent of memory/device. CLI and authenticated Web share TaskRequest;
 existing foreground cancellation controls remain distinct. Task models resolve from the
 account catalog at creation according to fixed configuration or initiating-agent choice.
-Tasks owns one versioned model policy with configurable fast/balanced/deep profiles.
+Tasks owns one versioned model policy with configurable fast/balanced/deep/ultra profiles.
+`ultra` is reserved for exceptional reasoning/original research with justification that
+`deep` is insufficient; routine research search/summaries do not qualify. Instance
+defaults remain fast with one controlled upgrade, and profile mappings remain configurable.
+`ultra` defaults to Astra/high. Tasks forms bounded account-supported profile/effort
+combinations for a single optional Jev judgment, filling only unresolved fields; fixed
+values and explicit fields filter the supported candidates. That one HTTP request
+batches separate small tier/effort questions; each field requires its own confidence
+threshold, and the final combination still passes executor validation. No joint
+probability is fabricated from independent answers. Fixed
+instance values and explicit agent fields win independently. Canonical combination IDs
+select trusted candidates rather than generated model arguments. Single-option cases
+stay local, and failed advice returns to the original profile defaults. Reasoning effort
+can vary without losing tier identity; selection receipts record origins of both fields.
 Missing/auto choices resolve through that policy instead of inheriting main/parent models;
 explicit agent choices require reasoning grounded in uncertainty and acceptance checks.
 The executor validates concrete account support and reports provider-confirmed selections.
@@ -361,6 +379,15 @@ completion. Ambiguous dispatch stays unknown. Native Goals and custom/fixed sele
 remain under explicit task management. No extra routing model or automation plugin is used.
 User-authorized goals may derive scoped children, not new unapproved goals. Memory is
 shared through the existing provider and scope/source policy, never used as execution proof.
+
+`tasks/self_schedule.py` owns explicitly granted self scheduling. Foreground management
+records a condition and exact allowed timed triggers; an active background caller can
+change only its own future schedule through a dedicated capability. The run snapshot,
+current grant, revision and database compare-and-swap must agree. User edits/pause/end
+invalidate older execution authority. Definition and UUID receipt commit atomically;
+lost replies never cause a second change or restart the current work. Trace exposes
+bounded receipts; condition evidence remains executor-reported, not proof of completion.
+General task mutation, scope expansion and granting capabilities to children stay denied.
 
 Durable record subscriptions are another tasks trigger, not a separate automation
 engine. `tasks/event_inbox.py` consumes EventRequest changes and commits cursor, bounded

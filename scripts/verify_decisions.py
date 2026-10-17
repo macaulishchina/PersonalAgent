@@ -19,6 +19,22 @@ from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.decisions import create_server
 
 
+def model_state(objective):
+    return {
+        "objective": objective,
+        "options": {
+            f"{profile}_{effort}": {"profile": profile, "model": model, "reasoning_effort": effort}
+            for profile, model in (
+                ("fast", "gpt-6-luna"),
+                ("balanced", "gpt-6.1-sol"),
+                ("deep", "gpt-6.1-sol"),
+                ("ultra", "gpt-6-astra"),
+            )
+            for effort in ("low", "medium", "high")
+        },
+    }
+
+
 CASES = [
     ("exit", "voice_intent", {"utterance": "退下吧", "execution_active": False}, "sleep"),
     (
@@ -72,16 +88,14 @@ CASES = [
     (
         "model_fast",
         "model_profile",
-        {"objective": "只读查询已知设备当前温度，已有工具和字段，读回结果即可验收。"},
-        "fast",
+        model_state("只读查询已知设备当前温度，已有工具和字段，读回结果即可验收。"),
+        "fast_low",
     ),
     (
         "model_deep",
         "model_profile",
-        {
-            "objective": "诊断分布式系统的罕见数据损坏，证据互相冲突，无现成流程；需排除多种因果假设并验证根因。"
-        },
-        "deep",
+        model_state("诊断分布式系统的罕见数据损坏，证据互相冲突，无现成流程；需排除多种因果假设并验证根因。"),
+        "deep_high",
     ),
 ]
 
