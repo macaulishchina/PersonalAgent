@@ -41,6 +41,12 @@ A capability request has exactly one handler and a timeout. It returns a result 
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
+Independent audio acceptance lives entirely in `scripts/audio_check/`. It reuses
+existing PCM device registries/providers after verifying the assistant is stopped,
+with bounded capture and owned prompt playback. It adds no kernel contract,
+management command, audio-loop observer or conversation state. Production wake and
+DSP behavior stay unchanged; offline wake detection is not live voice acceptance.
+
 ## State and ownership
 
 - `wake_words` selects equivalent phrases supported by the installed FSMN V2 bundle, handled by one KWS stream and one activation path. The keyword plugin owns 80ms batching, bounded native features/CTC history, one ONNX inference thread and checksum validation. Inference runs off the event loop; generation changes invalidate results across sleep/session resets. The inference-only upstream FunASR decoder is vendored with its MIT license, without a Torch/FunASR runtime dependency. Local commands strip any configured leading phrase before parsing.

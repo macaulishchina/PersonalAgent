@@ -49,6 +49,68 @@ Device MCP exposes `list_devices()` and `inspect_device(device_id="office")`. Co
 
 ## Acceptance
 
+### Independent input and wake benchmark
+
+Stop the assistant explicitly before testing, then run from the repository:
+
+```sh
+.venv/bin/personal-agent --config config.toml stop
+.venv/bin/python -m scripts.check_audio_input --config config.toml --guided --save-audio
+```
+
+The test never stops, starts or enables the service. It refuses to open audio while
+the user unit or the management socket is active, and stops its own streams if the
+service starts during the benchmark. Restart the assistant yourself when ready.
+All measurement, local wake inference and orchestration live in `scripts/audio_check/`;
+there is no test capability, audio tap, prompt RPC or test state in the runtime.
+The script uses the existing `AudioInputs` / `AudioOutputs` registries and PipeWire
+providers, pinned to configured `input_device` / `default_output`. It does not
+change endpoint selection, volume, Bluetooth profile or production DSP policy.
+The independently captured input is raw PCM, not the service's processed audio.
+
+Follow the spoken prompts; no forms or typed confirmations are required. Keep the
+microphone fixed. The guide gives 15 seconds to reach each position: living-room
+center, far living room, kitchen and study. It runs quiet and ordinary external
+TV/music conditions, allowing 20 seconds to set the background sound. At each
+position it captures three seconds of background, a ten-second ordinary reading,
+and a twenty-second wake-plus-reading window. **Say each sentence once**:
+
+- Ordinary reading: “今天上午天气不错，我准备整理书桌，然后看看窗外。”
+- Wake test: say the configured primary wake phrase, immediately followed by the
+  same sentence. Other configured wake aliases are not separately prompted.
+
+After the spoken start cue, wait two seconds and speak. The background and ordinary
+reading are negative wake samples; the wake reading is positive. FSMN runs locally
+on each captured segment, using the unchanged installed model. There is no model
+training, cloud inference, ASR, injected user turn or native voice connection.
+Review recordings for intelligibility and completeness of the first sentence;
+transcript accuracy and live wake acceptance are separate acceptance work.
+Positions and sound conditions follow operator instructions, not sensor validation.
+The report compares background energy at matching positions and flags missing noise
+contrast. Energy alone cannot separate a human voice from competing TV speech.
+
+Fixed Mandarin prompts use local Kokoro v1.1 (`zf_079`, speed 0.95), via the existing
+sherpa-onnx voice dependency. Assets must already exist under
+`<config.models>/test-tts/kokoro-int8-multi-lang-v1_1/`; the script does not download
+models, install packages or fall back to robotic/system/cloud TTS. An owned worker
+validates and atomically caches complete WAVs before playback. `--prepare-guide`
+prepares this cache without capture or playback. `--text-only --guided` prints the
+same instructions. PipeWire playback drains to EOF so short cues are not cut off.
+
+A single-instance lock prevents concurrent benchmarks. Ctrl+C preserves completed
+rows, closes only owned streams and leaves the service stopped. Reports are private
+mode-0600 JSON under ignored `state/acceptance/audio-input/`; `--output` chooses a
+new JSON file and never overwrites an existing one. WAVs are saved there only with
+explicit `--save-audio`. Without `--guided`, capture lasts five seconds by default
+(`--seconds 1..30`) and neither plays prompts nor loads a wake model.
+
+Delivery gaps are application timing, not Bluetooth packet-loss measurements.
+Digital zeros can be silence or hardware gating. No clipping does not establish
+intelligibility, and these short negative samples do not establish a long-term
+false-wake rate. Completing the workflow is not a quality pass.
+
+### Device onboarding
+
 ```sh
 .venv/bin/python scripts/check.py
 .venv/bin/python -m scripts.verify_device_onboarding --config config.toml --disconnect

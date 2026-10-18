@@ -240,6 +240,7 @@ The pre-refactor Git tag is `baseline-before-refactor`. Code rollback must prese
 
 - `check.py`: formatting, lint, kernel typing and runtime contract tests.
 - `install_service.py`: render/install the user systemd unit.
+- `check_audio_input.py`: independent input/wake benchmark; stop the service first. See the [audio acceptance guide](src/assistant_runtime/plugins/pipewire/README.md#independent-input-and-wake-benchmark).
 - `download_models.py`: validate/install the current FSMN bundle and prepare VAD.
 - `prepare_memory.py`: initialize local Mem0 and its embedding model, without inference or user facts.
 - `verify_memory.py`: repeat real Mem0/ChatGPT-subscription acceptance with isolated synthetic facts and actual MCP queries.

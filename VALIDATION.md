@@ -164,3 +164,66 @@ The microphone and existing speakers now use `devices.<logical_id>` configuratio
 - Historical cloud re-extraction was rejected by automatic approval review. The implemented migration sends no historical content to a model: 21 original-user-sourced records were copied locally; 12 legacy model-report records remain in the complete private Basic Memory/SQLite backup and were not promoted as facts. Old Basic Memory runtime code and dependency were removed.
 - Production local remember/read/forget, temporary-marker removal and service restart persistence passed. The foreground logical session, selected output and task rows were preserved; microphone capture remains recent. This verifies the memory capability path, not every natural voice memory dialogue.
 - Necessary private evidence is under `state/acceptance/mem0/` (subscription-acceptance.json, migration.json, deployment.json) and `state/mem0-check.log`. No HTML report is produced.
+
+## 语音输入与唤醒优化交接 — 2026-10-18
+
+**状态：语音唤醒优化暂缓，先处理模型调度。用户随后要求审查、收敛测试代码并恢复助手自启与运行；这一新要求取代此前保持服务停止的操作约束。** 本节是恢复入口，以下是本次实测与已对齐的约束，不代表已经部署新的唤醒方案。
+
+### 操作约束
+
+- 独立基准和附件测试期间，`personal-agent.service` 为 `ActiveState=inactive`、`MainPID=0`。用户已另行授权恢复自启并启动；以后重做独立录音前需明确停服，脚本自身仍不自动停启服务。
+- 先独立测试和验证协议能力，不因基准测试扩展框架。不要重新训练唤醒模型，也不要为了测试新增付费 API 或自动回退到其他房间设备。
+- 保留 MCP01 的 USB 连接。Dell 与设备在电视下，位置固定，不能把远离电视或移动麦克风作为必要方案。
+- 实例配置的主音频输入、输出仍遵守进程启动时固定绑定规则。后续审查已备份私有配置，将原来的蓝牙连接更新为已验证的 MCP01 USB 输入、输出，保留逻辑设备 ID；恢复服务使用这组 USB 绑定。
+- 后续代码审查撤回了为测试增加的运行时请求、采音探针、唤醒状态和端点指纹；测试逻辑集中在 `scripts/audio_check/`，复用既有设备资源接口。源码没有接入低阈值复核、云端音频判断或新的生产 DSP。
+
+### 已完成的录音基准
+
+- 早期 MCP01 蓝牙录音存在明显断续，观察到蓝牙语音帧校验失败；USB 对照未复现严重断续。用户确认 USB 录音听感良好。证据支持当前使用 USB，但不能仅据此断言所有无线故障的具体成因。
+- USB 播放最初很小，排查到设备独立硬件总音量较低；调整硬件音量后用户确认相对正常，没有增加软件增益。
+- 完整基准采用客厅中央、客厅远处、厨房、书房四个位置，各做安静与日常电视背景声两种条件，共八段真人录音，每段约 20 秒。每句只说一遍，提示与准备时间要清楚，不要求用户在终端填写测试句或复杂参数。
+- 测试句为“嘟嘟，今天上午天气不错，我准备整理书桌，然后看看窗外”。**安静厨房一轮，用户实际漏说了“上午”，不能把转写缺少它算作识别错误。**
+- 八段 USB 录音没有发现削波或长段数字零，最大采集交付间隔约 41.73 ms；不据此保证所有位置的语音内容都清晰。
+- 当前本地唤醒检测在安静场景命中 3/4，安静书房漏检但本地 ASR 能识别完整测试句；电视背景声下命中 0/4，转写会混入或跟随电视内容。这里的 ASR 是独立基准使用的本地 Paraformer，不能等同于正式 GPT 语音链路。
+- 对同一批录音进行离线 WebRTC 降噪对照，没有改善电视背景声下的唤醒命中；更强降噪还损失了部分安静场景命中。不把“加大降噪”视为已验证方案。
+- 原始录音及逐项结果保留在私有目录 `state/acceptance/audio-input/offline-usb-rooms-20261018T094805/`，主记录为 `result.json`。不要重新采集这批已经可复用的样本，也不要提交录音。
+
+### 已对齐的唤醒方向，尚未实现
+
+1. 本地模型满足高阈值时，立即接受唤醒。
+2. 本地模型检测到候选但未满足高阈值时，若达到较低的召回阈值，再用模型判断是否真的呼叫助手；用户接受这一路径稍有等待。
+3. 二次判断的目标是“文字指令加一段真实音频，判断是否唤醒”，不把纯 ASR 转写或正式连续语音会话当作同一项验收。
+4. 候选缓冲、排队与确认次数有界；每个候选只确认一次。高置信本地唤醒可抢先完成，迟到的确认不能重复唤醒；失败、超时或不确定时保持待机，并保护唤醒后的第一句话不被等待过程丢弃。
+
+当前 FSMN V2 的高阈值为 0.485，但现有 CTC 解码还会剪枝，并主要向外输出完整关键词命中。安静书房样本没有形成有效候选，电视背景声也并非都有低分完整关键词候选。因此恢复工作时需要先核对候选产生与召回能力，**只给现有输出增加一个低阈值不能保证召回这些漏检**；不得通过用户已否定的训练方案绕过这个问题。
+
+### GPT 订阅直接音频附件测试
+
+使用上述安静书房的 20 秒真实 WAV；提交时使用中性文件名，没有向模型提供本地转写、预期答案或位置标签。使用已有 ChatGPT 订阅登录、独立临时线程、禁用工具的上下文，没有修改框架或实例配置。
+
+| 模型 | 提交方式 | 实测结果 |
+| --- | --- | --- |
+| `gpt-6.1-sol` | `localAudio` WAV 附件 | 客户端接受；模型报告无法听到音频，结果不确定 |
+| `gpt-6.1-sol` | `audio` 内嵌 WAV data URL | 同上 |
+| `gpt-6-astra` | `localAudio` WAV 附件 | 同上；回显内容类型包含 `localAudio` |
+
+每次约 6–8 秒；这是调用耗时，不是有效唤醒判断耗时。普通输入协议确实定义了 `audio` / `localAudio`，不能再表述成“客户端完全没有音频附件类型”；但客户端接受附件不构成模型理解音频的证据。本机模型目录仅宣告文字、图片输入，三个请求都明确报告音频不可访问，因此没有继续耗费请求做正反样本准确率测试。
+
+结论只限于**这次测试的 Codex 普通订阅附件通道和模型**，不能推广为“GPT 订阅的所有语音入口都不支持音频”。项目已有的订阅原生实时语音通道属于另一个入口，其独立唤醒复核能力尚未验收。
+
+- 三次私有证据：`state/acceptance/audio-wake-subscription/{20261018T104116Z,20261018T104210Z,20261018T104326Z}/probe.json`。
+- 一次性探测脚本：`/tmp/probe-gpt-subscription-audio.py`；临时目录可能被清理，以已保存证据为准。脚本没有进入源代码管理。
+- 三次记录均确认源码指纹未变、服务停止。没有配置自动启用的云端唤醒复核器。
+
+### 回到本任务时
+
+先读取本节与上述私有结果，确认用户要恢复语音工作；优先复用录音，如需新录音再明确停服。若继续验证订阅能力，应先做最小原生语音协议探测，明确它与普通附件测试的区别，并验证真实音频感知、无工具副作用、超时与退出。能力未证实前不扩展框架；能力证实后再评估候选召回、误唤醒、首句保留及等待延迟，最后决定是否实现。
+
+### 独立测试代码收敛审查
+
+- 撤回测试专用的内核请求、管理 socket 分支、运行时采音统计、关键词计数、首句观测与连接指纹。本次提交不修改正式运行的 Python 代码；测试仅复用既有设备注册表与 PipeWire 提供者。
+- 保留本地中文语音引导、四个房间的安静／日常背景声对照、普通朗读负例、唤醒接首句正例、现有 FSMN 离线检测和按需保存 WAV。原生语音连接、文本转写与首句可懂度不冒充自动验收通过。
+- 修复提示音关闭前未排空造成截断的风险、提示缓存发布后临时目录清理失败、异常子进程输出的 UTF-8 解码，以及录音断流后等待超时才发现错误的问题。中断保留已完成记录，仅释放本脚本的资源，不自动恢复服务。
+- 设备分组检查 101 项通过；最终全量检查通过格式、lint、类型、前端构建及 568 项测试，0 跳过。之后没有修改源码、测试或依赖。
+- 两秒真实 USB 采音就绪检查：32,000 采样，削波 0%，最长交付间隔 68.52 ms；无原始音频保存。它不是新一轮真人朗读或唤醒质量验收。证据为 `state/acceptance/audio-input/standalone-20261018T110208657157Z/result.json`。
+- 旧未提交实现及私有实例配置的审查前备份保留于 `state/acceptance/audio-review/20261018T105506Z/`，不进入 Git。
