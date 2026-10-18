@@ -60,9 +60,10 @@ Updating the image is an explicit revalidation and digest change, not a floating
 Only the secret-free `gateway/` assets are mounted; private Compose and local gateway
 keys are outside that mount. The small transport callback sets the client user agent,
 declared upstream authentication and session identity. It does not forward arbitrary
-client headers, route models, retry, schedule work or execute tools. The sole parameter
-normalization removes OpenAI's nonsemantic `prompt_cache_key` for Anthropic Messages
-and Gemini, which have no equivalent field. Tools, images, reasoning and schemas remain strict.
+client headers, route models, retry, schedule work or execute tools. Transport normalization removes OpenAI's nonsemantic `prompt_cache_key` for Anthropic
+Messages and Gemini. Declared reasoning levels are checked before forwarding; Anthropic
+`none` explicitly sends `thinking.type=disabled`, because omission uses adaptive thinking.
+Tools, images, positive reasoning levels and schemas remain strict.
 Codex header names remain in the Codex adapter; the gateway receives only the declared
 identity-header mapping.
 
@@ -88,8 +89,8 @@ stores output, usage, response identity, elapsed time, caller/version and config
 input bodies/images are not copied into the audit table or ordinary logs.
 
 Inference has at most 4 workers + 16 queued calls by default, 60 seconds total,
-24,000 text characters, 4 registered images, 2 MiB response stream and 2,048 output
-tokens. Bounds are configurable within validated limits; no arbitrary daily call cap.
+24,000 text characters, 4 registered images, 2 MiB response stream and 8,192 auxiliary
+output tokens. Native execution has a separate 16,384-token default output budget. Bounds are configurable within validated limits; no arbitrary daily call cap.
 The gateway, client and API Codex provider all disable retries. An upstream service
 may still process a request after a disconnect; cancellation is not proof of zero cost.
 
@@ -106,6 +107,82 @@ entry. Mem0, local embeddings, source validation, correction/deletion and histor
 their owners. Empty binding keeps existing subscription extraction. API memory uses only an explicitly configured entry fallback chain; every candidate must preserve the required schema capability. Subscription memory does not switch automatically. The API entry must be enabled and validated against actual
 memory schemas/context sizes before enabling this binding. A disabled provider is
 rejected during configuration validation.
+
+## Reasoning configuration
+
+Each API entry must declare the real supported `reasoning_efforts`; omission fails
+configuration validation. It can also declare an optional
+`default_reasoning_effort` selected from that list. An omitted default uses the first
+listed value; it never inherits the main session or another provider. Both the models
+MCP catalog and derived Codex metadata expose the same configured default and levels.
+Task advice sees every supported level for the selected model. Explicit task choices
+remain authoritative; Jev fills unresolved choices using the existing policy.
+
+`infer_with_model` / CLI `models infer` accepts optional `reasoning_effort`. Omission
+uses the selected entry's default. An explicit unsupported level fails before dispatch.
+Each attempt and successful receipt records its actual effort. A configured fallback
+that cannot honor the requested effort, image or schema capability is logged/skipped,
+with no paid call and no silent downgrade. Omitted effort uses each candidate's own
+default; explicit effort remains identical across all attempted candidates.
+
+```toml
+[model_api]
+max_output_tokens = 8192           # auxiliary inference, includes thinking
+execution_max_output_tokens = 16384 # native task model turns, includes thinking
+
+[model_api.entries.deepseek-assist]
+provider = "deepseek"
+model = "deepseek-flash"
+reasoning_efforts = ["none", "low", "high", "max"]
+default_reasoning_effort = "low"
+```
+
+Both budgets allow per-entry overrides. Auxiliary output is bounded at 16,384 tokens;
+execution output is bounded at 131,072 and must fit the selected upstream model.
+The gateway's route default is the execution budget; auxiliary calls always send their
+separate budget explicitly. A small cap can truncate thinking or tool arguments as well
+as the final answer; reaching a cap is not evidence of an account quota failure.
+
+Canonical levels verified through the current configured endpoints:
+
+| Model | Exposed levels | Default |
+| --- | --- | --- |
+| DeepSeek Flash | none, low, high, max | low |
+| Go GPT-6-Luna | none, low, medium, high, xhigh, max | low |
+| Go Claude Haiku 5.5 | none, low, medium, high, xhigh, max | medium |
+| Go GLM-5.3-Flash | low, high, max | low |
+| Go Gemini 4 Argon Contributor | low, medium, high | medium; production provider disabled |
+
+Subscription execution keeps using the signed-in account's native model catalog.
+Its available levels need no duplicated local registry. Provider aliases are not
+invented independent levels: DeepSeek's `medium` alias maps to `high`, while
+GLM-5.3-Flash treats unrecognized values (including `medium`) as `max`.
+Gemini Argon cannot disable thinking; `none` would be translated to a lower level
+rather than off, so it is not advertised for that model.
+
+Sources: [DeepSeek parameters](https://api-docs.deepseek.com/api/create-chat-completion/),
+[GPT-6-Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[GLM model card](https://huggingface.co/zai-org/GLM-5.3-Flash),
+[Gemini thinking](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
+
+Synthetic acceptance on 2026-10-19: all 22 configured model/effort combinations
+returned the expected bounded answer through the pinned gateway. Reported reasoning
+tokens were zero with DeepSeek/Claude/GPT `none`, and positive thinking samples were
+observed at enabled levels. This does not imply monotonic token use or a quality
+ranking: adaptive models can skip thinking on easy inputs. All five API routes also
+passed native patch, edit and shell-readback checks at `high` (three actual tool items
+each). Tests used isolated state, synthetic text, no household data, and no automatic
+request retries. Real-provider acceptance still does not replace task-specific evals.
+
+Repeat an explicit level only with existing synthetic-data/budget authorization:
+
+```
+.venv/bin/python -m scripts.verify_models --config /absolute/acceptance/config.toml \
+  --model deepseek-assist --reasoning-effort high --confirm-paid --case text
+.venv/bin/python -m scripts.verify_models --config /absolute/acceptance/config.toml \
+  --model deepseek-assist --reasoning-effort high --confirm-paid --case execution-only --execution
+```
 
 ## Explicit ordered fallback
 
@@ -216,8 +293,11 @@ data. Selecting a Go URL does not change the platform's optional balance overflo
 setting; usage accounting remains the provider's responsibility.
 
 GLM-5.3-Flash rejects `reasoning_effort="none"` because it is thinking-only.
-Acceptance uses an explicit `medium` effort; the probe follows the selected entry
-instead of hardcoding an effort for all models.
+The initial probe used `medium`, which the upstream accepted, but subsequent native
+model-card review established that GLM-5.3-Flash maps unknown values to `max`. Current
+configuration exposes only `low/high/max`; the earlier acceptance proved transport,
+not the semantics of `medium`. Probes use each entry's configured default or an explicit
+validated effort, and never assume that all models support `none`.
 
 The three available routes also passed isolated **Codex native file-edit + shell
 readback**: create `probe.txt`, edit `alpha` to `beta`, read it back, verify both file

@@ -17,11 +17,12 @@ keepalive_seconds = 120
 dns_cache_seconds = 300
 
 [model_api]
+execution_max_output_tokens = 16384
 enabled = false
 concurrency = 4
 queue_size = 16
 timeout_seconds = 60
-max_output_tokens = 2048
+max_output_tokens = 8192
 
 [model_api.providers]
 
@@ -59,29 +60,36 @@ enabled = false
 
 [model_api.entries]
 
-[model_api.entries.go-responses]
+[model_api.entries.go-gpt]
+reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
+default_reasoning_effort = "low"
 provider = "go-responses"
 model = "gpt-6-luna"
 context_window = 128000
 execution_validated = false
 
-[model_api.entries.go-chat]
+[model_api.entries.go-glm]
 provider = "go-chat"
 model = "glm-5.3-flash"
 context_window = 128000
-reasoning_efforts = ["medium"]
+reasoning_efforts = ["low", "high", "max"]
+default_reasoning_effort = "low"
 execution_validated = false
 
-# 此表中可选：fallbacks = ["go-responses", "go-chat"]
+# 此表中可选：fallbacks = ["go-gpt", "go-glm"]
 # 仅辅助推理使用，按顺序、每个一次；不递归展开备选自己的列表。
 # 所有候选须先启用并验收所需能力。
-[model_api.entries.go-anthropic]
+[model_api.entries.go-claude]
+reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
+default_reasoning_effort = "medium"
 provider = "go-anthropic"
 model = "claude-haiku-5-5"
 context_window = 128000
 execution_validated = false
 
 [model_api.entries.go-gemini]
+reasoning_efforts = ["low", "medium", "high"]
+default_reasoning_effort = "medium"
 provider = "go-gemini"
 model = "gemini-4-argon-contributor"
 execution_validated = false
@@ -93,8 +101,9 @@ images = false
 structured = false
 execution_validated = false
 context_window = 128000
-reasoning_efforts = ["none"]
-max_output_tokens = 2048
+reasoning_efforts = ["none", "low", "high", "max"]
+default_reasoning_effort = "low"
+max_output_tokens = 8192
 # model_api.enabled 是 API 总开关；providers.<name>.enabled 是供应商开关。
 # 不改变供应商的数据留存/训练政策，也不会按任务内容自动过滤。
 
@@ -107,3 +116,6 @@ max_output_tokens = 2048
 # auth_scheme = "bearer" # 可选，默认按协议认证
 # session_header = "x-session-id" # 可选，服务端绑定的会话标识
 # capability 字段和 reasoning_efforts 按实际验收填写，不按名称推测。
+
+# reasoning_efforts 是该模型的有效档位；default_reasoning_effort 用于未显式指定的辅助调用。
+# 输出预算包含思考：max_output_tokens 用于辅助推理，execution_max_output_tokens 用于后台执行。

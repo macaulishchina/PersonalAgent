@@ -22,15 +22,15 @@ from assistant_runtime.store import Store
 from assistant_runtime.conversation.store import ConversationStore
 from assistant_runtime.conversation.media import MediaAttachments
 from assistant_runtime.plugins.models.plugin import ModelsPlugin
-from assistant_runtime.plugins.models.settings import ModelSettings
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort as resolve_effort
 from assistant_runtime.plugins.models.gateway import gateway_credential
 from assistant_runtime.plugins.codex.rpc import CodexClient
 from assistant_runtime.plugins.codex.api_catalog import write_catalog
 
 
-async def codex_probe(config, model, settings):
+async def codex_probe(config, model, settings, *, effort=None):
     """A new temporary workspace, no household MCP/skills/history, maximum 90 seconds."""
-    effort = settings.entry(model).get("reasoning_efforts", ["none"])[0]
+    effort = resolve_effort(settings.entry(model), effort)
     with tempfile.TemporaryDirectory(prefix="assistant-api-probe-") as area:
         provider = {
             "name": "Synthetic API acceptance",
@@ -170,11 +170,12 @@ async def codex_probe(config, model, settings):
             await client.close()
 
 
-async def verify(config, model, execution, cases=None):
+async def verify(config, model, execution, cases=None, *, effort=None):
     explicit_cases = bool(cases)
     cases = cases or {"text", "structured", "image"}
     settings = ModelSettings.parse(config.model_api)
     entry = settings.entry(model)
+    effort = resolve_effort(entry, effort)
     for capability, flag in (("image", "images"), ("structured", "structured")):
         if explicit_cases and capability in cases and not entry.get(flag):
             raise ValueError("Requested acceptance capability is not enabled in test config: " + capability)
@@ -202,7 +203,16 @@ async def verify(config, model, execution, cases=None):
 
     async def call(case, text, **extra):
         result = await runtime.invoke(
-            ModelRequest("infer", {"request_id": str(uuid.uuid4()), "model": model, "text": text, **extra}),
+            ModelRequest(
+                "infer",
+                {
+                    "request_id": str(uuid.uuid4()),
+                    "model": model,
+                    "text": text,
+                    "reasoning_effort": effort,
+                    **extra,
+                },
+            ),
             timeout=settings.timeout_seconds + 2,
         )
         results["cases"].append({"case": case, **result})
@@ -242,7 +252,7 @@ async def verify(config, model, execution, cases=None):
             if answer["text"].strip().lower().strip(".") != "red":
                 raise RuntimeError("Incorrect synthetic image result")
         if execution:
-            results["codex"] = await codex_probe(config, model, settings)
+            results["codex"] = await codex_probe(config, model, settings, effort=effort)
             if not results["codex"]["passed"]:
                 raise RuntimeError("Codex file/tool acceptance failed")
             print("codex file/tools passed", flush=True)
@@ -264,6 +274,9 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument(
+        "--reasoning-effort", help="An exact supported level; defaults to the model's configured default"
+    )
+    parser.add_argument(
         "--confirm-paid", action="store_true", help="User has authorized synthetic data and test budget"
     )
     parser.add_argument(
@@ -279,7 +292,15 @@ def main():
     if not args.confirm_paid:
         parser.error("Paid testing requires explicit data/budget authorization and --confirm-paid")
     raise SystemExit(
-        asyncio.run(verify(Config.load(args.config), args.model, args.execution, set(args.case or [])))
+        asyncio.run(
+            verify(
+                Config.load(args.config),
+                args.model,
+                args.execution,
+                set(args.case or []),
+                effort=args.reasoning_effort,
+            )
+        )
     )
 
 

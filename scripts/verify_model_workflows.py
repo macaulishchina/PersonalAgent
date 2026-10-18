@@ -20,6 +20,7 @@ from assistant_runtime.config import Config
 from assistant_runtime.kernel.contracts import TaskRequest
 from assistant_runtime.kernel.models import ModelRequest
 from assistant_runtime.mcp.client import LocalRuntimeClient
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
 from scripts.model_acceptance_host import AcceptanceHost
 from scripts.prepare_model_gateway import private_write
 from scripts.model_voice_check import voice, voice_active
@@ -49,6 +50,8 @@ def finished(host, task_id):
 
 
 async def create(client, model, title, prompt, **spec):
+    catalog = await client.invoke(TaskRequest("models", {}))
+    selected = next(row for row in catalog["models"] if row["model"] == model)
     return await client.invoke(
         TaskRequest(
             "create",
@@ -62,7 +65,7 @@ async def create(client, model, title, prompt, **spec):
                     **spec,
                     "execution": {
                         "model": model,
-                        "reasoning_effort": "none",
+                        "reasoning_effort": selected["defaultReasoningEffort"],
                         "reason": "Explicit synthetic compatibility acceptance",
                     },
                 },
@@ -98,7 +101,9 @@ async def mixed(
         "prompt": child_prompt,
         "execution": {
             "model": child_model,
-            "reasoning_effort": "none",
+            "reasoning_effort": reasoning_effort(
+                ModelSettings.parse(host.config.model_api).entry(child_model)
+            ),
             "reason": "Explicit synthetic mixed-provider acceptance",
         },
         "notify_completion": False,

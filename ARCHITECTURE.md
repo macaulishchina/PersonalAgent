@@ -536,6 +536,12 @@ explicit custom endpoints normalize from `model_api`; generated gateway files ar
 private derivatives. LiteLLM runs in a pinned independent container and owns protocol
 conversion only. It has no MCP, task or device authority.
 
+API reasoning levels and defaults belong to each model entry. The same declaration
+feeds auxiliary MCP, native execution metadata, task advice and gateway validation.
+Explicit effort is preserved across inference fallbacks; incompatible candidates are
+skipped rather than downgraded. Auxiliary and execution output budgets are independent
+and include reasoning tokens. Protocol mapping stays in the gateway adapter.
+
 The composition root injects `RoutedJobs` when API support is enabled. It reuses
 `CodexJobs`, with separate subscription and API app-server processes. Subscription
 voice/main execution remain on their original process. Tasks owns model selection,

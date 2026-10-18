@@ -12,7 +12,7 @@ import uuid
 from ...kernel.models import ModelRequest, ModelCallError
 from ...kernel.contracts import TaskRequest
 from ...kernel.runtime import Manifest
-from .settings import ModelSettings
+from .settings import ModelSettings, reasoning_effort
 from .gateway import gateway_credential
 from .client import GatewayClient
 
@@ -145,12 +145,20 @@ class ModelsPlugin:
         if request.action != "infer":
             raise ValueError("Unknown model action")
         a = request.arguments
-        if not isinstance(a, dict) or set(a) - {"request_id", "model", "text", "images", "schema"}:
+        if not isinstance(a, dict) or set(a) - {
+            "request_id",
+            "model",
+            "text",
+            "images",
+            "schema",
+            "reasoning_effort",
+        }:
             raise ValueError("Unknown inference arguments")
         ident = str(uuid.UUID(a["request_id"]))
         if ident != a["request_id"]:
             raise ValueError("Canonical request UUID required")
         m = self.settings.entry(a["model"])
+        reasoning_effort(m, a.get("reasoning_effort"))
         caller = await self.caller(request.caller_run)
         if not isinstance(a.get("text"), str) or not 1 <= len(a["text"]) <= 24000:
             raise ValueError("Inference requires bounded text")
@@ -237,14 +245,30 @@ class ModelsPlugin:
                         ).hexdigest()
                         candidates = [a["model"], *m.get("fallbacks", [])]
                         for index, candidate in enumerate(candidates):
-                            selected = self.settings.entry(candidate)
-                            if (a.get("images") and not selected.get("images")) or (
-                                a.get("schema") is not None and not selected.get("structured")
-                            ):
-                                raise ValueError("Fallback model lacks required input/output capability")
+                            try:
+                                selected = self.settings.entry(candidate)
+                                effort = reasoning_effort(selected, a.get("reasoning_effort"))
+                                if (a.get("images") and not selected.get("images")) or (
+                                    a.get("schema") is not None and not selected.get("structured")
+                                ):
+                                    raise ValueError("Fallback lacks required capability")
+                            except ValueError:
+                                attempts.append(
+                                    {
+                                        "model": candidate,
+                                        "state": "skipped",
+                                        "error": "incompatible_configuration",
+                                    }
+                                )
+                                log.warning(
+                                    "Model candidate skipped request=%s model=%s reason=incompatible_configuration",
+                                    ident,
+                                    candidate,
+                                )
+                                continue
                             if await self.caller(request.caller_run) != caller:
                                 raise ValueError("Model caller execution version changed")
-                            attempted = {"model": candidate, "state": "submitted"}
+                            attempted = {"model": candidate, "reasoning_effort": effort, "state": "submitted"}
                             attempts.append(attempted)
                             with self.db:
                                 self.db.execute(
@@ -261,6 +285,7 @@ class ModelsPlugin:
                                     {
                                         **payload,
                                         "model": candidate,
+                                        "reasoning": {"effort": effort},
                                         "max_output_tokens": selected.get(
                                             "max_output_tokens", self.settings.max_output_tokens
                                         ),
@@ -268,7 +293,9 @@ class ModelsPlugin:
                                     session_id=session_id,
                                 )
                                 attempted["state"] = "completed"
-                                result.update(selected_model=candidate, attempts=attempts)
+                                result.update(
+                                    selected_model=candidate, reasoning_effort=effort, attempts=attempts
+                                )
                                 break
                             except ModelCallError as exc:
                                 attempted.update(state="failed", error=exc.code)
@@ -281,6 +308,8 @@ class ModelsPlugin:
                                 )
                                 if not exc.fallback_allowed or index + 1 == len(candidates):
                                     raise
+                        else:
+                            raise ModelCallError("no_compatible_fallback")
                         if a.get("schema") is not None:
                             from jsonschema import Draft202012Validator
 

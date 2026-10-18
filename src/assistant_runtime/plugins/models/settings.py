@@ -8,6 +8,15 @@ from copy import deepcopy
 from urllib.parse import urlsplit
 
 PROTOCOLS = {"openai_responses", "openai_chat", "anthropic", "gemini"}
+EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+
+def reasoning_effort(entry, requested=None):
+    supported = entry["reasoning_efforts"]
+    effort = requested if requested is not None else entry.get("default_reasoning_effort", supported[0])
+    if not isinstance(effort, str) or effort not in supported:
+        raise ValueError("Unsupported model reasoning effort")
+    return effort
 
 
 PRESETS = {
@@ -82,7 +91,8 @@ class ModelSettings:
     concurrency: int = 4
     queue_size: int = 16
     timeout_seconds: int = 60
-    max_output_tokens: int = 2048
+    max_output_tokens: int = 8192
+    execution_max_output_tokens: int = 16384
     providers: dict = field(default_factory=dict)
     entries: dict = field(default_factory=dict)
     memory: str = ""
@@ -116,6 +126,7 @@ class ModelSettings:
             ("queue_size", 64),
             ("timeout_seconds", 80),
             ("max_output_tokens", 16384),
+            ("execution_max_output_tokens", 131072),
         ):
             n = getattr(obj, key)
             if type(n) is not int or not 1 <= n <= maximum:
@@ -156,7 +167,9 @@ class ModelSettings:
                     "structured",
                     "execution_validated",
                     "reasoning_efforts",
+                    "default_reasoning_effort",
                     "max_output_tokens",
+                    "execution_max_output_tokens",
                     "context_window",
                     "fallbacks",
                 },
@@ -168,22 +181,24 @@ class ModelSettings:
             for flag in ("images", "structured", "execution_validated"):
                 if type(m.get(flag, False)) is not bool:
                     raise ValueError("Model capabilities must be boolean")
-            efforts = m.get("reasoning_efforts", ["none"])
+            efforts = m.get("reasoning_efforts")
             if (
                 not isinstance(efforts, list)
                 or not efforts
-                or any(
-                    e not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
-                    for e in efforts
-                )
+                or any(not isinstance(e, str) or e not in EFFORTS for e in efforts)
+                or len(set(efforts)) != len(efforts)
             ):
                 raise ValueError("Invalid reasoning efforts")
+            reasoning_effort(m)
             window = m.get("context_window", 32768)
             if type(window) is not int or not 8192 <= window <= 2000000:
                 raise ValueError("Invalid model context window")
             limit = m.get("max_output_tokens", obj.max_output_tokens)
             if type(limit) is not int or not 1 <= limit <= 16384:
                 raise ValueError("Invalid output token budget")
+            execution_limit = m.get("execution_max_output_tokens", obj.execution_max_output_tokens)
+            if type(execution_limit) is not int or not 1 <= execution_limit <= 131072:
+                raise ValueError("Invalid execution output token budget")
         for ident, entry in obj.entries.items():
             fallback = entry.get("fallbacks", [])
             if (
@@ -225,9 +240,8 @@ class ModelSettings:
                 "structured": m.get("structured", False),
                 "execution_validated": m.get("execution_validated", False),
                 "fallbacks": m.get("fallbacks", []),
-                "supportedReasoningEfforts": [
-                    {"reasoningEffort": e} for e in m.get("reasoning_efforts", ["none"])
-                ],
+                "defaultReasoningEffort": reasoning_effort(m),
+                "supportedReasoningEfforts": [{"reasoningEffort": e} for e in m["reasoning_efforts"]],
             }
             for k, m in self.entries.items()
         ]

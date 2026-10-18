@@ -64,6 +64,27 @@ class ApiJobsTest(unittest.IsolatedAsyncioTestCase):
         routed.settings.entries["test-model"]["execution_validated"] = False
         self.assertEqual(len(await routed.models()), 1)
 
+    async def test_every_configured_effort_is_available_to_task_advice_and_execution(self):
+        from assistant_runtime.plugins.tasks.selection import ModelPolicy
+
+        routed = self.router()
+        levels = ["none", "low", "medium", "high", "xhigh", "max"]
+        routed.settings.entries["test-model"].update(
+            reasoning_efforts=levels, default_reasoning_effort="medium"
+        )
+        options = ModelPolicy().options(
+            await routed.models(),
+            {"model": "test-model", "reason": "Explicit model, choose appropriate supported effort"},
+            {"model": "auto", "reasoning_effort": "auto"},
+        )
+        self.assertEqual({o["reasoning_effort"] for o in options.values()}, set(levels))
+        for effort in levels:
+            self.assertEqual(
+                await routed.select("test-model", effort), {"model": "test-model", "reasoning_effort": effort}
+            )
+        with self.assertRaisesRegex(ValueError, "validated"):
+            await routed.select("test-model", "ultra")
+
     async def test_process_credentials_and_lifecycle_are_isolated(self):
         routed = self.router()
         client = SimpleNamespace(start=AsyncMock(), close=AsyncMock())

@@ -40,3 +40,8 @@
 
 API 的 `model_api.enabled` 控制总开关，供应商的 `enabled` 控制单独接入。
 密钥放实例根目录 `.env`，模型配置只引用变量名。供应商开关不是数据分类过滤器。
+
+每个 API 模型必须用 `reasoning_efforts` 声明有效档位，`default_reasoning_effort` 指定默认值。
+辅助推理和后台任务可明确选择其中一档；未指定的任务选型沿用 Jev 与原策略。
+`model_api.max_output_tokens` 控制辅助推理预算，`execution_max_output_tokens` 控制后台执行预算；
+两者都包含思考 token，模型条目可以单独覆盖。

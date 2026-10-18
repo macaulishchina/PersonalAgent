@@ -25,8 +25,16 @@ class InferenceFallbackTest(unittest.IsolatedAsyncioTestCase):
     request = test_models.ModelsTest.request
 
     def chain(self):
-        self.plugin.settings.entries["second"] = {"provider": "test", "model": "two"}
-        self.plugin.settings.entries["third"] = {"provider": "test", "model": "three"}
+        self.plugin.settings.entries["second"] = {
+            "provider": "test",
+            "model": "two",
+            "reasoning_efforts": ["none"],
+        }
+        self.plugin.settings.entries["third"] = {
+            "provider": "test",
+            "model": "three",
+            "reasoning_efforts": ["none"],
+        }
         self.plugin.settings.entries["test-model"]["fallbacks"] = ["second", "third"]
 
     async def test_order_and_receipt_prevent_duplicate_paid_calls(self):
@@ -85,9 +93,28 @@ class InferenceFallbackTest(unittest.IsolatedAsyncioTestCase):
     async def test_incompatible_backup_cannot_drop_schema(self):
         self.chain()
         self.client.complete.side_effect = ModelCallError("model_http_402", fallback_allowed=True)
-        with self.assertRaisesRegex(ValueError, "capability"):
-            await self.runtime.invoke(self.request(schema={"type": "object"}))
+        request = self.request(schema={"type": "object"})
+        with self.assertRaisesRegex(ModelCallError, "no_compatible_fallback"):
+            await self.runtime.invoke(request)
         self.client.complete.assert_awaited_once()
+        receipt = await self.runtime.invoke(request)
+        self.assertEqual(receipt["state"], "failed")
+        self.assertEqual([a["state"] for a in receipt["attempts"]], ["failed", "skipped", "skipped"])
+
+    async def test_explicit_effort_is_not_downgraded_by_fallback(self):
+        self.chain()
+        self.plugin.settings.entries["test-model"]["reasoning_efforts"] = ["none", "high"]
+        self.plugin.settings.entries["third"]["reasoning_efforts"] = ["high"]
+        self.client.complete.side_effect = [
+            ModelCallError("model_http_402", fallback_allowed=True),
+            {"text": "done"},
+        ]
+        result = await self.runtime.invoke(self.request(reasoning_effort="high"))
+        self.assertEqual(result["selected_model"], "third")
+        self.assertEqual([a["state"] for a in result["attempts"]], ["failed", "skipped", "completed"])
+        self.assertTrue(
+            all(c.args[0]["reasoning"] == {"effort": "high"} for c in self.client.complete.await_args_list)
+        )
 
 
 class TaskFallbackTest(unittest.IsolatedAsyncioTestCase):

@@ -17,7 +17,7 @@ from aiohttp import web
 from assistant_runtime.config import Config
 from assistant_runtime.kernel.models import ModelRequest
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.plugins.models.settings import ModelSettings
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
 from assistant_runtime.plugins.models.gateway import gateway_credential
 from scripts.model_acceptance_host import AcceptanceHost
 from scripts.prepare_model_gateway import private_write
@@ -92,7 +92,7 @@ async def verify(config, target):
                 try:
                     await host.start()
                     host.tasks.model_policy.fallbacks = {
-                        "synthetic-rejected": [{"model": target, "reasoning_effort": "none"}]
+                        "synthetic-rejected": [{"model": target, "reasoning_effort": reasoning_effort(entry)}]
                     }
                     request = ModelRequest(
                         "infer",

@@ -12,6 +12,7 @@ from pathlib import Path
 from assistant_runtime.kernel.contracts import TaskRequest
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.plugins.tasks.selection import ModelPolicy
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
 from scripts.prepare_model_gateway import private_write
 
 
@@ -116,7 +117,12 @@ async def context(host, output):
     async def turn(text):
         offset = len(host.api_events)
         response = await client.request(
-            "turn/start", {"threadId": thread, "effort": "none", "input": [{"type": "text", "text": text}]}
+            "turn/start",
+            {
+                "threadId": thread,
+                "effort": reasoning_effort(ModelSettings.parse(host.config.model_api).entry("go-anthropic")),
+                "input": [{"type": "text", "text": text}],
+            },
         )
         ident = response["turn"]["id"]
         end = await wait_for(
@@ -450,8 +456,18 @@ async def upgrade(host, output):
     host.tasks.model_policy = ModelPolicy.parse(
         {
             "profiles": {
-                "fast": {"model": "go-anthropic", "reasoning_effort": "none"},
-                "balanced": {"model": "go-responses", "reasoning_effort": "none"},
+                "fast": {
+                    "model": "go-anthropic",
+                    "reasoning_effort": reasoning_effort(
+                        ModelSettings.parse(host.config.model_api).entry("go-anthropic")
+                    ),
+                },
+                "balanced": {
+                    "model": "go-responses",
+                    "reasoning_effort": reasoning_effort(
+                        ModelSettings.parse(host.config.model_api).entry("go-responses")
+                    ),
+                },
             }
         }
     )

@@ -27,12 +27,81 @@ def settings(**changes):
         "concurrency": 1,
         "queue_size": 1,
         "providers": {"test": {"preset": "deepseek", "enabled": True}},
-        "entries": {"test-model": {"provider": "test", "model": "upstream", "structured": True}},
+        "entries": {
+            "test-model": {
+                "provider": "test",
+                "model": "upstream",
+                "structured": True,
+                "reasoning_efforts": ["none"],
+            }
+        },
         **changes,
     }
 
 
 class SettingsTest(unittest.TestCase):
+    def test_missing_effort_declaration_does_not_silently_advertise_none(self):
+        config = settings()
+        del config["entries"]["test-model"]["reasoning_efforts"]
+        with self.assertRaisesRegex(ValueError, "reasoning efforts"):
+            ModelSettings.parse(config)
+
+    def test_reasoning_default_is_explicit_and_not_the_first_supported_level(self):
+        raw = settings()
+        raw["entries"]["test-model"].update(
+            reasoning_efforts=["none", "low", "high"], default_reasoning_effort="low"
+        )
+        parsed = ModelSettings.parse(raw)
+        self.assertEqual(parsed.catalog()[0]["defaultReasoningEffort"], "low")
+        from assistant_runtime.plugins.codex.api_catalog import catalog
+
+        self.assertEqual(catalog(parsed)["models"][0]["default_reasoning_level"], "low")
+        route = configuration(parsed)["model_list"][0]["litellm_params"]
+        self.assertEqual(route["max_tokens"], parsed.execution_max_output_tokens)
+        for invalid in (
+            {"default_reasoning_effort": "medium"},
+            {"reasoning_efforts": ["low", "low"]},
+            {"reasoning_efforts": [[]]},
+            {"execution_max_output_tokens": 131073},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                ModelSettings.parse(
+                    settings(entries={"test-model": {**raw["entries"]["test-model"], **invalid}})
+                )
+
+    def test_gateway_preserves_effort_and_disables_anthropic_thinking_explicitly(self):
+        for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
+            route = {
+                "protocol": protocol,
+                "reasoning_efforts": ["low", "high"],
+                "default_reasoning_effort": "low",
+            }
+            self.assertEqual(prepare_request(route, {}, {}, [])["reasoning"], {"effort": "low"})
+            self.assertEqual(
+                prepare_request(route, {"reasoning": {"effort": "high"}}, {}, [])["reasoning"],
+                {"effort": "high"},
+            )
+            self.assertEqual(
+                prepare_request(route, {"reasoning": {"effort": None}, "reasoning_effort": "high"}, {}, [])[
+                    "reasoning"
+                ],
+                {"effort": "high"},
+            )
+            with self.assertRaisesRegex(ValueError, "Unsupported"):
+                prepare_request(route, {"reasoning": {"effort": "medium"}}, {}, [])
+        route = {
+            "protocol": "anthropic",
+            "reasoning_efforts": ["none", "high"],
+            "default_reasoning_effort": "high",
+        }
+        result = prepare_request(route, {"reasoning": {"effort": "none"}}, {}, [])
+        self.assertEqual(result["thinking"], {"type": "disabled"})
+        self.assertEqual(result["reasoning"], {"effort": "none"})
+        with self.assertRaisesRegex(ValueError, "Conflicting"):
+            prepare_request(route, {"reasoning": {"effort": "high"}, "reasoning_effort": "none"}, {}, [])
+        with self.assertRaisesRegex(ValueError, "Invalid"):
+            prepare_request(route, {"reasoning": "high"}, {}, [])
+
     def test_disabled_provider_cannot_be_called_or_routed(self):
         from assistant_runtime.plugins.codex.api_catalog import catalog
 
@@ -176,6 +245,24 @@ class SettingsTest(unittest.TestCase):
 
 
 class ModelsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_auxiliary_reasoning_default_explicit_override_and_validation(self):
+        self.plugin.settings.entries["test-model"].update(
+            reasoning_efforts=["none", "low", "high"], default_reasoning_effort="low"
+        )
+        for requested, expected in (
+            ({}, "low"),
+            ({"reasoning_effort": "none"}, "none"),
+            ({"reasoning_effort": "high"}, "high"),
+        ):
+            result = await self.runtime.invoke(self.request(**requested))
+            self.assertEqual(result["reasoning_effort"], expected)
+            self.assertEqual(self.client.complete.call_args.args[0]["reasoning"], {"effort": expected})
+            self.assertEqual(result["attempts"][0]["reasoning_effort"], expected)
+        for invalid in ("medium", "auto", [], 1):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                await self.runtime.invoke(self.request(reasoning_effort=invalid))
+        self.assertEqual(self.client.complete.await_count, 3)
+
     async def test_composed_memory_uses_explicit_binding_without_error_fallback(self):
         from assistant_runtime.bootstrap import memory_complete
 
@@ -364,7 +451,8 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             tools = await client.list_tools()
             tool = next(t for t in tools if t.name == "infer_with_model")
             self.assertEqual(
-                set(tool.inputSchema["properties"]), {"request_id", "model", "text", "images", "schema"}
+                set(tool.inputSchema["properties"]),
+                {"request_id", "model", "text", "images", "schema", "reasoning_effort"},
             )
             await client.call_tool("infer_with_model", self.request().arguments)
         self.assertEqual(target.invoke.call_args.args[0].caller_run, "bound-run")

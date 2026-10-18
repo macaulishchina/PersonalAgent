@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from assistant_runtime.config import Config
-from assistant_runtime.plugins.models.settings import ModelSettings
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
 from assistant_runtime.plugins.models.gateway import configuration, credential, gateway_credential
 
 # Pulled from the official repository; independently checked package version: 1.106.0.
@@ -83,7 +83,11 @@ def prepare(config):
     assets.mkdir(mode=0o700, exist_ok=True)
     private_write(assets / "config.yaml", json.dumps(configuration(settings), indent=2))
     routes = {
-        ident: settings.providers[entry["provider"]]
+        ident: {
+            **settings.providers[entry["provider"]],
+            "reasoning_efforts": entry["reasoning_efforts"],
+            "default_reasoning_effort": reasoning_effort(entry),
+        }
         for ident, entry in settings.entries.items()
         if settings.providers[entry["provider"]].get("enabled", False)
     }

@@ -32,6 +32,30 @@ def prepare_request(provider, data, environment, session_headers):
     incoming = data.get("proxy_server_request", {}).get("headers", {})
     data.pop("headers", None)
     data["extra_headers"] = upstream_headers(provider, incoming, environment, session_headers)
+    if "reasoning_efforts" in provider:
+        reasoning = data.get("reasoning")
+        if reasoning is not None and not isinstance(reasoning, dict):
+            raise ValueError("Invalid reasoning configuration")
+        effort = (reasoning or {}).get("effort")
+        if (
+            reasoning is not None
+            and data.get("reasoning_effort") is not None
+            and reasoning.get("effort") not in (None, data["reasoning_effort"])
+        ):
+            raise ValueError("Conflicting reasoning efforts")
+        if effort is None:
+            effort = data.get("reasoning_effort")
+        if effort is None:
+            effort = provider["default_reasoning_effort"]
+        if effort not in provider["reasoning_efforts"]:
+            raise ValueError("Unsupported configured reasoning effort")
+        if reasoning is not None or "reasoning_effort" not in data:
+            data["reasoning"] = {**(reasoning or {}), "effort": effort}
+        else:
+            data["reasoning_effort"] = effort
+        if provider["protocol"] == "anthropic" and effort == "none":
+            # Haiku's server default is adaptive. Omitting thinking does not disable it.
+            data["thinking"] = {"type": "disabled"}
     if provider["protocol"] in {"anthropic", "gemini"}:
         # OpenAI's cache-routing hint has no Messages/Gemini equivalent. It does not
         # change model input or execution semantics. Keep all tools, reasoning,

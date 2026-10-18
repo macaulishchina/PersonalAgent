@@ -46,7 +46,7 @@ def configuration(settings):
             "num_retries": 0,
             "timeout": settings.timeout_seconds,
             "max_output_tokens" if protocol == "openai_responses" else "max_tokens": entry.get(
-                "max_output_tokens", settings.max_output_tokens
+                "execution_max_output_tokens", settings.execution_max_output_tokens
             ),
         }
         if protocol == "openai_chat":
