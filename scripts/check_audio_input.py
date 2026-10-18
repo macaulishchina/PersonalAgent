@@ -168,7 +168,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("config.toml"))
+    parser.add_argument("--config", type=Path, default=Path("config/config.toml"))
     parser.add_argument("--seconds", type=float, default=5)
     parser.add_argument("--guided", action="store_true", help="四个房间，各做安静与日常背景声对照")
     parser.add_argument("--prepare-guide", action="store_true", help="只准备固定本地提示音，不采音、不播放")

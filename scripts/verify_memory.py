@@ -240,7 +240,7 @@ async def verify(config, rounds, folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--rounds", type=int, choices=range(2, 6), default=2)
     args = parser.parse_args()
     config = Config.load(args.config)

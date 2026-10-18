@@ -333,7 +333,7 @@ async def verify(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     args = parser.parse_args()
     asyncio.run(verify(Config.load(args.config)))
 

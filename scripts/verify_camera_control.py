@@ -159,7 +159,7 @@ async def verify(config, device, fixed, codex):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--device", required=True)
     parser.add_argument("--fixed-device")
     parser.add_argument(

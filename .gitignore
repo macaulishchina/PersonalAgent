@@ -2,10 +2,12 @@
 __pycache__/
 .pytest_cache/
 *.egg-info/
-models/
+/models/
 state/
 .env
 config.toml
+/config/
+!/config.example/config.toml
 .ruff_cache/
 .mypy_cache/
 .env.*

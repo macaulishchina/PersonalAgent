@@ -91,9 +91,10 @@ MCP instructions require agents to continue their original reasoning on fallback
 never loop on the tool or report optional judgment failure as user-task failure.
 
 Voice intent, event relevance and bounded candidate selection use question version 2;
-model profile uses version 5 with `objective` and 1..32 `options`, each a closed
+model profile uses version 6 with `objective` and 1..32 `options`, each a closed
 `{profile, model, reasoning_effort}` combination keyed as `profile_effort` (e.g.
-`deep_high`). The adapter batches two small native Choice questions in one HTTP
+`deep_high`). Verified API candidates with `none` effort remain eligible in both
+profile selection and the independent effort question; missing support is never invented. The adapter batches two small native Choice questions in one HTTP
 request, validating both responses and retaining each probability distribution.
 `field_choices` contains only fields above their confidence threshold; other fields
 are null. `confidence_scope=per_field` never claims a joint probability. `choice`
@@ -170,12 +171,12 @@ normal-use evidence before claiming accuracy or savings.
 Local CLI through the existing private Unix socket:
 
 ```sh
-personal-agent --config config.toml decisions status
-personal-agent --config config.toml decisions list '{"limit":20}'
-personal-agent --config config.toml decisions get '{"id":"64-character-receipt-id"}'
-personal-agent --config config.toml decisions evaluate '{"kind":"voice_intent","reference":"synthetic:exit:1","state":{"utterance":"退下吧","execution_active":false}}'
-personal-agent --config config.toml decisions label '{"id":"64-character-receipt-id","expected":"sleep"}'
-personal-agent --config config.toml decisions reload
+personal-agent --config config/config.toml decisions status
+personal-agent --config config/config.toml decisions list '{"limit":20}'
+personal-agent --config config/config.toml decisions get '{"id":"64-character-receipt-id"}'
+personal-agent --config config/config.toml decisions evaluate '{"kind":"voice_intent","reference":"synthetic:exit:1","state":{"utterance":"退下吧","execution_active":false}}'
+personal-agent --config config/config.toml decisions label '{"id":"64-character-receipt-id","expected":"sleep"}'
+personal-agent --config config/config.toml decisions reload
 ```
 
 Manual evaluate acknowledges only volatile admission; poll get/list for committed output.
@@ -188,8 +189,8 @@ coalescing, calls beyond the former daily cap, restart, model fallbacks and conc
 providers establish contracts, not live-provider success. Explicit paid acceptance:
 
 ```sh
-.venv/bin/python scripts/verify_decisions.py --config config.toml
-.venv/bin/python scripts/verify_decisions_transport.py --config config.toml
+.venv/bin/python scripts/verify_decisions.py --config config/config.toml
+.venv/bin/python scripts/verify_decisions_transport.py --config config/config.toml
 ```
 
 Synthetic fixtures cover all kinds and the installed active MCP/capability paths,

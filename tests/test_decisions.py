@@ -663,6 +663,17 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ContractTest(unittest.TestCase):
+    def test_verified_api_none_effort_is_preserved_in_joint_questions(self):
+        state = {
+            "objective": "确定性的 API 核验",
+            "options": {"fast_none": {"profile": "fast", "model": "api-model", "reasoning_effort": "none"}},
+        }
+        job = prepare(DecisionSample("model_profile", "api-none", state), "tasks", "jev-1.13.0")
+        self.assertIn("fast_none", job["choices"])
+        from assistant_runtime.plugins.decisions.questions import execution_questions
+
+        self.assertEqual(set(execution_questions(job)["effort"]["criteria"]), {"none", "uncertain"})
+
     def test_execution_options_are_closed_bounded_and_not_arbitrary_model_output(self):
         for mutation in (
             lambda state: state.pop("options"),
@@ -684,7 +695,7 @@ class ContractTest(unittest.TestCase):
             old = prepare(model_sample, "tasks", "jev-1.13.0")
             self.assertEqual(prepare(sample(), "assistant", "jev-1.13.0")["id"], voice["id"])
         self.assertNotEqual(current["id"], old["id"])
-        self.assertEqual(current["question_version"], 5)
+        self.assertEqual(current["question_version"], 6)
         self.assertEqual(
             set(current["choices"]), {"fast_low", "balanced_low", "deep_medium", "ultra_high", "uncertain"}
         )

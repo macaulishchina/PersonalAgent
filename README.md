@@ -14,10 +14,19 @@ Python 3.12 and `uv` are required. All application and memory dependencies share
 uv sync --locked --extra voice --extra memory --extra tasks --extra dev
 .venv/bin/playwright install chromium
 .venv/bin/python scripts/download_models.py --wake-bundle /path/to/fsmn-v2
-cp config.example.toml config.toml
+cp -r config.example config
 ```
 
-The example starts a hardware-free management host. For speech configure `profile="voice"`, an absolute instance `root`, `workspace`, model location, input identity and output map. Configure Codex's existing subscription login normally. No separate paid API key is used. Linux voice also needs `pactl` and `pacat`; Bluetooth outputs need BlueZ. Optional camera capture occurs only on explicit requests.
+The example starts a hardware-free management host. For speech configure `profile="voice"`, an absolute instance `root`, `workspace`, model location, input identity and output map. Configure Codex's existing subscription login normally. The default subscription voice path needs no separate API key. Optional API model access is configured independently. Linux voice also needs `pactl` and `pacat`; Bluetooth outputs need BlueZ. Optional camera capture occurs only on explicit requests.
+
+Instance configuration is split by purpose under `config/`; see
+[configuration layout and rules](config.example/README.md). Start all CLI commands
+with `--config config/config.toml`. The entry lists fragments explicitly, without
+directory scanning or recursive includes. Duplicate fields, missing files and invalid
+settings fail before startup. Relative `root` is resolved against the entry directory;
+the example uses `root=".."` so `.env`, state and models stay at the instance root.
+Changes apply on restart, not while running. The combined snippet below illustrates
+field names; edit their owning files in the split layout.
 
 ```toml
 profile = "voice"
@@ -51,7 +60,7 @@ location = "书房"
 address = "AA:BB:CC:DD:EE:FF" # or sink = "exact PipeWire sink name"
 ```
 
-`codex_model` and `codex_reasoning_effort` select the foreground task model and effort. Mem0 extraction and ADD/UPDATE/DELETE/NONE decisions independently use `memory_model` and `memory_reasoning_effort` (default `gpt-6-luna` / `low`), through the same official ChatGPT subscription login. Changing one pair does not change the other; global Codex settings are untouched. Use values supported by the installed Codex and account. There is no paid API or automatic model fallback; a lighter model does not imply a specific subscription quota saving or measured latency. Local embeddings remain independent. `realtime_voice` selects the voice timbre, not its model. After editing `config.toml`, run `personal-agent --config config.toml restart`. `status` reports task settings and voice, while its `memory` section reports requested and last provider-returned memory model/effort; unavailable returned fields are null rather than guessed.
+`codex_model` and `codex_reasoning_effort` select the foreground task model and effort. Mem0 extraction and ADD/UPDATE/DELETE/NONE decisions independently use `memory_model` and `memory_reasoning_effort` (default `gpt-6-luna` / `low`), through the same official ChatGPT subscription login. Changing one pair does not change the other; global Codex settings are untouched. Use values supported by the installed Codex and account. Optional `model_api` provides explicitly configured API execution/auxiliary inference (see below), with optional explicitly configured ordered fallbacks; a lighter model does not imply a specific subscription quota saving or measured latency. Local embeddings remain independent. `realtime_voice` selects the voice timbre, not its model. After editing files in `config/`, run `personal-agent --config config/config.toml restart`. `status` reports task settings and voice, while its `memory` section reports requested and last provider-returned memory model/effort; unavailable returned fields are null rather than guessed.
 
 `minimum_volume` raises readable channels below the floor, preserves louder channels and skips unknown volume. There is no extra gain/limiter. Output loss does not route audio to another room. Native audio uses Chromium WebRTC and optional WebRTC AEC3; the wake model receives the original mic stream.
 
@@ -77,7 +86,7 @@ Memory updates require the current revision obtained from `read_memory`; read/se
 
 Codex registers these services in this project's foreground and authorized background threads, with the already authorized local-operation permissions. Memory-curation threads disable them. Another MCP client can launch either service independently with `.venv/bin/python -m assistant_runtime.mcp memory --socket /path/to/instance/state/control.sock` or replace `memory` with `device`. Use the actual `Config.socket` path (see `doctor`/instance root); the combined `personal_agent` MCP is removed. Registration does not alter global Codex settings or memory identities on disk.
 
-For repeatable isolated verification run `.venv/bin/python scripts/verify_mcp.py --config config.toml`. This checks separate real stdio inventories, actual Mem0 create/read/update/search/forget and revision conflicts, newly registered synthetic devices, native image content, and real Codex calls to both servers. It uses temporary synthetic state, no room capture/playback or production memories. Private evidence goes to `state/acceptance/mcp/`.
+For repeatable isolated verification run `.venv/bin/python scripts/verify_mcp.py --config config/config.toml`. This checks separate real stdio inventories, actual Mem0 create/read/update/search/forget and revision conflicts, newly registered synthetic devices, native image content, and real Codex calls to both servers. It uses temporary synthetic state, no room capture/playback or production memories. Private evidence goes to `state/acceptance/mcp/`.
 
 ## Shared Web chat
 
@@ -97,7 +106,7 @@ Retain any other enabled extras, such as `airplay` and `camera`, when running `u
 web = {enable = true, host = "0.0.0.0", port = 8046}
 ```
 
-Restart with `.venv/bin/personal-agent --config config.toml restart`. Open `http://SERVER_IP:8046/`. The existing report server on 8045 is independent. At first startup a random access credential is written to `<instance-root>/state/web-access-token`, readable only by the service account. Read it locally and enter it on the login page; do not commit it or put it in a URL. `web.token_file` optionally overrides that path. An explicitly approved existing password can be pinned with `web.approved_short_password_sha256` in private instance configuration; only that exact password (at least eight characters) is exempt from the normal 24-character minimum. This does not change or regenerate the credential file. Browser login lasts seven days and survives service restarts. To rotate access, replace that file with a new strong random token and restart; existing cookies are invalidated. Bind to `127.0.0.1` for SSH tunnels or use a trusted LAN/VPN. The plain HTTP listener is not intended for public Internet exposure.
+Restart with `.venv/bin/personal-agent --config config/config.toml restart`. Open `http://SERVER_IP:8046/`. The existing report server on 8045 is independent. At first startup a random access credential is written to `<instance-root>/state/web-access-token`, readable only by the service account. Read it locally and enter it on the login page; do not commit it or put it in a URL. `web.token_file` optionally overrides that path. An explicitly approved existing password can be pinned with `web.approved_short_password_sha256` in private instance configuration; only that exact password (at least eight characters) is exempt from the normal 24-character minimum. This does not change or regenerate the credential file. Browser login lasts seven days and survives service restarts. To rotate access, replace that file with a new strong random token and restart; existing cookies are invalidated. Bind to `127.0.0.1` for SSH tunnels or use a trusted LAN/VPN. The plain HTTP listener is not intended for public Internet exposure.
 
 The page supports text, paste/drop/upload of up to four JPEG/PNG/WebP images (10 MB each), Markdown/code copying, task details, stop playback, and cancel task. User uploads and image content returned by tools share private chat attachments. Tool images are visible even when execution details are collapsed, support the same preview, and survive refresh/restart. Requested camera frames are saved before provider display/history truncation; the result carries registered attachment IDs. Available complete image content or valid references can repair missing attachments without another device capture. Already-truncated old pictures cannot be reconstructed. There is no browser audio input/output. Web messages select silent playback until the next actual voice user turn; microphone reception and background work continue. Quiet hours affect voice only. A new message during a task steers that task instead of replacing it. Interrupted or uncertain outcomes are shown, never automatically replayed.
 
@@ -107,12 +116,12 @@ Validation:
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/python scripts/verify_web.py --config config.toml
+.venv/bin/python scripts/verify_web.py --config config/config.toml
 ```
 
-For the real subscription → MCP → two-browser image path, including a large synthetic camera frame and recovery without recapture, use `.venv/bin/python scripts/verify_web.py --config config.toml --reply-images`. It does not capture the room.
+For the real subscription → MCP → two-browser image path, including a large synthetic camera frame and recovery without recapture, use `.venv/bin/python scripts/verify_web.py --config config/config.toml --reply-images`. It does not capture the room.
 
-For a read-only check of existing assistant images in the installed local UI use `.venv/bin/python scripts/verify_web.py --config config.toml --installed-images`; it checks two browsers, preview, reload and connection recovery without capturing another image or starting a model task.
+For a read-only check of existing assistant images in the installed local UI use `.venv/bin/python scripts/verify_web.py --config config/config.toml --installed-images`; it checks two browsers, preview, reload and connection recovery without capturing another image or starting a model task.
 
 The default second command uses real subscription calls, two isolated browsers, synthetic speech and a generated image in a temporary workspace. It neither records the room nor plays through speakers, and does not read production conversation history. Private acceptance evidence is written to `state/acceptance/web/`. Frontend changes require a rebuild; the standard check runs its build when its dependencies are installed.
 
@@ -150,7 +159,7 @@ Do not add result caching or reduce coverage to improve the reported time.
 ## Run and maintain
 
 ```sh
-export PERSONAL_AGENT_CONFIG="$PWD/config.toml"
+export PERSONAL_AGENT_CONFIG="$PWD/config/config.toml"
 .venv/bin/personal-agent run
 .venv/bin/personal-agent status
 .venv/bin/personal-agent doctor
@@ -172,7 +181,7 @@ Wake acknowledgement uses a locally generated 1.04-second rising chime with a so
 Install a user service after validating the foreground run:
 
 ```sh
-.venv/bin/python scripts/install_service.py --config "$PWD/config.toml"
+.venv/bin/python scripts/install_service.py --config "$PWD/config/config.toml"
 .venv/bin/personal-agent start
 .venv/bin/personal-agent logs
 .venv/bin/personal-agent halt
@@ -216,7 +225,7 @@ Open `http://SERVER_IP:8553/`. The configured access credential is in private `s
 
 ## Memory
 
-Mem0 1.0.11 runs locally in a worker using the same environment. Prepare its multilingual embedding cache with `scripts/prepare_memory.py --config config.toml`. Embeddings stay under `models/memory-embedding/`; local vectors and Mem0 history live under `state/mem0/`. Mem0 owns automatic extraction and dedup/update decisions. Its model provider calls the existing official Codex App Server through internal stdio callbacks using ChatGPT login; no API key, HTTP model proxy or hosted Mem0 account is required. Automatic jobs use original user evidence, run while idle and are preempted by wake. Failures are retried with bounded backoff.
+Mem0 1.0.11 runs locally in a worker using the same environment. Prepare its multilingual embedding cache with `scripts/prepare_memory.py --config config/config.toml`. Embeddings stay under `models/memory-embedding/`; local vectors and Mem0 history live under `state/mem0/`. Mem0 owns automatic extraction and dedup/update decisions. By default its model provider calls the official Codex App Server through internal stdio callbacks using ChatGPT login. An accepted structured-output entry can instead be selected with `model_api.memory`; source policy, local vectors and Mem0 history stay unchanged. No hosted Mem0 account is required. Automatic jobs use original user evidence, run while idle and are preempted by wake. Failures are retried with bounded backoff.
 
 ```sh
 .venv/bin/personal-agent memory search '{"query":"饮品偏好","scope":"user"}'
@@ -289,3 +298,17 @@ The optional [voice-first command path](src/assistant_runtime/interaction/README
 separates streaming recognition, request revisions, task execution and spoken receipts.
 It is off pending acoustic/latency acceptance; offline comparison and its measured local
 engine limitations are documented there. Existing fixed USB bindings are unchanged.
+
+## Optional API model access
+
+`model_api` adds explicit API providers while preserving subscription voice and the
+existing Codex/task execution loop. Official OpenAI, Claude, Gemini and DeepSeek presets
+supply endpoint/protocol/key-variable defaults; custom compatible endpoints remain
+explicit. Main sessions and tasks get a separate no-tool `models` MCP. Accepted task
+model aliases reuse the existing four execution tiers and guarded upgrade checkpoints.
+
+See [configuration, deployment and current acceptance](src/assistant_runtime/plugins/models/README.md).
+Keys go in the private instance `.env`; variable names are listed in
+[the template](deploy/model-api.env.example). LiteLLM runs in its own pinned container.
+API execution/memory and production migration remain gated on actual capability
+acceptance; there is no silent fallback or feature removal.

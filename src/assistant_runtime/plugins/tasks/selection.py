@@ -26,6 +26,7 @@ GUIDANCE = (
 class ModelPolicy:
     default_profile: str = "fast"
     max_upgrades: int = 1
+    fallbacks: dict = field(default_factory=dict)
     profiles: dict = field(
         default_factory=lambda: {
             "fast": {"model": "gpt-6-luna", "reasoning_effort": "low"},
@@ -37,11 +38,41 @@ class ModelPolicy:
 
     @classmethod
     def parse(cls, data):
-        if not isinstance(data, dict) or set(data) - {"default_profile", "max_upgrades", "profiles"}:
+        if not isinstance(data, dict) or set(data) - {
+            "default_profile",
+            "max_upgrades",
+            "profiles",
+            "fallbacks",
+        }:
             raise ValueError("Unknown task model policy settings")
         result = cls()
         result.default_profile = data.get("default_profile", result.default_profile)
         result.max_upgrades = data.get("max_upgrades", result.max_upgrades)
+        result.fallbacks = data.get("fallbacks", {})
+        if not isinstance(result.fallbacks, dict) or len(result.fallbacks) > 64:
+            raise ValueError("Invalid task fallback configuration")
+        for model, candidates in result.fallbacks.items():
+            if (
+                not isinstance(model, str)
+                or not 1 <= len(model) <= 160
+                or not isinstance(candidates, list)
+                or not 1 <= len(candidates) <= 3
+            ):
+                raise ValueError("Task fallback chains require 1..3 concrete candidates")
+            seen = {model}
+            for candidate in candidates:
+                if (
+                    not isinstance(candidate, dict)
+                    or set(candidate) != {"model", "reasoning_effort"}
+                    or any(
+                        not isinstance(v, str) or not 1 <= len(v) <= 160 or v == "auto"
+                        for v in candidate.values()
+                    )
+                ):
+                    raise ValueError("Task fallback requires concrete model and reasoning effort")
+                if candidate["model"] in seen:
+                    raise ValueError("Task fallback candidates cannot repeat")
+                seen.add(candidate["model"])
         if (
             result.default_profile not in PROFILES
             or type(result.max_upgrades) is not int
@@ -69,6 +100,7 @@ class ModelPolicy:
             "version": 1,
             "default_profile": self.default_profile,
             "max_upgrades": self.max_upgrades,
+            "fallbacks": self.fallbacks,
             "guidance": GUIDANCE,
             "profiles": {
                 name: {
@@ -126,7 +158,7 @@ class ModelPolicy:
             supported = catalog.get(selected_model, {}).get("supportedReasoningEfforts", [])
             for item in supported:
                 value = item["reasoningEffort"]
-                if value not in {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
+                if value not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
                     continue
                 if effort not in (None, "auto", value):
                     continue

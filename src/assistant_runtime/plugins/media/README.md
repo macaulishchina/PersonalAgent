@@ -68,7 +68,7 @@ mount_path = "/mnt/P"
 
 Targets are explicit account/drive/folder bindings. Only configured targets may
 receive transfers; arbitrary filesystem or cloud paths cannot be tool arguments.
-`scripts/prepare_media.py --config config.toml --create-targets` creates/reuses
+`scripts/prepare_media.py --config config/config.toml --create-targets` creates/reuses
 only `影视/电影` and `影视/电视剧` on the resource drive and prints configuration.
 `--apply-config` applies it with a private prior-config backup. It preserves unrelated
 settings and refuses to replace existing media configuration. Run before enabling
@@ -77,7 +77,7 @@ An optional `--import-aliyun-auth PRIVATE_FILE` imports an existing aligo Web se
 once. Never import an OpenList OAuth refresh token. Credentials must stay out of Git.
 
 Login uses `begin_media_login` then `get_media_login(login_id)` for a native QR image.
-CLI: `personal-agent --config config.toml media login`, followed by `login_status`
+CLI: `personal-agent --config config/config.toml media login`, followed by `login_status`
 with the returned login ID. CLI saves the QR privately at `state/media/login-qr.png`.
 Tokens never cross MCP. The session expires; starting again replaces only a terminal
 login. An account identity binding prevents accidental account switching.
@@ -220,12 +220,12 @@ These fixtures do not establish real provider or television behavior.
 Explicit installed-service acceptance (not an automatic parallel test):
 
 ```sh
-.venv/bin/python scripts/verify_media.py --config config.toml --query 流浪地球
+.venv/bin/python scripts/verify_media.py --config config/config.toml --query 流浪地球
 # One authorized cloud copy; retain the printed request/operation IDs if interrupted:
-.venv/bin/python scripts/verify_media.py --config config.toml \
+.venv/bin/python scripts/verify_media.py --config config/config.toml \
   --share-url https://www.alipan.com/s/SHARE_ID --file-id VIDEO_ID --target movies
 # Explicitly download an original already in the configured cloud folder:
-.venv/bin/python scripts/verify_media.py --config config.toml \
+.venv/bin/python scripts/verify_media.py --config config/config.toml \
   --download-file-id SAVED_FILE_ID --target movies
 ```
 

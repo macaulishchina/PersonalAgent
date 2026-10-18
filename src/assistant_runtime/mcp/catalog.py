@@ -95,6 +95,7 @@ MEDIA_TOOLS = (
 DECISION_TOOLS = ("decision_support_status", "judge_options")
 
 SERVICES = {
+    "models": {"tools": ("list_models", "infer_with_model"), "task_context": True},
     "memory": {"tools": MEMORY_TOOLS, "task_context": False},
     "device": {"tools": DEVICE_TOOLS, "task_context": False},
     "tasks": {"tools": TASK_TOOLS, "task_context": True},

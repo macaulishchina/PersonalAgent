@@ -1,0 +1,7 @@
+# 记忆开关、订阅提取模型及可选 API 提取绑定。
+memory_model = "gpt-6-luna"
+memory_reasoning_effort = "low"
+memory_enabled = true
+memory_auto_capture = true
+# 可选 API 提取：在本文件添加 [model_api] 和 memory = "已验收的模型别名"。
+# 若已有该字段，请修改现有值，不要重复定义。

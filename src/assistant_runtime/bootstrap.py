@@ -4,6 +4,32 @@ from .kernel.runtime import Runtime
 from .kernel.contracts import Control, Trigger, VoiceBinding
 
 
+async def memory_complete(service, messages, schema):
+    from .plugins.models.settings import ModelSettings
+    from .kernel.models import ModelRequest
+    import json
+    import uuid
+
+    binding = ModelSettings.parse(service.config.model_api).memory
+    if not binding:
+        return await service.backend.memory_complete(messages, schema)
+    result = await service.runtime.invoke(
+        ModelRequest(
+            "infer",
+            {
+                "request_id": str(uuid.uuid4()),
+                "model": binding,
+                "text": json.dumps(messages, ensure_ascii=False),
+                "schema": schema,
+            },
+        ),
+        timeout=90,
+    )
+    if result.get("state") != "completed":
+        raise RuntimeError("Memory model result unconfirmed")
+    return result["data"]
+
+
 def compose(service):
     from .plugins.pipewire.plugin import PipeWirePlugin
     from .plugins.keyword.plugin import KeywordPlugin
@@ -64,6 +90,11 @@ def compose(service):
 
         return MediaPlugin(service)
 
+    def models():
+        from .plugins.models.plugin import ModelsPlugin
+
+        return ModelsPlugin(service)
+
     def decisions():
         from .plugins.decisions.plugin import DecisionsPlugin
 
@@ -122,6 +153,7 @@ def compose(service):
         "tasks": tasks,
         "media": media,
         "decisions": decisions,
+        "models": models,
         "notifications": notifications,
         "events": events,
         "observations": observations,
@@ -143,7 +175,7 @@ def compose(service):
             Mem0Memory(
                 config.state_dir / "mem0",
                 config.models / "memory-embedding",
-                lambda messages, schema: service.backend.memory_complete(messages, schema),
+                lambda messages, schema: memory_complete(service, messages, schema),
                 config.workspace,
             ),
             lambda: service.active or service.backend.busy,
@@ -186,7 +218,12 @@ def compose(service):
     service.backend, service.voice = runtime.resolve("brain").backend, runtime.resolve("brain").voice
     from .plugins.codex.jobs import CodexJobs
 
-    service.task_executor = lambda notify: CodexJobs(service.backend, notify)
+    if config.model_api.get("enabled", False):
+        from .plugins.codex.api_jobs import RoutedJobs
+
+        service.task_executor = lambda notify: RoutedJobs(service, notify)
+    else:
+        service.task_executor = lambda notify: CodexJobs(service.backend, notify)
     service.memory = runtime.plugins.get(config.bindings.get("memory"))
     service.backend.on_task_done = service.memory.enqueue if service.memory else None
     from .conversation.service import Conversation

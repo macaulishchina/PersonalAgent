@@ -87,6 +87,6 @@ async def verify(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     args = parser.parse_args()
     asyncio.run(verify(Config.load(Path(args.config))))

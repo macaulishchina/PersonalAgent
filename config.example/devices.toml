@@ -1,0 +1,62 @@
+# 设备定义及协议参数。主音频绑定在 voice.toml，进程运行期间不切换。
+
+
+# Fixed main voice endpoints for the entire process; change config and restart.
+# Extra devices remain tool endpoints and never replace these bindings at runtime.
+# input_device = "office_microphone"
+# default_output = "office_speaker"
+# [devices.office_microphone]
+# adapter = "pipewire"
+# kind = "microphone"
+# label = "书房麦克风"
+# location = "书房"
+# [devices.office_microphone.connection]
+# match = "stable USB microphone identity"
+# Optional ALSA hardware control initialization. Omit to preserve hardware volume.
+# hardware_volume = { control = "Mic Capture Volume", percent = 100 }
+# [devices.office_speaker]
+# adapter = "pipewire"
+# kind = "speaker"
+# label = "书房音箱"
+# location = "书房"
+# [devices.office_speaker.connection]
+# address = "AA:BB:CC:DD:EE:FF"  # or sink = "exact PipeWire sink name"
+# ALSA-backed USB outputs only; not a Bluetooth/network volume control:
+# hardware_volume = { control = "PCM Playback Volume", index = 1, percent = 100 }
+
+# Optional AirPlay receiver: install the airplay extra and add airplay to plugins.
+# [devices.homepod]
+# adapter = "airplay"
+# kind = "speaker"
+# label = "HomePod"
+# location = "客厅"
+# physical_id = "living_homepod"  # shared with the sensor endpoint below
+# max_age_seconds = 45
+# [devices.homepod.connection]
+# host = "192.168.1.50"
+# identifier = "discovered-raop-identifier"
+# timing_port = 49160
+# control_port = 49161
+
+# Optional sensor endpoint of the same HomePod; not provided by AirPlay.
+# [devices.homepod_environment]
+# adapter = "apple_home"
+# kind = "sensor"
+# label = "HomePod 温湿度"
+# location = "客厅"
+# physical_id = "living_homepod"
+# max_age_seconds = 180
+# [devices.homepod_environment.connection]
+# metrics = ["temperature", "humidity"]
+# trigger_name = "读取HomePod温湿度"
+
+# Optional video gateway: install camera extra, add go2rtc to plugins. Audio is separate.
+# [devices.office_camera]
+# adapter = "go2rtc"
+# kind = "camera"
+# label = "书房摄像头"
+# location = "书房"
+# [devices.office_camera.connection]
+# base_url = "http://127.0.0.1:8553"
+# stream = "office_camera"
+# timeout_seconds = 8

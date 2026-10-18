@@ -16,6 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
+    "models": {"models", "models_transport", "model_fallbacks", "api_jobs"},
     "speech": {"interaction"},
     "core": {"behavior", "conversation", "quiet", "runtime", "voice_binding", "wake_words"},
     "codex": {"codex_config", "integrations", "job_lifecycle", "mcp", "native", "voice_lifecycle"},

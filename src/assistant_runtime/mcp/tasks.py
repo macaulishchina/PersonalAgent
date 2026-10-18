@@ -16,7 +16,7 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def list_task_models() -> dict:
-        """Available subscription models/efforts, enforced settings and unified profile policy.
+        """Available configured execution models/efforts, enforced settings and unified profile policy.
 
         Choose the lightest suitable profile using uncertainty, known procedures and acceptance
         checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep|ultra,

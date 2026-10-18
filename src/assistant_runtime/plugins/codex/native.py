@@ -17,6 +17,7 @@ class NativeVoice:
         self.peer = None  # compatibility for older diagnostic scripts
         self.epoch = 0
         self.ready = asyncio.Event()
+        self.session_ready = asyncio.Event()
         self.remote_sdp = None
         self.tasks = set()
         self.last_error = None
@@ -34,11 +35,14 @@ class NativeVoice:
         self.awaiting_result = False
         self.interim_speech = None
         self.speech_revision = 0
+        self.speech_completed = False
 
     def media_event(self, data, epoch):
         if epoch != self.epoch or self.closing:
             return
         kind = data.get("type")
+        if kind == "session.started":
+            self.session_ready.set()
         turn = data.get("turn", {})
         ident = turn.get("id") or data.get("turn_id")
         if kind == "delegation.created":
@@ -81,6 +85,8 @@ class NativeVoice:
         if kind == "turn.done":
             turn = data.get("turn", {})
             if turn.get("role") in {"user", "assistant"} and turn.get("transcript"):
+                if turn["role"] == "assistant":
+                    self.speech_completed = True
                 # Use final turns on the media connection itself. The sideband
                 # can stall or deliver partial transcripts independently.
                 self._task(
@@ -112,7 +118,9 @@ class NativeVoice:
         self.finished_turns.clear()
         self.pending_execution = None
         self.awaiting_result = False
+        self.speech_completed = False
         self.ready.clear()
+        self.session_ready.clear()
         self.last_error = None
         started = time.monotonic()
         self.open_timing_ms = {}
@@ -152,6 +160,9 @@ class NativeVoice:
                     "version": "v3",
                     "outputModality": "audio",
                     "clientManagedHandoffs": self.on_conversation is not None,
+                    # Output-only delivery must not import a conversational
+                    # startup that can absorb or reinterpret the first result.
+                    "includeStartupContext": not notification_only,
                     "delegationAckFiller": False,
                     "voice": self.config.realtime_voice,
                     "transport": {"type": "webrtc", "sdp": sdp},
@@ -173,6 +184,11 @@ class NativeVoice:
             answer = await asyncio.wait_for(self.remote_sdp, 20)
             self.open_timing_ms["answer"] = round((time.monotonic() - started) * 1000)
             await self.engine.answer(answer)
+            # Transport connectivity precedes the remote media-session start.
+            # Do not submit speech to a connection that is not ready to consume it.
+            await asyncio.wait_for(self.session_ready.wait(), 10)
+            if epoch != self.epoch or self.closing:
+                raise asyncio.CancelledError
             self.open_timing_ms["connected"] = round((time.monotonic() - started) * 1000)
             self._task(self._stats(epoch))
         except BaseException:
@@ -274,6 +290,7 @@ class NativeVoice:
                 if self.pending_execution != execution_id:
                     raise RuntimeError("Speech result does not belong to the active execution")
             self.end_interim()
+            self.speech_completed = False
             speech = None
             epoch = self.epoch
             revision = self.speech_revision
@@ -312,6 +329,7 @@ class NativeVoice:
             self.on_conversation({"kind": "closed"}, self.epoch)
         self.closing = True
         self.epoch += 1
+        self.session_ready.set()  # Release an opener; its generation check rejects closure.
         self.ready.clear()
         if self.opened:
             try:

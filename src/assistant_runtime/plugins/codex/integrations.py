@@ -62,6 +62,7 @@ class CodexIntegrations:
                 events="events" in cfg.plugins,
                 media="media" in cfg.plugins,
                 decisions="decisions" in cfg.plugins,
+                models="models" in cfg.plugins,
                 integrations="integrations" in cfg.plugins,
                 manage_integrations=manage_integrations,
             )

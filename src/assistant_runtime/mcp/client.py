@@ -21,8 +21,11 @@ from ..kernel.contracts import (
     DecisionQuery,
 )
 
+from ..kernel.models import ModelRequest
+
 Request = (
-    DecisionQuery
+    ModelRequest
+    | DecisionQuery
     | DecisionRequest
     | MediaRequest
     | EventRequest
@@ -51,7 +54,9 @@ class LocalRuntimeClient:
         self.socket, self.timeout = str(socket), timeout
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, DecisionQuery):
+        if isinstance(request, ModelRequest):
+            payload = {"command": "models", **asdict(request)}
+        elif isinstance(request, DecisionQuery):
             payload = {
                 "command": "decisions",
                 "action": "judge",

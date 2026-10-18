@@ -15,6 +15,58 @@ def default_root():
     return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "personal-agent"
 
 
+def read_config(path, *, text=None):
+    """Combine one entry file and its explicit, nonrecursive includes without overrides."""
+    path = Path(path).expanduser().resolve()
+
+    def parse(source, content=None):
+        try:
+            return tomllib.loads(source.read_text() if content is None else content)
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"Invalid TOML configuration: {source}") from exc
+
+    data = parse(path, text)
+    includes = data.pop("include", [])
+    if not isinstance(includes, list) or len(includes) > 32:
+        raise ValueError(f"include must be a list of at most 32 files: {path}")
+    origins = {}
+
+    def merge(target, incoming, source, prefix=()):
+        for key, value in incoming.items():
+            location = (*prefix, key)
+            if key in target:
+                if isinstance(target[key], dict) and isinstance(value, dict):
+                    merge(target[key], value, source, location)
+                    continue
+                raise ValueError(
+                    f"Duplicate configuration {'.'.join(location)}: {origins[location]} and {source}"
+                )
+            origins[location] = source
+            if isinstance(value, dict):
+                target[key] = {}
+                merge(target[key], value, source, location)
+            else:
+                target[key] = value
+
+    combined = {}
+    merge(combined, data, path)
+    seen = {path}
+    for name in includes:
+        if not isinstance(name, str) or not name.strip() or Path(name).is_absolute():
+            raise ValueError(f"include entries must be nonempty relative file paths: {path}")
+        source = (path.parent / name).resolve()
+        if not source.is_relative_to(path.parent):
+            raise ValueError(f"Included configuration must stay inside {path.parent}")
+        if source in seen:
+            raise ValueError(f"Duplicate included configuration: {source}")
+        seen.add(source)
+        fragment = parse(source)
+        if "include" in fragment:
+            raise ValueError(f"Only the entry configuration may declare include: {source}")
+        merge(combined, fragment, source)
+    return combined
+
+
 @dataclass
 class Config:
     root: Path = field(default_factory=default_root)
@@ -39,6 +91,7 @@ class Config:
     events: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
     interaction: dict = field(default_factory=dict)
+    model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
@@ -79,6 +132,11 @@ class Config:
     def __post_init__(self):
         from assistant_runtime.interaction.settings import InteractionSettings
 
+        from assistant_runtime.plugins.models.settings import ModelSettings
+
+        model_settings = ModelSettings.parse(self.model_api)
+        if model_settings.enabled and "models" not in self.plugins:
+            raise ValueError("Enabled model API requires the models plugin")
         interaction = InteractionSettings.parse(self.interaction)
         if interaction.enabled and "tasks" not in self.plugins:
             raise ValueError("Dual-path interaction requires the tasks capability")
@@ -188,14 +246,16 @@ class Config:
             else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
             / "personal-agent/config.toml"
         )
-        data = tomllib.loads(p.read_text()) if p.exists() else {}
+        p = p.resolve()
+        data = read_config(p) if configured or p.exists() else {}
         unknown = set(data) - cls.__dataclass_fields__.keys()
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         if not p.exists() and not configured:
             data["profile"] = "headless"
-        # Relative instance data stays next to its explicit configuration.
-        root = Path(data.pop("root", p.parent if p.exists() else default_root())).expanduser().resolve()
+        # Moving configuration must not move instance state; relative root is entry-relative.
+        root = Path(data.pop("root", p.parent if p.exists() else default_root())).expanduser()
+        root = (root if root.is_absolute() else p.parent / root).resolve()
         c = cls(root=root, **data)
         if c.profile not in {"voice", "headless"} or c.backend != "native":
             raise ValueError("Unsupported profile or backend")

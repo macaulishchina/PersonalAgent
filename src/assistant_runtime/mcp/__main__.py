@@ -19,12 +19,20 @@ def main():
             "events",
             "media",
             "decisions",
+            "models",
         ),
     )
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--task-run")
     parser.add_argument("--manage-integrations", action="store_true")
     args = parser.parse_args()
+    if args.service == "models":
+        from .models import create_server
+
+        create_server(LocalRuntimeClient(args.socket), args.task_run).run(
+            transport="stdio", show_banner=False
+        )
+        return
     if args.service == "decisions":
         from .decisions import create_server
 

@@ -16,6 +16,7 @@ def server_config(
     events=False,
     media=False,
     decisions=False,
+    models=False,
 ):
     # Project-scoped local operations, including the explicitly requested camera
     # pan/tilt integration. This does not change global Codex permissions.
@@ -46,6 +47,7 @@ def server_config(
             "events": events,
             "media": media,
             "decisions": decisions,
+            "models": models,
         }.get(name, False)
         for tools in (descriptor["tools"],)
     }

@@ -165,7 +165,7 @@ async def verify(config, devices, duration):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--device", action="append", required=True)
     parser.add_argument("--duration", type=int, choices=range(1, 61), default=3, metavar="1..60")
     args = parser.parse_args()

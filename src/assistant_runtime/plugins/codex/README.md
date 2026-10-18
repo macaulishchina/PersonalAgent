@@ -22,7 +22,12 @@ These provider names stay in this adapter, not kernel contracts.
 WebRTC PCM arrives without a reliable per-answer ID. `appendSpeech` acceptance is
 neither a playout receipt nor proof that a person heard it. It remains a generative
 voice renderer; check actual final transcripts during real acceptance. Do not replace
-this with an API-key service or silently relax the instance sandbox.
+this with an API-key service or silently relax the instance sandbox. Opening waits
+for the current media `session.started`, not transport connectivity alone. Output-only
+notifications exclude conversational startup context. A notification is deliverable
+only after a final spoken turn and audio drain; an RPC acknowledgement or startup
+sound is insufficient. Cold V3 `appendSpeech` still has a failing real-provider case;
+see model-access acceptance before claiming reliable out-of-session speech.
 
 ## Turn and output ownership
 
@@ -97,7 +102,7 @@ Explicit installed-host acceptance uses known **synthetic** audio with a mainten
 `run --no-mic` host and the configured real output. Do not mix room audio into injection:
 
 ```sh
-.venv/bin/python scripts/verify_voice.py --config config.toml \
+.venv/bin/python scripts/verify_voice.py --config config/config.toml \
   --request /absolute/synthetic-question.wav --exit /absolute/synthetic-exit.wav \
   --chat /absolute/synthetic-chat.wav
 ```
@@ -109,3 +114,22 @@ acceptance. Separately probe an isolated subscription thread with MCP disabled a
 only a bounded harmless calculation; verify both success/failure transcripts against
 actual execution results. A sandbox error must remain a failure, never spoken as a
 calculated result. No raw room recordings are required or retained by this workflow.
+
+## Optional API execution
+
+`api_jobs.py` routes accepted API aliases to a separate app-server process and reuses
+`CodexJobs`; the subscription voice/main process keeps its login and configuration.
+`api_catalog.py` derives explicit model metadata so unknown aliases do not silently
+lose native file editing. Configured context/images/efforts are explicit; subscription
+Responses-Lite, verbosity and private effort-update items are not inherited.
+API processes wait for the configured bounded MCP startup timeouts before presenting
+initial tools (`mcp_optional_startup_grace_ms=0` in the native protocol); a cold MCP
+must not silently disappear from the first model request. Subscription process
+startup policy remains separate.
+Do not interpret the generated catalog as proof of provider feature support. See
+[model access](../models/README.md) for per-capability acceptance and unresolved limits.
+
+Background threads explicitly enable the native `default_mode_request_user_input`
+feature. A question suspends execution through the existing native RPC and task
+`waiting_user`/`supplement` contract; it does not change the task to Plan mode or
+treat a prose question as a successful completed task.

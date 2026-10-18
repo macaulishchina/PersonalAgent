@@ -544,7 +544,7 @@ async def check_installed_images(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument(
         "--installed-images",
         action="store_true",

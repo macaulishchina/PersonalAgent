@@ -21,6 +21,17 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = task_fixtures.TasksTest.asyncTearDown
     create = task_fixtures.TasksTest.create
 
+    def test_api_no_reasoning_model_remains_an_automatic_selection_candidate(self):
+        policy = ModelPolicy.parse({"profiles": {"fast": {"model": "api-model", "reasoning_effort": "none"}}})
+        candidates = policy.options(
+            [{"model": "api-model", "supportedReasoningEfforts": [{"reasoningEffort": "none"}]}],
+            {},
+            {"model": "auto", "reasoning_effort": "auto"},
+        )
+        self.assertEqual(
+            candidates, {"fast_none": {"profile": "fast", "model": "api-model", "reasoning_effort": "none"}}
+        )
+
     async def make_running(self, **spec):
         definition = await self.create(auto_archive=False, **spec)
         self.plugin.due(definition["id"])

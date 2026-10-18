@@ -1,0 +1,109 @@
+# 主会话订阅模型、API 接入及 Jev 判断。密钥留在实例根目录 .env。
+codex_model = "gpt-6.1-sol"
+codex_reasoning_effort = "high"
+
+[decisions]
+enabled = true
+external_data_consent = false
+mode = "active"
+model = "jev-1.13.0"
+queue_size = 32
+retention = 2000
+timeout_seconds = 8
+active_timeout_seconds = 3
+max_age_seconds = 30
+warmup_enabled = true
+keepalive_seconds = 120
+dns_cache_seconds = 300
+
+[model_api]
+enabled = false
+concurrency = 4
+queue_size = 16
+timeout_seconds = 60
+max_output_tokens = 2048
+
+[model_api.providers]
+
+[model_api.providers.openai]
+preset = "openai"
+enabled = false
+
+[model_api.providers.claude]
+preset = "claude"
+enabled = false
+
+[model_api.providers.gemini]
+preset = "gemini"
+enabled = false
+
+[model_api.providers.deepseek]
+preset = "deepseek"
+enabled = false
+
+[model_api.providers.go-responses]
+preset = "opencode_go_responses"
+enabled = false
+
+[model_api.providers.go-chat]
+preset = "opencode_go_chat"
+enabled = false
+
+[model_api.providers.go-anthropic]
+preset = "opencode_go_anthropic"
+enabled = false
+
+[model_api.providers.go-gemini]
+preset = "opencode_go_gemini"
+enabled = false
+
+[model_api.entries]
+
+[model_api.entries.go-responses]
+provider = "go-responses"
+model = "gpt-6-luna"
+context_window = 128000
+execution_validated = false
+
+[model_api.entries.go-chat]
+provider = "go-chat"
+model = "glm-5.3-flash"
+context_window = 128000
+reasoning_efforts = ["medium"]
+execution_validated = false
+
+# 此表中可选：fallbacks = ["go-responses", "go-chat"]
+# 仅辅助推理使用，按顺序、每个一次；不递归展开备选自己的列表。
+# 所有候选须先启用并验收所需能力。
+[model_api.entries.go-anthropic]
+provider = "go-anthropic"
+model = "claude-haiku-5-5"
+context_window = 128000
+execution_validated = false
+
+[model_api.entries.go-gemini]
+provider = "go-gemini"
+model = "gemini-4-argon-contributor"
+execution_validated = false
+
+[model_api.entries.deepseek-assist]
+provider = "deepseek"
+model = "deepseek-flash"
+images = false
+structured = false
+execution_validated = false
+context_window = 128000
+reasoning_efforts = ["none"]
+max_output_tokens = 2048
+# model_api.enabled 是 API 总开关；providers.<name>.enabled 是供应商开关。
+# 不改变供应商的数据留存/训练政策，也不会按任务内容自动过滤。
+
+# 自定义第三方示例（与固定官方/Go preset 二选一，不同时填写）：
+# [model_api.providers.company]
+# protocol = "openai_chat" # openai_responses / openai_chat / anthropic / gemini
+# base_url = "https://provider.example/v1" # Gemini 使用版本路径，例如 /v1beta
+# key_env = "COMPANY_MODEL_API_KEY"
+# enabled = false
+# auth_scheme = "bearer" # 可选，默认按协议认证
+# session_header = "x-session-id" # 可选，服务端绑定的会话标识
+# capability 字段和 reasoning_efforts 按实际验收填写，不按名称推测。

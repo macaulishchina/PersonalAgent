@@ -7,7 +7,7 @@ import re
 
 from ...kernel.contracts import DecisionSample
 
-VERSIONS = {"voice_intent": 2, "event_relevance": 2, "model_profile": 5, "selection": 2}
+VERSIONS = {"voice_intent": 2, "event_relevance": 2, "model_profile": 6, "selection": 2}
 PROFILES = {
     "fast": "目标清晰、流程熟悉、容易读回验证",
     "balanced": "需要探索不熟悉接口或协调多个工具",
@@ -15,7 +15,7 @@ PROFILES = {
     "ultra": "极复杂推理或原创科研，有具体依据表明 deep 不足；慎用",
     "custom": "执行模型已由调用者或实例指定，只判断其未指定的推理强度",
 }
-EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
 def execution_questions(job):
@@ -23,6 +23,7 @@ def execution_questions(job):
     options = job["input"]["options"]
     profiles = {o["profile"]: PROFILES[o["profile"]] + "；模型 " + o["model"] for o in options.values()}
     efforts = {
+        "none": "使用模型已验证的无额外推理配置，适合确定性的直接调用",
         "minimal": "最少推理，直接转述或确定性的读取",
         "low": "轻量推理，目标清楚且有已验证的流程与核验方法",
         "medium": "中等推理，需要一定探索、比较或组织信息",
@@ -135,7 +136,7 @@ def question(kind, state=None):
             "依据任务目标选择能满足验收的最轻执行档位，推理强度由另一个问题独立判断。"
             "候选已按实例固定值、助手显式选择和当前账号目录过滤；不得发明候选之外的模型或强度。"
             "档位决定模型层级，推理强度可独立变化；看目标不确定性、已有流程和核验方法。"
-            "minimal/low 用于熟悉流程与直接核验；medium 用于一定探索；high 用于困难推理；"
+            "none/minimal/low 用于熟悉流程与直接核验；medium 用于一定探索；high 用于困难推理；"
             "xhigh/max/ultra 强度仅用于格外困难且有依据的推理，不因档位名字相同而选择同名强度。"
             "步骤多或耗时久本身不意味着推理困难；离线、超时和缺少工具不能靠更强模型解决。"
             "ultra 慎用：仅在有具体理由表明 deep 不足时，用于极复杂推理或原创科研。"

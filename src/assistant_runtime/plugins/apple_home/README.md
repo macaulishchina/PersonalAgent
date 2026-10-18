@@ -91,9 +91,9 @@ Refresh requests coalesce per endpoint, enforce a five-second minimum interval, 
 ## Query and acceptance
 
 ```sh
-personal-agent --config config.toml devices list
-personal-agent --config config.toml devices inspect homepod_environment
-.venv/bin/python scripts/verify_environment.py --config config.toml --device homepod_environment --codex
+personal-agent --config config/config.toml devices list
+personal-agent --config config/config.toml devices inspect homepod_environment
+.venv/bin/python scripts/verify_environment.py --config config/config.toml --device homepod_environment --codex
 ```
 
 Device MCP needs no HomePod-specific tool: `list_devices` discovers `sensor.temperature` / `sensor.humidity`; `inspect_device` requests refresh and returns typed readings. The model must inspect each metric's validity/freshness before stating a current value. The acceptance entry uses an isolated provider thread with the installed device socket; it does not play, capture media, change output, save memory or disturb the shared conversation. Evidence is private under `state/acceptance/environment/`. `--restart` additionally checks installed-service recovery without replaying a user task. Synthetic acceptance can check the HTTP → directory → real stdio MCP → Codex path with `--synthetic`; that is expressly not real HomePod success.

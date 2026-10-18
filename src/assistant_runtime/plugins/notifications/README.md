@@ -71,10 +71,10 @@ an unread badge and inbox drawer. “引用” beside each notification timestam
 to the next user message in the same conversation; it does not send a message by itself.
 
 ```
-personal-agent --config config.toml notifications list
-personal-agent --config config.toml notifications get '{"id":"ID"}'
-personal-agent --config config.toml notifications read '{"id":"ID","revision":1}'
-personal-agent --config config.toml notifications retry '{"id":"ID","revision":1,"channel":"chat"}'
+personal-agent --config config/config.toml notifications list
+personal-agent --config config/config.toml notifications get '{"id":"ID"}'
+personal-agent --config config/config.toml notifications read '{"id":"ID","revision":1}'
+personal-agent --config config/config.toml notifications retry '{"id":"ID","revision":1,"channel":"chat"}'
 ```
 
 ## Future channels

@@ -37,7 +37,9 @@ def systemctl(*args):
 
 def main():
     parser = argparse.ArgumentParser(description="Personal Agent — local assistant runtime")
-    parser.add_argument("--config", help="Instance TOML; otherwise PERSONAL_AGENT_CONFIG or XDG config")
+    parser.add_argument(
+        "--config", help="Entry TOML (supports include); otherwise PERSONAL_AGENT_CONFIG or XDG config"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--no-mic", action="store_true")
@@ -178,6 +180,9 @@ def main():
     decisions.add_argument(
         "arguments", nargs="?", default="{}", help="JSON decision arguments; no credentials"
     )
+    models = sub.add_parser("models", help="Model API configuration and bounded inference")
+    models.add_argument("action", choices=["check", "gateway-config", "list", "status", "health", "infer"])
+    models.add_argument("arguments", nargs="?", default="{}")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
@@ -197,6 +202,22 @@ def main():
             subprocess.run(
                 ["journalctl", "--user", "-u", config.unit_name, "-n", "60", "--no-pager"], check=True
             )
+        elif args.command == "models" and args.action in {"check", "gateway-config"}:
+            from .plugins.models.settings import ModelSettings
+            from .plugins.models.gateway import configuration
+
+            settings = ModelSettings.parse(config.model_api)
+            result = (
+                configuration(settings)
+                if args.action == "gateway-config"
+                else {
+                    "valid": True,
+                    "enabled": settings.enabled,
+                    "models": settings.catalog(),
+                    "revision": settings.fingerprint(),
+                }
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.command == "doctor":
             import shutil
 

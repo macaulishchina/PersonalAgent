@@ -72,9 +72,9 @@ Microphones declare `audio.capture`; state includes whether the bound capture pr
 CLI and Codex's device tool use the same directory:
 
 ```sh
-personal-agent --config config.toml devices list
-personal-agent --config config.toml devices inspect office_microphone
-personal-agent --config config.toml devices inspect office
+personal-agent --config config/config.toml devices list
+personal-agent --config config/config.toml devices inspect office_microphone
+personal-agent --config config/config.toml devices inspect office
 ```
 
 Device MCP exposes `list_devices()` and `inspect_device(device_id="office")`. Connection addresses/selectors remain private adapter configuration; AI receives logical identity, capabilities and actual state. Passive observations never start a conversation.
@@ -94,8 +94,8 @@ resampler is ignored before delivery and cannot reset the remote quiet interval.
 Stop the assistant explicitly before testing, then run from the repository:
 
 ```sh
-.venv/bin/personal-agent --config config.toml stop
-.venv/bin/python -m scripts.check_audio_input --config config.toml --guided --save-audio
+.venv/bin/personal-agent --config config/config.toml stop
+.venv/bin/python -m scripts.check_audio_input --config config/config.toml --guided --save-audio
 ```
 
 The test never stops, starts or enables the service. It refuses to open audio while
@@ -155,7 +155,7 @@ false-wake rate. Completing the workflow is not a quality pass.
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/python -m scripts.verify_device_onboarding --config config.toml --disconnect
+.venv/bin/python -m scripts.verify_device_onboarding --config config/config.toml --disconnect
 ```
 
 The explicit real-device script requires the installed service to be idle. It briefly stops that service, starts an isolated state/provider thread with automatic memory disabled, checks the shared directory via the actual management socket, captures mic PCM in memory, plays the existing authored chime, and correlates the physical mic signal against that chime. It tests Bluetooth output disconnection/recovery and real Codex → MCP → socket → directory queries. It restores the installed service in `finally`, writes private JSON evidence under `state/acceptance/device-onboarding/`, and saves no raw audio. Successful stream submission alone is not accepted as physical playback success.

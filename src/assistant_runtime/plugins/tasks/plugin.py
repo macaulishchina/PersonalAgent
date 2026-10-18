@@ -21,6 +21,7 @@ from .selection import ModelPolicy
 from .model_advice import select_execution
 from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
 from .self_schedule import SelfSchedule, policy as schedule_policy
+from .fallbacks import ModelFallbacks
 
 
 PLAN_LABELS = {
@@ -70,6 +71,8 @@ class TasksPlugin:
         self.trace = TaskTrace(self.repo)
         self.upgrades = ModelUpgrades(self)
         self.self_schedule = SelfSchedule(self)
+        self.fallbacks = ModelFallbacks(self)
+        self.falling_back = set()
         self.upgrading = set()
         self.scheduler = None
         self.launching = set()
@@ -87,6 +90,15 @@ class TasksPlugin:
         self.scheduler.start(paused=True)
         for run in self.repo.pending():
             if run["state"] in {"dispatching", "running", "waiting_user"}:
+                fallback = run["data"].get("model_fallback", {})
+                if fallback.get("phase") in {"ready", "dispatching"}:
+                    self.repo.update_run(
+                        run["id"],
+                        "unknown",
+                        model_fallback={**fallback, "phase": "unknown"},
+                        progress="模型切换期间服务中断，需明确核查后继续；未自动重放。",
+                    )
+                    continue
                 upgrade = pending_upgrade(run)
                 if upgrade and upgrade["phase"] == "dispatching":
                     self.repo.update_run(
@@ -238,6 +250,12 @@ class TasksPlugin:
             # Quiet/no-notification tasks must not lose their images to upload expiry.
             data["attachments"] = self.host.conversation.media.resolve(data["attachments"])
         state, data = self.upgrades.boundary(run, state, data)
+        pending_fallback = run["data"].get("model_fallback", {})
+        if pending_fallback.get("phase") == "ready":
+            return False  # Late old-thread notifications cannot revive rejected work.
+        if pending_fallback.get("phase") == "dispatching" and state == "running":
+            data["model_fallback"] = {**pending_fallback, "phase": "applied"}
+        state, data = self.fallbacks.boundary(run, state, data)
         if "provider_selection" in data and run["data"].get("model_selections"):
             history = [dict(item) for item in run["data"]["model_selections"]]
             history[-1]["provider"] = data["provider_selection"]
@@ -472,6 +490,11 @@ class TasksPlugin:
                     "task_id": run["task_id"],
                     "state": run["state"],
                     "resources": run["data"]["spec"].get("resources", []),
+                    "execution_version": {
+                        "thread_id": run["data"].get("thread_id"),
+                        "turn_id": run["data"].get("turn_id"),
+                        "model_segments": len(run["data"].get("model_upgrades", [])),
+                    },
                     "events_management": run["state"] in {"running", "waiting_user"}
                     and "events_management" in run["data"]["spec"].get("resources", []),
                     "mcp_management": run["state"] in {"running", "waiting_user"}
@@ -743,6 +766,13 @@ class TasksPlugin:
         while True:
             runs = self.repo.pending()
             for r in runs:
+                if (
+                    r["state"] == "running"
+                    and r["data"].get("model_fallback", {}).get("phase") == "ready"
+                    and r["id"] not in self.falling_back
+                ):
+                    self.falling_back.add(r["id"])
+                    self.context.spawn(self.fallback_run(r["id"]), "model-fallback:" + r["id"])
                 upgrade = pending_upgrade(r)
                 if (
                     r["state"] == "running"
@@ -839,6 +869,12 @@ class TasksPlugin:
                     )
             self.archive_finished({r["task_id"] for r in runs if r["state"] in TERMINAL})
             await asyncio.sleep(0.5)
+
+    async def fallback_run(self, ident):
+        try:
+            await self.fallbacks.apply(ident)
+        finally:
+            self.falling_back.discard(ident)
 
     async def upgrade_run(self, ident):
         try:

@@ -105,7 +105,7 @@ async def verify(config, request, exit_audio, chat_audio):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--request", type=Path, required=True, help="Known synthetic harmless question WAV")
     parser.add_argument(
         "--exit", dest="exit_audio", type=Path, required=True, help="Known synthetic 退下 WAV"

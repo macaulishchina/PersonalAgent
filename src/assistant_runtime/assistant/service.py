@@ -136,7 +136,8 @@ class AssistantService:
                     if self.active or self.quiet_active() or self.player.manual_muted:
                         return "interrupted"
                     if (
-                        self.last_output
+                        self.voice.speech_completed
+                        and self.last_output
                         and self.last_output > started
                         and time.monotonic() - self.last_output > 1.5
                         and not self.player.playing
@@ -723,6 +724,17 @@ class AssistantService:
 
                 result = await self.runtime.invoke(
                     MediaRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "models":
+                from ..kernel.models import ModelRequest
+
+                result = await self.runtime.invoke(
+                    ModelRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
                 )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()

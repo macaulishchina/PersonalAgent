@@ -182,6 +182,46 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_open_waits_for_current_media_session_and_scopes_output_only_context(self):
+        from assistant_runtime.config import Config
+
+        for notification in (False, True):
+            with self.subTest(notification=notification):
+                voice = None
+
+                async def request(method, params, **kwargs):
+                    if method == "thread/realtime/start":
+                        self.assertEqual(params["includeStartupContext"], not notification)
+                        voice.remote_sdp.set_result("synthetic-answer")
+                    return {}
+
+                client = SimpleNamespace(request=AsyncMock(side_effect=request))
+                backend = SimpleNamespace(
+                    client=client, thread_id="test", submit_lock=asyncio.Lock(), integrations=None
+                )
+                voice = NativeVoice(Config(), backend, Mock(), AsyncMock())
+                bridge = SimpleNamespace(
+                    start=AsyncMock(return_value="offer"),
+                    answer=AsyncMock(),
+                    close=AsyncMock(),
+                    get_stats=AsyncMock(return_value=[]),
+                )
+                with patch("assistant_runtime.plugins.codex.native.BrowserAudio", return_value=bridge):
+                    opening = asyncio.create_task(voice.open(notification_only=notification))
+                    try:
+                        async with asyncio.timeout(1):
+                            while not bridge.answer.await_count:
+                                await asyncio.sleep(0)
+                        self.assertFalse(opening.done())
+                        voice.media_event({"type": "session.started"}, voice.epoch - 1)
+                        self.assertFalse(voice.session_ready.is_set())
+                        voice.media_event({"type": "session.started"}, voice.epoch)
+                        await opening
+                    finally:
+                        opening.cancel()
+                        await asyncio.gather(opening, return_exceptions=True)
+                        await voice.close()
+
     async def test_ack_drains_audio_tail_then_waits_for_real_result(self):
         output = Mock()
         backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))

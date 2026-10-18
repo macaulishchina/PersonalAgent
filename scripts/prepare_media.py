@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import re
 
-from assistant_runtime.config import Config
+from assistant_runtime.config import Config, read_config
 from assistant_runtime.plugins.media.aliyun import Aliyun
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.private import save
@@ -121,9 +121,10 @@ async def prepare(args):
             else:
                 content = replacement + "\n" + content
             candidate = content + snippet
-            import tomllib
-
-            Config(root=config.root, **{k: v for k, v in tomllib.loads(candidate).items() if k != "root"})
+            Config(
+                root=config.root,
+                **{k: v for k, v in read_config(path, text=candidate).items() if k != "root"},
+            )
             # Preserve all unrelated settings; private backup made above.
             from tempfile import NamedTemporaryFile
             import os

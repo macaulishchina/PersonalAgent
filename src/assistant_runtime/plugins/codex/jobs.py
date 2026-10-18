@@ -8,6 +8,7 @@ from pathlib import Path
 import weakref
 from .backend import INSTRUCTIONS
 from .mcp import server_config
+from .failures import model_failure
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,9 @@ class CodexJobs:
             + "\n任务选型以 tasks MCP list_task_models 返回的实例策略为准；子任务不继承自己的模型和思考深度。步骤多或执行久不等于推理困难。确有推理困难时，可用 request_task_model_upgrade 请求更高档；必须提供证据和检查点，清空活动/结果不明操作，再结束当前轮次等待系统交接。不要自行新建重复任务或通过主会话升级；离线、超时、缺少工具不作为升级理由。"
             + "，需要项目操作时显式指定目标路径和命令 cwd；沿用已有授权和沙盒配置。后台子任务仅可通过 tasks MCP 在本任务范围内派发。用户授权的监控发现新信息时用 notifications MCP 推送，event_key 使用源事件 ID，不使用轮询时间或 run ID；没有变化就保持静默。入队成功后才推进检查游标。任务完成摘要由系统自动投递，不要另发重复摘要。",
             "config": {
+                # Background execution must be able to suspend for a real answer
+                # without changing into Plan mode or treating prose as completion.
+                "features.default_mode_request_user_input": True,
                 "model_reasoning_effort": selection["reasoning_effort"],
                 "shell_environment_policy.set": {
                     "TMPDIR": str(directory / "scratch"),
@@ -118,9 +122,12 @@ class CodexJobs:
                     events="events" in cfg.plugins,
                     media="media" in cfg.plugins,
                     decisions="decisions" in cfg.plugins,
+                    models="models" in cfg.plugins,
                 ),
             },
         }
+        if getattr(self.backend, "model_provider", None):
+            params["modelProvider"] = self.backend.model_provider
         existing = run["data"].get("thread_id")
         if existing:
             history = run["data"].get("model_upgrades", [])
@@ -134,7 +141,7 @@ class CodexJobs:
             await self.client.request("thread/unsubscribe", {"threadId": existing})
         result = await self.client.request(
             "thread/resume" if existing else "thread/start",
-            {**params, **({"threadId": existing} if existing else {})},
+            {**params, **({"threadId": existing} if existing else {"allowProviderModelFallback": False})},
             timeout=60,
         )
         for field, expected in (
@@ -143,11 +150,17 @@ class CodexJobs:
         ):
             if result.get(field) is not None and result[field] != expected:
                 raise RuntimeError("Provider resolved a different task model/effort; no turn was started")
+        if params.get("modelProvider") and result.get("modelProvider") != params["modelProvider"]:
+            raise RuntimeError("Provider resolved a different executor; no turn was started")
         thread = result["thread"]["id"]
         self.threads[thread] = run["id"]
         self.handles[run["id"]] = {
             "thread_id": thread,
             "attachments": run["data"].get("attachments", []),
+            "fresh_execution": not existing
+            and not run["data"].get("continuation")
+            and not spec.get("long_term"),
+            "activity": False,
             **({"mcp_revision": mcp_revision} if integration_adapter else {}),
         }
         if (
@@ -208,6 +221,7 @@ class CodexJobs:
         if method != "turn/started" and incoming and expected and incoming != expected:
             return True  # Late events from a prior model segment cannot finish this one.
         if "id" in event:
+            self.handles.setdefault(ident, {})["activity"] = True
             if method == "item/tool/requestUserInput":
                 self.questions[ident] = event
                 self.notify(
@@ -232,6 +246,8 @@ class CodexJobs:
                 )
             return True
         trace = tool_trace(method, p)
+        if method.startswith("item/") and p.get("item", {}).get("type") not in {"reasoning", "userMessage"}:
+            self.handles.setdefault(ident, {})["activity"] = True
         if trace:
             self.notify(ident, None, tool_trace=trace)
         if method == "item/completed":
@@ -271,8 +287,24 @@ class CodexJobs:
                 state,
                 turn_id=p["turn"]["id"],
                 provider_error=p["turn"].get("error"),
+                model_failure=model_failure(p["turn"].get("error")) if state == "failed" else None,
                 turn_active=False,
                 result=self.handles.get(ident, {}).get("result", ""),
+            )
+        elif method == "thread/tokenUsage/updated":
+            usage = p.get("tokenUsage", {})
+            self.notify(
+                ident,
+                None,
+                model_usage={
+                    scope: {
+                        key: value
+                        for key, value in usage.get(scope, {}).items()
+                        if type(value) is int and value >= 0
+                    }
+                    for scope in ("total", "last")
+                    if isinstance(usage.get(scope), dict)
+                },
             )
         elif method == "thread/goal/updated":
             goal = p.get("goal") or {}
@@ -281,6 +313,48 @@ class CodexJobs:
         elif method == "error":
             self.notify(ident, None, error=str(p.get("error", "Provider error"))[:500])
         return True
+
+    async def fallback_ready(self, run):
+        """Only a first rejected turn with authoritative empty action history may restart."""
+        handle = self.handles.get(run["id"], {})
+        if not handle.get("fresh_execution") or handle.get("activity") or run["data"].get("goal"):
+            raise RuntimeError("Execution has activity or prior context; automatic fallback blocked")
+        thread = run["data"].get("thread_id")
+        if not thread or handle.get("thread_id") != thread:
+            raise RuntimeError("Cannot verify fallback thread")
+        summary = (await self.client.request("thread/read", {"threadId": thread, "includeTurns": True}))[
+            "thread"
+        ]
+        turns = summary.get("turns")
+        if (
+            summary.get("status", {}).get("type") not in {"idle", "notLoaded", "systemError"}
+            or not isinstance(turns, list)
+            or len(turns) != 1
+        ):
+            raise RuntimeError("Fallback requires a single confirmed idle rejected turn")
+        turn = turns[0]
+        if (
+            turn.get("id") != run["data"].get("turn_id")
+            or turn.get("status") != "failed"
+            or not model_failure(turn.get("error"))["fallback_allowed"]
+        ):
+            raise RuntimeError("Provider did not confirm an eligible model failure")
+        items = turn.get("items")
+        if (
+            turn.get("itemsView") != "full"
+            or not isinstance(items, list)
+            or any(item.get("type") not in {"reasoning", "userMessage"} for item in items)
+        ):
+            raise RuntimeError("Provider history contains work or is incomplete")
+        terminals = await self.client.request("thread/backgroundTerminals/list", {"threadId": thread})
+        if terminals.get("data") or terminals.get("nextCursor"):
+            raise RuntimeError("Background operations prevent automatic fallback")
+
+    async def detach(self, run):
+        """Old provider events cannot mutate the replacement execution."""
+        self.threads.pop(run["data"].get("thread_id"), None)
+        self.handles.pop(run["id"], None)
+        self.questions.pop(run["id"], None)
 
     async def reject_continuation(self, ident, turn):
         async with self.locks.setdefault(ident, asyncio.Lock()):

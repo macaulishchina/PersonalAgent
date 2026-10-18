@@ -1,0 +1,322 @@
+"""Optional inference owner with durable receipts, bounded admission and caller checks."""
+
+import asyncio
+import base64
+import hashlib
+import json
+import logging
+import re
+import time
+import uuid
+
+from ...kernel.models import ModelRequest, ModelCallError
+from ...kernel.contracts import TaskRequest
+from ...kernel.runtime import Manifest
+from .settings import ModelSettings
+from .gateway import gateway_credential
+from .client import GatewayClient
+
+log = logging.getLogger(__name__)
+
+
+class ModelsPlugin:
+    manifest = Manifest("models")
+
+    def __init__(self, host, client=None):
+        self.host = host
+        self.settings = ModelSettings.parse(host.config.model_api)
+        self.db = host.store.db
+        self.client, self.context, self.error = client, None, None
+        self.semaphore = asyncio.Semaphore(self.settings.concurrency)
+        self.pending = 0
+        self.active = set()
+        self.stopping = False
+        self.session_namespace = str(uuid.uuid4())
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS model_calls (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, caller TEXT NOT NULL, model TEXT NOT NULL, state TEXT NOT NULL, result TEXT, created REAL NOT NULL, config_revision TEXT NOT NULL)"
+        )
+        with self.db:
+            self.db.execute("UPDATE model_calls SET state='unknown' WHERE state='submitted'")
+
+    async def start(self, context):
+        self.context = context
+        context.register(ModelRequest, self.request)
+        if not self.settings.enabled:
+            return
+        try:
+            if self.client is None:
+                self.client = GatewayClient(
+                    self.settings, gateway_credential(self.host.config.root, self.settings)
+                )
+            context.own(self.client.close)
+            await self.client.start()
+            context.own(self.close)
+        except Exception:
+            self.error = "gateway_initialization_failed"
+
+    async def close(self):
+        self.stopping = True
+        tasks = list(self.active)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def receipt(self, key, fingerprint, ident):
+        row = self.db.execute(
+            "SELECT fingerprint,state,result FROM model_calls WHERE id=?", (key,)
+        ).fetchone()
+        if row:
+            if row[0] != fingerprint:
+                raise ValueError("Request ID reused with different content")
+            return {**(json.loads(row[2]) if row[2] else {}), "state": row[1], "request_id": ident}
+        return None
+
+    def diagnostics(self):
+        return {
+            "enabled": self.settings.enabled,
+            "error": self.error,
+            "pending": self.pending,
+            "configuration_revision": self.settings.fingerprint(),
+        }
+
+    async def caller(self, run):
+        if run:
+            info = await self.host.runtime.invoke(TaskRequest("execution_info", {"run_ids": [run]}))
+            if info.get(run, {}).get("state") not in {"running", "waiting_user"}:
+                raise ValueError("Model caller is no longer active")
+            version = info[run].get("execution_version", {})
+            return run + ":" + hashlib.sha256(json.dumps(version, sort_keys=True).encode()).hexdigest()[:16]
+        return "foreground"
+
+    async def images(self, ids, caller_run):
+        if (
+            not isinstance(ids, list)
+            or len(ids) > 4
+            or any(not isinstance(i, str) or not re.fullmatch(r"[a-f0-9]{32}", i) for i in ids)
+        ):
+            raise ValueError("Images must be registered attachment IDs")
+        if caller_run and ids:
+            tasks = self.host.runtime.plugins.get("tasks")
+            run = tasks.repo.run(caller_run) if tasks else None
+            allowed = {r["id"] for r in (run or {}).get("data", {}).get("attachments", [])}
+            if not set(ids) <= allowed:
+                raise ValueError("Image does not belong to this task execution")
+        media = self.host.conversation.media
+        references = media.resolve([{"id": i} for i in ids])
+        if len(references) != len(ids):
+            raise ValueError("Registered image is unavailable")
+        content = []
+        for r in references:
+            if not r["type"].startswith("image/"):
+                raise ValueError("Only image attachments are accepted")
+
+            def read():
+                with (media.folder / r["id"]).open("rb") as source:
+                    return source.read(10 * 1024 * 1024 + 1)
+
+            data = await asyncio.to_thread(read)
+            if len(data) > 10 * 1024 * 1024:
+                raise ValueError("Image too large")
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": "data:" + r["type"] + ";base64," + base64.b64encode(data).decode(),
+                }
+            )
+        return content
+
+    async def request(self, request):
+        if self.stopping:
+            raise RuntimeError("Model service stopping")
+        task = asyncio.current_task()
+        self.active.add(task)
+        try:
+            return await self.handle(request)
+        finally:
+            self.active.discard(task)
+
+    async def handle(self, request):
+        if request.action in {"list", "status"}:
+            return {**self.diagnostics(), "models": self.settings.catalog(), "memory": self.settings.memory}
+        if request.action == "health":
+            if not self.client or self.error or not self.settings.enabled:
+                return {**self.diagnostics(), "reachable": False}
+            return await self.client.health()
+        if request.action != "infer":
+            raise ValueError("Unknown model action")
+        a = request.arguments
+        if not isinstance(a, dict) or set(a) - {"request_id", "model", "text", "images", "schema"}:
+            raise ValueError("Unknown inference arguments")
+        ident = str(uuid.UUID(a["request_id"]))
+        if ident != a["request_id"]:
+            raise ValueError("Canonical request UUID required")
+        m = self.settings.entry(a["model"])
+        caller = await self.caller(request.caller_run)
+        if not isinstance(a.get("text"), str) or not 1 <= len(a["text"]) <= 24000:
+            raise ValueError("Inference requires bounded text")
+        if a.get("images") and not m.get("images"):
+            raise ValueError("Model does not support images")
+        if a.get("schema") is not None:
+            if not m.get("structured"):
+                raise ValueError("Model does not support structured output")
+            from jsonschema import Draft202012Validator
+
+            Draft202012Validator.check_schema(a["schema"])
+            if any(k in json.dumps(a["schema"]) for k in ('"$ref"', '"$dynamicRef"')):
+                raise ValueError("External/reference schemas are not supported")
+        serialized = json.dumps(a, sort_keys=True, ensure_ascii=False)
+        if len(serialized.encode()) > 60000:
+            raise ValueError("Inference request too large")
+        fingerprint = hashlib.sha256(serialized.encode()).hexdigest()
+        key = (request.caller_run or "foreground") + ":" + ident
+        prior = self.receipt(key, fingerprint, ident)
+        if prior is not None:
+            return prior
+        if not self.client or self.error:
+            raise RuntimeError("Model gateway unavailable")
+        if self.pending >= self.settings.concurrency + self.settings.queue_size:
+            raise RuntimeError("Model request queue full")
+        self.pending += 1
+        try:
+            async with asyncio.timeout(self.settings.timeout_seconds):
+                async with self.semaphore:
+                    if await self.caller(request.caller_run) != caller:
+                        raise ValueError("Model caller execution version changed")
+                    # Recheck after admission wait to avoid duplicate paid requests.
+                    prior = self.receipt(key, fingerprint, ident)
+                    if prior is not None:
+                        return prior
+                    content = [{"type": "input_text", "text": a["text"]}]
+                    if a.get("images"):
+                        content += await self.images(a["images"], request.caller_run)
+                    payload = {
+                        "model": a["model"],
+                        "input": [{"role": "user", "content": content}],
+                        "store": False,
+                        "max_output_tokens": m.get("max_output_tokens", self.settings.max_output_tokens),
+                    }
+                    if a.get("schema") is not None:
+                        payload["text"] = {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "result",
+                                "schema": a["schema"],
+                                "strict": True,
+                            }
+                        }
+                    if await self.caller(request.caller_run) != caller:
+                        raise ValueError("Model caller execution version changed")
+                    prior = self.receipt(key, fingerprint, ident)
+                    if prior is not None:
+                        return prior
+                    with self.db:
+                        self.db.execute(
+                            "INSERT INTO model_calls VALUES (?,?,?,?,?,?,?,?)",
+                            (
+                                key,
+                                fingerprint,
+                                caller,
+                                a["model"],
+                                "submitted",
+                                None,
+                                time.time(),
+                                self.settings.fingerprint(),
+                            ),
+                        )
+                    attempts = []
+                    try:
+                        session = (
+                            caller
+                            if request.caller_run
+                            else getattr(
+                                getattr(self.host, "conversation", None), "session", self.session_namespace
+                            )
+                        )
+                        session_id = hashlib.sha256(
+                            (str(self.host.config.root) + ":" + str(session)).encode()
+                        ).hexdigest()
+                        candidates = [a["model"], *m.get("fallbacks", [])]
+                        for index, candidate in enumerate(candidates):
+                            selected = self.settings.entry(candidate)
+                            if (a.get("images") and not selected.get("images")) or (
+                                a.get("schema") is not None and not selected.get("structured")
+                            ):
+                                raise ValueError("Fallback model lacks required input/output capability")
+                            if await self.caller(request.caller_run) != caller:
+                                raise ValueError("Model caller execution version changed")
+                            attempted = {"model": candidate, "state": "submitted"}
+                            attempts.append(attempted)
+                            with self.db:
+                                self.db.execute(
+                                    "UPDATE model_calls SET result=? WHERE id=?",
+                                    (
+                                        json.dumps(
+                                            {"state": "submitted", "request_id": ident, "attempts": attempts}
+                                        ),
+                                        key,
+                                    ),
+                                )
+                            try:
+                                result = await self.client.complete(
+                                    {
+                                        **payload,
+                                        "model": candidate,
+                                        "max_output_tokens": selected.get(
+                                            "max_output_tokens", self.settings.max_output_tokens
+                                        ),
+                                    },
+                                    session_id=session_id,
+                                )
+                                attempted["state"] = "completed"
+                                result.update(selected_model=candidate, attempts=attempts)
+                                break
+                            except ModelCallError as exc:
+                                attempted.update(state="failed", error=exc.code)
+                                log.error(
+                                    "Model call failed request=%s model=%s error=%s fallback=%s",
+                                    ident,
+                                    candidate,
+                                    exc.code,
+                                    exc.fallback_allowed and index + 1 < len(candidates),
+                                )
+                                if not exc.fallback_allowed or index + 1 == len(candidates):
+                                    raise
+                        if a.get("schema") is not None:
+                            from jsonschema import Draft202012Validator
+
+                            result["data"] = json.loads(result["text"])
+                            Draft202012Validator(a["schema"]).validate(result["data"])
+                        if await self.caller(request.caller_run) != caller:
+                            raise ValueError("Model caller execution version changed")
+                        result.update(
+                            state="completed", request_id=ident, model=a["model"], caller_version=caller
+                        )
+                        with self.db:
+                            self.db.execute(
+                                "UPDATE model_calls SET state='completed',result=? WHERE id=?",
+                                (json.dumps(result, ensure_ascii=False), key),
+                            )
+                        return result
+                    except BaseException as exc:
+                        failed = isinstance(exc, ModelCallError)
+                        if attempts and attempts[-1]["state"] == "submitted":
+                            attempts[-1]["state"] = "unknown"
+                        state = "failed" if failed else "unknown"
+                        log.error(
+                            "Model request ended request=%s state=%s error=%s",
+                            ident,
+                            state,
+                            type(exc).__name__,
+                        )
+                        with self.db:
+                            self.db.execute(
+                                "UPDATE model_calls SET state=?,result=? WHERE id=?",
+                                (
+                                    state,
+                                    json.dumps({"state": state, "request_id": ident, "attempts": attempts}),
+                                    key,
+                                ),
+                            )
+                        raise
+        finally:
+            self.pending -= 1

@@ -1,6 +1,7 @@
 # Tasks plugin
 
-Trusted local plugin for independent background work on the existing ChatGPT subscription.
+Trusted local plugin for independent background work through the configured Codex executor
+(subscription or an explicitly accepted API model).
 Enable `notifications` and `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
 Requires the conversation and configured brain capabilities. Does not activate the microphone.
 
@@ -86,10 +87,11 @@ Concrete model/effort choices remain supported with a nonempty reason (max 400 c
 Missing/auto values use the configured profile, never the foreground or parent model.
 Fixed instance settings override requests. The resolved model/effort is stored with the definition and each run.
 Unsupported models/efforts fail explicitly. Repeated executions reuse saved choices while settings remain auto; fixed instance settings are applied again before every execution and saved in its run snapshot.
-Foreground and Mem0 retain their existing independent model settings.
+Foreground retains its subscription binding. Mem0 has its independent subscription settings
+or the explicit `model_api.memory` binding; task profiles do not change either.
 
 Profiles are instance-owned opaque model IDs; partial overrides merge into the four
-defaults above. Unavailable choices fail, without paid API fallback or silent replacement.
+defaults above. Unavailable choices fail unless an explicitly configured fallback applies at the safe first-turn boundary below; there is no implicit replacement.
 Codex owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
 Existing saved concrete selections are not silently changed by a new default policy.
 Unrelated definition edits preserve selection provenance. Selection metadata supplied
@@ -104,6 +106,42 @@ Provider-confirmed model/effort are recorded separately when available, never in
 from tool latency. `get_task_execution_trace` returns these receipts and bounded upgrade
 history alongside tool metadata. Total execution time is not claimed as model reasoning
 time: queueing, tools, user waits and other orchestration also contribute.
+
+## Explicit failure fallback
+
+Configure an ordered list per concrete primary model, separately from complexity
+upgrades and from no-tool inference fallback lists:
+
+```toml
+[tasks.model_policy.fallbacks]
+gpt-6-luna = [{ model = "deepseek-assist", reasoning_effort = "none" }]
+# Example with verified API entries:
+go-claude = [
+  { model = "go-gpt", reasoning_effort = "none" },
+  { model = "gpt-6.1-sol", reasoning_effort = "medium" },
+]
+```
+
+The primary is tried first, then at most three listed backups once each. The
+original list remains fixed: no recursive backup expansion. Each backup has an
+explicit model and effort validated by the executor. Same upstream model through
+a different provider must have a distinct API entry alias. Existing saved task
+choices remain primary; the instance mapping also applies to those choices.
+
+Only a structured provider rejection on a fresh first execution is eligible.
+The Codex adapter must read back one failed turn, complete items, no tool/assistant
+activity, no active terminals and no Goal. Then tasks records a new model selection,
+revokes the old binding and starts a fresh thread for the same run and grants.
+Already-executed work, resumed turns, long-term Goals, user cancellation, policy
+errors, stream loss and unknown outcomes are not automatically replayed. Existing
+safe-checkpoint upgrades remain separate. Fallback can change model quality; it
+is availability policy, not a promise of equivalent reasoning strength.
+
+`get_task_execution_trace` exposes `model_fallback` with ordered errors, selected
+model and phase. Logs record failure and switch without credentials. Exhaustion
+fails the run. Restart during a pending handoff becomes unknown and requires
+reconciliation rather than another dispatch. Late old-thread results cannot replace
+the new run. Primary failure alone is never evidence that no operation happened.
 
 ## Controlled model upgrades
 
@@ -238,7 +276,7 @@ remain durable for idempotency and audit; they include before/after schedule, re
 identity, time, reason, evidence and the authorization condition.
 
 Tests: `scripts/check.py --test test_task_self_schedule`. Explicit installed-service
-acceptance: `scripts/verify_task_self_schedule.py --config config.toml`. It creates one
+acceptance: `scripts/verify_task_self_schedule.py --config config/config.toml`. It creates one
 silent synthetic timed plan, verifies its real MCP change and unchanged run snapshot,
 then archives it. It uses no physical devices and does not replay failed/unknown work.
 
@@ -250,13 +288,13 @@ execution pause/cancel/continue/supplement, terminate/archive and artifact listi
 capabilities; CLI examples:
 
 ```sh
-personal-agent --config config.toml tasks list
-personal-agent --config config.toml tasks models
-personal-agent --config config.toml tasks get '{"task_id":"ID"}'
-personal-agent --config config.toml tasks pause '{"task_id":"ID"}'
-personal-agent --config config.toml tasks supplement '{"run_id":"ID","text":"补充要求"}'
-personal-agent --config config.toml tasks workfiles
-personal-agent --config config.toml tasks workfiles '{"apply":true}'
+personal-agent --config config/config.toml tasks list
+personal-agent --config config/config.toml tasks models
+personal-agent --config config/config.toml tasks get '{"task_id":"ID"}'
+personal-agent --config config/config.toml tasks pause '{"task_id":"ID"}'
+personal-agent --config config/config.toml tasks supplement '{"run_id":"ID","text":"补充要求"}'
+personal-agent --config config/config.toml tasks workfiles
+personal-agent --config config/config.toml tasks workfiles '{"apply":true}'
 ```
 
 Creation/manual runs require a stable UUID request_id; reuse it on uncertain transport
@@ -302,7 +340,7 @@ overrides/provenance, UUID idempotency, upgrade boundaries, live terminals, canc
 lost acknowledgments, restart recovery and late prior-turn events. Provider fixtures do
 not establish real subscription model-switch success; perform explicit scratch-only live
 acceptance before claiming deployment verification. No TV/camera interaction is needed.
-Run `python scripts/verify_tasks.py --config config.toml` against the installed service
+Run `python scripts/verify_tasks.py --config config/config.toml` against the installed service
 for a silent reminder, real Codex artifact, long-term Goal and cancellation. It writes
 only to managed task areas and saves private evidence under `state/acceptance/tasks/`.
 Do not count fake tests as provider/hardware acceptance. No camera or microphone capture
@@ -468,8 +506,8 @@ invalidated/lifecycle-discard counters. `get_task_execution_trace(run_id, after,
 links trigger references to run state, provider thread/turn and tool metadata. CLI:
 
 ```sh
-personal-agent --config config.toml tasks event_inbox '{"task_id":"..."}'
-personal-agent --config config.toml tasks trace '{"run_id":"...","limit":50}'
+personal-agent --config config/config.toml tasks event_inbox '{"task_id":"..."}'
+personal-agent --config config/config.toml tasks trace '{"run_id":"...","limit":50}'
 ```
 
 Trace stores at most 500 entries per run, paged 50 by default, maximum 100. Repeated

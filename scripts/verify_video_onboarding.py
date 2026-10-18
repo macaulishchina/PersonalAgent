@@ -268,7 +268,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--device", required=True)
     parser.add_argument(
         "--save-frame", action="store_true", help="Explicitly retain one private acceptance JPEG"

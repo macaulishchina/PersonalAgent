@@ -16,7 +16,7 @@ flowchart LR
   DeviceMCP --> Kernel
   Kernel --> Memory[Memory policy / durable capture jobs]
   Memory --> BM[Mem0 worker: local vectors and history]
-  BM --> Curator[Official Codex subscription task callback]
+  BM --> Curator[Configured inference callback: subscription or accepted API]
 ```
 
 | Location | Owns | Must not own |
@@ -59,6 +59,7 @@ DSP behavior stay unchanged; offline wake detection is not live voice acceptance
 - `wake_words` selects equivalent phrases supported by the installed FSMN V2 bundle, handled by one KWS stream and one activation path. The keyword plugin owns 80ms batching, bounded native features/CTC history, one ONNX inference thread and checksum validation. Inference runs off the event loop; generation changes invalidate results across sleep/session resets. The inference-only upstream FunASR decoder is vendored with its MIT license, without a Torch/FunASR runtime dependency. Local commands strip any configured leading phrase before parsing.
 - Assistant owns standby → connecting → active → reconnecting → standby. Only explicit wake/trigger activates it. Background work never activates voice.
 - Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
+- `VoiceSession.speech_completed` reports a completed spoken turn, separately from transport readiness and audio drain. Output-only notification success requires both completion and drained non-silent audio; it is still not proof a person heard the output. Native protocol fields remain in the Codex adapter.
 - Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation and explicit Web submissions enter the same provider thread; transcripts are synchronized as context, never dispatched a second time.
 - The composition root freezes one `VoiceBinding` from `input_device` / `default_output` at startup. The audio adapter snapshots those device connections and reconnects only those endpoints; saved room state is ignored. Binding changes require configuration plus restart. MCP, dynamic tools, CLI and voice commands cannot select another main input/output.
 - PipeWire owns optional `connection.hardware_volume` initialization for ALSA-backed input/output devices. It resolves the physical card from that endpoint, validates and verifies the named mixer control, and applies it before PCM delivery or a new primary speech segment. An omitted setting performs no hardware mixer writes. AEC's virtual sink does not replace the physical target; no kernel, assistant or MCP hardware branch is needed.
@@ -213,7 +214,7 @@ device leases. See the [integration guide](src/assistant_runtime/plugins/integra
 
 The default backend is Mem0 1.0.11, using its original ADD/UPDATE/DELETE/NONE workflow. Version 2.2.1 uses additive automatic ingestion and was not selected for this application’s correction/merge contract. A trusted worker in the **same `.venv`** owns one embedded local Qdrant store and Mem0’s SQLite history. Telemetry and remote provider defaults are disabled. A thin FastEmbed provider uses the existing multilingual MiniLM model, 384 dimensions, two threads and an explicit local-only cache under `models/memory-embedding/`.
 
-The worker's registered LLM provider sends a bounded internal callback to the host. The host submits a silent, tool-free, ephemeral JSON task to the existing official Codex App Server over stdio and checks that the account is ChatGPT before inference. This is application-internal IPC, not an OpenAI-compatible HTTP server, credential exporter or public model service. Memory inference uses independent project `memory_model` / `memory_reasoning_effort` settings, separate from foreground task settings; no API key fallback is implemented. Calls are serialized. Failed automatic jobs have bounded retries with exponential backoff and foreground wake preempts work.
+The worker's registered LLM provider sends a bounded internal callback to the host. By default the host submits a silent, tool-free, ephemeral JSON task to the official Codex App Server over stdio and checks the ChatGPT login. With an explicitly accepted `model_api.memory` binding it invokes the models capability instead; source validation and Mem0 ownership are unchanged. This is application-internal IPC, not an OpenAI-compatible HTTP server, credential exporter or public model service. Memory inference uses independent project `memory_model` / `memory_reasoning_effort` settings, separate from foreground task settings; neither path automatically falls back to the other. Calls are serialized. Failed automatic jobs have bounded retries with exponential backoff and foreground wake preempts work.
 
 Mem0 owns fact extraction, related-memory retrieval, deduplication and change decisions. Application policy supplies scope/persistence instructions and validates that each proposed fact has an exact quote from an actual user transcript. Assistant responses and provider-reported task completion are excluded from automatic evidence. Explicit remember/correct/forget remains an authorized capability; a current revision is required when correcting a record, and scope cannot silently change. These provenance checks do not prove semantic truth.
 
@@ -518,3 +519,28 @@ catalogue and authorization rules. Source definitions live in tracked
 records remain in `state/events/`. Recording itself starts no model, notification or
 memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
 and [source onboarding](src/assistant_runtime/plugins/observations/README.md).
+
+## Optional API models
+
+Instance TOML is composed once by `Config.load()`: one entry explicitly includes up
+to 32 relative files inside its directory. Fragments cannot include other files;
+disjoint table keys merge, duplicate leaves or table/value conflicts fail with source
+paths. Plugins receive the same normalized `Config`, never read fragments themselves.
+Missing explicit files fail; only absent implicit XDG configuration permits the existing
+headless default. Relative instance `root` resolves against the entry directory, so
+moving configuration must explicitly preserve data, credentials and audio bindings.
+
+`plugins/models` owns bounded no-tool inference through `kernel/models.ModelRequest`,
+private durable UUID receipts and an independent MCP. Official endpoint presets and
+explicit custom endpoints normalize from `model_api`; generated gateway files are
+private derivatives. LiteLLM runs in a pinned independent container and owns protocol
+conversion only. It has no MCP, task or device authority.
+
+The composition root injects `RoutedJobs` when API support is enabled. It reuses
+`CodexJobs`, with separate subscription and API app-server processes. Subscription
+voice/main execution remain on their original process. Tasks owns model selection,
+permissions and checkpoints; changing provider creates a fresh execution thread after
+confirmed safe handoff. Explicit ordered fallbacks are owned by models (no-tool calls) and tasks (execution), never by the gateway. Native rejection plus a complete readback proving no actions permits a fresh first-turn execution; uncertain operations, prior turns and Goals are never replayed. Attempts, errors and the selected model are durable and logged.
+Mem0 extraction can bind to the no-tool API capability, retaining its source policy
+and local embeddings. See [model access](src/assistant_runtime/plugins/models/README.md)
+for configuration, limits, deployment and acceptance boundaries.

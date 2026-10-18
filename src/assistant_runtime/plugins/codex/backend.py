@@ -155,6 +155,7 @@ class CodexBackend:
                     events="events" in self.config.plugins,
                     media="media" in self.config.plugins,
                     decisions="decisions" in self.config.plugins,
+                    models="models" in self.config.plugins,
                 ),
             },
         }

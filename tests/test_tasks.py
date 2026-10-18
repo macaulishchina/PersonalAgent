@@ -1206,6 +1206,36 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         await host.notify_task("quiet")
         self.assertEqual(host.voice.say.await_count, 1)
 
+    async def test_notification_audio_gap_is_not_a_completed_speech_receipt(self):
+        from assistant_runtime.assistant.service import AssistantService
+
+        host = object.__new__(AssistantService)
+        host.active = False
+        host.transition = asyncio.Lock()
+        host.quiet_active = lambda: False
+        host.notification_output = False
+        host.player = SimpleNamespace(manual_muted=False, playing=False, stop=AsyncMock())
+        speaking = asyncio.Event()
+
+        async def say(text):
+            host.last_output = time.monotonic()
+            speaking.set()
+
+        host.voice = SimpleNamespace(
+            open=AsyncMock(), close=AsyncMock(), say=AsyncMock(side_effect=say), speech_completed=False
+        )
+        job = asyncio.create_task(host.notify_task("synthetic result"))
+        try:
+            await speaking.wait()
+            await asyncio.sleep(1.7)
+            self.assertFalse(job.done(), "A quiet gap or startup audio must not finish speech")
+            host.voice.speech_completed = True
+            self.assertEqual(await asyncio.wait_for(job, 0.5), "played")
+            host.voice.say.assert_awaited_once()
+        finally:
+            job.cancel()
+            await asyncio.gather(job, return_exceptions=True)
+
     async def test_real_scheduler_runs_without_manual_due_callback(self):
         d = await self.create(execution={"kind": "reminder"})
         await asyncio.sleep(1.1)

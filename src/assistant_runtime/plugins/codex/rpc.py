@@ -13,8 +13,9 @@ class RpcError(RuntimeError):
 
 
 class CodexClient:
-    def __init__(self, binary="codex", cwd=None):
+    def __init__(self, binary="codex", cwd=None, *, overrides=None, environment=None):
         self.binary, self.cwd = binary, cwd
+        self.overrides, self.environment = overrides or {}, environment or {}
         self.process = None
         self.events = asyncio.Queue()
         self.pending = {}
@@ -25,8 +26,13 @@ class CodexClient:
         env = os.environ.copy()
         # The Live project key must never switch Codex away from its existing login.
         env.pop("OPENAI_API_KEY", None)
+        env.update(self.environment)
+        options = []
+        for key, value in self.overrides.items():
+            options.extend(["-c", key + "=" + toml_value(value)])
         self.process = await asyncio.create_subprocess_exec(
             self.binary,
+            *options,
             "app-server",
             "--listen",
             "stdio://",
@@ -104,3 +110,12 @@ class CodexClient:
         for task in self.readers:
             task.cancel()
         await asyncio.gather(*self.readers, return_exceptions=True)
+
+
+def toml_value(value):
+    """Encode startup overrides without shell interpolation or credential arguments."""
+    if isinstance(value, dict):
+        return "{" + ",".join(json.dumps(k) + "=" + toml_value(v) for k, v in value.items()) + "}"
+    if isinstance(value, (str, bool, int, float, list)):
+        return json.dumps(value)
+    raise ValueError("Unsupported Codex configuration value")

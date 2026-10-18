@@ -220,7 +220,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", default="config.toml")
+    p.add_argument("--config", default="config/config.toml")
     p.add_argument("--disconnect", action="store_true")
     p.add_argument("--output-device")
     p.add_argument("--tail-seconds", type=float, default=3)
