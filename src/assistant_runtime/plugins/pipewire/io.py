@@ -7,6 +7,7 @@ import json
 from .audio import command, audio_env, PINNED_STREAM_ARGS
 from .devices import resolve
 from .playback import PipeWirePlayback
+from .volume import apply_hardware_volume
 
 
 class PipeWireCapture:
@@ -47,23 +48,30 @@ class PipeWireEndpoint:
     async def open(self, rate):
         node = await self.node()
         if self.spec["kind"] == "speaker":
-            return await PipeWirePlayback.open(node["name"], rate)
-        process = await asyncio.create_subprocess_exec(
-            "pacat",
-            "--record",
-            "--raw",
-            "--format=s16le",
-            f"--rate={rate}",
-            "--channels=1",
-            "--latency-msec=20",
-            "--client-name=personal-agent-microphone",
-            f"--device={node['name']}",
-            *PINNED_STREAM_ARGS,
-            env=audio_env(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        return PipeWireCapture(process)
+            transport = await PipeWirePlayback.open(node["name"], rate)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                "pacat",
+                "--record",
+                "--raw",
+                "--format=s16le",
+                f"--rate={rate}",
+                "--channels=1",
+                "--latency-msec=20",
+                "--client-name=personal-agent-microphone",
+                f"--device={node['name']}",
+                *PINNED_STREAM_ARGS,
+                env=audio_env(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            transport = PipeWireCapture(process)
+        try:
+            await apply_hardware_volume(self.spec, node)
+        except BaseException:
+            await transport.close()
+            raise
+        return transport
 
     async def ensure_ready(self):
         await self.node()

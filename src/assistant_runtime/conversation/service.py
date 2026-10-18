@@ -5,6 +5,7 @@ import base64
 from dataclasses import asdict
 import hashlib
 import json
+import time
 import uuid
 
 from ..kernel.runtime import Manifest
@@ -12,6 +13,7 @@ from ..kernel.contracts import Control, NotificationRequest
 from .store import ConversationStore
 from .media import MediaAttachments, MAX_BYTES
 from .feedback import Feedback, spoken_result
+from ..kernel.speech import FeedbackIntent, RequestRef
 
 
 class Conversation:
@@ -36,6 +38,8 @@ class Conversation:
         self.feedback = Feedback(self.store.db)
         self.feedback_lock = asyncio.Lock()
         self.voice_revision = 0
+        self.spoken_focus = None
+        self.voice_reply_focus = {}
         host.backend.on_conversation = self.provider_event
         host.voice.on_conversation = self.media_event
         host.backend.on_conversation_done = self.task_done
@@ -160,6 +164,10 @@ class Conversation:
         role = data.get("role") or (old["role"] if old else None)
         if role not in ("user", "assistant"):
             return
+        if role == "assistant" and old is None:
+            self.voice_reply_focus[message_id] = (epoch, self.voice_revision)
+            if len(self.voice_reply_focus) > 128:
+                del self.voice_reply_focus[next(iter(self.voice_reply_focus))]
         text = (
             data.get("text", "")
             if kind != "message_delta"
@@ -174,6 +182,10 @@ class Conversation:
             status=data["status"],
         )
         if data["status"] == "complete" and text:
+            if role == "assistant":
+                focus = self.voice_reply_focus.pop(message_id, None)
+                if focus == (epoch, self.voice_revision):
+                    self.spoken_focus = focus
             self.voice_pending.set()
 
     async def sync_loop(self):
@@ -231,6 +243,22 @@ class Conversation:
                     turn_id=turn,
                 )
         ident = event.get("message_id")
+        if kind == "execution_input" and not restored and turn == self.host.backend.active_turn:
+            renewed = self.feedback.accept_input(
+                f"{self.session}:{ident}",
+                turn,
+                self.session,
+                getattr(self.host.voice, "epoch", 0),
+                self.voice_revision,
+                "web" if self.web_dispatching or getattr(self.host.voice, "web_silent", False) else "voice",
+            )
+            if renewed:
+                self.host.voice.execution_started(turn)
+            receipt = self.feedback.get(turn)
+            if receipt and event.get("text"):
+                focus = (receipt["epoch"], receipt["revision"])
+                if self.ack_allowed(turn, focus):
+                    self.spawn(self.acknowledge_input(turn, focus, event["text"]), "voice-acceptance")
         if kind == "message_delta" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
@@ -405,6 +433,58 @@ class Conversation:
         if self.feedback_allowed(turn_id) and turn_id not in self.web_turns and not self.web_dispatching:
             await self.host.voice.say(text)
 
+    def ack_allowed(self, turn, focus):
+        receipt = self.feedback.get(turn)
+        return bool(
+            self.feedback_allowed(turn)
+            and receipt["source"] == "voice"
+            and focus == (receipt["epoch"], receipt["revision"])
+            and focus != self.spoken_focus
+            and not self.web_dispatching
+            and not getattr(self.host.voice, "web_silent", False)
+            and not getattr(self.host.player, "manual_muted", False)
+        )
+
+    async def deliver_ack(self, turn, focus, text):
+        # Only speech delivery waits here; provider events and device work continue.
+        async with self.feedback_lock:
+            if not self.ack_allowed(turn, focus):
+                self.feedback.acknowledge(turn, *focus, "skipped")
+                return
+            try:
+                await self.speech_feedback(turn, focus, "accepted", text)
+            except asyncio.CancelledError:
+                self.feedback.acknowledge(turn, *focus, "unknown")
+                raise
+            except Exception:
+                self.feedback.acknowledge(turn, *focus, "unknown")
+                self.sync_error = "接单说明的语音交付未确认，任务继续执行；未自动重播。"
+                self.store.emit(self.session, "notice", {"text": self.sync_error})
+            else:
+                self.feedback.acknowledge(turn, *focus, "submitted")
+
+    async def acknowledge_input(self, turn, focus, text):
+        # Structured provider acceptance, independent of web commentary. Fast
+        # completion closes the receipt before this delay and needs no extra ack.
+        await asyncio.sleep(0.8)
+        if self.ack_allowed(turn, focus) and self.feedback.acknowledge(turn, *focus, "dispatching"):
+            spoken = "我来处理“" + text + "”。" if len(text) <= 65 else "请求已收到，我先核对具体操作。"
+            await self.deliver_ack(turn, focus, spoken)
+
+    async def speech_feedback(self, turn, focus, kind, text):
+        interaction = getattr(self.host, "interaction", None)
+        if interaction and interaction.ready:
+            if len(text) > 240:
+                text = "这次返回的结果比较长，需要我展开说明吗？"
+            intent = FeedbackIntent(RequestRef(turn, focus[1]), kind, text, time.monotonic() + 30)
+            result = await interaction.output.say(intent, lambda: self.feedback_allowed(turn))
+            if result != "completed":
+                raise RuntimeError("Speech delivery " + result)
+        else:
+            await self.host.voice.say(
+                text, execution_id=turn, **({"interim": True} if kind == "accepted" else {})
+            )
+
     async def task_done(self, turn_id, text, status):
         try:
             await self.deliver_result(turn_id, text, status)
@@ -437,7 +517,9 @@ class Conversation:
                         "网页任务的实际回复（仅同步上下文，无需播报）：\n" + text
                     )
                 else:
-                    await self.host.voice.say(spoken, execution_id=turn_id)
+                    await self.speech_feedback(
+                        turn_id, (receipt["epoch"], receipt["revision"]), "result", spoken
+                    )
             except Exception:
                 self.feedback.finish(turn_id, "unknown")
                 raise

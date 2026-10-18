@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from assistant_runtime.interaction.input import InputBuffer
 from datetime import datetime
 from types import SimpleNamespace
 import unittest
@@ -68,6 +69,8 @@ class QuietHoursTest(unittest.TestCase):
 class QuietSessionTest(unittest.IsolatedAsyncioTestCase):
     def service(self, active=False):
         service = AssistantService.__new__(AssistantService)
+        service.input_buffer = InputBuffer()
+        service.native_pending = deque(maxlen=1500)
         service.active = active
         service.quiet_hours = SimpleNamespace(active=Mock(return_value=True))
         service.player = SimpleNamespace(feed=Mock(), cue=AsyncMock())

@@ -794,6 +794,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_voice_owner_publishes_sample_and_exits_without_waiting_for_judge(self):
         service = AssistantService.__new__(AssistantService)
+        service.mode = "listening"
         service.events = asyncio.Queue()
         service.voice = SimpleNamespace(epoch=7)
         service.active = True

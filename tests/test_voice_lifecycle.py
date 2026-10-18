@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock
 from collections import deque
+from assistant_runtime.interaction.input import InputBuffer
 from types import SimpleNamespace
 
 import test_conversation as fixtures
@@ -15,6 +16,7 @@ from assistant_runtime.assistant.service import AssistantService
 from assistant_runtime.config import Config
 from assistant_runtime.conversation.feedback import spoken_result
 from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.codex.conversation import task_event
 from assistant_runtime.store import Store
 
 
@@ -138,13 +140,146 @@ class FeedbackTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     def bind(self, turn="one"):
+        self.host.backend.active_turn = turn
         self.c.provider_event({"kind": "turn_started", "turn_id": turn})
+
+    def commentary(self, text="我在电视上找节目，找到就播放。", ident="ack", turn="one", restored=False):
+        for method in ("item/started", "item/completed"):
+            self.c.provider_event(
+                task_event(
+                    method,
+                    {
+                        "turnId": turn,
+                        "item": {"type": "agentMessage", "id": ident, "text": text, "phase": "commentary"},
+                    },
+                ),
+                restored=restored,
+            )
+
+    def voice_input(self, ident):
+        self.c.media_event(
+            {"kind": "message", "message_id": ident, "role": "user", "text": "新请求", "status": "complete"},
+            self.host.voice.epoch,
+        )
+
+    def accepted_input(self, ident):
+        self.c.provider_event(
+            task_event(
+                "item/completed",
+                {
+                    "turnId": "one",
+                    "item": {
+                        "type": "userMessage",
+                        "id": ident,
+                        "content": [{"type": "input_text", "text": "播放节目"}],
+                    },
+                },
+            )
+        )
+
+    async def test_structured_acceptance_ack_once_and_final_still_delivers(self):
+        self.bind()
+        self.commentary()
+        await asyncio.sleep(0)
+        self.host.voice.say.assert_not_awaited()
+        self.accepted_input("accepted")
+        self.accepted_input("accepted")
+        await asyncio.sleep(0.85)
+        self.host.voice.say.assert_awaited_once_with("我来处理“播放节目”。", execution_id="one", interim=True)
+        await self.c.task_done("one", "尚未找到可用片源。", "completed")
+        self.assertEqual(self.host.voice.say.await_count, 2)
+
+    async def test_accepted_followup_renews_same_execution_but_old_ack_is_fenced(self):
+        self.bind()
+        self.accepted_input("initial")
+        self.voice_input("followup")
+        self.accepted_input("followup-accepted")
+        self.commentary("旧进度", "late")
+        await asyncio.sleep(0.85)
+        self.host.voice.say.assert_awaited_once()
+        self.voice_input("another")
+        self.accepted_input("initial")
+        self.assertNotEqual(self.c.feedback.get("one")["revision"], self.c.voice_revision)
+
+    async def test_web_quiet_muted_restored_and_long_commentary_do_not_speak(self):
+        for state in ("web", "quiet", "muted", "restored", "long"):
+            with self.subTest(state=state):
+                self.bind(state)
+                self.host.voice.web_silent = state == "web"
+                self.host.quiet_active = lambda: state == "quiet"
+                self.host.player.manual_muted = state == "muted"
+                self.commentary(
+                    "甲" * 2000 if state == "long" else "准备执行。", state, state, state == "restored"
+                )
+                await asyncio.sleep(0)
+        self.host.voice.say.assert_not_awaited()
+
+    async def test_native_ack_and_restored_output_are_not_repeated(self):
+        self.c.media_event(
+            {
+                "kind": "message",
+                "message_id": "native",
+                "role": "assistant",
+                "text": "我来找一下。",
+                "status": "complete",
+            },
+            self.host.voice.epoch,
+        )
+        self.bind()
+        self.commentary()
+        await asyncio.sleep(0)
+        self.host.voice.say.assert_not_awaited()
+
+    async def test_fast_completion_merges_pending_ack_into_one_result(self):
+        self.bind()
+        self.accepted_input("input")
+        await self.c.task_done("one", "已完成", "completed")
+        await asyncio.sleep(0.85)
+        self.host.voice.say.assert_awaited_once_with("已完成", execution_id="one")
+
+    async def test_uncertain_ack_is_not_replayed_and_does_not_consume_final_report(self):
+        async def say(*args, **kwargs):
+            if kwargs.get("interim"):
+                raise TimeoutError()
+
+        self.host.voice.say.side_effect = say
+        self.bind()
+        self.accepted_input("input")
+        await asyncio.sleep(0.85)
+        self.accepted_input("input")
+        self.assertEqual(self.c.feedback.get("one")["ack_state"], "unknown")
+        await self.c.task_done("one", "真实失败结果", "completed")
+        self.assertEqual(self.host.voice.say.await_count, 2)
+
+    async def test_restart_never_replays_claimed_ack_and_duplicate_input(self):
+        self.bind()
+        self.accepted_input("input")
+        focus = self.c.feedback.get("one")
+        self.c.feedback.acknowledge("one", focus["epoch"], focus["revision"], "dispatching")
+        self.c.feedback.recover(self.c.session)
+        self.voice_input("new")
+        self.accepted_input("input")
+        self.commentary()
+        await asyncio.sleep(0)
+        self.host.voice.say.assert_not_awaited()
+        self.assertEqual(self.c.feedback.get("one")["ack_state"], "unknown")
 
     async def test_duplicate_completions_submit_speech_once(self):
         self.bind()
         await asyncio.gather(*(self.c.task_done("one", "真实结果", "completed") for _ in range(3)))
         self.host.voice.say.assert_awaited_once_with("真实结果", execution_id="one")
         self.assertEqual(self.c.feedback.get("one")["state"], "submitted")
+
+    async def test_new_voice_epoch_can_continue_existing_execution_after_accepted_input(self):
+        self.bind()
+        self.c.media_event({"kind": "closed"}, self.host.voice.epoch)
+        self.host.voice.epoch += 1
+        self.voice_input("new-connection-input")
+        self.commentary("旧连接迟到的文字", "late")
+        self.accepted_input("new-connection-accepted")
+        await asyncio.sleep(0.85)
+        self.host.voice.execution_started.assert_called_once_with("one")
+        self.host.voice.say.assert_awaited_once_with("我来处理“播放节目”。", execution_id="one", interim=True)
 
     async def test_lost_ack_is_unknown_and_never_automatically_repeated(self):
         self.bind()
@@ -206,6 +341,8 @@ class ExitRaceTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.context = fixtures.Owned()
         s = self.service = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
         s.mode = "active"
         s.active = True
         s.memory = None

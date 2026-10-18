@@ -7,6 +7,7 @@ import time
 
 from ...kernel.contracts import VoiceBinding
 from .devices import resolve, validate_device
+from .volume import apply_hardware_volume
 
 import numpy as np
 from pywebrtc_audio import AudioProcessor
@@ -79,6 +80,13 @@ class AudioRoute:
     @property
     def output_device(self):
         return self._voice_io.output_device
+
+    @property
+    def hardware_volume_configured(self):
+        return (
+            self._output_spec["adapter"] == "pipewire"
+            and "hardware_volume" in self._output_spec["connection"]
+        )
 
     async def devices(self):
         sources = json.loads(await command("pactl", "-f", "json", "list", "sources"))
@@ -189,6 +197,12 @@ class AudioRoute:
             return
         if not self.physical_sink:
             return
+        # The main voice output can use a private AEC sink, bypassing the
+        # physical provider's open(). Initialize the resolved hardware here too.
+        if self.hardware_volume_configured:
+            nodes = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
+            node = next((s for s in nodes if s["name"] == self.physical_sink), None)
+            await apply_hardware_volume(self._output_spec, node)
         try:
             sinks = json.loads(await command("pactl", "-f", "json", "list", "sinks"))
             sink = next((s for s in sinks if s["name"] == self.physical_sink), None)

@@ -41,6 +41,13 @@ A capability request has exactly one handler and a timeout. It returns a result 
 
 Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
 
+Remote quiet boundaries can release interruption suppression independently of local
+VAD activity, which may remain active on TV speech or a release delay. Explicit
+manual mute remains authoritative. Existing status exposes output-gate state and
+written/discarded PCM byte counts; text/RTP reception alone is not audible delivery.
+Empty resampler output is not PCM: it must neither reach the player nor reset
+remote-silence accumulation and playback timestamps.
+
 Independent audio acceptance lives entirely in `scripts/audio_check/`. It reuses
 existing PCM device registries/providers after verifying the assistant is stopped,
 with bounded capture and owned prompt playback. It adds no kernel contract,
@@ -54,6 +61,7 @@ DSP behavior stay unchanged; offline wake detection is not live voice acceptance
 - Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
 - Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation and explicit Web submissions enter the same provider thread; transcripts are synchronized as context, never dispatched a second time.
 - The composition root freezes one `VoiceBinding` from `input_device` / `default_output` at startup. The audio adapter snapshots those device connections and reconnects only those endpoints; saved room state is ignored. Binding changes require configuration plus restart. MCP, dynamic tools, CLI and voice commands cannot select another main input/output.
+- PipeWire owns optional `connection.hardware_volume` initialization for ALSA-backed input/output devices. It resolves the physical card from that endpoint, validates and verifies the named mixer control, and applies it before PCM delivery or a new primary speech segment. An omitted setting performs no hardware mixer writes. AEC's virtual sink does not replace the physical target; no kernel, assistant or MCP hardware branch is needed.
 - The player owns queue/epoch/mute state. Stop, cancel-task and end-session are distinct operations.
 - Memory is not provider chat history and cannot prove an action completed. It is sourced, revisable context.
 
@@ -100,6 +108,24 @@ without another prompt to infer a result. Output acceptance is not proof of play
 lost acknowledgements remain unknown. Native delegation filler and speculative output
 while awaiting execution are suppressed. Native client-managed handoff controls result
 forwarding, not pre-execution approval; WebRTC audio has no reliable per-answer identity.
+
+Execution acceptance and completion have separate spoken receipts. Normalized provider
+`execution_input` acceptance schedules a short delayed acknowledgement; web commentary
+never triggers speech. A fast result consumes the pending acknowledgement. Accepted
+follow-ups renew output ownership with durable input deduplication; stale speech and
+unknown submissions are not replayed. Native rendering still has no per-answer playout
+receipt and can paraphrase appended speech.
+
+The optional voice-first command entrance lives in `interaction/`; provider-neutral
+contracts live in `kernel/speech.py`, and local inference adapters in `plugins/speech/`.
+Capture and inference have separate bounded work paths. The coordinator owns request
+versions, recent operation context and feedback; commands reuse isolated durable task
+execution and its existing MCP/model policy. Dialogue gets the original utterance once.
+The local output scheduler shares the fixed player and arbitrates literal speech with
+native output, expiry, interruption and durable delivery states. Command follow-up is
+3 seconds; existing native attention remains independently configured. Defaults remain
+native until acoustic and latency acceptance passes. See
+[voice-first design and measured gates](src/assistant_runtime/interaction/README.md).
 
 Assistant attention defaults to a short request with an 8-second follow-up window after
 the reply. Explicit chat selects continuous mode for one activation. Accepted user input,

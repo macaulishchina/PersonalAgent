@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from assistant_runtime.interaction.input import InputBuffer
 from types import SimpleNamespace
 import unittest
 import time
@@ -41,7 +42,7 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output, pcm)
 
     async def test_silent_stream_after_voice_does_not_prevent_idle_timeout(self):
-        route = SimpleNamespace(sink="test", ensure=AsyncMock())
+        route = SimpleNamespace(sink="test", ensure=AsyncMock(), hardware_volume_configured=False)
         proc = SimpleNamespace(
             returncode=None,
             stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
@@ -102,6 +103,59 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(p.playing)
         self.assertTrue(p.queue.empty())
 
+    async def test_remote_quiet_boundary_releases_reply_despite_persistent_local_speech(self):
+        p = StreamPlayer(None)
+        old_tail = np.full(480, 1000, dtype="<i2").tobytes()
+        new_reply = np.full(480, 2000, dtype="<i2").tobytes()
+        p.input_speaking = True  # TV speech or the local VAD's release delay.
+        await p.stop()
+        p.feed(old_tail)
+        p.feed(bytes(960 * 8))  # A short pause is not a new output boundary.
+        self.assertTrue(p.queue.empty())
+        self.assertTrue(p.suppressed)
+        p.feed(bytes(960 * 4))  # The remote stream has now been quiet for 240 ms.
+        p.feed(new_reply)
+        self.assertFalse(p.suppressed)
+        output = b"".join(p.queue.get_nowait()[1] for _ in range(p.queue.qsize()))
+        self.assertEqual(output, new_reply)
+        self.assertTrue(p.input_speaking)
+
+    async def test_empty_resampler_chunks_do_not_break_remote_quiet_boundary(self):
+        p = StreamPlayer(None)
+        p.feed(np.full(480, 1000, dtype="<i2").tobytes())
+        await p.stop()
+        for _ in range(12):
+            p.feed(bytes(960))
+            p.feed(b"")
+        reply = np.full(480, 1000, dtype="<i2").tobytes()
+        p.feed(reply)
+        self.assertFalse(p.suppressed)
+        output = b"".join(p.queue.get_nowait()[1] for _ in range(p.queue.qsize()))
+        self.assertEqual(output, reply)
+
+    async def test_browser_output_never_delivers_empty_resampler_chunks(self):
+        from aiohttp import ClientSession, web
+
+        delivered = []
+        bridge = BrowserAudio(delivered.append, AsyncMock())
+        app = web.Application()
+        app.router.add_get("/pcm", bridge._websocket)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with ClientSession() as client:
+                async with client.ws_connect(f"http://127.0.0.1:{port}/pcm") as socket:
+                    for _ in range(30):
+                        await socket.send_bytes(np.zeros(960, dtype="<f4").tobytes())
+            self.assertTrue(delivered)
+            self.assertTrue(all(delivered), "An empty resampler output is not an audio frame")
+        finally:
+            await bridge.close()
+            await runner.cleanup()
+
     async def test_explicit_stop_stays_muted_across_old_audio_silence(self):
         p = StreamPlayer(None)
         p.manual_muted = True
@@ -128,6 +182,64 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_ack_drains_audio_tail_then_waits_for_real_result(self):
+        output = Mock()
+        backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))
+        voice = NativeVoice(None, backend, output, AsyncMock())
+        voice.opened = True
+        voice.execution_started("execution")
+        pending = asyncio.create_task(voice.say("我来找这个节目。", execution_id="execution", interim=True))
+        await asyncio.sleep(0)
+        voice.media_event({"type": "turn.created", "turn": {"id": "ack", "role": "assistant"}}, voice.epoch)
+        voice.media_event({"type": "turn.done", "turn": {"id": "ack", "role": "assistant"}}, voice.epoch)
+        tail = np.full(480, 2000, dtype="<i2").tobytes()
+        voice.deliver_audio(tail, voice.epoch)
+        voice.deliver_audio(bytes(24000), voice.epoch)
+        await pending
+        self.assertTrue(voice.awaiting_result)
+        self.assertEqual(voice.pending_execution, "execution")
+        output.assert_any_call(tail)
+        count = output.call_count
+        voice.deliver_audio(tail, voice.epoch)
+        self.assertEqual(output.call_count, count)
+        await voice.say("没有找到可用片源。", execution_id="execution")
+        voice.deliver_audio(tail, voice.epoch)
+        self.assertEqual(output.call_count, count + 1)
+        await asyncio.gather(*voice.tasks)
+
+    async def test_interrupting_ack_does_not_regate_new_user_input(self):
+        backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))
+        voice = NativeVoice(None, backend, Mock(), AsyncMock())
+        voice.opened = True
+        voice.execution_started("execution")
+        pending = asyncio.create_task(voice.say("准备执行。", execution_id="execution", interim=True))
+        await asyncio.sleep(0)
+        voice.media_event({"type": "turn.created", "turn": {"id": "user", "role": "user"}}, voice.epoch)
+        await pending
+        self.assertFalse(voice.awaiting_result)
+        await asyncio.gather(*voice.tasks)
+
+    async def test_new_execution_and_web_input_fence_old_ack(self):
+        for change in ("execution", "web", "close"):
+            with self.subTest(change=change):
+                output = Mock()
+                backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))
+                voice = NativeVoice(None, backend, output, AsyncMock())
+                voice.opened = True
+                voice.execution_started("execution")
+                old_epoch = voice.epoch
+                pending = asyncio.create_task(voice.say("准备执行。", execution_id="execution", interim=True))
+                await asyncio.sleep(0)
+                if change == "execution":
+                    voice.execution_started("new")
+                elif change == "web":
+                    voice.silence_web_reply()
+                else:
+                    await voice.close()
+                await pending
+                voice.deliver_audio(bytes(960), old_epoch)
+                output.assert_not_called()
+
     async def test_execution_suppresses_speculation_and_only_matching_result_releases_output(self):
         output = Mock()
         backend = SimpleNamespace(thread_id="main", client=SimpleNamespace(request=AsyncMock()))
@@ -191,6 +303,9 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
         for phrase in ["嘟嘟", "你好嘟嘟"]:
             with self.subTest(phrase=phrase):
                 s = AssistantService.__new__(AssistantService)
+                s.input_buffer = InputBuffer()
+                s.native_pending = deque(maxlen=1500)
+                s.mode = "active"
                 s.active = False
                 s.preroll = deque(maxlen=50)
                 pcm = bytes(640)
@@ -213,13 +328,16 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
                     yield pcm
 
                 s.route = SimpleNamespace(frames=frames, raw_frame=pcm)
-                await s._capture()
+                await capture_and_process(s)
                 s.wake.assert_awaited_once_with((pcm,), source="keyword", keyword=phrase)
                 s.recognizer.detect.assert_awaited_once()
                 s.voice.feed.assert_called_once_with(pcm)
 
     async def test_delayed_native_turn_does_not_cut_new_audio(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.events = asyncio.Queue()
         s.active = True
         s.voice = SimpleNamespace(epoch=1)
@@ -297,6 +415,9 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wake_uses_raw_microphone_not_echo_filtered_keyword(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.active = False
         s.preroll = deque(maxlen=50)
         raw = np.full(320, 1500, dtype="<i2").tobytes()
@@ -312,13 +433,16 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
             yield bytes(640)
 
         s.route = SimpleNamespace(frames=frames, raw_frame=raw)
-        await s._capture()
+        await capture_and_process(s)
         np.testing.assert_allclose(s.recognizer.detect.call_args.args[0], 1500 / 32768)
         s.wake.assert_awaited_once()
         s.voice.feed.assert_not_called()
 
     async def test_local_vad_does_not_interrupt_playback(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.active = True
         s.recognizer = SimpleNamespace(
             vad=SimpleNamespace(accept_waveform=Mock(), is_speech_detected=lambda: True, empty=lambda: True)
@@ -330,12 +454,15 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
             yield bytes(640)
 
         s.route = SimpleNamespace(frames=frames)
-        await s._capture()
+        await capture_and_process(s)
         s.player.stop.assert_not_awaited()
         s.voice.feed.assert_called_once()
 
     async def test_sleep_closes_voice_without_cancelling_task(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.active = True
         s.mode = "active"
         s.connect_task = None
@@ -354,6 +481,9 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_standby_speech_never_sent_to_remote_voice(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.active = False
         s.preroll = deque(maxlen=32)
         s.recognizer = SimpleNamespace(
@@ -368,13 +498,16 @@ class NativeSessionTest(unittest.IsolatedAsyncioTestCase):
                 yield bytes(1024)
 
         s.route = SimpleNamespace(frames=frames)
-        await s._capture()
+        await capture_and_process(s)
         s.voice.feed.assert_not_called()
 
 
 class ReconnectTest(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_does_not_block_user_turn_events(self):
         s = AssistantService.__new__(AssistantService)
+        s.input_buffer = InputBuffer()
+        s.native_pending = deque(maxlen=1500)
+        s.mode = "active"
         s.events = asyncio.Queue()
         s.active = True
         s.mode = "active"
@@ -410,3 +543,13 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
             for task in pending:
                 task.cancel()
             await asyncio.gather(run, *pending, return_exceptions=True)
+
+
+async def capture_and_process(service):
+    await service._capture()
+    while not service.input_buffer.queue.empty():
+        chunk, raw, interrupted = service.input_buffer.queue.get_nowait()
+        try:
+            await service._process_frame(chunk, raw, interrupted)
+        finally:
+            service.input_buffer.queue.task_done()

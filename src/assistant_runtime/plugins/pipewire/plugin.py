@@ -40,5 +40,9 @@ class PipeWirePlugin:
             "playback_queue_ms": round(self.player.last_queue_ms, 1),
             "max_playback_queue_ms": round(self.player.max_queue_ms, 1),
             "written_audio_bytes": self.player.written_bytes,
+            "discarded_audio_bytes": self.player.discarded_bytes,
+            "playback_suppressed": self.player.suppressed,
+            "playback_manual_muted": self.player.manual_muted,
+            "local_input_speaking": self.player.input_speaking,
             "software_stop_seconds": self.player.last_stop_seconds,
         }

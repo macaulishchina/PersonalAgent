@@ -16,11 +16,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
+    "speech": {"interaction"},
     "core": {"behavior", "conversation", "quiet", "runtime", "voice_binding", "wake_words"},
     "codex": {"codex_config", "integrations", "job_lifecycle", "mcp", "native", "voice_lifecycle"},
     "devices": {
         "audio_input_quality",
         "audio_input_guide",
+        "hardware_volume",
         "audio_outputs",
         "camera_motion",
         "device_operations",

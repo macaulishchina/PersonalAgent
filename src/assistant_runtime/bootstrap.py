@@ -193,6 +193,23 @@ def compose(service):
 
     service.conversation = Conversation(service)
     runtime.add(service.conversation)
+    from .interaction.settings import InteractionSettings
+
+    settings = InteractionSettings.parse(config.interaction)
+    service.interaction = None
+    if settings.enabled:
+        from .interaction.service import Interaction
+        from .interaction.output import OutputScheduler
+        from .plugins.speech.recognition import LocalRecognition
+        from .plugins.speech.rendering import LocalSpeech
+
+        output = OutputScheduler(
+            service.player,
+            LocalSpeech(settings.tts_model_dir, settings.tts_voice),
+            store.db,
+            lambda: not service.quiet_active() and not service.player.manual_muted,
+        )
+        service.interaction = Interaction(service, settings, LocalRecognition(settings.asr_model_dir), output)
     return runtime
 
 
@@ -217,5 +234,9 @@ class AssistantPlugin:
         context.register(Trigger, trigger)
         context.spawn(self.service._events(), "voice-events")
         context.spawn(self.service._maintenance(), "idle-and-devices")
+        if self.service.interaction:
+            context.own(self.service.interaction.close)
+            context.spawn(self.service.interaction.prepare(), "speech-prepare")
         if not self.service.no_mic:
             context.spawn(self.service._capture(), "capture")
+            context.spawn(self.service._process_capture(), "recognition-input")

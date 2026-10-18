@@ -45,6 +45,8 @@ memory_auto_capture = true
 # location = "书房"
 # [devices.office_microphone.connection]
 # match = "stable USB microphone identity"
+# Optional ALSA hardware control initialization. Omit to preserve hardware volume.
+# hardware_volume = { control = "Mic Capture Volume", percent = 100 }
 # [devices.office_speaker]
 # adapter = "pipewire"
 # kind = "speaker"
@@ -52,6 +54,8 @@ memory_auto_capture = true
 # location = "书房"
 # [devices.office_speaker.connection]
 # address = "AA:BB:CC:DD:EE:FF"  # or sink = "exact PipeWire sink name"
+# ALSA-backed USB outputs only; not a Bluetooth/network volume control:
+# hardware_volume = { control = "PCM Playback Volume", index = 1, percent = 100 }
 
 # Optional AirPlay receiver: install the airplay extra and add airplay to plugins.
 # [devices.homepod]
@@ -89,6 +93,18 @@ memory_auto_capture = true
 # base_url = "http://127.0.0.1:8553"
 # stream = "office_camera"
 # timeout_seconds = 8
+
+[interaction]
+# Acceptance candidate: leave off until recognition and response latency pass in your rooms.
+enabled = false
+asr_model_dir = ""
+tts_model_dir = ""
+tts_voice = 46
+follow_up_seconds = 3
+context_seconds = 120
+acknowledgement_seconds = 0.8
+routing_seconds = 1
+input_buffer_seconds = 30
 
 # Optional semantic support: install decisions extra (included in the default plugins).
 # TYPESAFE_API_KEY is read privately from the process environment or instance .env.

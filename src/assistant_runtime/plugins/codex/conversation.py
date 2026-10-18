@@ -100,6 +100,14 @@ def task_event(method, params):
     if method not in ("item/started", "item/completed") or not ident:
         return None
     kind = item.get("type")
+    if kind == "userMessage" and method == "item/completed":
+        content = item.get("content", [])
+        text = "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") in {"text", "input_text"}
+        )
+        return {**common, "kind": "execution_input", "text": text[:1000]}
     labels = {
         "commandExecution": "执行命令",
         "fileChange": "修改文件",

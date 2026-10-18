@@ -14,6 +14,31 @@ from assistant_runtime.plugins.codex.jobs import CodexJobs
 
 
 class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_final_result_is_distinct_from_progress_and_cleared_on_next_turn(self):
+        self.runner.threads["background"] = "run"
+        events = []
+        self.runner.notify = lambda ident, state, **data: events.append((state, data))
+
+        async def send(method, **params):
+            await self.runner.event({"method": method, "params": {"threadId": "background", **params}})
+
+        await send("turn/started", turn={"id": "one"})
+        await send(
+            "item/completed",
+            turnId="one",
+            item={"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": "已核对结果"},
+        )
+        await send("turn/completed", turn={"id": "one", "status": "completed"})
+        self.assertEqual(events[-1][1]["result"], "已核对结果")
+        await send("turn/started", turn={"id": "two"})
+        await send(
+            "item/completed",
+            turnId="two",
+            item={"id": "progress", "type": "agentMessage", "phase": "commentary", "text": "正在操作"},
+        )
+        await send("turn/completed", turn={"id": "two", "status": "completed"})
+        self.assertEqual(events[-1][1]["result"], "")
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

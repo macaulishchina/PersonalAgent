@@ -20,7 +20,8 @@ class BrowserAudio:
         self.playwright = self.browser = self.page = self.runner = self.socket = None
         self.ready = asyncio.Event()
         self.socket_ready = asyncio.Event()
-        self.queue = asyncio.Queue(maxsize=500)
+        self.queue = asyncio.Queue(maxsize=1500)
+        self.queued_bytes = 0
         self.writer = None
         self.closed = False
         self.overflows = 0
@@ -38,7 +39,8 @@ class BrowserAudio:
             if message.type == WSMsgType.BINARY:
                 samples = np.frombuffer(message.data, dtype="<f4")
                 data = self.resampler.resample_chunk(samples)
-                self.on_audio((data * 32768).clip(-32768, 32767).astype("<i2").tobytes())
+                if len(data):
+                    self.on_audio((data * 32768).clip(-32768, 32767).astype("<i2").tobytes())
             elif message.type == WSMsgType.TEXT:
                 data = message.json()
                 if data["type"] == "connection" and data["state"] == "connected":
@@ -96,17 +98,20 @@ class BrowserAudio:
         if not len(data):
             return
         pcm = data.clip(-32768, 32767).astype("<i2").tobytes()
+        if self.queued_bytes + len(pcm) > 30 * 48000 * 2:
+            self.overflows += 1
+            raise BufferError("Native input duration limit exceeded; utterance incomplete")
         try:
             self.queue.put_nowait(pcm)
+            self.queued_bytes += len(pcm)
         except asyncio.QueueFull:
             self.overflows += 1
-            # Keep a bounded backlog and report it; never block capture/control.
-            self.queue.get_nowait()
-            self.queue.put_nowait(pcm)
+            raise BufferError("Native input buffer exhausted; utterance incomplete") from None
 
     async def _write(self):
         while True:
             pcm = await self.queue.get()
+            self.queued_bytes -= len(pcm)
             await self.socket.send_bytes(pcm)
 
     async def answer(self, sdp):

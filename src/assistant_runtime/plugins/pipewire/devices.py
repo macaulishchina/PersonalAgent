@@ -4,6 +4,7 @@ import re
 import time
 
 from ...kernel.contracts import DeviceObservation
+from .volume import hardware_volume
 
 MAC = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 
@@ -11,17 +12,18 @@ MAC = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 def validate_device(spec):
     connection = spec["connection"]
     kind = spec["kind"]
-    keys = set(connection)
+    keys = set(connection) - {"hardware_volume"}
     if kind == "microphone":
         valid = keys == {"match"}
     elif kind == "speaker":
         valid = keys in ({"address"}, {"sink"})
     else:
         raise ValueError(f"PipeWire does not support device kind: {kind}")
-    if not valid or any(not isinstance(v, str) or not v.strip() for v in connection.values()):
+    if not valid or any(not isinstance(connection[k], str) or not connection[k].strip() for k in keys):
         raise ValueError(f"Invalid PipeWire connection for {kind}")
     if "address" in connection and not MAC.fullmatch(connection["address"]):
         raise ValueError("Bluetooth speaker address must be a MAC")
+    hardware_volume(connection)
 
 
 def resolve(spec, sources, sinks):

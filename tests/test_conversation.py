@@ -60,6 +60,7 @@ def fixture(root):
             instruct=AsyncMock(),
             say=AsyncMock(),
             finish_execution=Mock(),
+            execution_started=Mock(),
             silence_web_reply=Mock(),
         ),
         mode="standby",

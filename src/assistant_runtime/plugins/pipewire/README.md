@@ -31,6 +31,38 @@ address = "AA:BB:CC:DD:EE:FF"
 
 Another supported endpoint requires configuration, not a new plugin or a room branch. `input_device` and `default_output` are snapshotted at startup and cannot change during the process. Old persisted room choices are ignored. Replacing a voice endpoint requires editing those settings and restarting; there is no runtime selector or hot reload. Additional devices stay independently discoverable tools and never replace the fixed conversation input/output.
 
+### Optional hardware mixer volume
+
+An ALSA-backed PipeWire endpoint can explicitly reset one hardware volume control.
+Omit `connection.hardware_volume` to leave all hardware mixer controls untouched.
+This is separate from Pulse/PipeWire channel volume and `minimum_volume`; it does
+not amplify PCM, unmute the device or select another endpoint.
+
+```toml
+# Within a USB speaker's connection table:
+sink = "exact PipeWire USB sink name"
+hardware_volume = { control = "PCM Playback Volume", index = 1, percent = 100 }
+
+# Within a USB microphone's connection table:
+match = "unique stable USB source identity"
+hardware_volume = { control = "Mic Capture Volume", percent = 100 }
+```
+
+`control` is the full ALSA control name shown by `amixer -c <card> controls`;
+`index` defaults to 0 and distinguishes controls with the same name. `percent`
+is an integer from 0 to 100. The card is derived from the resolved endpoint's
+ALSA identity on each initialization, never a configured transient card number.
+Only readable/writable integer controls are supported. Missing controls, unsupported
+network/Bluetooth endpoints, command timeouts or unconfirmed writes fail explicitly
+before delivering PCM; there is no system-default card or software-gain fallback.
+
+The provider applies the configured level when opening an input/output stream.
+The primary voice route also initializes its physical sink when it uses the private
+AEC playback bus. With this option configured, a new voiced segment after at least
+0.5 seconds without voiced output resets the hardware level before playback, even
+when the stream remains open. No periodic enforcement runs while idle, and device
+inspection remains read-only. Configuration changes require a service restart.
+
 ## Registration and state
 
 `PipeWireDevices` validates protocol configuration, registers each enabled device once, and probes the physical inventory every three seconds. Shared state includes stable ID, label/location, capabilities, observed time, age and freshness. The default freshness limit is 15 seconds, configurable per device. Probes are read-only and do not record PCM, connect Bluetooth, change volume or wake voice. The existing audio route owns reconnection of the fixed input/output.
@@ -46,6 +78,14 @@ personal-agent --config config.toml devices inspect office
 ```
 
 Device MCP exposes `list_devices()` and `inspect_device(device_id="office")`. Connection addresses/selectors remain private adapter configuration; AI receives logical identity, capabilities and actual state. Passive observations never start a conversation.
+
+Status separates `written_audio_bytes` and `discarded_audio_bytes`, and exposes
+`playback_suppressed`, `playback_manual_muted` and `local_input_speaking` for output
+diagnosis. A remote quiet boundary releases interruption suppression even while
+the local VAD remains active on background speech. Explicit manual mute still
+blocks playback; receipt of RTP/PCM frames or display of a transcript alone does
+not establish that speech was delivered or heard. Empty output from the buffered
+resampler is ignored before delivery and cannot reset the remote quiet interval.
 
 ## Acceptance
 
@@ -65,7 +105,9 @@ All measurement, local wake inference and orchestration live in `scripts/audio_c
 there is no test capability, audio tap, prompt RPC or test state in the runtime.
 The script uses the existing `AudioInputs` / `AudioOutputs` registries and PipeWire
 providers, pinned to configured `input_device` / `default_output`. It does not
-change endpoint selection, volume, Bluetooth profile or production DSP policy.
+change endpoint selection, Bluetooth profile or production DSP policy. Stream
+opening honors any explicitly configured hardware mixer initialization above;
+without that option, the benchmark does not change volume.
 The independently captured input is raw PCM, not the service's processed audio.
 
 Follow the spoken prompts; no forms or typed confirmations are required. Keep the

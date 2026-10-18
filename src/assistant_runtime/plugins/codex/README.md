@@ -39,6 +39,22 @@ spoken completion. Provider failure without prose gets one factual failure notic
 Claim output before the RPC; a lost acknowledgement stays `unknown` and is never
 automatically replayed. Restart closes old bindings and preserves uncertainty.
 
+For voice execution, normalized provider input acceptance schedules one acknowledgement
+after 0.8 seconds. A fast completion merges it into the result; commentary and tool
+details never trigger speech. A native reply already associated with that input prevents
+an extra acknowledgement. Accepted execution inputs renew the voice epoch/revision
+binding when a follow-up steers the same foreground turn. Their IDs are durably
+deduplicated, so replay cannot reclaim focus. The optional command entrance uses the
+same receipt principle and a literal local renderer; see `interaction/README.md`.
+
+Acknowledgement submission runs in owned work, outside the provider event pump. Only
+result delivery waits behind it. Native speech drains after assistant transcript completion
+through 500 ms of quiet PCM before restoring execution silence, with a 15-second total
+bound; interruption, Web input, a new execution and closing release the wait immediately.
+This is a transport heuristic, not a per-answer playout receipt. Failed/uncertain
+acknowledgements are recorded without retry or cancelling execution. The actual final
+report remains separately eligible for speech.
+
 Eligible results use `appendSpeech`, instead of another developer prompt asking the
 voice model to invent a completion response. Preserve error/output code blocks as
 evidence. Long reports stay in the conversation instead of reading a truncated prefix

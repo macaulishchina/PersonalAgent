@@ -38,6 +38,7 @@ class Config:
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
+    interaction: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
@@ -76,6 +77,11 @@ class Config:
     memory_auto_capture: bool = True
 
     def __post_init__(self):
+        from assistant_runtime.interaction.settings import InteractionSettings
+
+        interaction = InteractionSettings.parse(self.interaction)
+        if interaction.enabled and "tasks" not in self.plugins:
+            raise ValueError("Dual-path interaction requires the tasks capability")
         from assistant_runtime.plugins.integrations.settings import IntegrationSettings
 
         IntegrationSettings.parse(self.external_mcp)

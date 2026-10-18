@@ -505,6 +505,7 @@ class StreamsTest(unittest.IsolatedAsyncioTestCase):
         old, new = self.transport(), self.transport()
         registry.get("main").open.side_effect = [old, new]
         route = SimpleNamespace(
+            hardware_volume_configured=False,
             ensure=AsyncMock(),
             open_output=lambda rate: registry.open("main", rate, owner="voice"),
         )

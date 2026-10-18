@@ -51,6 +51,10 @@ class CodexPlugin:
             },
             "voice_connect_ms": self.voice.open_timing_ms,
             "native_output_frames": self.voice.output_frames,
+            "native_output_gates": {
+                "web_silent": self.voice.web_silent,
+                "awaiting_result": self.voice.awaiting_result,
+            },
             "rtp_inbound": [
                 {
                     k: s.get(k)

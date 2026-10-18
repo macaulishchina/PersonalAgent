@@ -15,6 +15,7 @@ import numpy as np
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.assistant.quiet import QuietHours
 from assistant_runtime.assistant.dialogue import Dialogue
+from assistant_runtime.interaction.input import InputBuffer
 from assistant_runtime.store import Store
 from assistant_runtime.kernel.contracts import (
     Control,
@@ -50,6 +51,9 @@ class AssistantService:
         self.last_error = None
         self.connect_task = None
         self.preroll = deque(maxlen=50)  # approximately one second, memory only
+        self.input_buffer = InputBuffer(config.interaction.get("input_buffer_seconds", 30))
+        self.native_pending = deque(maxlen=1500)
+        self.capture_sequence = 0
         self.tasks = []
         self.transition = asyncio.Lock()
         self.standby_ready = asyncio.Event()
@@ -81,6 +85,11 @@ class AssistantService:
             await self.sleep()
 
     def audio_received(self, pcm):
+        interaction = getattr(self, "interaction", None)
+        if interaction and (
+            interaction.output.active or interaction.path == "command" and self.mode == "command"
+        ):
+            return
         if isinstance(pcm, AudioFrame):
             if pcm.generation != self.voice.epoch:
                 return
@@ -93,6 +102,10 @@ class AssistantService:
             self.last_activity = self.last_output
 
     async def speak(self, text):
+        interaction = getattr(self, "interaction", None)
+        if interaction and self.mode == "command" and interaction.state.current:
+            await interaction.feedback(interaction.state.current, "control", text)
+            return
         if self.active and not self.quiet_active():
             await self.voice.say(text)
 
@@ -103,6 +116,16 @@ class AssistantService:
         async with self.transition:
             if self.active or self.quiet_active():
                 return "deferred"
+            interaction = getattr(self, "interaction", None)
+            if interaction and interaction.ready:
+                from ..kernel.speech import FeedbackIntent, RequestRef
+                import uuid
+
+                intent = FeedbackIntent(
+                    RequestRef(uuid.uuid4().hex, 1), "brief", text[:240], time.monotonic() + 30
+                )
+                result = await interaction.output.say(intent, lambda: not self.active)
+                return "played" if result == "completed" else result
             self.notification_output = True
             self.player.manual_muted = False
             started = time.monotonic()
@@ -156,10 +179,41 @@ class AssistantService:
         correlation = uuid.uuid4().hex
         self._record_wake("accepted", correlation, entrance=source, keyword=keyword)
         self.player.manual_muted = False
-        await self._cue()
-        self.connect_task = self.context.spawn(self._connect(tuple(preroll), correlation), "voice-connect")
+        self.native_pending.clear()
+        self.context.spawn(self._cue(), "wake-cue")
+        interaction = getattr(self, "interaction", None)
+        if interaction and interaction.ready:
+            self.dialogue.follow_up_seconds = interaction.settings.follow_up_seconds
+            chunks = (
+                tuple(c for c in self.input_buffer.frames if c.sequence <= self.capture_sequence)[
+                    -len(preroll) :
+                ]
+                if preroll
+                else ()
+            )
+            self.connect_task = self.context.spawn(
+                self._connect_command(chunks, correlation), "command-connect"
+            )
+        else:
+            self.connect_task = self.context.spawn(
+                self._connect(tuple(preroll), correlation), "voice-connect"
+            )
         log.info("wake_detected connecting_native_voice")
         return True
+
+    async def _connect_command(self, chunks, correlation):
+        try:
+            await self.interaction.begin(chunks)
+            if self.active and self.interaction.path == "command":
+                self.mode = "command"
+                self._record_wake("connected", correlation)
+        except Exception as exc:
+            self.last_error = "Command input unavailable: " + type(exc).__name__
+            self.interaction.ready = False
+            self.active = False
+            self.mode = "standby"
+            self._record_wake("failed", correlation, error=type(exc).__name__)
+            await self._cue(error=True)
 
     async def _connect(self, preroll, correlation=None):
         async with self.transition:
@@ -173,6 +227,9 @@ class AssistantService:
                     await self.voice.close()
                     return
                 self.mode = "active"
+                for pcm in self.native_pending:
+                    self.voice.feed(pcm)
+                self.native_pending.clear()
                 self.last_error = None
                 if correlation:
                     self._record_wake("connected", correlation)
@@ -188,6 +245,8 @@ class AssistantService:
                 log.warning("%s", self.last_error)
                 self.active = False
                 self.mode = "standby"
+                self.native_pending.clear()
+                await self.voice.close()
                 self.recognizer.reset_keyword()
                 await self._cue(error=True)
 
@@ -196,6 +255,8 @@ class AssistantService:
             await self.standby_ready.wait()
             return
         self.active = False
+        if getattr(self, "interaction", None):
+            await self.interaction.end_attention()
         self.mode = "closing"
         self.standby_ready.clear()
         try:
@@ -209,6 +270,8 @@ class AssistantService:
                 await asyncio.gather(reconnect, return_exceptions=True)
             self.recovering = False
             self.preroll.clear()
+            self.native_pending.clear()
+            self.input_buffer.clear()
             self.recognizer.reset_keyword()
             if self.connect_task and not self.connect_task.done():
                 self.connect_task.cancel()
@@ -226,35 +289,89 @@ class AssistantService:
         async for pcm in self.route.frames():
             self.last_frame = time.monotonic()
             if self.quiet_active():
+                self.input_buffer.clear()
                 self.preroll.clear()
                 continue
-            samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
-            self.input_rms = round(float(np.sqrt(np.mean(samples * samples))), 5)
-            if not self.active:
-                self.preroll.append(pcm)
-                raw = getattr(self.route, "raw_frame", None) or pcm
-                wake_samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
-                keyword = await self.recognizer.detect(wake_samples)
-                if keyword and not self.active:
-                    log.info("keyword_detected phrase=%s", keyword)
-                    await self.wake(tuple(self.preroll), source="keyword", keyword=keyword)
-                    self.preroll.clear()
+            self.input_buffer.offer(pcm, self.last_frame, getattr(self.route, "raw_frame", None))
+
+    async def _process_capture(self):
+        while True:
+            chunk, raw, interrupted = await self.input_buffer.queue.get()
+            try:
+                await self._process_frame(chunk, raw, interrupted)
+            finally:
+                self.input_buffer.queue.task_done()
+
+    async def _process_frame(self, chunk, raw, interrupted):
+        pcm = chunk.pcm
+        self.capture_sequence = chunk.sequence
+        if self.quiet_active():
+            self.preroll.clear()
+            return
+        interaction = getattr(self, "interaction", None)
+        if interrupted:
+            self.preroll.clear()
+            self.last_error = "Audio input interrupted; partial request discarded"
+            if self.active:
+                if interaction and self.mode == "command":
+                    await interaction.gap()
+                else:
+                    await self.sleep()
+                    await self._cue(error=True)
+                return
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
+        self.input_rms = round(float(np.sqrt(np.mean(samples * samples))), 5)
+        if not self.active:
+            self.preroll.append(pcm)
+            wake_samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
+            gaps = self.input_buffer.gaps
+            keyword = await self.recognizer.detect(wake_samples)
+            if self.input_buffer.gaps != gaps:
+                self.recognizer.reset_keyword()
+                return
+            if keyword and not self.active:
+                log.info("keyword_detected phrase=%s", keyword)
+                await self.wake(tuple(self.preroll), source="keyword", keyword=keyword)
+                self.preroll.clear()
+        elif self.mode == "command":
+            await interaction.accept(chunk)
+        elif self.mode in {"connecting", "reconnecting"}:
+            if interaction and interaction.ready and interaction.path == "command":
+                if self.connect_task:
+                    await asyncio.shield(self.connect_task)
+                if self.mode == "command":
+                    await interaction.accept(chunk)
             else:
+                if len(self.native_pending) == self.native_pending.maxlen:
+                    self.last_error = "Voice connection input buffer exhausted; request not replayed"
+                    await self.sleep()
+                    await self._cue(error=True)
+                    return
+                self.native_pending.append(pcm)
+        elif self.mode == "active":
+            try:
                 self.voice.feed(pcm)
-            self.recognizer.vad.accept_waveform(samples)
-            speech = self.recognizer.vad.is_speech_detected()
-            self.player.input_speaking = speech
-            if speech and self.active:
-                self.last_speech = time.monotonic()
-                # Room echo also passes a simple VAD. Let native voice identify
-                # a user turn before flushing playback. VAD never renews attention.
-            while not self.recognizer.vad.empty():
-                self.recognizer.vad.pop()  # no utterance ASR in the native route
+            except BufferError:
+                self.last_error = "Voice input buffer exhausted; partial request discarded"
+                await self.sleep()
+                await self._cue(error=True)
+                return
+        self.recognizer.vad.accept_waveform(samples)
+        speech = self.recognizer.vad.is_speech_detected()
+        self.player.input_speaking = speech
+        if speech and self.active:
+            self.last_speech = time.monotonic()
+            # Room echo also passes a simple VAD. Let native voice identify
+            # a user turn before flushing playback. VAD never renews attention.
+        while not self.recognizer.vad.empty():
+            self.recognizer.vad.pop()  # no utterance ASR in the native route
 
     async def _events(self):
         while True:
             event = await self.events.get()
             try:
+                if self.mode == "command":
+                    continue  # Old native callbacks cannot dispatch a second command.
                 if event["epoch"] != self.voice.epoch or not self.active or self.quiet_active():
                     continue
                 if event["kind"] == "transcript":
@@ -308,6 +425,10 @@ class AssistantService:
                             )
                     elif role == "assistant" and not self.backend.busy:
                         self.dialogue.replied()
+                elif event["kind"] == "input_gap":
+                    self.last_error = "Voice input incomplete; please repeat the request"
+                    await self.sleep()
+                    await self._cue(error=True)
                 elif event["kind"] == "user_turn":
                     # Data-channel events can arrive seconds after their
                     # audio. A stale turn must not cut a newer answer.
@@ -368,6 +489,9 @@ class AssistantService:
                         await self.voice.open()
                     if not self.active or self.quiet_active():
                         return
+                    for pcm in self.native_pending:
+                        self.voice.feed(pcm)
+                    self.native_pending.clear()
                     self.mode = "active"
                     self.last_error = None
                     return
@@ -391,6 +515,8 @@ class AssistantService:
             self.dialogue.user()
             await self.speak("好，我们聊聊。")
         elif cmd.kind == "stop":
+            if getattr(self, "interaction", None):
+                await self.interaction.output.interrupt()
             await self.player.stop()
             self.player.manual_muted = True
 
@@ -427,6 +553,19 @@ class AssistantService:
     def status(self):
         return {
             "assistant_name": self.config.assistant_name,
+            "interaction": {
+                "enabled": bool(getattr(self, "interaction", None)),
+                "ready": bool(getattr(self, "interaction", None) and self.interaction.ready),
+                "error": self.interaction.error if getattr(self, "interaction", None) else None,
+                "input_gaps": self.input_buffer.gaps,
+                "path": self.interaction.path if getattr(self, "interaction", None) else "native",
+                "trace": list(self.interaction.state.trace)[-16:]
+                if getattr(self, "interaction", None)
+                else [],
+                "stages": dict(self.interaction.state.current.stages)
+                if getattr(self, "interaction", None) and self.interaction.state.current
+                else {},
+            },
             "wake_words": self.config.wake_words,
             "quiet_hours": {"settings": self.config.quiet_hours, "active": self.quiet_active()},
             "wake_detector": self.recognizer.diagnostics(),
@@ -483,7 +622,7 @@ class AssistantService:
             await self._enforce_quiet()
             if (
                 self.active
-                and self.mode == "active"
+                and self.mode in {"active", "command"}
                 and self.dialogue.expired(
                     busy=self.backend.busy,
                     playing=self.player.playing,

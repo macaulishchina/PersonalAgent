@@ -55,6 +55,11 @@ address = "AA:BB:CC:DD:EE:FF" # or sink = "exact PipeWire sink name"
 
 `minimum_volume` raises readable channels below the floor, preserves louder channels and skips unknown volume. There is no extra gain/limiter. Output loss does not route audio to another room. Native audio uses Chromium WebRTC and optional WebRTC AEC3; the wake model receives the original mic stream.
 
+ALSA-backed PipeWire devices can additionally set an optional per-device
+`connection.hardware_volume` control/percent. Unconfigured hardware levels stay
+unchanged; configured levels apply before capture/playback, including the main AEC
+output. See [hardware mixer configuration](src/assistant_runtime/plugins/pipewire/README.md#optional-hardware-mixer-volume).
+
 Optional `quiet_hours = {enable = true, start = "23:00", end = "07:00", timezone = "Asia/Shanghai"}` suppresses keyword/gesture activation, speech PCM, confirmations and wake/error chimes in that local-time interval. Set `enable = false` to disable silence while preserving the schedule; the flag must be a TOML boolean, and schedule fields are validated even when disabled. Start is inclusive and end exclusive; overnight intervals cross midnight. The one-second maintenance loop clears queued playback and closes an active voice session, preserving background tasks. At the end the assistant stays in standby until explicitly awakened. This does not change device volume or wake sensitivity. An omitted/empty table has no silence schedule. Configuration changes require a service reload/restart; this setting currently has no voice-command override.
 
 For a core-only, hardware-free installation use `uv sync --locked`; `profile="headless"` runs management/explicit-trigger validation without voice, models, Codex or memory. Missing capabilities are reported rather than simulated as completed tasks.
@@ -279,3 +284,8 @@ in `.agents/mcp/servers.json` belong in Git; credentials and runtime state stay 
 Shared Codex configuration is untouched. See the
 [integration guide](src/assistant_runtime/plugins/integrations/README.md) for schemas,
 CLI/tools, OAuth and reproducible hardware-free acceptance.
+
+The optional [voice-first command path](src/assistant_runtime/interaction/README.md)
+separates streaming recognition, request revisions, task execution and spoken receipts.
+It is off pending acoustic/latency acceptance; offline comparison and its measured local
+engine limitations are documented there. Existing fixed USB bindings are unchanged.

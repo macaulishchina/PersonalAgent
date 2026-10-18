@@ -8,23 +8,27 @@ async function startVoice() {
   const code = `
   class Input extends AudioWorkletProcessor {
     constructor() {
-      super(); this.blocks=[]; this.offset=0; this.enabled=false;
+      super(); this.blocks=[]; this.offset=0; this.enabled=false; this.failed=false; this.buffered=0;
       this.port.onmessage=e=>{
         if(e.data.enabled!==undefined) this.enabled=e.data.enabled;
-        else { this.blocks.push(new Int16Array(e.data)); if(this.blocks.length>500)this.blocks.shift(); }
+        else if(!this.failed) {
+          const block=new Int16Array(e.data);
+          if(this.buffered+block.length>30*48000) {
+            this.failed=true; this.blocks=[]; this.offset=0; this.buffered=0;
+            this.port.postMessage({type:'input_gap'});
+          } else { this.blocks.push(block); this.buffered+=block.length; }
+        }
       };
     }
     process(inputs,outputs) {
       const out=outputs[0][0];
-      if(!this.enabled) return true;
-      // Catch up after connection setup by removing only leading silence.
-      // Never speed up speech or drop voiced samples from the opening question.
-      while(this.offset===0 && this.blocks.length>4 && this.blocks[0].every(v=>Math.abs(v)<80))this.blocks.shift();
+      if(!this.enabled || this.failed) return true;
       for(let i=0;i<out.length;i++) {
         // Python's soxr stream supplies 48 kHz PCM, already resampled.
         if(!this.blocks.length) break;
         const a=this.blocks[0];
         out[i]=a[this.offset++]/32768;
+        this.buffered--;
         if(this.offset>=a.length){this.blocks.shift();this.offset=0;}
       }
       return true;
@@ -48,6 +52,7 @@ async function startVoice() {
   const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
   await context.audioWorklet.addModule(url);URL.revokeObjectURL(url);
   const microphone=new AudioWorkletNode(context,'personal-agent-input',{numberOfInputs:0,outputChannelCount:[1]});
+  microphone.port.onmessage=e=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify(e.data));};
   socket.onmessage=e=>{if(e.data instanceof ArrayBuffer)microphone.port.postMessage(e.data,[e.data]);};
   const stream=context.createMediaStreamDestination();microphone.connect(stream);
   peer=new RTCPeerConnection({iceServers:[]});

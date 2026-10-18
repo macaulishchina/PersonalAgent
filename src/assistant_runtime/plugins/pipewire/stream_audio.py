@@ -42,6 +42,8 @@ class StreamPlayer:
         return self.pending_voice_frames > 0 or time.monotonic() - self.last_voice_write < 0.18
 
     def feed(self, pcm):
+        if not pcm:
+            return  # A buffered resampler can emit no samples; this is not a gap or speech.
         if self.manual_muted:
             self.discarded_bytes += len(pcm)
             return
@@ -54,7 +56,10 @@ class StreamPlayer:
             self.silence_bytes = self.silence_bytes + len(pcm) if quiet else 0
             # Live has no response ID / audio-done event. Resume after a quiet
             # output boundary, never just after an instruction acknowledgement.
-            if not self.input_speaking and (self.silence_bytes >= self.rate * 2 * 0.2 or gap > 0.5):
+            # A local VAD can remain active on TV/background speech or its
+            # release delay. It cannot veto a confirmed remote quiet boundary
+            # indefinitely and discard every subsequent assistant reply.
+            if self.silence_bytes >= self.rate * 2 * 0.2 or (not self.input_speaking and gap > 0.5):
                 self.suppressed = False
             else:
                 self.discarded_bytes += len(pcm)
@@ -128,7 +133,15 @@ class StreamPlayer:
                 try:
                     if epoch != self.epoch:
                         continue
-                    if not self.transport or not self.transport.healthy:
+                    if (
+                        not self.transport
+                        or not self.transport.healthy
+                        or (
+                            voiced
+                            and self.route.hardware_volume_configured
+                            and time.monotonic() - self.last_voice_write > 0.5
+                        )
+                    ):
                         await self.route.ensure(check_volume=True)
                     if epoch != self.epoch:
                         continue

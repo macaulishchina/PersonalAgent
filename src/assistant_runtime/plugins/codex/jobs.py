@@ -248,7 +248,7 @@ class CodexJobs:
                 handle["attachments"] = list(references.values())[-4:]
                 self.notify(ident, None, attachments=handle["attachments"])
         if method == "turn/started":
-            self.handles.setdefault(ident, {})["turn_id"] = p["turn"]["id"]
+            self.handles.setdefault(ident, {}).update(turn_id=p["turn"]["id"], result="")
             accepted = self.notify(ident, "running", turn_id=p["turn"]["id"], turn_active=True)
             if accepted is False:
                 # Late native continuation cannot revive a canceled/paused/ended run.
@@ -257,7 +257,10 @@ class CodexJobs:
                 self.backend.server_tasks.add(task)
                 task.add_done_callback(self.backend.server_tasks.discard)
         elif method == "item/completed" and p.get("item", {}).get("type") == "agentMessage":
-            self.notify(ident, None, progress=p["item"].get("text", "")[:16000])
+            text = p["item"].get("text", "")[:16000]
+            self.notify(ident, None, progress=text)
+            if p["item"].get("phase") != "commentary":
+                self.handles.setdefault(ident, {})["result"] = text
         elif method == "turn/completed":
             status = p["turn"]["status"]
             state = {"completed": "completed", "interrupted": "canceled", "failed": "failed"}.get(
@@ -269,6 +272,7 @@ class CodexJobs:
                 turn_id=p["turn"]["id"],
                 provider_error=p["turn"].get("error"),
                 turn_active=False,
+                result=self.handles.get(ident, {}).get("result", ""),
             )
         elif method == "thread/goal/updated":
             goal = p.get("goal") or {}
