@@ -70,6 +70,17 @@ inspection and explicit retry. Existing same-origin protections apply. The compo
 an unread badge and inbox drawer. “引用” beside each notification timestamp attaches the selected notification
 to the next user message in the same conversation; it does not send a message by itself.
 
+The inbox groups loaded notifications by the server's stable `source`, never by title
+or run ID. Each source shows its latest notification; earlier entries expand in place.
+Task sources use the task title as a display label, while separate tasks remain separate
+even if their titles match. Expanding does not acknowledge notifications: each entry
+keeps its own revision-checked read, reference and retry actions. Group unread/important
+counts describe loaded entries in the selected filter; when more pages exist, counts
+are explicitly labeled as loaded. Scrolling near the bottom loads one bounded page,
+with a manual load button when collapsed groups do not fill the viewport. Collapsing
+must never automatically drain all remaining pages. No storage or delivery aggregation
+occurs, and the inbox-wide unread count and snapshot-based “全部已读” remain unchanged.
+
 ```
 personal-agent --config config/config.toml notifications list
 personal-agent --config config/config.toml notifications get '{"id":"ID"}'
