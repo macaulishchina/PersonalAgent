@@ -70,6 +70,26 @@ def policy(value, spec, zone):
     return {"allowed_triggers": allowed, "condition": value["condition"].strip()}
 
 
+def completion_policy(value, spec):
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"condition"}
+        or not isinstance(value["condition"], str)
+        or not 1 <= len(value["condition"].strip()) <= 1000
+    ):
+        raise ValueError("Self completion requires an explicit authorization condition")
+    if (
+        spec.get("authorization") != "user"
+        or spec.get("parent_id")
+        or spec.get("auto_archive")
+        or spec["trigger"]["kind"] not in {"interval", "date", "cron"}
+    ):
+        raise ValueError("Self completion requires a user-authorized reusable timed plan")
+    return {"condition": value["condition"].strip()}
+
+
 class SelfSchedule:
     def __init__(self, plugin):
         self.plugin, self.repo = plugin, plugin.repo
@@ -96,16 +116,13 @@ class SelfSchedule:
             "schedule_changes_truncated": len(rows) > 20,
         }
 
-    def request(self, args, caller):
+    def request(self, args, caller, *, complete=False):
         if not caller:
             raise ValueError("Self scheduling requires the bound background execution identity")
-        if not isinstance(args, dict) or set(args) != {
-            "request_id",
-            "revision",
-            "trigger",
-            "reason",
-            "evidence",
-        }:
+        fields = {"request_id", "revision", "reason", "evidence"}
+        if not complete:
+            fields.add("trigger")
+        if not isinstance(args, dict) or set(args) != fields:
             raise ValueError("Self scheduling accepts only UUID, revision, trigger, reason and evidence")
         try:
             if str(uuid.UUID(args["request_id"])) != args["request_id"]:
@@ -117,7 +134,7 @@ class SelfSchedule:
         for key, maximum in (("reason", 400), ("evidence", 2000)):
             if not isinstance(args[key], str) or not 1 <= len(args[key].strip()) <= maximum:
                 raise ValueError("Self scheduling requires bounded reason and evidence")
-        target = schedule(args["trigger"], self.plugin.settings.timezone)
+        target = None if complete else schedule(args["trigger"], self.plugin.settings.timezone)
         fingerprint = hashlib.sha256(
             json.dumps(args, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
         ).hexdigest()
@@ -148,19 +165,27 @@ class SelfSchedule:
             raise ValueError("User changed this plan; a new execution must use the latest authorization")
         current = definition["spec"]
         for spec in (run["data"]["spec"], current):
-            grant = policy(spec.get("self_schedule"), spec, self.plugin.settings.timezone)
-            if grant is None or target not in grant["allowed_triggers"]:
+            grant = (
+                completion_policy(spec.get("self_completion"), spec)
+                if complete
+                else policy(spec.get("self_schedule"), spec, self.plugin.settings.timezone)
+            )
+            if grant is None or (not complete and target not in grant["allowed_triggers"]):
                 raise ValueError("Requested schedule is outside this execution's explicit authorization")
-        if target == schedule(current["trigger"], self.plugin.settings.timezone):
+        if not complete and target == schedule(current["trigger"], self.plugin.settings.timezone):
             raise ValueError("Schedule already matches; keep its existing next occurrence")
         now = time.time()
-        following = next_time(
-            target,
-            self.plugin.settings.timezone,
-            now,
-            after=None if target["kind"] == "date" else now,
+        following = (
+            None
+            if complete
+            else next_time(
+                target,
+                self.plugin.settings.timezone,
+                now,
+                after=None if target["kind"] == "date" else now,
+            )
         )
-        if following is None or following <= now:
+        if not complete and (following is None or following <= now):
             raise ValueError("Self scheduling must select a future occurrence")
         receipt = {
             "request_id": args["request_id"],
@@ -174,7 +199,10 @@ class SelfSchedule:
             "at": now,
             "reason": args["reason"],
             "evidence": args["evidence"],
-            "authorization_condition": current["self_schedule"]["condition"],
+            "authorization_condition": current["self_completion" if complete else "self_schedule"][
+                "condition"
+            ],
+            "action": "complete_self" if complete else "reschedule_self",
             "evidence_scope": "executor_reported",
             "status": "applied",
         }
@@ -183,7 +211,8 @@ class SelfSchedule:
         saved = self.repo.update_definition(
             definition["id"],
             expected_revision=definition["revision"],
-            spec={**current, "trigger": target},
+            spec=current if complete else {**current, "trigger": target},
+            state="archived" if complete else definition["state"],
             next_at=following,
             on_update=lambda _: self.record(caller, args["request_id"], fingerprint, receipt),
         )

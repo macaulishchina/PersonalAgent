@@ -20,7 +20,7 @@ from .trace import TaskTrace
 from .selection import ModelPolicy
 from .model_advice import select_execution
 from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
-from .self_schedule import SelfSchedule, policy as schedule_policy
+from .self_schedule import SelfSchedule, policy as schedule_policy, completion_policy
 from .fallbacks import ModelFallbacks
 
 
@@ -294,6 +294,7 @@ class TasksPlugin:
             "misfire_seconds",
             "auto_archive",
             "self_schedule",
+            "self_completion",
         }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Unknown task specification fields")
@@ -342,6 +343,10 @@ class TasksPlugin:
         s.setdefault("auto_archive", one_shot(s))
         if type(s["auto_archive"]) is not bool or (s["auto_archive"] and not one_shot(s)):
             raise ValueError("auto_archive requires a one-shot, non-Goal task")
+        if s.get("self_completion") is not None:
+            if caller:
+                raise ValueError("Background executions cannot grant self completion to children")
+            s["self_completion"] = completion_policy(s["self_completion"], s)
         if s.get("self_schedule") is not None:
             if caller:
                 raise ValueError("Background executions cannot grant self scheduling to children")
@@ -423,7 +428,7 @@ class TasksPlugin:
                 raise ValueError("Invalid event timing/hysteresis")
 
     async def request(self, request):
-        if request.action == "reschedule_self":
+        if request.action in {"reschedule_self", "complete_self"}:
             if not request.caller_run:
                 raise ValueError("Self scheduling requires the bound background execution identity")
             lock = self.run_locks.setdefault(request.caller_run, asyncio.Lock())
@@ -447,12 +452,13 @@ class TasksPlugin:
             "trace",
             "upgrade_model",
             "reschedule_self",
+            "complete_self",
         }:
             raise ValueError(
                 "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
             )
-        if a == "reschedule_self":
-            return self.self_schedule.request(args, caller)
+        if a in {"reschedule_self", "complete_self"}:
+            return self.self_schedule.request(args, caller, complete=a == "complete_self")
         if a == "upgrade_model":
             return await self.upgrades.request(args, caller)
         if a in {"event_inbox", "trace"}:

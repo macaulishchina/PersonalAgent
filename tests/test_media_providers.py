@@ -70,6 +70,33 @@ class ProviderProtocolTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, "provider_response_limit")
         self.assertTrue(caught.exception.uncertain)
 
+    def test_empty_success_and_move_refuses_overwrite(self):
+        auth = SimpleNamespace(session=Mock())
+        response = self.response(204, {})
+        response.iter_content.return_value = []
+        auth.session.post.return_value = response
+        self.assertEqual(
+            worker.execute(auth, "restore", {"drive_id": "d", "file_id": "f"}),
+            {"file_id": None, "async_task_id": None},
+        )
+        auth.session.post.return_value = self.response(200, {"file_id": "f"})
+        worker.execute(auth, "move", {"drive_id": "d", "file_id": "f", "to_folder_id": "nested"})
+        body = auth.session.post.call_args.kwargs["json"]
+        self.assertFalse(body["overwrite"])
+        self.assertFalse(body["auto_rename"])
+        self.assertEqual(body["to_parent_file_id"], "nested")
+
+    def test_scoped_ancestry_is_bounded_and_cannot_escape(self):
+        auth = SimpleNamespace(session=Mock())
+        auth.session.post.return_value = self.response(
+            200, {"file_id": "f", "parent_file_id": "root", "name": "outside.mkv", "type": "file"}
+        )
+        with self.assertRaisesRegex(MediaError, "outside"):
+            worker.execute(auth, "locate", {"drive_id": "d", "folder_id": "allowed", "file_id": "f"})
+        self.assertEqual(auth.session.post.call_count, 1)
+        result = worker.execute(auth, "locate", {"drive_id": "d", "folder_id": "root", "file_id": "f"})
+        self.assertEqual(result["relative_parts"], ["outside.mkv"])
+
     def test_share_url_validation_rejects_lookalikes_and_credentials(self):
         self.assertEqual(share_id("https://www.alipan.com/s/public123?pwd=abcd"), "public123")
         for url in (

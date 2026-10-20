@@ -94,8 +94,9 @@ Missing/expired OpenList credentials do not undo confirmed cloud acquisitions.
 Infuse should mount only the existing OpenList local directory (`/本地影视` in this
 instance). A cloud save is a separate operation from a local download. Select a file
 with `list_media_files`, or use `saved_file_id` from a completed transfer, then call
-`download_media(request_id, target, file_id)`. Only direct children of the configured
-cloud folder are eligible; folder downloads and arbitrary signed URLs are not tool input.
+`download_media(request_id, target, file_id)`. Files inside validated descendants of the configured cloud folder are eligible;
+provider ancestry is bounded to 16 levels. Their directory hierarchy is mirrored locally.
+Folder downloads and arbitrary signed URLs are not tool input.
 The plugin requests the original download URL, never video preview/transcoding output.
 
 Create the configured library/staging directories beforehand. Both must be on the
@@ -255,3 +256,84 @@ Whole-file completion/hash/publication are covered by real-HTTP local fixtures; 
 cloud film download and TV playback are not claimed. The expanded full gate passed
 419 tests, zero skips, plus static checks and the frontend build. Configured local
 destinations are under `/mnt/P/openlist/media`; staging is outside that library.
+
+
+## Library organization and batches
+
+`Library` owns stable cloud object identities, last-observed locations, collection facts
+and exact change plans. `LocalLibrary` owns filesystem changes. Provider protocol stays
+in Aliyun; scheduling and model decisions stay in tasks. No global library scan starts
+on a timer. `browse_media_library` reads one bounded folder page on demand, returning
+coverage, observation time and whether the page finishes that folder. This is never a
+claim that the whole library or every public source was scanned. `get_media_asset`
+returns cached observations; operation receipts keep historical evidence separately.
+
+Start with `media_capabilities`. `preview_media_changes(target, changes, location)`
+persists up to 100 exact changes for one hour; `apply_media_changes(request_id, plan_id)`
+queues them in the existing media operation repository. Existing explicit user authority
+permits immediate apply; ask again only for ambiguity, conflicts or expanded scope.
+Use small batches for slow cloud accounts: preview performs real bounded metadata and
+conflict checks, so 100 is a ceiling, not a latency guarantee. Execution checks again.
+
+Cloud changes are `mkdir(folder_id,name)`, `rename(file_id,name)`,
+`move(file_id,folder_id)`, `trash(file_id)`, `restore(file_id)`. Local changes are
+`mkdir(path)`, `rename(path,name)`, `move(path,folder)`, `trash(path)`,
+`restore(file_id)`; each object includes `action`. Local paths are relative to the
+configured library. Create parents first. One change per file per plan keeps every
+precondition unambiguous; folders can be created but recursive folder moves/deletes
+are not exposed. No overwriting, extension changes or inferred media identity.
+
+Accepted writes are durably marked before IO. Lost replies reconcile against stable
+identity and the intended location, never blindly repeat the write. An interrupted
+mkdir without a returned identity stays uncertain; a matching name alone does not
+prove ownership. Resume explicitly to recheck an uncertain write. Cancellation stops
+later steps and reports already completed steps; it does not roll them back. A partly
+applied failed/cancelled plan reports `outcome=partial`. Download reservations prevent
+conflicting cloud changes; local management waits for target downloads to end.
+
+Local changes use no-follow directory descriptors, require the configured mount, and
+stay on that filesystem. Files move using no-clobber link/unlink with inode/size/mtime
+preconditions; crash recovery recognizes the two-name intermediate state. Local trash
+is `staging_path/library-trash`, outside the published library, with no automatic purge.
+Restore requires our recorded original location and refuses collisions. Cloud restore
+also requires our own recorded trash receipt, and remains subject to upstream expiry.
+Permanent deletion is not exposed. Trash takes disk space; it is not space reclamation.
+
+`transfer_media` accepts optional validated `folder_id` and desired `name`. The adapter
+performs copy then verified rename; cloud acquisition is complete only after organization
+succeeds. `download_media` accepts a stable cloud ID and resolves its current parent within
+the configured target. It retains original-file Range/hash/atomic-publish guarantees.
+`submit_media_batch` groups 1..100 explicitly selected transfer/download items. Its UUID
+and per-item derived UUIDs survive disconnect/restart. `get_media_batch` reports item
+receipts and completed/partial/failed/cancelled/uncertain/waiting_auth outcomes.
+`cancel_media_batch` does not cancel an operation merely reused from another batch.
+Media owns waiting; the AI run need not stay alive. A batch emits one summary rather than
+per-file completion notices; account-expiry notices remain transition-scoped.
+
+Use stable collection/season/episode for deduplication. Keep existing versions by default;
+only an explicit user request warrants a distinct `version` identifier and a nonconflicting
+filename. Old copies remain. Do not invent title/year/season/resolution from weak filenames.
+Recommended layout is `电视剧/剧名/Season 01/剧名.S01E01.ext`, with year when needed to
+resolve ambiguity; films use `电影/片名 (已知年份)/片名 (已知年份).ext`. Unidentified existing
+files remain browsable. Historical completed transfer receipts populate collection links
+when their exact saved IDs are observed, not by fuzzy filename matching.
+
+`media_collection` persists revisioned completion criteria:
+`{title,season,total_episodes,evidence,required_state:"cloud"|"local"}`. Unknown episode
+totals are null. Query returns paginated observed copies, missing episodes and pending
+acquisitions. `completion_candidate` is based on recorded observations, not a fresh
+provider audit. Reverify expected copies and unresolved operations before ending a plan.
+Do not infer series completion from no new search results. Configure task
+`self_completion={condition:...}` only when authorized, then use `complete_own_task` with
+current revision and concrete evidence. That archives future scheduling and preserves the
+current run's final response. A completed AI execution alone is not a completed media goal.
+
+CLI uses the same actions: `capabilities`, `library`, `asset`, `preview`, `apply`,
+`collection`, `batch`, `batch_get`, `batch_cancel`; pass bounded JSON arguments. MCP/CLI
+have no credentials or arbitrary endpoint arguments. Background writes require the
+captured `media:TARGET` grant; plan application/cancellation also respects ownership.
+
+Validation: `scripts/check.py --group media --group tasks`. Protocol fixtures and actual
+local filesystem tests cover lost write acknowledgments, changed preconditions, restore
+conflicts, symlinks, nested downloads, cancellation, aggregate notices and scoped grants.
+They are separate from installed-service and cloud-account acceptance.

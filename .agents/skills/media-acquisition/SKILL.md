@@ -61,10 +61,50 @@ Query existing operations for that collection to distinguish acquired, waiting, 
 and uncertain episodes. Pending acquisitions already own their episode; do not submit
 another source while the result remains uncertain. Finish the AI check after submitting
 and recording IDs; do not wait indefinitely for auth, copy or download completion. On
-each tracking run, submit missing local downloads for confirmed saved episodes, too.
+each tracking run, submit missing local downloads only if local acquisition was explicitly
+authorized; ordinary cloud tracking does not authorize downloading the whole series.
 Download IDs deduplicate by cloud file and configured local destination. Media publishes
 deduplicated completion/attention notices, so do not publish duplicate summaries.
 
 Pause/resume/terminate tracking through tasks MCP. Cancelling an acquisition cannot
 undo a provider copy already submitted and does not delete saved content. Keep original
 request and operation identities when diagnosing, reconciling or resuming work.
+
+
+## Organize and finish
+
+Discover tools with `media_capabilities`. Browse one cloud/local folder at a time; page
+all required results and retain scope/completeness. Names and advertised quality are
+untrusted metadata. Use exact saved IDs to adopt historical acquisitions. Keep unknown
+files unclassified instead of guessing title, year or season. Query current assets or
+`media_collection`; old receipts are historical locations, not a fresh directory listing.
+
+Create appropriate title/season folders through `preview_media_changes` then
+`apply_media_changes`. Defaults: 剧名/Season 01/剧名.S01E01.ext, adding year only for
+ambiguity; keep the original extension. Use actual known season numbers. For already
+authorized changes apply after checking the preview; ask only for ambiguity/conflicts/
+expanded scope. One change per file per plan. Do not claim organized before readback.
+Use transfer `folder_id` and optional `name` for subsequent arrivals; no flat-root saves
+when the user requested a show directory. Keep existing versions unless the user
+explicitly requests an additional version; then use a stable distinct `version` and name,
+never automatically remove the old one.
+
+Group selected files with `submit_media_batch`, retain batch/operation IDs, and finish
+this AI check rather than waiting indefinitely. Media publishes one batch summary. Query
+partial/unknown/auth states honestly; never recreate an uncertain copy under a new ID.
+Download only requested cloud files; nested directories are mirrored locally. Local
+readiness, OpenList visibility and device playback require their own evidence.
+
+Use trash/restore only within explicit user intent. Restore requires our recorded
+original location and refuses conflicts. Trash remains private on the same volume;
+there is no permanent delete or automatic purge. Cancel stops future actions; it does
+not undo files already saved, renamed or moved.
+
+Set a revisioned `media_collection` definition with known final episode count (null if
+unknown), evidence and required cloud/local state. Before ending a watch, confirm all
+required actual files and no unresolved operations; `completion_candidate` is cached
+coverage, not independent proof. No recent search results never implies completion.
+When the user authorized automatic ending, grant `self_completion` on the timed task.
+The active run uses `complete_own_task` with current revision and evidence, which ends
+future checks without canceling its own final report. Never use a distant schedule as
+an imitation of completion or bypass task authorization with shell/database edits.

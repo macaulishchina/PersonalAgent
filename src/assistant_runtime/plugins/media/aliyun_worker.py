@@ -19,6 +19,7 @@ from .private import save
 HOST = "https://api.aliyundrive.com"
 FIELDS = (
     "file_id",
+    "parent_file_id",
     "name",
     "type",
     "size",
@@ -87,7 +88,7 @@ def request(auth, path, body, *, share_token=None, write=False):
                 if len(data) > 2 * 1024 * 1024:
                     raise MediaError("provider_response_limit", uncertain=write)
             try:
-                result = json.loads(data)
+                result = {} if not data and response.status_code in {202, 204} else json.loads(data)
             except (ValueError, UnicodeError):
                 raise MediaError("provider_invalid_response", uncertain=write) from None
             if not isinstance(result, dict):
@@ -137,6 +138,7 @@ def file_record(item):
         raise MediaError("provider_invalid_file")
     for field, maximum in (
         ("file_id", 160),
+        ("parent_file_id", 160),
         ("name", 500),
         ("type", 20),
         ("category", 40),
@@ -160,6 +162,48 @@ def files(result):
 
 
 def execute(auth, action, args):
+    if action == "locate":
+        current = args["file_id"]
+        chain, record = [], None
+        for _ in range(17):
+            if current == args["folder_id"]:
+                return {"file": record, "relative_parts": list(reversed(chain))}
+            value = request(auth, "/v2/file/get", {"drive_id": args["drive_id"], "file_id": current})
+            if value.get("file_id") != current or value.get("trashed"):
+                raise MediaError("file_outside_configured_target")
+            record = record or file_record(value)
+            chain.append(value["name"])
+            current = value.get("parent_file_id")
+            if not current or (current == "root" and args["folder_id"] != "root"):
+                break
+        raise MediaError("file_outside_configured_target")
+    if action in {"rename", "move", "trash", "restore", "trash_list"}:
+        body = {"drive_id": args["drive_id"]}
+        if action == "trash_list":
+            result = request(
+                auth,
+                "/v2/recyclebin/list",
+                {**body, "limit": 100, "marker": args.get("marker", "")},
+            )
+            return {"items": files(result), "marker": result.get("next_marker") or None}
+        body["file_id"] = args["file_id"]
+        paths = {
+            "rename": "/v3/file/update",
+            "move": "/v2/file/move",
+            "trash": "/v2/recyclebin/trash",
+            "restore": "/v2/recyclebin/restore",
+        }
+        if action == "rename":
+            body.update(name=args["name"], check_name_mode="refuse")
+        elif action == "move":
+            body.update(
+                to_drive_id=args["drive_id"],
+                to_parent_file_id=args["to_folder_id"],
+                auto_rename=False,
+                overwrite=False,
+            )
+        result = request(auth, paths[action], body, write=True)
+        return {key: result.get(key) for key in ("file_id", "async_task_id")}
     if action == "status":
         request(auth, "/v2/user/get", {})
         return {"identity": identity(auth.token), "state": "ready"}
@@ -283,7 +327,7 @@ def execute(auth, action, args):
             ]
         }
     if action == "mkdir":
-        # Trusted onboarding only; deliberately absent from MediaRequest/MCP.
+        # Caller validates configured-root membership and no-clobber preconditions.
         result = request(
             auth,
             "/adrive/v2/file/createWithFolders",

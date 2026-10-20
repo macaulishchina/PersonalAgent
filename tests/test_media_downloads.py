@@ -16,6 +16,7 @@ import aiohttp
 from aiohttp import web
 
 from assistant_runtime.plugins.media.downloads import Downloads, LocalFiles
+from assistant_runtime.plugins.media.library import Library
 from assistant_runtime.plugins.media.private import disk
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.repository import MediaRepository
@@ -82,6 +83,8 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             download_session=SimpleNamespace(get=get),
             reporter=Mock(),
         )
+        self.plugin.target = lambda name: self.settings.targets[name]
+        self.plugin.library = Library(self.plugin)
         self.downloads = Downloads(self.plugin)
 
     async def asyncTearDown(self):
@@ -140,6 +143,32 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             },
             "assistant",
         )
+
+    async def test_nested_download_mirrors_directory_and_rejects_symlink_parent(self):
+        from unittest.mock import AsyncMock
+
+        item = self.create()
+        intent = item["data"]["intent"]
+        intent["root_destination"] = dict(self.cloud)
+        intent["destination"] = {
+            **self.cloud,
+            "folder_id": "nested",
+            "openlist_path": "/cloud/Series/Season 01",
+        }
+        intent["relative_parts"] = ["Series", "Season 01"]
+        self.repo.change(item["id"], item["state"], intent=intent)
+        self.plugin.library.destination = AsyncMock(
+            return_value=(intent["destination"], intent["relative_parts"])
+        )
+        await self.downloads.process(self.repo.get(item["id"]))
+        self.assertEqual((self.library / "Series" / "Season 01" / "movie.mkv").read_bytes(), self.content)
+        (self.library / "escape").symlink_to(self.stage, target_is_directory=True)
+        files = LocalFiles({**self.local, "relative_parts": ["escape"]}, "another", "test.mkv", 0)
+        try:
+            with self.assertRaises(OSError):
+                files.open()
+        finally:
+            files.close()
 
     async def test_original_full_checksum_atomic_publish_and_dedup(self):
         item = self.create()

@@ -12,6 +12,8 @@ from .openlist import OpenList
 from .repository import MediaRepository, TERMINAL
 from .search import PanSou, share_id, extraction_code
 from .settings import MediaSettings, identifier
+from .library import Library, filename
+from .batches import Batches
 
 
 class MediaPlugin:
@@ -21,6 +23,8 @@ class MediaPlugin:
         self.host = host
         self.settings = MediaSettings.parse(host.config.media)
         self.repo = MediaRepository(host.store.db, self.settings)
+        self.library = Library(self)
+        self.batches = Batches(self)
         self.root = host.config.state_dir / "media"
         self.provider = provider or Aliyun(self.root, self.repo.account_state)
         self.wakeup = asyncio.Event()
@@ -55,6 +59,8 @@ class MediaPlugin:
         context.own(self.stop_accepting)
         context.register(MediaRequest, self.request)
         context.spawn(self.worker(), "acquisitions")
+        context.spawn(self.library.worker(), "library")
+        context.spawn(self.batches.worker(), "batches")
         self.downloads = Downloads(self)
         context.spawn(self.downloads.worker(), "downloads")
         context.spawn(self.notifications(), "outbox")
@@ -85,7 +91,16 @@ class MediaPlugin:
             "status": set(),
             "search": {"query", "before", "limit", "search_id", "refresh"},
             "inspect": {"share_url", "password", "parent_file_id", "marker"},
-            "files": {"target", "marker"},
+            "files": {"target", "marker", "folder_id"},
+            "capabilities": set(),
+            "library": {"target", "marker", "folder_id", "location", "path"},
+            "preview": {"target", "changes", "location"},
+            "apply": {"request_id", "plan_id"},
+            "collection": {"collection", "definition", "revision", "target", "before", "limit"},
+            "asset": {"asset_id"},
+            "batch": {"request_id", "target", "action", "items"},
+            "batch_get": {"batch_id"},
+            "batch_cancel": {"batch_id"},
             "transfer": {
                 "request_id",
                 "share_url",
@@ -95,6 +110,9 @@ class MediaPlugin:
                 "collection",
                 "season",
                 "episode",
+                "folder_id",
+                "name",
+                "version",
             },
             "download": {"request_id", "target", "file_id"},
             "get": {"operation_id"},
@@ -108,6 +126,57 @@ class MediaPlugin:
         if action not in allowed or not isinstance(args, dict) or set(args) - allowed[action]:
             raise ValueError("Unknown media action or arguments")
         owner = await self.authorize(request.caller_run)
+        if action == "asset":
+            return self.library.asset(args["asset_id"])
+        if action == "batch":
+            await self.authorize(request.caller_run, args["target"])
+            return self.batches.create(args, owner, request.caller_run)
+        if action in {"batch_get", "batch_cancel"}:
+            result = self.batches.get(args["batch_id"])
+            if action == "batch_cancel":
+                await self.authorize(request.caller_run, result["target"])
+                return self.batches.cancel(args["batch_id"], owner)
+            return result
+        if action == "capabilities":
+            return {
+                "provider": "aliyun",
+                "targets": list(self.settings.targets),
+                "cloud": ["list", "mkdir", "rename", "move", "trash", "restore", "transfer", "download"],
+                "limits": {"change_items": 100, "directory_depth": 16, "conflict_scan": 1000},
+                "local": ["list", "mkdir", "rename", "move", "trash", "restore"],
+                "restore_scope": "recorded_own_trash",
+                "permanent_delete": False,
+                "evidence": "implementation_available_provider_account_validation_is_separate",
+            }
+        if action == "library":
+            if args.get("location", "cloud") == "local":
+                from .local_library import LocalLibrary
+
+                return await LocalLibrary(self.library).listing(
+                    args["target"], args.get("path", ""), args.get("marker", "")
+                )
+            if args.get("location", "cloud") != "cloud":
+                raise ValueError("Unknown library location")
+            return await self.library.listing(args["target"], args.get("folder_id"), args.get("marker", ""))
+        if action == "preview":
+            await self.authorize(request.caller_run, args["target"])
+            return await self.library.preview(args, owner)
+        if action == "apply":
+            # Resolve the persisted plan on the server, never accept a caller-supplied scope.
+            import json
+
+            row = self.repo.db.execute(
+                "SELECT data FROM media_change_plans WHERE id=?", (args.get("plan_id"),)
+            ).fetchone()
+            if not row:
+                raise ValueError("Change plan not found")
+            await self.authorize(request.caller_run, json.loads(row[0])["target"])
+            return self.library.apply(args, owner, request.caller_run)
+        if action == "collection":
+            if "definition" in args:
+                self.target(args.get("target"))
+                await self.authorize(request.caller_run, args["target"])
+            return self.library.collection(args)
         if action == "search":
             return await self.search.search(
                 args.get("query"),
@@ -144,7 +213,7 @@ class MediaPlugin:
                 values[field] = value
             return await self.provider.call("inspect", values)
         if action == "files":
-            target = self.target(args.get("target"))
+            target, _ = await self.library.destination(args.get("target"), args.get("folder_id"))
             marker = args.get("marker", "")
             if not isinstance(marker, str) or len(marker) > 2000:
                 raise ValueError("Invalid media file cursor")
@@ -169,6 +238,13 @@ class MediaPlugin:
                 "target": target_id,
                 "destination": target,
             }
+            if args.get("folder_id"):
+                intent["root_destination"] = target
+                intent["destination"], _ = await self.library.destination(target_id, args["folder_id"])
+            if args.get("name") is not None:
+                intent["desired_name"] = filename(args["name"])
+            if args.get("version") is not None:
+                intent["version"] = identifier(args["version"])
             collection = args.get("collection")
             if collection is not None:
                 if not isinstance(collection, str) or not 1 <= len(collection) <= 200:
@@ -198,6 +274,24 @@ class MediaPlugin:
                 "destination": target,
                 "local_destination": dict(self.settings.local_targets[target_id]),
             }
+            # Existing direct-child callers retain their bindings; nested files resolve
+            # from a provider ID through the configured root, never an arbitrary path.
+            loc = await self.library.locate(target_id, intent["file_id"])
+            parts = loc["relative_parts"][:-1]
+            if parts:
+                intent["root_destination"] = target
+                intent["destination"], _ = await self.library.destination(
+                    target_id, loc["file"]["parent_file_id"]
+                )
+                intent["relative_parts"] = parts
+            if self.repo.db.execute(
+                """SELECT 1 FROM media_operations, json_each(data,'$.steps') AS step
+                 WHERE state NOT IN ('completed','failed','cancelled')
+                 AND json_extract(data,'$.intent.target')=?
+                 AND (json_extract(step.value,'$.file_id')=? OR json_extract(data,'$.intent.location')='local') LIMIT 1""",
+                (target_id, intent["file_id"]),
+            ).fetchone():
+                raise MediaError("media_file_busy")
             item = self.repo.create(args.get("request_id"), intent, owner, request.caller_run)
             return self.repo.public(item)
         if action == "list":
@@ -215,7 +309,7 @@ class MediaPlugin:
                 raise ValueError("probe must be boolean")
             if item["state"] != "completed":
                 return self.repo.public(item)
-            if item["data"]["intent"].get("kind") == "download":
+            if item["data"]["intent"].get("kind") in {"download", "library"}:
                 return self.repo.public(item)
             await self.verify_openlist(item, probe=args.get("probe", False))
             return self.repo.public(self.repo.get(item["id"]))
@@ -296,10 +390,14 @@ class MediaPlugin:
     async def process(self, item):
         ident, data = item["id"], item["data"]
         intent = data["intent"]
+        if self.target(intent["target"]) != intent.get("root_destination", intent["destination"]):
+            raise MediaError("target_configuration_changed")
         if item["state"] == "queued":
             self.repo.change(ident, "checking")
-            if self.target(intent["target"]) != intent["destination"]:
+            if self.target(intent["target"]) != intent.get("root_destination", intent["destination"]):
                 raise MediaError("target_configuration_changed")
+            if "root_destination" in intent:
+                await self.library.destination(intent["target"], intent["destination"]["folder_id"])
             folder = await self.provider.call("folder", intent["destination"])
             if folder.get("type") != "folder":
                 raise MediaError("destination_not_a_folder")
@@ -313,6 +411,18 @@ class MediaPlugin:
             ):
                 raise MediaError("source_must_be_a_verifiable_video_file")
             self.repo.change(ident, "checking", file=file)
+            if intent.get("desired_name"):
+                from pathlib import PurePosixPath
+
+                if (
+                    PurePosixPath(intent["desired_name"]).suffix.lower()
+                    != PurePosixPath(file["name"]).suffix.lower()
+                ):
+                    raise MediaError("media_extension_changed")
+                if intent["desired_name"] != file["name"]:
+                    await self.library.conflict(
+                        intent["target"], intent["destination"]["folder_id"], intent["desired_name"]
+                    )
             present = await self.matches(intent, file)
             if present:
                 await self.complete(ident, present)
@@ -335,6 +445,15 @@ class MediaPlugin:
                 raise
             self.repo.change(ident, "verifying", copy_receipt=result)
         item = self.repo.get(ident)
+        if item["data"].get("organization_file_id"):
+            await self.complete(
+                ident,
+                {
+                    "file_id": item["data"]["organization_file_id"],
+                    "verification": item["data"]["verification"],
+                },
+            )
+            return
         present = await self.matches(
             intent,
             item["data"]["file"],
@@ -353,10 +472,53 @@ class MediaPlugin:
             )
 
     async def complete(self, ident, file):
+        item = self.repo.get(ident)
+        intent = item["data"]["intent"]
+        if intent.get("desired_name"):
+            self.repo.change(
+                ident, "verifying", organization_file_id=file["file_id"], verification=file["verification"]
+            )
+            actual = await self.provider.call("file", {**intent["destination"], "file_id": file["file_id"]})
+            if actual["name"] != intent["desired_name"]:
+                if item["data"].get("rename_submitted"):
+                    raise MediaError("rename_result_unconfirmed", uncertain=True)
+                await self.library.conflict(
+                    intent["target"],
+                    intent["destination"]["folder_id"],
+                    intent["desired_name"],
+                    file["file_id"],
+                )
+                self.repo.change(ident, "verifying", rename_submitted=True)
+                try:
+                    await self.provider.call(
+                        "rename",
+                        {**intent["destination"], "file_id": file["file_id"], "name": intent["desired_name"]},
+                    )
+                except MediaError as exc:
+                    if not exc.uncertain:
+                        self.repo.change(ident, "verifying", rename_submitted=False)
+                    raise
+                actual = await self.provider.call(
+                    "file", {**intent["destination"], "file_id": file["file_id"]}
+                )
+                if actual["name"] != intent["desired_name"]:
+                    raise MediaError("rename_result_unconfirmed", uncertain=True)
+            self.repo.change(ident, "verifying", file=actual)
         self.repo.change(
             ident, "completed", saved_file_id=file["file_id"], verification=file["verification"], error=None
         )
         item = self.repo.get(ident)
+        known = {
+            **item["data"]["file"],
+            "file_id": file["file_id"],
+            "parent_file_id": intent["destination"]["folder_id"],
+        }
+        self.library.remember(
+            intent["target"],
+            known,
+            trashed=False,
+            **{k: intent[k] for k in ("collection", "season", "episode", "version") if k in intent},
+        )
         await self.verify_openlist(item)
         # Operation facts and pending notice commit together; a lost publish ack
         # reuses the same notification key instead of executing copy again.

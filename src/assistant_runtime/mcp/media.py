@@ -52,6 +52,93 @@ def create_server(client, caller_run=None):
         return await call("status")
 
     @server.tool(annotations=READ)
+    async def media_capabilities() -> dict:
+        """Discover supported actions, scopes and limits. Availability is not account acceptance evidence."""
+        return await call("capabilities")
+
+    @server.tool(annotations=READ)
+    async def browse_media_library(
+        target: ID, folder_id: str | None = None, marker: str = "", location: str = "cloud", path: str = ""
+    ) -> dict:
+        """Browse one cloud folder by ID, or one local relative directory. Coverage is nonrecursive.
+
+        Current locations are separate from historical receipts. Unidentified files can be
+        browsed without guessing their title, year, season or episode. Page using marker.
+        """
+        return await call(
+            "library", target=target, folder_id=folder_id, marker=marker, location=location, path=path
+        )
+
+    @server.tool(annotations=WRITE)
+    async def preview_media_changes(target: ID, changes: list[dict], location: str = "cloud") -> dict:
+        """Persist a bounded exact plan, up to 100 changes. No provider mutation yet.
+
+        Cloud changes: mkdir(folder_id,name), rename(file_id,name), move(file_id,folder_id),
+        trash(file_id), restore(file_id). Each object includes action. Local changes:
+        mkdir(path), rename(path,name), move(path,folder), trash(path), restore(file_id).
+        Local paths are relative to configured library; no recursive folder changes.
+        Restore only our recorded trash; no overwrite/permanent deletion. Preserve suffix.
+        User-authorized unambiguous plans can be applied immediately; ask only for conflicts,
+        unclear identity or expanded scope. One change per file per plan.
+        """
+        return await call("preview", target=target, changes=changes, location=location)
+
+    @server.tool(annotations={**WRITE, "idempotentHint": True})
+    async def apply_media_changes(request_id: ID, plan_id: ID) -> dict:
+        """Apply the stored plan with fresh preconditions; retain operation_id for progress/cancel.
+
+        Reuse UUID after lost replies. Submitted unknown writes are reconciled, not replayed.
+        Cancellation stops subsequent changes and does not undo completed changes.
+        """
+        return await call("apply", request_id=request_id, plan_id=plan_id)
+
+    @server.tool(annotations=WRITE)
+    async def media_collection(
+        collection: ID,
+        target: str | None = None,
+        definition: dict | None = None,
+        revision: int | None = None,
+        before: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """Query durable episode coverage, or explicitly set completion criteria with revision.
+
+        definition={title,season,total_episodes,evidence,required_state:cloud|local}.
+        total_episodes may be null when unknown; never infer end-of-series from no search hits.
+        Definitions require target authorization. Observations are not a fresh provider scan;
+        reverify required copies and pending operations before completing a watch plan.
+        """
+        values = {"collection": collection, "before": before, "limit": limit}
+        if definition is not None:
+            values.update(target=target, definition=definition, revision=revision)
+        return await call("collection", **values)
+
+    @server.tool(annotations=READ)
+    async def get_media_asset(asset_id: ID) -> dict:
+        """Get last observed identity/current location separately from historical receipts."""
+        return await call("asset", asset_id=asset_id)
+
+    @server.tool(annotations={**WRITE, "idempotentHint": True})
+    async def submit_media_batch(request_id: ID, target: ID, action: str, items: list[dict]) -> dict:
+        """Submit 1..100 explicit transfer/download items under one authorized target.
+
+        Items use single-operation fields without request_id/target; no implicit folder
+        download. One summary notification; individual receipts remain queryable.
+        Existing episode versions are retained, never automatically upgraded.
+        """
+        return await call("batch", request_id=request_id, target=target, action=action, items=items)
+
+    @server.tool(annotations=READ)
+    async def get_media_batch(batch_id: ID) -> dict:
+        """Get item states; partial/uncertain/waiting_auth are not full success."""
+        return await call("batch_get", batch_id=batch_id)
+
+    @server.tool(annotations=WRITE)
+    async def cancel_media_batch(batch_id: ID) -> dict:
+        """Stop unsubmitted items and cancel this batch's owned operations; keep saved files."""
+        return await call("batch_cancel", batch_id=batch_id)
+
+    @server.tool(annotations=READ)
     async def search_media(
         query: Annotated[str, Field(min_length=1, max_length=150)],
         before: int = 0,
@@ -81,9 +168,9 @@ def create_server(client, caller_run=None):
         )
 
     @server.tool(annotations=READ)
-    async def list_media_files(target: ID, marker: str = "") -> dict:
+    async def list_media_files(target: ID, marker: str = "", folder_id: str | None = None) -> dict:
         """List one bounded page in a configured destination; never traverse unrelated cloud folders."""
-        return await call("files", target=target, marker=marker)
+        return await call("files", target=target, marker=marker, folder_id=folder_id)
 
     @server.tool(annotations={**WRITE, "idempotentHint": True})
     async def transfer_media(
@@ -95,11 +182,17 @@ def create_server(client, caller_run=None):
         collection: str | None = None,
         season: int | None = None,
         episode: int | None = None,
+        folder_id: str | None = None,
+        name: str | None = None,
+        version: str | None = None,
     ) -> dict:
         """Persist ONE authorized video acquisition; returns an operation_id immediately. No overwrite.
 
         Reuse request_id after a lost reply. For tracking use a stable collection plus season and episode;
         an existing acquisition for that episode/target is reused. Background writes require media:TARGET.
+        folder_id must be below the configured target. Optional name preserves the extension.
+        Leave version unset to keep existing episodes. Use a distinct stable version only
+        when the user explicitly requests an additional/upgraded version; old copies stay.
         """
         return await call(
             "transfer",
@@ -111,6 +204,9 @@ def create_server(client, caller_run=None):
             collection=collection,
             season=season,
             episode=episode,
+            folder_id=folder_id,
+            name=name,
+            version=version,
         )
 
     @server.tool(annotations=READ)

@@ -13,6 +13,7 @@ import aiohttp
 
 from .errors import MediaError
 from .private import disk
+from .library import filename
 
 
 class LocalFiles:
@@ -42,6 +43,19 @@ class LocalFiles:
             setattr(self, field, descriptor)
             if os.fstat(descriptor).st_dev != mount.stat().st_dev:
                 raise MediaError("download_filesystem_changed")
+        for part in self.destination.get("relative_parts", []):
+            filename(part)
+            try:
+                os.mkdir(part, 0o755, dir_fd=self.library)
+                os.fsync(self.library)
+            except FileExistsError:
+                pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.library)
+            if os.fstat(child).st_dev != mount.stat().st_dev:
+                os.close(child)
+                raise MediaError("download_filesystem_changed")
+            os.close(self.library)
+            self.library = child
         self.fd = os.open(
             self.partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=self.stage
         )
@@ -131,14 +145,25 @@ class Downloads:
     async def process(self, item):
         ident, intent = item["id"], item["data"]["intent"]
         if (
-            self.settings.targets.get(intent["target"]) != intent["destination"]
+            self.settings.targets.get(intent["target"])
+            != intent.get("root_destination", intent["destination"])
             or self.settings.local_targets.get(intent["target"]) != intent["local_destination"]
         ):
             raise MediaError("target_configuration_changed")
+        local_destination = {
+            **intent["local_destination"],
+            "relative_parts": intent.get("relative_parts", []),
+        }
+        if "root_destination" in intent:
+            dest, parts = await self.plugin.library.destination(
+                intent["target"], intent["destination"]["folder_id"]
+            )
+            if dest != intent["destination"] or parts != intent["relative_parts"]:
+                raise MediaError("download_path_changed")
         if self.cancelled(ident):
             previous = item["data"].get("file")
             if previous:
-                files = LocalFiles(intent["local_destination"], ident, previous["name"], 0)
+                files = LocalFiles(local_destination, ident, previous["name"], 0)
                 try:
                     await disk(files.open)
                     await disk(files.remove_partial)
@@ -167,9 +192,7 @@ class Downloads:
         if previous and metadata != previous:
             raise MediaError("download_source_changed")
         self.repo.change(ident, "checking", file=metadata)
-        files = LocalFiles(
-            intent["local_destination"], ident, metadata["name"], self.settings.download_min_free_bytes
-        )
+        files = LocalFiles(local_destination, ident, metadata["name"], self.settings.download_min_free_bytes)
         try:
             offset = await disk(files.open)
             if self.cancelled(ident):
@@ -212,7 +235,12 @@ class Downloads:
 
     def complete(self, ident, metadata):
         item = self.repo.get(ident)
-        path = str(Path(item["data"]["intent"]["local_destination"]["path"]) / metadata["name"])
+        intent = item["data"]["intent"]
+        path = str(
+            Path(intent["local_destination"]["path"]).joinpath(
+                *intent.get("relative_parts", []), metadata["name"]
+            )
+        )
         self.repo.change(
             ident,
             "completed",
@@ -224,6 +252,9 @@ class Downloads:
                 "percent": 100.0,
             },
             error=None,
+        )
+        self.plugin.library.remember(
+            intent["target"], metadata, local_path=path, local_verified=True, trashed=False
         )
         self.plugin.reporter.offer(
             type="media.download_completed",

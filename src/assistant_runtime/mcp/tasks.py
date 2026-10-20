@@ -45,8 +45,9 @@ def create_server(client, caller_run=None):
         notify_completion: bool | None = None,
         auto_archive: bool | None = None,
         self_schedule: dict | None = None,
+        self_completion: dict | None = None,
     ) -> dict:
-        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. No grant is inferred from a prompt; children cannot receive this permission."""
+        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. For authorized automatic ending, self_completion={condition:concrete stopping criteria} permits complete_own_task after verification. No grant is inferred from a prompt; children cannot receive either permission."""
         spec = {
             "title": title,
             "prompt": prompt,
@@ -60,6 +61,8 @@ def create_server(client, caller_run=None):
             spec["notify_completion"] = notify_completion
         if auto_archive is not None:
             spec["auto_archive"] = auto_archive
+        if self_completion is not None:
+            spec["self_completion"] = self_completion
         if self_schedule is not None:
             spec["self_schedule"] = self_schedule
         if workspace:
@@ -133,6 +136,19 @@ def create_server(client, caller_run=None):
             trigger=trigger,
             reason=reason,
             evidence=evidence,
+        )
+
+    @server.tool(annotations=WRITE)
+    async def complete_own_task(request_id: str, revision: int, reason: str, evidence: str) -> dict:
+        """Archive this plan only after its explicit self_completion condition is verified.
+
+        Bound running identity, captured/current authorization and revision must agree.
+        Stops future scheduling, leaves this execution alive to finish reporting. Evidence
+        is executor-reported, not independently proved by this tool. Missing search results
+        are not proof that a series ended. Reuse UUID after a lost acknowledgment.
+        """
+        return await call(
+            "complete_self", request_id=request_id, revision=revision, reason=reason, evidence=evidence
         )
 
     @server.tool(annotations=WRITE)

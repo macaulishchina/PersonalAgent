@@ -25,6 +25,7 @@ TASK_TOOLS = (
     "get_task_execution_trace",
     "update_task",
     "update_own_task_schedule",
+    "complete_own_task",
     "run_task",
     "pause_task",
     "resume_task",
@@ -78,6 +79,15 @@ EVENT_TOOLS = (
 # One service descriptor catalogue shared by provider registration and exclusion.
 MEDIA_TOOLS = (
     "media_status",
+    "media_capabilities",
+    "browse_media_library",
+    "preview_media_changes",
+    "apply_media_changes",
+    "media_collection",
+    "get_media_asset",
+    "submit_media_batch",
+    "get_media_batch",
+    "cancel_media_batch",
     "search_media",
     "inspect_media_share",
     "list_media_files",

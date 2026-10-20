@@ -526,3 +526,22 @@ transaction rollback, duplicate reports, real runtime/SQLite restart, pagination
 coalescing, overflow, expiration, mutation invalidation, paused subscriptions, stale
 in-flight reads, unknown executions, and trace redaction/limits. Simulated sensor events
 are not evidence that a physical presence sensor has been connected or validated.
+
+
+## Completing an authorized plan from its own execution
+
+Foreground creation/update may grant `self_completion={"condition":"concrete user-authorized stopping criteria"}`
+to a reusable user-authorized timed plan. Children cannot grant themselves this authority.
+`complete_own_task(request_id, revision, reason, evidence)` derives the target from its
+bound active provider run; it accepts no arbitrary task identity. Both the captured and
+current grant must exist, and current revision must match the run or its last controlled
+self-change. User edits/revocation/pause invalidate older authority. Archive and UUID
+receipt commit together; retries return the receipt without another transition.
+
+Completion stops future scheduling, preserving the current execution for its final
+report. It does not call the general archive action that cancels active work. The existing
+self-change audit records `action=complete_self` and executor-reported evidence; the task
+framework does not independently prove a domain goal. For media watches, verify the
+known final episode range, requested storage level and absence of unresolved operations;
+no search hits is not completion evidence. Unknown totals require continued tracking or
+user clarification. Tests live in `test_task_self_schedule`.

@@ -5,6 +5,9 @@ import hashlib
 import json
 import time
 import uuid
+from contextvars import ContextVar
+
+CURRENT_BATCH = ContextVar("media_batch", default=None)
 
 TERMINAL = {"completed", "failed", "cancelled"}
 STATES = TERMINAL | {
@@ -63,7 +66,7 @@ class MediaRepository:
             (key, canonical({"event_key": key, "title": title, "body": body})),
         )
 
-    def create(self, request_id, intent, owner, caller_run=None):
+    def create(self, request_id, intent, owner, caller_run=None, *, initial=None):
         try:
             if str(uuid.UUID(request_id)) != request_id:
                 raise ValueError()
@@ -78,7 +81,9 @@ class MediaRepository:
                 raise ValueError("Media request_id conflicts with an earlier request")
             return self.get(prior[0])
         keys = (
-            ("kind", "file_id", "target", "local_destination")
+            ("kind", "plan_id", "target")
+            if intent.get("kind") == "library"
+            else ("kind", "file_id", "target", "local_destination")
             if intent.get("kind") == "download"
             else (
                 ("collection", "season", "episode", "target")
@@ -87,7 +92,11 @@ class MediaRepository:
             )
         )
         identity = hashlib.sha256(
-            canonical({k: intent[k] for k in (*keys, "destination")}).encode()
+            canonical(
+                {k: intent[k] for k in keys}
+                | ({"version": intent["version"]} if intent.get("version") else {})
+                | {"destination": intent.get("root_destination", intent["destination"])}
+            ).encode()
         ).hexdigest()
         prior = self.db.execute(
             "SELECT id FROM media_operations WHERE identity=? AND state NOT IN ('failed','cancelled')",
@@ -109,6 +118,8 @@ class MediaRepository:
             "attempts": 0,
             "created_at": now,
             "stages": [],
+            "batch_id": CURRENT_BATCH.get(),
+            **(initial or {}),
         }
         with self.db:
             self.db.execute(
@@ -151,17 +162,20 @@ class MediaRepository:
                 "UPDATE media_operations SET state=?,updated=?,due=?,data=? WHERE id=?",
                 (state, now, now if due is None else due, canonical(data), ident),
             )
-            if state == "completed" and item["state"] != "completed":
+            if state == "completed" and item["state"] != "completed" and not data.get("batch_id"):
+                managed = data["intent"].get("kind") == "library"
                 local = data["intent"].get("kind") == "download"
                 self.enqueue(
                     "media-complete:" + ident,
-                    "影视资源已下载" if local else "影视资源已转存",
-                    data["file"]["name"]
+                    "媒体整理已完成" if managed else "影视资源已下载" if local else "影视资源已转存",
+                    ("已核验 " + str(len(data["steps"])) + " 项操作。")
+                    if managed
+                    else data["file"]["name"]
                     + (" 已下载到本地并通过完整校验。耗时 " if local else " 已在目标网盘核验。耗时 ")
                     + str(data["duration_seconds"])
                     + " 秒。",
                 )
-            elif state in {"failed", "uncertain"} and state != item["state"]:
+            elif state in {"failed", "uncertain"} and state != item["state"] and not data.get("batch_id"):
                 self.enqueue(
                     "media-attention:" + ident,
                     "媒体操作需要处理",
@@ -229,6 +243,10 @@ class MediaRepository:
         return {
             "operation_id": item["id"],
             "state": item["state"],
+            "outcome": "partial"
+            if item["state"] in {"failed", "cancelled"}
+            and any(step["state"] == "completed" for step in data.get("steps", []))
+            else item["state"],
             "created_at": item["created_at"],
             "updated_at": item["updated_at"],
             "target": data["intent"]["target"],
@@ -237,6 +255,7 @@ class MediaRepository:
             "collection": data["intent"].get("collection"),
             "season": data["intent"].get("season"),
             "episode": data["intent"].get("episode"),
+            "version": data["intent"].get("version"),
             **{
                 k: data[k]
                 for k in (
@@ -249,6 +268,7 @@ class MediaRepository:
                     "openlist",
                     "progress",
                     "local_path",
+                    "steps",
                 )
                 if k in data
             },

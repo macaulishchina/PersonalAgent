@@ -66,6 +66,42 @@ class SelfScheduleTest(unittest.IsolatedAsyncioTestCase):
     async def apply(self, run, args):
         return await self.runtime.invoke(TaskRequest("reschedule_self", args, run["id"]))
 
+    async def test_complete_own_plan_preserves_current_run_and_replays_receipt(self):
+        definition, run = await self.running(self_completion={"condition": "All requested files verified"})
+        args = self.arguments(definition)
+        args.pop("trigger")
+        receipt = await self.plugin.request(TaskRequest("complete_self", args, run["id"]))
+        self.assertEqual(self.plugin.repo.definition(definition["id"])["state"], "archived")
+        self.assertIsNone(self.plugin.repo.definition(definition["id"])["next_at"])
+        self.assertEqual(self.plugin.repo.run(run["id"]), run)
+        repeated = await self.plugin.request(TaskRequest("complete_self", args, run["id"]))
+        self.assertEqual(receipt, repeated)
+        self.assertEqual(receipt["action"], "complete_self")
+
+    async def test_completion_requires_explicit_grant_current_revision_and_active_identity(self):
+        definition, run = await self.running()
+        args = self.arguments(definition)
+        args.pop("trigger")
+        with self.assertRaisesRegex(ValueError, "explicit authorization"):
+            await self.plugin.request(TaskRequest("complete_self", args, run["id"]))
+        with self.assertRaises(ValueError):
+            await self.plugin.request(TaskRequest("complete_self", args))
+        definition, run = await self.running(self_completion={"condition": "Files verified"})
+        updated = await self.plugin.request(
+            TaskRequest(
+                "update",
+                {
+                    "task_id": definition["id"],
+                    "revision": definition["revision"],
+                    "changes": {"self_completion": None},
+                },
+            )
+        )
+        args = self.arguments(updated)
+        args.pop("trigger")
+        with self.assertRaisesRegex(ValueError, "User changed"):
+            await self.plugin.request(TaskRequest("complete_self", args, run["id"]))
+
     async def test_changes_future_schedule_only_and_retains_execution_snapshot_and_trace(self):
         definition, run = await self.running()
         original = copy.deepcopy(run["data"])

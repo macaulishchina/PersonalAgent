@@ -433,6 +433,9 @@ invalidate older execution authority. Definition and UUID receipt commit atomica
 lost replies never cause a second change or restart the current work. Trace exposes
 bounded receipts; condition evidence remains executor-reported, not proof of completion.
 General task mutation, scope expansion and granting capabilities to children stay denied.
+Explicit `self_completion` uses the same identity/version/audit boundary to archive future
+scheduling while preserving the current run for final reporting. Domain completion
+evidence remains executor-reported; no implicit permission follows from finishing a turn.
 
 Durable record subscriptions are another tasks trigger, not a separate automation
 engine. `tasks/event_inbox.py` consumes EventRequest changes and commits cursor, bounded
@@ -469,6 +472,15 @@ Submitted/unknown writes reconcile on restart instead of replay. Background writ
 require an active task and its explicit `media:TARGET` resource; interactive login stays
 in the main conversation. Cloud completion, OpenList availability and physical playback
 are different evidence. See the [media plugin](src/assistant_runtime/plugins/media/README.md).
+
+Media library management remains inside that plugin: stable provider IDs and separate
+last-observed locations, revisioned collection criteria, bounded preconditioned change
+plans, and durable batches over existing operation workers. Aliyun owns cloud writes;
+local management uses mounted, same-volume, no-follow filesystem operations and private
+trash. Unknown writes reconcile without replay; cancellation preserves completed steps.
+Batch notification aggregation does not create another scheduler. Tasks own periodic
+checks and controlled plan completion; cloud save, organized placement, local checksum,
+OpenList visibility and actual playback stay separate evidence.
 
 ## Durable notifications
 

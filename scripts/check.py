@@ -36,7 +36,7 @@ GROUPS = {
     "events": {"events", "event_sources", "event_reporting"},
     "decisions": {"decisions", "decisions_transport"},
     "tasks": {"notifications", "tasks", "task_events", "task_models", "task_self_schedule"},
-    "media": {"media", "media_providers", "media_downloads"},
+    "media": {"media", "media_providers", "media_downloads", "media_library"},
     "memory": {"mem0", "memory"},
     "web": {"reply_images", "reply_videos", "web"},
 }

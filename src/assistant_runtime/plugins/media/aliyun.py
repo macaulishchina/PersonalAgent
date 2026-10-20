@@ -14,6 +14,8 @@ import uuid
 from .errors import MediaError
 from .private import disk, remove, save
 
+WRITES = {"copy", "mkdir", "rename", "move", "trash", "restore"}
+
 
 class Aliyun:
     def __init__(self, root, account_changed):
@@ -108,23 +110,23 @@ class Aliyun:
                 for _ in range(3):
                     line = await process.stdout.readline()
                     if not line:
-                        raise MediaError("sdk_worker_disconnected", uncertain=action == "copy")
+                        raise MediaError("sdk_worker_disconnected", uncertain=action in WRITES)
                     try:
                         result = json.loads(line)
                     except ValueError:
-                        raise MediaError("sdk_worker_protocol_error", uncertain=action == "copy") from None
+                        raise MediaError("sdk_worker_protocol_error", uncertain=action in WRITES) from None
                     if "qr_base64" in result and on_qr:
                         on_qr(result["qr_base64"])
                         continue
                     if "error" in result:
                         raise MediaError(result["error"], uncertain=bool(result.get("uncertain")))
                     if "result" not in result:
-                        raise MediaError("sdk_worker_protocol_error", uncertain=action == "copy")
+                        raise MediaError("sdk_worker_protocol_error", uncertain=action in WRITES)
                     await process.wait()
                     return result["result"]
-                raise MediaError("sdk_worker_protocol_error", uncertain=action == "copy")
+                raise MediaError("sdk_worker_protocol_error", uncertain=action in WRITES)
         except (TimeoutError, OSError, ValueError):
-            raise MediaError("sdk_worker_timeout", uncertain=action == "copy") from None
+            raise MediaError("sdk_worker_timeout", uncertain=action in WRITES) from None
         finally:
             if process.returncode is None:
                 try:
