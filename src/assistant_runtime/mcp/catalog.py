@@ -89,6 +89,8 @@ MEDIA_TOOLS = (
     "get_media_batch",
     "cancel_media_batch",
     "search_media",
+    "media_search_history",
+    "media_search_sources",
     "inspect_media_share",
     "list_media_files",
     "transfer_media",
@@ -105,6 +107,7 @@ MEDIA_TOOLS = (
 DECISION_TOOLS = ("decision_support_status", "judge_options")
 
 SERVICES = {
+    "search": {"tools": ("search_capabilities", "search_web", "fetch_webpage"), "task_context": True},
     "models": {"tools": ("list_models", "infer_with_model"), "task_context": True},
     "memory": {"tools": MEMORY_TOOLS, "task_context": False},
     "device": {"tools": DEVICE_TOOLS, "task_context": False},

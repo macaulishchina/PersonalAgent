@@ -17,6 +17,7 @@ from ..kernel.contracts import (
     IntegrationRequest,
     EventRequest,
     MediaRequest,
+    SearchRequest,
     DecisionRequest,
     DecisionQuery,
 )
@@ -28,6 +29,7 @@ Request = (
     | DecisionQuery
     | DecisionRequest
     | MediaRequest
+    | SearchRequest
     | EventRequest
     | IntegrationRequest
     | NotificationRequest
@@ -65,6 +67,8 @@ class LocalRuntimeClient:
             }
         elif isinstance(request, DecisionRequest):
             payload = {"command": "decisions", **asdict(request)}
+        elif isinstance(request, SearchRequest):
+            payload = {"command": "search", **asdict(request)}
         elif isinstance(request, MediaRequest):
             payload = {"command": "media", **asdict(request)}
         elif isinstance(request, EventRequest):

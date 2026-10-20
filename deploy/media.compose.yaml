@@ -16,7 +16,9 @@ services:
     environment:
       CACHE_PATH: /tmp/cache
       CHANNELS: Aliyun_4K_Movies,shareAliyun,alyp_1,Oscar_4Kmovies
-      ENABLED_PLUGINS: pansearch,zhizhen,labi,shandian,duoduo,muou,hunhepan
+      # Verified source additions; recent persistent failures excluded explicitly.
+      # PanSou source adapters are independent of assistant framework plugins.
+      ENABLED_PLUGINS: pansearch,labi,shandian,muou,hunhepan,yunso,susu
       PLUGIN_TIMEOUT: "20"
       PLUGIN_BATCH_TIMEOUT_SECONDS: "8"
       ASYNC_RESPONSE_TIMEOUT: "8"

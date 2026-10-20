@@ -148,6 +148,8 @@ class FakeProvider:
             raise MediaError("auth_required")
         if action == "status":
             return {"state": "ready"}
+        if action == "inspect":
+            return {"items": [dict(self.video)], "marker": None}
         if action == "folder":
             return {"type": "folder"}
         if action == "source":
@@ -233,6 +235,31 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
                 if item["state"] in states:
                     return item
                 await asyncio.sleep(0.005)
+
+    async def test_search_history_and_inspection_keep_active_task_read_boundary(self):
+        self.plugin.search_history.record({"queries": ["movie"]})
+        for action, args in [
+            ("search_history", {}),
+            ("search_sources", {}),
+            ("inspect", {"share_url": "https://www.alipan.com/s/publicshare"}),
+        ]:
+            with self.assertRaisesRegex(ValueError, "active task"):
+                await self.runtime.invoke(MediaRequest(action, args, "stale"))
+        self.dependencies.runs["reader"] = {"state": "running", "task_id": "task", "resources": []}
+        result = await self.runtime.invoke(MediaRequest("search_history", {}, "reader"))
+        self.assertEqual(result["items"][0]["queries"], ["movie"])
+        args = {"share_url": "https://www.alipan.com/s/publicshare"}
+        first = await self.runtime.invoke(MediaRequest("inspect", args, "reader"))
+        second = await self.runtime.invoke(MediaRequest("inspect", args))
+        self.assertFalse(first["inspection"]["cached"])
+        self.assertTrue(second["inspection"]["cached"])
+        self.assertEqual(self.provider.calls.count("inspect"), 1)
+        await self.runtime.invoke(MediaRequest("inspect", {**args, "refresh": True}))
+        self.assertEqual(self.provider.calls.count("inspect"), 2)
+        self.assertNotIn("copy", self.provider.calls)
+        caps = await self.runtime.invoke(MediaRequest("capabilities", {}))
+        self.assertIn("quark", caps["discovery"]["platforms"])
+        self.assertEqual(caps["acquisition_providers"], ["aliyun"])
 
     async def test_transfer_copies_once_and_verifies_content(self):
         item = await self.submit()

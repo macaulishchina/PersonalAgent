@@ -1,0 +1,16 @@
+# 独立网页搜索，不绑定执行模型。启用时在入口 plugins 中添加 "search"。
+# 密钥只放实例根目录 .env：DEEPSEEK_API_KEY=...
+# 与订阅 Search Service 并列；助手按需选择，失败不会自动改用另一种服务。
+[search]
+default_provider = "deepseek"
+timeout_seconds = 20
+concurrency = 4
+max_pending = 16
+requests_per_second = 5
+cache_seconds = 60
+
+[search.providers.deepseek]
+adapter = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+# 官方接口不必填 URL。兼容服务可显式填写服务根地址（不含 /v1/tools/search）。
+# base_url = "https://api.deepseek.com"

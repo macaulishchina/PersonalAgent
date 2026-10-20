@@ -44,9 +44,26 @@ async def verify(args):
             flush=True,
         )
         if args.query:
-            found = await call("search_media", query=args.query, limit=20)
+            found = await call(
+                "search_media", query=args.query, aliases=args.alias, platforms=args.platform, limit=20
+            )
             print(
-                json.dumps({"search_count": len(found["items"]), "complete": found["complete"]}), flush=True
+                json.dumps(
+                    {
+                        k: found[k]
+                        for k in ("search_id", "complete", "counts", "outcome", "diagnostics", "next_actions")
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+        if args.sources:
+            print(json.dumps(await call("media_search_sources"), ensure_ascii=False), flush=True)
+        if args.history:
+            history = await call("media_search_history", limit=5)
+            print(
+                json.dumps({"history_ids": [i["id"] for i in history["items"]], "before": history["before"]}),
+                flush=True,
             )
         if args.share_url:
             inspected = await call(
@@ -100,6 +117,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--query")
+    parser.add_argument("--alias", action="append", help="Known title alias; at most three")
+    parser.add_argument("--platform", action="append", help="Discovery platform; defaults to all")
+    parser.add_argument(
+        "--sources", action="store_true", help="Inspect configured source inventory/recent evidence"
+    )
+    parser.add_argument("--history", action="store_true", help="Verify bounded persisted search history")
     parser.add_argument("--share-url")
     parser.add_argument("--parent-file-id", default="root")
     parser.add_argument("--file-id")

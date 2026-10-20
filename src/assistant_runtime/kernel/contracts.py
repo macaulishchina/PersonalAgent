@@ -40,6 +40,15 @@ class DecisionQuery:
 
 
 @dataclass(frozen=True)
+class SearchRequest:
+    """Bounded public web lookup; caller identity is bound by the local transport."""
+
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
+
+
+@dataclass(frozen=True)
 class MediaRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)

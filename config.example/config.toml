@@ -8,6 +8,7 @@ include = [
   "tasks.toml",
   "memory.toml",
   "media.toml",
+  "search.toml",
   "services.toml",
 ]
 # 实际语音实例需设置 profile="voice"，并在 voice/devices 文件配置主设备。

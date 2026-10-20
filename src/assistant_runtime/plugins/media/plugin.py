@@ -11,6 +11,8 @@ from .downloads import Downloads
 from .openlist import OpenList
 from .repository import MediaRepository, TERMINAL
 from .search import PanSou, share_id, extraction_code
+from .search_history import SearchHistory
+from .search_candidates import DISCOVERY_PLATFORMS
 from .settings import MediaSettings, identifier
 from .library import Library, filename
 from .batches import Batches
@@ -23,6 +25,7 @@ class MediaPlugin:
         self.host = host
         self.settings = MediaSettings.parse(host.config.media)
         self.repo = MediaRepository(host.store.db, self.settings)
+        self.search_history = SearchHistory(host.store.db)
         self.library = Library(self)
         self.batches = Batches(self)
         self.root = host.config.state_dir / "media"
@@ -48,7 +51,7 @@ class MediaPlugin:
             trust_env=False,
         )
         context.own(self.download_session.close)
-        self.search = PanSou(self.session, self.settings.search_url)
+        self.search = PanSou(self.session, self.settings.search_url, self.search_history)
         self.openlist = OpenList(
             self.session, self.settings.openlist_url, self.root / "credentials" / "openlist.json"
         )
@@ -89,8 +92,10 @@ class MediaPlugin:
         action, args = request.action, request.arguments
         allowed = {
             "status": set(),
-            "search": {"query", "before", "limit", "search_id", "refresh"},
-            "inspect": {"share_url", "password", "parent_file_id", "marker"},
+            "search": {"query", "before", "limit", "search_id", "refresh", "aliases", "platforms"},
+            "search_history": {"before", "limit"},
+            "search_sources": set(),
+            "inspect": {"share_url", "password", "parent_file_id", "marker", "refresh"},
             "files": {"target", "marker", "folder_id"},
             "capabilities": set(),
             "library": {"target", "marker", "folder_id", "location", "path"},
@@ -140,6 +145,15 @@ class MediaPlugin:
         if action == "capabilities":
             return {
                 "provider": "aliyun",
+                "discovery": {
+                    "platforms": list(DISCOVERY_PLATFORMS),
+                    "aliases_per_search": 3,
+                    "source_inventory": "search_sources",
+                    "history": "search_history",
+                    "coverage": "partial",
+                    "identity_verification_required": True,
+                },
+                "acquisition_providers": ["aliyun"],
                 "targets": list(self.settings.targets),
                 "cloud": ["list", "mkdir", "rename", "move", "trash", "restore", "transfer", "download"],
                 "limits": {"change_items": 100, "directory_depth": 16, "conflict_scan": 1000},
@@ -177,6 +191,10 @@ class MediaPlugin:
                 self.target(args.get("target"))
                 await self.authorize(request.caller_run, args["target"])
             return self.library.collection(args)
+        if action == "search_history":
+            return self.search_history.list(args.get("before"), args.get("limit", 20))
+        if action == "search_sources":
+            return await self.search.health()
         if action == "search":
             return await self.search.search(
                 args.get("query"),
@@ -184,6 +202,8 @@ class MediaPlugin:
                 args.get("limit", 20),
                 search_id=args.get("search_id"),
                 refresh=args.get("refresh", False),
+                aliases=args.get("aliases"),
+                platforms=args.get("platforms"),
             )
         if action == "status":
             try:
@@ -211,7 +231,7 @@ class MediaPlugin:
                 if not isinstance(value, str) or len(value) > 2000:
                     raise ValueError("Invalid share listing cursor/parent")
                 values[field] = value
-            return await self.provider.call("inspect", values)
+            return await self.search_history.inspect(self.provider, values, args.get("refresh", False))
         if action == "files":
             target, _ = await self.library.destination(args.get("target"), args.get("folder_id"))
             marker = args.get("marker", "")

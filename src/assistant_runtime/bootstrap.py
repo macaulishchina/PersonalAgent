@@ -90,6 +90,11 @@ def compose(service):
 
         return MediaPlugin(service)
 
+    def search():
+        from .plugins.search.plugin import SearchPlugin
+
+        return SearchPlugin(service)
+
     def models():
         from .plugins.models.plugin import ModelsPlugin
 
@@ -152,6 +157,7 @@ def compose(service):
         "web": web,
         "tasks": tasks,
         "media": media,
+        "search": search,
         "decisions": decisions,
         "models": models,
         "notifications": notifications,

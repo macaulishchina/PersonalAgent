@@ -145,8 +145,16 @@ def create_server(client, caller_run=None):
         limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20,
         search_id: Annotated[str, Field(max_length=64)] | None = None,
         refresh: bool = False,
+        aliases: Annotated[list[str], Field(max_length=3)] | None = None,
+        platforms: list[str] | None = None,
     ) -> dict:
-        """Search public Aliyun candidates; inspect actual files before transfer.
+        """Discover public candidates across platforms; only Aliyun acquisition is connected.
+
+        Use a short title and up to three known aliases as separate bounded queries.
+        Platforms default to all supported discovery types; see media_capabilities.
+        History and last_inspection reuse prior evidence, never prove current availability.
+        Preserve query, aliases and platforms across pages and refreshes.
+        Resolve password_conflict and inspect actual files/title/year before transfer.
 
         Page with returned search_id and next as before. If results are insufficient,
         wait refresh_after_seconds and call refresh=true without search_id/before to
@@ -155,16 +163,50 @@ def create_server(client, caller_run=None):
         source is not proof of absence. Source health describes recent searches only.
         """
         return await call(
-            "search", query=query, before=before, limit=limit, search_id=search_id, refresh=refresh
+            "search",
+            query=query,
+            before=before,
+            limit=limit,
+            search_id=search_id,
+            refresh=refresh,
+            aliases=aliases,
+            platforms=platforms,
         )
 
     @server.tool(annotations=READ)
+    async def media_search_history(before: int | None = None, limit: int = 20) -> dict:
+        """Read bounded historical search summaries before repeating a search; not current availability."""
+        return await call("search_history", before=before, limit=limit)
+
+    @server.tool(annotations=READ)
+    async def media_search_sources() -> dict:
+        """Get configured PanSou source inventory and recent failure/yield evidence, not query completion.
+
+        Source plugins belong to PanSou, not the assistant framework. Missing failure
+        entries do not prove health. Zero yield alone is not grounds for disabling a source.
+        """
+        return await call("search_sources")
+
+    @server.tool(annotations=READ)
     async def inspect_media_share(
-        share_url: str, password: str = "", parent_file_id: str = "root", marker: str = ""
+        share_url: str,
+        password: str = "",
+        parent_file_id: str = "root",
+        marker: str = "",
+        refresh: bool = False,
     ) -> dict:
-        """List actual files in an official Aliyun share. Browse folders/page cursors to select a video file."""
+        """Read Aliyun files; same share/password/folder/page caches for 120s. Refresh bypasses cache.
+
+        Browse folders/pages and verify identity. Cached reads are timestamped observations;
+        authorization/network failures are never cached. Transfer checks source files again.
+        """
         return await call(
-            "inspect", share_url=share_url, password=password, parent_file_id=parent_file_id, marker=marker
+            "inspect",
+            share_url=share_url,
+            password=password,
+            parent_file_id=parent_file_id,
+            marker=marker,
+            refresh=refresh,
         )
 
     @server.tool(annotations=READ)

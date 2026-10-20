@@ -93,6 +93,7 @@ class Config:
     interaction: dict = field(default_factory=dict)
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
+    search: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     work_files: dict = field(default_factory=dict)
@@ -157,6 +158,11 @@ class Config:
 
         DecisionSettings.parse(self.decisions)
         MediaSettings.parse(self.media)
+        from assistant_runtime.plugins.search.settings import SearchSettings
+
+        search = SearchSettings.parse(self.search)
+        if "search" in self.plugins and not search.providers:
+            raise ValueError("Search plugin requires a configured provider")
         EventSettings.parse(self.events)
         NotificationSettings.parse(self.notifications)
         TaskSettings.parse(self.tasks)

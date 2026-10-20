@@ -9,6 +9,7 @@ import uuid
 import weakref
 
 from .errors import MediaError
+from .search_candidates import acquisition, candidate_id, platform_filter, public_link
 
 ALIYUN_HOSTS = {"www.alipan.com", "alipan.com", "www.aliyundrive.com", "aliyundrive.com"}
 
@@ -60,23 +61,31 @@ async def json_response(response, *, limit=2 * 1024 * 1024):
 
 
 class PanSou:
-    def __init__(self, session, url):
-        self.session, self.url = session, url
+    def __init__(self, session, url, history=None):
+        self.session, self.url, self.history = session, url, history
         self.slots = asyncio.Semaphore(3)
         self.locks = weakref.WeakValueDictionary()
         self.snapshots = {}
         self.latest = {}
         self.pending = 0
 
-    async def search(self, query, before=0, limit=20, *, search_id=None, refresh=False):
-        """Refresh reads PanSou's asynchronously enriched cache, never starts a forced rescan.
-
-        Every refresh creates a separate snapshot; existing pages remain immutable.
-        Global coverage is always partial, even after all configured sources respond.
-        """
+    async def search(
+        self, query, before=0, limit=20, *, search_id=None, refresh=False, aliases=None, platforms=None
+    ):
         if not isinstance(query, str) or not 1 <= len(query.strip()) <= 150:
             raise ValueError("Search query must be 1..150 characters")
         query = query.strip()
+        if aliases is None:
+            aliases = []
+        if (
+            not isinstance(aliases, list)
+            or len(aliases) > 3
+            or any(not isinstance(q, str) or not 1 <= len(q.strip()) <= 150 for q in aliases)
+        ):
+            raise ValueError("At most three explicit title aliases, each 1..150 characters")
+        queries = list(dict.fromkeys([query, *(q.strip() for q in aliases)]))
+        platforms = platform_filter(platforms)
+        key = (tuple(queries), tuple(platforms))
         if (
             type(limit) is not int
             or not 1 <= limit <= 50
@@ -96,60 +105,158 @@ class PanSou:
         self.latest = {q: ident for q, ident in self.latest.items() if ident in self.snapshots}
         if search_id is not None:
             snapshot = self.snapshots.get(search_id)
-            if not snapshot or snapshot["query"] != query:
+            if not snapshot or snapshot["key"] != key:
                 raise ValueError("Search snapshot expired or query changed; restart from the first page")
         else:
             if self.pending >= 8:
                 raise MediaError("search_busy")
             self.pending += 1
             try:
-                async with self.locks.setdefault(query, asyncio.Lock()):
-                    snapshot = self.snapshots.get(self.latest.get(query))
+                async with self.locks.setdefault(key, asyncio.Lock()):
+                    snapshot = self.snapshots.get(self.latest.get(key))
                     if (
                         not snapshot
                         or time.monotonic() - snapshot["created"] > 30
                         or (refresh and snapshot["created"] < now)
                     ):
-                        async with self.slots:
-                            items = await self.fetch(query)
-                            health = await self.health()
-                        search_id = uuid.uuid4().hex
+                        results = await asyncio.gather(*(self.query(q, platforms) for q in queries))
+                        diagnostics = [
+                            {k: v for k, v in result.items() if k != "items"} for result in results
+                        ]
+                        if all(result["state"] == "failed" for result in results):
+                            if self.history:
+                                self.history.record(
+                                    {
+                                        "queries": queries,
+                                        "platforms": platforms,
+                                        "diagnostics": diagnostics,
+                                        "outcome": "search_failed",
+                                    }
+                                )
+                            raise MediaError(results[0]["error"])
+                        found = {}
+                        for result in results:
+                            for item in result.get("items", []):
+                                item["matched_queries"] = [result["query"]] if item["title_match"] else []
+                                merge_candidate(found, item)
+                        items = sorted(
+                            found.values(),
+                            key=lambda item: (not item["title_match"], item["platform"] != "aliyun"),
+                        )
+                        limited = len(items) > 500 or any(result.get("truncated") for result in results)
+                        items = items[:500]
+                        health = await self.health()
+                        matching = [item for item in items if item["title_match"]]
+                        outcome = (
+                            "acquirable_candidates"
+                            if any(i["platform"] == "aliyun" for i in matching)
+                            else "discovery_only_candidates"
+                            if matching
+                            else "ambiguous_candidates"
+                            if items
+                            else "no_candidates_in_observed_results"
+                        )
+                        # These are read evidence, not judgments that a movie/file is correct.
+                        if self.history:
+                            for item in items:
+                                if item["platform"] == "aliyun":
+                                    item["last_inspection"] = self.history.observation(
+                                        share_id(item["share_url"]), item["password"]
+                                    )
                         snapshot = {
-                            "id": search_id,
-                            "query": query,
+                            "id": uuid.uuid4().hex,
+                            "key": key,
                             "created": time.monotonic(),
                             "observed_at": time.time(),
                             "items": items,
                             "source_health": health,
+                            "diagnostics": diagnostics,
+                            "truncated": limited,
+                            "outcome": outcome,
+                            "counts": {
+                                "candidates": len(items),
+                                "title_matches": len(matching),
+                                "platforms": {p: sum(i["platform"] == p for i in items) for p in platforms},
+                            },
                         }
                         if len(self.snapshots) >= 32:
                             del self.snapshots[next(iter(self.snapshots))]
-                        self.snapshots[search_id] = snapshot
-                        self.latest[query] = search_id
+                        self.snapshots[snapshot["id"]] = snapshot
+                        self.latest[key] = snapshot["id"]
+                        if self.history:
+                            self.history.record(
+                                {
+                                    "queries": queries,
+                                    "platforms": platforms,
+                                    "search_id": snapshot["id"],
+                                    "diagnostics": diagnostics,
+                                    "counts": snapshot["counts"],
+                                    "outcome": outcome,
+                                    "truncated": limited,
+                                    "candidates_sample": [
+                                        {
+                                            k: i[k]
+                                            for k in (
+                                                "candidate_id",
+                                                "share_url",
+                                                "platform",
+                                                "title",
+                                                "title_match",
+                                            )
+                                        }
+                                        for i in items[:10]
+                                    ],
+                                    "source_health": health,
+                                }
+                            )
             finally:
                 self.pending -= 1
-        items = snapshot["items"][before : before + limit]
         return {
-            "items": items,
+            "items": snapshot["items"][before : before + limit],
             "search_id": snapshot["id"],
             "next": before + limit if before + limit < len(snapshot["items"]) else None,
-            "observed_at": snapshot["observed_at"],
-            "source_health": snapshot["source_health"],
+            **{
+                k: snapshot[k]
+                for k in ("observed_at", "source_health", "diagnostics", "counts", "truncated", "outcome")
+            },
             "complete": False,
             "refresh_after_seconds": 8,
-            "note": "Partial public Aliyun coverage, not proof of absence. Slow sources may still be filling "
-            "the backend cache. If insufficient, wait about 8 seconds and start a new first page with "
-            "refresh=true; this rereads that cache, not a forced rescan. Browse this snapshot using search_id. "
-            "Health summarizes recent searches, not this query's completion. Inspect actual files before saving.",
+            "next_actions": next_actions(snapshot),
+            "note": "Partial public coverage; title matches are hints, not verified films. "
+            "Per-source completion is UNKNOWN: this PanSou API does not expose it. "
+            "Health is recent aggregate evidence, not query completion. If needed wait about 8s, "
+            "refresh at most twice with identical query/aliases/platforms and no cursor. "
+            "Refresh rereads the backend cache, not a forced rescan. Other platforms are discovery-only.",
         }
 
-    async def fetch(self, query):
+    async def query(self, query, platforms):
+        started = time.monotonic()
+        try:
+            async with self.slots:
+                result = await self.fetch(query, platforms)
+            return {
+                "query": query,
+                "state": "response_received",
+                "source_completion": "unknown",
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+                **result,
+            }
+        except MediaError as exc:
+            return {
+                "query": query,
+                "state": "failed",
+                "source_completion": "unknown",
+                "error": exc.code,
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+            }
+
+    async def fetch(self, query, platforms):
         import aiohttp
 
         try:
             async with self.session.post(
                 self.url + "/api/search",
-                json={"kw": query, "src": "all", "res": "all", "cloud_types": ["aliyun"]},
+                json={"kw": query, "src": "all", "res": "results", "cloud_types": platforms},
                 allow_redirects=False,
             ) as response:
                 if response.status != 200:
@@ -165,34 +272,50 @@ class PanSou:
         if not isinstance(results, list):
             raise MediaError("search_invalid_response")
         found = {}
+        dropped = 0
+        truncated = len(results) > 500
         for row in results[:500]:
             if not isinstance(row, dict) or not isinstance(row.get("links"), list):
+                dropped += 1
                 continue
+            truncated |= len(row["links"]) > 30
             for link in row["links"][:30]:
-                if not isinstance(link, dict):
-                    continue
                 try:
-                    ident = share_id(link.get("url"))
-                    password = extraction_code(link["url"], link.get("password") or "")
+                    if not isinstance(link, dict):
+                        raise ValueError()
+                    platform, ident, url, code = public_link(link.get("url"))
+                    if platform not in platforms:
+                        continue
+                    password = link.get("password") or code
+                    if not isinstance(password, str) or len(password) > 32:
+                        raise ValueError()
                 except ValueError:
+                    dropped += 1
                     continue
                 title = str(link.get("work_title") or link.get("note") or row.get("title") or "")[:300]
+                source = str(row.get("channel") or row.get("unique_id") or "")[:160]
                 item = {
-                    "share_url": "https://www.alipan.com/s/" + ident,
+                    "candidate_id": candidate_id(platform, ident),
+                    "platform": platform,
+                    "share_url": url,
                     "title": title,
                     "context_title": str(row.get("title") or "")[:300],
                     "password": password,
-                    "source": str(row.get("channel") or row.get("unique_id") or "")[:160],
+                    "source": source,
+                    "sources": [source] if source else [],
                     "published_at": str(link.get("datetime") or row.get("datetime") or "")[:80],
                     "title_match": title_match(query, title),
                     "verified": False,
+                    "acquisition": acquisition(platform),
+                    "password_conflict": False,
                 }
-                old = found.get(ident)
-                if not old or item["title_match"] and not old["title_match"]:
-                    found[ident] = item
-        # Matching titles precede unrelated links in multi-title channel posts.
-        # Keep unmatched candidates: filenames inside a share can provide better evidence.
-        return sorted(found.values(), key=lambda item: not item["title_match"])[:500]
+                merge_candidate(found, item)
+        return {
+            "items": list(found.values())[:500],
+            "candidate_count": min(len(found), 500),
+            "rejected_links_or_rows": dropped,
+            "truncated": truncated or len(found) > 500,
+        }
 
     async def health(self):
         import aiohttp
@@ -208,12 +331,54 @@ class PanSou:
             return {
                 "state": "available",
                 "scope": "recent_searches",
+                "observed_at": time.time(),
+                "per_query_completion": "unavailable",
+                "plugins": inventory(body.get("plugins")),
+                "channels": inventory(body.get("channels")),
+                "recent_evidence": recent_evidence(live),
+                "degraded_plugins": names(live.get("degraded_plugins")),
+                "failing_channels": names(live.get("failing_channels")),
                 "failing_plugins": names(live.get("failing_plugins")),
                 "zero_yield_plugins": names(live.get("zero_yield_plugins")),
                 "zero_yield_channels": names(live.get("zero_yield_channels")),
             }
         except (aiohttp.ClientError, OSError, TimeoutError, MediaError, AttributeError):
             return {"state": "unavailable"}
+
+
+def inventory(value):
+    return [item[:80] for item in value[:128] if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def recent_evidence(live):
+    if not isinstance(live, dict):
+        return {}
+    output = {}
+    for group in (
+        "failing_plugins",
+        "zero_yield_plugins",
+        "degraded_plugins",
+        "failing_channels",
+        "zero_yield_channels",
+    ):
+        values = live.get(group)
+        output[group] = (
+            [
+                {
+                    "name": str(item.get("name") or "")[:80],
+                    **{
+                        key: item[key]
+                        for key in ("rounds", "yielded", "failed", "zero_yield")
+                        if type(item.get(key)) is int and item[key] >= 0
+                    },
+                }
+                for item in values[:16]
+                if isinstance(item, dict)
+            ]
+            if isinstance(values, list)
+            else []
+        )
+    return output
 
 
 def names(value):
@@ -230,4 +395,48 @@ def title_match(query, title):
 
     query, title = compact(query), compact(title)
     base = re.sub(r"\d{4,8}", "", query)
-    return query in title or bool(len(base) >= 2 and base in title)
+    return bool(query) and (query in title or bool(len(base) >= 2 and base in title))
+
+
+def merge_candidate(found, item):
+    key = item["candidate_id"]
+    old = found.get(key)
+    if not old:
+        found[key] = item
+        return
+    winner = item if item["title_match"] and not old["title_match"] else old
+    codes = {code for code in (item["password"], old["password"]) if code}
+    conflict = old["password_conflict"] or item["password_conflict"] or len(codes) > 1
+    found[key] = {
+        **winner,
+        "sources": list(dict.fromkeys(old["sources"] + item["sources"]))[:16],
+        "matched_queries": list(
+            dict.fromkeys(old.get("matched_queries", []) + item.get("matched_queries", []))
+        )[:4],
+        "password_conflict": conflict,
+        "password": "" if conflict else next(iter(codes), ""),
+    }
+
+
+def next_actions(snapshot):
+    outcome = snapshot["outcome"]
+    actions = {
+        "acquirable_candidates": ["inspect_actual_files_and_identity"],
+        "discovery_only_candidates": [
+            "report_provider_not_connected",
+            "look_for_authorized_acquirable_alternative",
+        ],
+        "ambiguous_candidates": [
+            "check_title_aliases_and_work_identity",
+            "use_public_web_search_if_available",
+        ],
+        "no_candidates_in_observed_results": [
+            "try_short_title_or_verified_alias",
+            "use_public_web_search_if_available",
+        ],
+    }[outcome].copy()
+    if any(q["state"] == "failed" for q in snapshot["diagnostics"]):
+        actions.append("report_failed_queries_separately")
+    if snapshot["source_health"].get("failing_plugins"):
+        actions.append("report_recent_source_failures_not_resource_absence")
+    return actions

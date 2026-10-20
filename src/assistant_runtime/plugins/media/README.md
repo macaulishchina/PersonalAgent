@@ -12,18 +12,21 @@ PanSou service with `docker compose -p personal-agent-media-search -f deploy/med
 Its port is loopback-only, resources/logs are bounded and its disposable cache is tmpfs.
 The image digest is the tested upstream artifact; upgrade deliberately and reverify.
 Search coverage is partial, source labels are untrusted and no result means only
-that these sources found nothing. Search remains Aliyun-only; refresh does not enable
-additional providers, accounts or sources.
+that these sources found nothing. Discovery spans supported public platforms; only
+Aliyun acquisition is connected. Refresh does not add providers, accounts or sources.
 
 ## Search and late results
 
-`search_media(query, limit=20)` returns an immutable `search_id` snapshot. Page with
-its `next` as `before`, together with the same `query` and `search_id`. Snapshots
+`search_media(query, aliases=[], platforms=null, limit=20)` searches a short title
+and up to three explicitly supplied known aliases, then merges a bounded immutable
+`search_id` snapshot. No model is invoked to manufacture aliases. Page with `next` as
+`before`, keeping the same `query`, `aliases`, `platforms` and `search_id`. Snapshots
 expire after five minutes or bounded cache eviction (32 snapshots); restart from the
 first page if expired. Pagination never silently switches to a newer result set.
 Head requests reuse results for 30 seconds; identical concurrent queries share one
 fetch. Up to three distinct queries fetch concurrently, with at most eight requests
-waiting/working. Cancellation releases admission; failed refresh retains old pages.
+waiting/working. Aliases share that same three-query semaphore. Cancellation releases
+admission and cancels unfinished sibling queries; failed refresh retains old pages.
 
 PanSou returns quickly while slow sources enrich its backend cache. If results are
 insufficient, wait `refresh_after_seconds` (currently 8), then call
@@ -31,7 +34,7 @@ insufficient, wait `refresh_after_seconds` (currently 8), then call
 our head cache and reads enriched backend results into a NEW snapshot. It does not
 send PanSou's force-rescan flag, which would restart upstream work. Use at most two
 follow-ups per search attempt within its time budget; no permanent polling or model
-waiting loop. A few title/alias/date queries may run concurrently when needed.
+waiting loop. Aliases run as separate queries, so one long overconstrained string is unnecessary.
 
 Candidates prefer link-specific titles over channel collection titles, retain the
 original context title and publication timestamp, and rank title matches first.
@@ -44,6 +47,77 @@ strings are not forwarded. Zero yield alone does not prove a source is broken.
 configured sources have or have not finished. Distinguish source errors, invalid
 shares and missing matching files. No Aliyun match does not establish absence on
 other netdisks or across the Internet.
+
+### Discovery, evidence and reuse
+
+`media_capabilities` separates discovery platforms from acquisition providers. Exact
+public host/path validation determines platform regardless of backend labels. Discovery
+supports Aliyun, Quark, Baidu, 115, 123, UC, Tianyi, Xunlei, PikPak and BTIH magnets.
+Other links are rejected, never fetched as arbitrary URLs. Magnets are normalized by
+infohash, without tracker URLs. These are format capabilities, not a guarantee each
+source covers every platform. Only Aliyun shares can be inspected/transferred; local
+downloads still require a selected file already saved in a configured Aliyun target.
+
+Candidates deduplicate by platform/share identity, keeping bounded source provenance,
+matched aliases and public extraction codes. Conflicting extraction codes are explicitly
+flagged rather than silently picked. Different platforms are never merged into one file.
+`title_match` is a ranking hint; `verified=false` and `acquisition.availability=unverified`
+remain until actual provider/file checks. Inspect year/season/episode before saving.
+
+Each query has `response_received` or `failed`, elapsed time and sanitized error code.
+`source_completion=unknown`: this PanSou API provides no per-query source completion
+receipt. `counts`, `truncated`, `outcome` and `next_actions` distinguish ambiguous results,
+no observed candidates, discovery-only matches and matches on a supported acquisition
+provider. All-query failures raise the existing stable error and persist diagnostics in
+history. Never translate any of these into “no resource exists”.
+
+`media_search_sources` exposes the enabled PanSou plugin/channel inventory and recent
+failure/yield counters, excluding raw error strings. These are PanSou source adapters,
+not assistant plugins. Check the actual inventory: a source present in upstream source
+code/README may not be compiled into the pinned image, and unknown requested sources
+can silently produce empty results. Missing failure entries may mean too few samples.
+Maintain `deploy/media.compose.yaml` explicitly: isolate candidate sources, compare
+multiple representative titles, check late cache results and network/parser evidence,
+then enable verified additions. Do not disable a source merely for zero early yield,
+auto-scan every source or introduce a second scraping engine. Upgrades require rechecks.
+
+`media_search_history` returns keyset pages (default 20/max 50) of the latest 200 durable
+search summaries, counts, per-query outcomes and up to ten example candidates each;
+these examples are not the complete result snapshot. Review history before retrying an
+exhausted alias/source combination. Snapshot cursors expire independently of history.
+`inspect_media_share` reuses metadata or definitive expired/cancelled/wrong-code results
+for 120 seconds, scoped to share + extraction code + folder + page. Use `refresh=true`
+to bypass; simultaneous identical refreshes coalesce. Account/network/uncertain failures
+are never cached. Up to 128 pages, each <=64 KiB, persist across restart. Passwords are
+only part of hashed cache keys; the cache stores sanitized public file metadata.
+Candidates expose timestamped `last_inspection` for the same root-page/password scope,
+explicitly marking expired evidence; readable does not establish the requested title.
+Transfers always check source files again, irrespective of these read caches.
+
+Source acceptance on 2026-10-21 used the pinned image in an isolated container.
+`yunso` returned title-matching discovery candidates for 流浪地球, 利刃出鞘3, 普通事故
+and Twinless; `susu` additionally found multi-platform entries for 普通事故, 评估/The
+Assessment and Twinless, including an Aliyun Twinless link. These are discovery checks,
+not verified video contents. Generic “评估” also returned textbooks/exam material;
+known original aliases and file identity checks remain necessary. Both sources are
+now configured. `duoduo` and `zhizhen` were excluded after their production rolling
+windows each reported 20 failed/zero-yield rounds and isolated requests still failed;
+other zero-yield sources were retained. Re-evaluate on future upstream/network changes.
+
+Installed-service acceptance on 2026-10-21 discovered all 24 MCP tools. Real queries
+for Twinless, 普通事故 + its original alias, 评估 + The Assessment and 利刃出鞘3
+returned multi-platform candidates. Alias pairs completed concurrently in about 8s;
+head snapshots reused without a second fetch and pages had no overlap. Durable history
+keyset pages, exact-scope inspection cache and explicit refresh passed. The Twinless
+Aliyun folder returned `Twinless.2025.1080p.VINEnc.mp4`, size 3,834,891,461 bytes;
+this verifies readable file metadata, not playback or the film's contents. No transfer
+or download was performed. Full gate: 703 tests, zero skips, static checks and frontend
+build. After restart the service was standby/audio-ready with unchanged model and USB
+voice bindings. These observations do not establish universal source availability.
+
+CLI uses `search`, `search_sources`, `search_history`, `inspect` with the same arguments.
+The explicit live acceptance script supports `--alias`, `--platform`, `--sources`,
+`--history`; no transfer/download occurs without its corresponding write arguments.
 
 Enable `media` alongside `notifications`. Minimal instance example:
 

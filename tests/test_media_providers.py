@@ -359,7 +359,7 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
         url = await self.serve(app)
         async with aiohttp.ClientSession() as session:
             adapter = PanSou(session, url)
-            result = await adapter.search("movie")
+            result = await adapter.search("movie", platforms=["aliyun"])
         self.assertEqual(len(result["items"]), 1)
         self.assertFalse(result["complete"])
         self.assertFalse(result["items"][0]["verified"])
@@ -503,7 +503,7 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_search_failed_refresh_keeps_snapshot_and_cancellation_releases_admission(self):
         adapter = PanSou(None, "http://unused")
-        adapter.fetch = AsyncMock(return_value=[])
+        adapter.fetch = AsyncMock(return_value={"items": []})
         adapter.health = AsyncMock(return_value={"state": "unavailable"})
         first = await adapter.search("movie")
         adapter.fetch.side_effect = MediaError("search_unavailable")
@@ -513,7 +513,7 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(adapter.pending, 0)
         entered = asyncio.Event()
 
-        async def hold(query):
+        async def hold(query, platforms):
             entered.set()
             await asyncio.Future()
 
@@ -542,12 +542,14 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
                     "limit": 20,
                     "search_id": None,
                     "refresh": True,
+                    "aliases": None,
+                    "platforms": None,
                 },
             )
 
     async def test_search_snapshot_storage_is_bounded(self):
         adapter = PanSou(None, "http://unused")
-        adapter.fetch = AsyncMock(return_value=[])
+        adapter.fetch = AsyncMock(return_value={"items": []})
         adapter.health = AsyncMock(return_value={"state": "unavailable"})
         first = await adapter.search("first")
         for n in range(35):

@@ -32,6 +32,7 @@ flowchart LR
 | `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
 | `plugins/go2rtc/` | Configured gateway stream identity, bounded snapshots/clips and directional pan/tilt, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
 | `plugins/apple_home/` | Authenticated Apple Home readings, paired HAP refresh bridge, normalization and source freshness | AirPlay playback, model tasks, memory, HomePod account access |
+| `plugins/search/` | Configured public web search/fetch adapters, bounded IO/cache and metadata receipts | Execution model policy, agent loops, media acquisition, subscription Search Service |
 | `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
 | `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
@@ -473,6 +474,14 @@ require an active task and its explicit `media:TARGET` resource; interactive log
 in the main conversation. Cloud completion, OpenList availability and physical playback
 are different evidence. See the [media plugin](src/assistant_runtime/plugins/media/README.md).
 
+Public discovery also stays in media: bounded explicit title/alias fan-out through
+PanSou, platform/share identity normalization, immutable pages, durable bounded search
+summaries and short-lived exact-scope share observations. Discovery capability is
+separate from acquisition. PanSou owns its source adapters and scraping; per-query
+completion is unknown where upstream supplies no receipt. Recent source health cannot
+be presented as query completion or global absence. No model routing policy changes
+or additional search/agent loop accompany these capabilities.
+
 Media library management remains inside that plugin: stable provider IDs and separate
 last-observed locations, revisioned collection criteria, bounded preconditioned change
 plans, and durable batches over existing operation workers. Aliyun owns cloud writes;
@@ -531,6 +540,24 @@ catalogue and authorization rules. Source definitions live in tracked
 records remain in `state/events/`. Recording itself starts no model, notification or
 memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
 and [source onboarding](src/assistant_runtime/plugins/observations/README.md).
+
+## Optional public web search
+
+`SearchRequest` is the shared internal/MCP/CLI contract. The optional search plugin owns
+DeepSeek Search/Fetch protocol, public-page validation, reusable HTTP connections,
+bounded admission, deadlines, one transient retry, coalescing and ephemeral content cache.
+Only bounded call metadata is persisted. MCP binds the active task identity server-side;
+main and background/API executors use the same service catalogue. Configuration belongs
+to `config/search.toml`, with credential environment references, effective after restart.
+Configured does not mean remotely verified; capability inspection makes no paid request.
+
+Subscription Search Service remains a parallel independent tool. Neither tool changes
+the execution model or silently falls back to the other. Media acquisition remains in
+media; no search agent loop, browser or local crawler is introduced. Third-party page
+content is untrusted evidence, never authority. DeepSeek does not expose its final
+redirect URL; adapter output explicitly leaves it unknown rather than asserting that
+upstream redirects have been locally verified. See [search](src/assistant_runtime/plugins/search/README.md)
+for caller contracts, limits, failure semantics and explicit real-provider acceptance.
 
 ## Optional API models
 

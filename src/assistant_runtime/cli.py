@@ -116,6 +116,9 @@ def main():
     notifications = sub.add_parser("notifications")
     notifications.add_argument("action", choices=["list", "get", "publish", "update", "read", "retry"])
     notifications.add_argument("arguments", nargs="?", default="{}", help="JSON notification arguments")
+    search = sub.add_parser("search", help="Public web search and page reading through configured providers")
+    search.add_argument("action", choices=["capabilities", "search", "fetch", "history"])
+    search.add_argument("arguments", nargs="?", default="{}", help="JSON search arguments")
     media = sub.add_parser("media", help="Search, acquire and inspect media; plans remain in tasks")
     media.add_argument(
         "action",
@@ -131,6 +134,8 @@ def main():
             "batch_get",
             "batch_cancel",
             "search",
+            "search_history",
+            "search_sources",
             "inspect",
             "files",
             "transfer",

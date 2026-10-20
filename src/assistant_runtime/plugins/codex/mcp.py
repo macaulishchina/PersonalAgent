@@ -15,6 +15,7 @@ def server_config(
     manage_integrations=False,
     events=False,
     media=False,
+    search=False,
     decisions=False,
     models=False,
 ):
@@ -46,6 +47,7 @@ def server_config(
             "integrations": integrations,
             "events": events,
             "media": media,
+            "search": search,
             "decisions": decisions,
             "models": models,
         }.get(name, False)
