@@ -114,7 +114,10 @@ def main():
     )
     events.add_argument("arguments", nargs="?", default="{}", help="JSON event arguments")
     notifications = sub.add_parser("notifications")
-    notifications.add_argument("action", choices=["list", "get", "publish", "update", "read", "retry"])
+    notifications.add_argument(
+        "action",
+        choices=["list", "groups", "group", "get", "publish", "update", "read", "read_group", "retry"],
+    )
     notifications.add_argument("arguments", nargs="?", default="{}", help="JSON notification arguments")
     search = sub.add_parser("search", help="Public web search and page reading through configured providers")
     search.add_argument("action", choices=["capabilities", "search", "fetch", "history"])

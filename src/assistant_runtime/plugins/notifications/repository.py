@@ -6,6 +6,8 @@ import json
 import time
 import uuid
 
+from .groups import Groups, association
+
 
 class Notifications:
     def __init__(self, db, settings):
@@ -34,9 +36,11 @@ class Notifications:
                 db.execute("UPDATE notifications SET read_revision=revision WHERE archived=1")
                 db.execute("ALTER TABLE notifications DROP COLUMN archived")
 
+        self.groups = Groups(self)
+
     def get(self, ident):
         row = self.db.execute(
-            "SELECT id,source,event_key,fingerprint,payload,revision,read_revision,created,updated,expires FROM notifications WHERE id=?",
+            "SELECT id,source,event_key,fingerprint,payload,revision,read_revision,created,updated,expires,group_id,group_title FROM notifications WHERE id=?",
             (ident,),
         ).fetchone()
         if not row:
@@ -52,6 +56,8 @@ class Notifications:
             "created",
             "updated",
             "expires",
+            "group_id",
+            "group_title",
         )
         item = dict(zip(keys, row))
         item["payload"] = json.loads(item["payload"])
@@ -139,6 +145,11 @@ class Notifications:
                     "INSERT INTO notifications(id,source,event_key,fingerprint,payload,revision,read_revision,created,updated,expires) VALUES (?,?,?,?,?,?,0,?,?,?)",
                     (ident, source, key, fingerprint, raw, new_revision, now, now, payload.get("expires_at")),
                 )
+            group, title = association(source, key, payload)
+            self.db.execute(
+                "UPDATE notifications SET group_id=?,group_title=? WHERE id=? AND group_id IS NULL",
+                (group, title, ident),
+            )
             for channel in channels:
                 self.db.execute(
                     "INSERT INTO notification_deliveries VALUES (?,?,?,'pending',0,?,NULL,NULL,?)",

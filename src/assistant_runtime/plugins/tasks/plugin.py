@@ -836,7 +836,11 @@ class TasksPlugin:
                                             "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
                                             "title": r["data"]["spec"]["title"]
                                             + " · "
-                                            + RUN_LABELS[r["state"]],
+                                            + (
+                                                "本次执行结束"
+                                                if r["state"] == "completed"
+                                                else RUN_LABELS[r["state"]]
+                                            ),
                                             "body": (r["data"].get("progress") or RUN_SUMMARIES[r["state"]])[
                                                 :8000
                                             ],

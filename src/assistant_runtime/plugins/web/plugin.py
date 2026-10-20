@@ -168,7 +168,7 @@ class WebPlugin:
         return web.json_response(
             await self.host.runtime.invoke(
                 NotificationRequest(
-                    "list",
+                    "groups" if request.query.get("grouped") == "true" else "list",
                     {
                         "unread": request.query.get("unread") == "true",
                         "before": request.query.get("before"),
@@ -181,7 +181,7 @@ class WebPlugin:
         from ...kernel.contracts import NotificationRequest
 
         data = await self.object_body(request)
-        if data.get("action") not in {"read", "read_all", "retry", "get"}:
+        if data.get("action") not in {"read", "read_all", "read_group", "group", "retry", "get"}:
             raise ValueError("Unsupported inbox action")
         return web.json_response(
             await self.host.runtime.invoke(NotificationRequest(data["action"], data.get("arguments", {})))

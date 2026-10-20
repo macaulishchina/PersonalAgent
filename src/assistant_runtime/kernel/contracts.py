@@ -79,6 +79,17 @@ class NotificationRequest:
 
 
 @dataclass(frozen=True)
+class NotificationLink:
+    """Trusted producer enrichment of an existing unassociated notice; never exposed via IPC/MCP."""
+
+    source: str
+    event_key: str
+    caller_run: str | None = None
+    group_key: str | None = None
+    group_title: str | None = None
+
+
+@dataclass(frozen=True)
 class TaskRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)

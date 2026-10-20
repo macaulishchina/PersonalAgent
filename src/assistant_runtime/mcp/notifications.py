@@ -29,8 +29,10 @@ def create_server(client, caller_run=None):
         priority: str = "normal",
         voice: bool = False,
         expires_at: float | None = None,
+        group_key: str | None = None,
+        group_title: str | None = None,
     ) -> dict:
-        """Durably enqueue an authorized new event. Reuse event_key on retries and repeated observations."""
+        """Durably enqueue an authorized event; reuse event_key on retries. By default each task execution forms one group; unrelated foreground notices stay separate. Optional group_key correlates a specific matter across runs within your own producer scope, never another task. group_title labels it; neither field changes event deduplication. Do not guess correlation from similar titles or nearby timestamps."""
         return await call(
             "publish",
             event_key=event_key,
@@ -40,6 +42,8 @@ def create_server(client, caller_run=None):
             priority=priority,
             voice=voice,
             expires_at=expires_at,
+            group_key=group_key,
+            group_title=group_title,
         )
 
     @server.tool(annotations=WRITE)
@@ -67,9 +71,17 @@ def create_server(client, caller_run=None):
         )
 
     @server.tool(annotations=READ)
-    async def list_notifications(unread: bool = False, before: str | None = None, limit: int = 50) -> dict:
-        """List persistent notifications and delivery outcomes without marking anything read."""
-        return await call("list", unread=unread, before=before, limit=limit)
+    async def list_notifications(
+        unread: bool = False,
+        before: str | None = None,
+        limit: int = 20,
+        grouped: bool = False,
+        group_id: str | None = None,
+    ) -> dict:
+        """List without marking read. grouped=true returns source-scoped matter summaries (max 50); group_id pages that group's original notices. Cursors cannot cross views/filters. Counts cover the full group, not just a loaded page. Grouping does not prove the overall goal succeeded."""
+        if group_id:
+            return await call("group", group_id=group_id, before=before, limit=limit)
+        return await call("groups" if grouped else "list", unread=unread, before=before, limit=limit)
 
     @server.tool(annotations=READ)
     async def get_notification(notification_id: str) -> dict:

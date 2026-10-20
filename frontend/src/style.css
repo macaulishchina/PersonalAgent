@@ -1583,3 +1583,19 @@ p {
 .task-scope-count {
   white-space: nowrap;
 }
+
+.notification-group-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.notification-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.notification-body {
+  overflow-wrap: anywhere;
+}

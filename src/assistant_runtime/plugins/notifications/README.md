@@ -70,18 +70,52 @@ inspection and explicit retry. Existing same-origin protections apply. The compo
 an unread badge and inbox drawer. “引用” beside each notification timestamp attaches the selected notification
 to the next user message in the same conversation; it does not send a message by itself.
 
-The inbox groups loaded notifications by the server's stable `source`, never by title
-or run ID. Each source shows its latest notification; earlier entries expand in place.
-Task sources use the task title as a display label, while separate tasks remain separate
-even if their titles match. Expanding does not acknowledge notifications: each entry
-keeps its own revision-checked read, reference and retry actions. Group unread/important
-counts describe loaded entries in the selected filter; when more pages exist, counts
-are explicitly labeled as loaded. Scrolling near the bottom loads one bounded page,
-with a manual load button when collapsed groups do not fill the viewport. Collapsing
-must never automatically drain all remaining pages. No storage or delivery aggregation
-occurs, and the inbox-wide unread count and snapshot-based “全部已读” remain unchanged.
+The inbox groups by a durable association, independent of producer ownership and event
+identity. A task execution is one matter by default; separate runs do not collapse
+merely because they have the same task title. Foreground events without an explicit
+association remain separate. `group_key` (<=200 chars) explicitly correlates a topic or
+batch within the publisher's source; optional `group_title` labels it. Keys cannot join
+another producer's group. Task callers remain server-bound. Same-event retries across
+runs keep the original association and do not create another unread item. Corrections
+retain associations; titles, timestamps and model-generated summaries are never join keys.
+
+`groups` returns at most 50 groups (default 20), with an exact member/unread/important
+count, latest notice and snapshot timestamp. `group` pages member notices independently
+(default 20/max 50); no frontend scan of the whole inbox. Group and member cursors are
+scoped, snapshot-bounded keysets. New arrivals appear on refresh, without shifting old
+groups across an existing page cursor; corrections remain attached to their original
+notice. Groups sort by latest event creation, not acknowledgement time. The unread
+filter selects groups containing unread, nonexpired records; details retain the full
+history, including read/expired entries. `list` remains the flat event view for callers
+that need individual notifications.
+
+Cards show latest progress with a short preview, real counts, an expandable timeline and
+an explicit group read action. Expansion never marks read. `read_group` requires the
+returned group ID and snapshot timestamp; later arrivals/corrections remain unread even
+if the group contains more than one page. Background tasks cannot acknowledge groups.
+Individual read/reference/retry and inbox-wide unread/read-all retain their semantics.
+Expanding or collapsing does not drain pages; additional history loads on user request.
+
+Grouping is a read projection, not business-state inference or transport coalescing.
+Original records, revisions and each channel's receipts remain intact. The latest event
+is identified as progress; it is not proof that every operation or the overall user goal
+has finished. Task execution completion notices say execution ended, not goal achieved.
+A producer that knows the complete batch may publish its own evidenced summary; the
+notification layer does not parse titles/bodies or call a model to invent one.
+
+Trusted plugins can enrich an old unassociated event using the internal-only
+`NotificationLink(source, event_key, caller_run, group_key, group_title)` capability.
+It derives task identity from the saved run, allows only unassociated-to-associated or
+same-association idempotent links, and never changes payload/read state/channel jobs.
+It is deliberately absent from IPC, Web actions and MCP. A link is not authorization to
+publish or manage another task. The producer owns evidence of the causal relation.
+Existing task origins are indexed on migration; media restores its legacy links from
+operation/batch receipts in bounded startup batches through this contract. No title
+matching, historical content rewriting or delivery replay occurs.
 
 ```
+personal-agent --config config/config.toml notifications groups
+personal-agent --config config/config.toml notifications group '{"group_id":"GROUP_ID","limit":20}'
 personal-agent --config config/config.toml notifications list
 personal-agent --config config/config.toml notifications get '{"id":"ID"}'
 personal-agent --config config/config.toml notifications read '{"id":"ID","revision":1}'

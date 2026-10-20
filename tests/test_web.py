@@ -134,6 +134,62 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(self.base + "/api/tasks", params=params)
             self.assertEqual(response.status, 400)
 
+    async def test_notification_group_routes_preserve_snapshot_and_reject_internal_links(self):
+        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.kernel.contracts import NotificationRequest
+        from unittest.mock import AsyncMock
+
+        notifications = NotificationsPlugin(self.host)
+        self.host.runtime.invoke = AsyncMock(side_effect=notifications.request)
+        for i in range(25):
+            await notifications.request(
+                NotificationRequest(
+                    "publish",
+                    {
+                        "event_key": str(i),
+                        "title": "事项进展",
+                        "body": "证据",
+                        "group_key": "operation:one",
+                    },
+                )
+            )
+        await self.login()
+        response = await self.client.get(self.base + "/api/notifications?grouped=true&unread=true")
+        self.assertEqual(response.status, 200)
+        listing = await response.json()
+        self.assertEqual(len(listing["items"]), 1)
+        group = listing["items"][0]
+        self.assertEqual(group["total"], 25)
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={
+                "action": "group",
+                "arguments": {"group_id": group["id"], "snapshot": group["read_before"]},
+            },
+        )
+        members = await response.json()
+        self.assertEqual(len(members["items"]), 20)
+        self.assertTrue(members["before"])
+        response = await self.client.post(
+            self.base + "/api/notifications", json={"action": "link", "arguments": {}}
+        )
+        self.assertEqual(response.status, 400)
+        await notifications.request(
+            NotificationRequest(
+                "publish",
+                {"event_key": "late", "title": "新进展", "body": "新证据", "group_key": "operation:one"},
+            )
+        )
+        response = await self.client.post(
+            self.base + "/api/notifications",
+            json={
+                "action": "read_group",
+                "arguments": {"group_id": group["id"], "before": group["read_before"]},
+            },
+        )
+        self.assertEqual((await response.json())["marked_read"], 25)
+        self.assertEqual(notifications.repo.unread_count(), 1)
+
     async def test_notification_inbox_auth_read_and_follow_up_context(self):
         from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
         from assistant_runtime.kernel.contracts import NotificationRequest

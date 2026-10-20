@@ -4,9 +4,10 @@ import asyncio
 import math
 from urllib.parse import urlsplit
 from ...kernel.runtime import Manifest
-from ...kernel.contracts import NotificationRequest, TaskRequest
+from ...kernel.contracts import NotificationRequest, NotificationLink, TaskRequest
 from .settings import NotificationSettings
 from .repository import Notifications
+from .groups import association
 from .channels import ChatChannel, ContextChannel, VoiceChannel, Deferred
 
 
@@ -35,6 +36,7 @@ class NotificationsPlugin:
             raise ValueError("Configured notification channel is not registered")
         self.context = context
         context.register(NotificationRequest, self.request)
+        context.register(NotificationLink, self.link)
         for name, channel in self.channels.items():
             self.repo.recover(name, channel.replay_safe)
             context.spawn(self.worker(name, channel), "delivery:" + name)
@@ -61,7 +63,19 @@ class NotificationsPlugin:
         return "assistant", {}
 
     def validate(self, args):
-        allowed = {"event_key", "title", "body", "url", "priority", "voice", "expires_at", "id", "revision"}
+        allowed = {
+            "event_key",
+            "title",
+            "body",
+            "url",
+            "priority",
+            "voice",
+            "expires_at",
+            "id",
+            "revision",
+            "group_key",
+            "group_title",
+        }
         if set(args) - allowed:
             raise ValueError("Unknown notification fields")
         for key, limit in (("title", 200), ("body", 8000)):
@@ -92,6 +106,7 @@ class NotificationsPlugin:
             raise ValueError("Invalid notification priority/voice")
         if args.get("voice") and "voice" not in self.channels:
             raise ValueError("Voice notifications disabled")
+        self.group_fields(args)
         return {
             key: args.get(key, default)
             for key, default in (
@@ -103,6 +118,37 @@ class NotificationsPlugin:
                 ("expires_at", None),
             )
         }
+
+    @staticmethod
+    def group_fields(args):
+        for key, limit in (("group_key", 200), ("group_title", 200)):
+            value = args.get(key)
+            if value is not None and (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > limit
+                or any(ord(c) < 32 for c in value)
+            ):
+                raise ValueError("Invalid notification " + key)
+        if args.get("group_title") and not args.get("group_key"):
+            raise ValueError("Group title requires a group key")
+        return {"key": args["group_key"], "title": args.get("group_title")} if args.get("group_key") else None
+
+    async def link(self, request):
+        # This contract is internal only. The owning producer supplies durable evidence,
+        # not a title match or an AI-selected target task.
+        source, origin = self.source(request.caller_run) if request.caller_run else (request.source, {})
+        group = self.group_fields({"group_key": request.group_key, "group_title": request.group_title})
+        payload = {"title": request.group_title or request.event_key, "origin": origin}
+        if group:
+            payload["group"] = group
+        ident, title = association(source, request.event_key, payload)
+        return self.repo.groups.link(
+            request.source,
+            request.event_key,
+            ident,
+            title if request.caller_run or request.group_title else None,
+        )
 
     async def describe(self, items):
         # Execution facts remain owned by tasks. Resolve them at read time so an
@@ -136,7 +182,7 @@ class NotificationsPlugin:
         action, args = request.action, request.arguments
         if not isinstance(args, dict):
             raise ValueError("Notification arguments must be an object")
-        if request.caller_run and action not in {"publish", "update", "get", "list"}:
+        if request.caller_run and action not in {"publish", "update", "get", "list", "groups", "group"}:
             raise ValueError("Background tasks cannot mark user notifications read or retry delivery")
         if action in {"publish", "update"}:
             payload = self.validate(args)
@@ -145,6 +191,9 @@ class NotificationsPlugin:
                 raise ValueError("Update requires notification id")
             # Run identity is server-derived metadata, not part of event deduplication.
             payload["origin"] = origin
+            group = self.group_fields(args)
+            if group:
+                payload["group"] = group
             old = None
             if args.get("id"):
                 old = self.repo.get(args["id"])
@@ -157,6 +206,10 @@ class NotificationsPlugin:
             if old and args.get("id") and not request.caller_run:
                 source = old["source"]
             if old:
+                if action == "update" and group and group != old["payload"].get("group"):
+                    raise ValueError("Notification association cannot be changed")
+                if not group and old["payload"].get("group"):
+                    payload["group"] = old["payload"]["group"]
                 payload["origin"] = old["payload"].get("origin", {})
             channels = list(self.settings.channels) + (["voice"] if payload["voice"] else [])
             return self.repo.publish(
@@ -175,6 +228,20 @@ class NotificationsPlugin:
             )
             listing["items"] = await self.describe(listing["items"])
             return listing
+        if action == "groups":
+            listing = self.repo.groups.list(
+                args.get("unread", False), args.get("before"), args.get("limit", 20)
+            )
+            await self.describe([group["latest"] for group in listing["items"]])
+            return listing
+        if action == "group":
+            listing = self.repo.groups.members(
+                args.get("group_id"), args.get("before"), args.get("limit", 20), args.get("snapshot")
+            )
+            listing["items"] = await self.describe(listing["items"])
+            return listing
+        if action == "read_group":
+            return self.repo.groups.read(args.get("group_id"), args.get("before"))
         if action == "read_all":
             return self.repo.read_all(args.get("before"))
         if action == "read":

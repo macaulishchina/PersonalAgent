@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from ...kernel.contracts import MediaRequest, NotificationRequest, TaskRequest
+from ...kernel.contracts import MediaRequest, TaskRequest
 from ...kernel.runtime import Manifest
 from .aliyun import Aliyun
 from .errors import MediaError
@@ -67,6 +67,9 @@ class MediaPlugin:
         self.downloads = Downloads(self)
         context.spawn(self.downloads.worker(), "downloads")
         context.spawn(self.notifications(), "outbox")
+        from .notifications import restore_associations
+
+        context.spawn(restore_associations(self), "notification-associations")
         if self.repo.db.execute(
             "SELECT 1 FROM media_operations WHERE state='waiting_auth' LIMIT 1"
         ).fetchone():
@@ -608,6 +611,8 @@ class MediaPlugin:
                 pass
 
     async def notifications(self):
+        from .notifications import publish
+
         while True:
             row = self.repo.db.execute(
                 "SELECT key,payload FROM media_outbox ORDER BY rowid LIMIT 1"
@@ -616,7 +621,7 @@ class MediaPlugin:
                 import json
 
                 try:
-                    await self.host.runtime.invoke(NotificationRequest("publish", json.loads(row[1])))
+                    await publish(self, json.loads(row[1]))
                     with self.repo.db:
                         self.repo.db.execute("DELETE FROM media_outbox WHERE key=?", (row[0],))
                 except Exception:

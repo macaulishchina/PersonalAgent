@@ -13,7 +13,12 @@ import uuid
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.kernel.contracts import MediaRequest, NotificationRequest, TaskRequest
+from assistant_runtime.kernel.contracts import (
+    MediaRequest,
+    NotificationRequest,
+    NotificationLink,
+    TaskRequest,
+)
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from assistant_runtime.mcp.catalog import MEDIA_TOOLS
 from assistant_runtime.mcp.media import create_server
@@ -191,6 +196,7 @@ class Dependencies:
             return self.runs
 
         context.register(NotificationRequest, notify)
+        context.register(NotificationLink, lambda request: asyncio.sleep(0, result={"linked": False}))
         context.register(TaskRequest, tasks)
 
 

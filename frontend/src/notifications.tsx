@@ -6,13 +6,13 @@ import {
   ArrowUpRight,
   Quote,
   RefreshCw,
-  ChevronDown,
 } from "lucide-react";
 import { RUN_LABELS } from "./task-presentation";
 import { formatDuration } from "./duration";
 import { PanelHeader } from "./panel-header";
+import { NotificationGroup, type NoticeGroup } from "./notification-group";
 
-type Notice = {
+export type Notice = {
   id: string;
   source: string;
   revision: number;
@@ -34,7 +34,7 @@ type Notice = {
   deliveries: { channel: string; state: string; error?: string }[];
 };
 type Page = {
-  items: Notice[];
+  items: NoticeGroup[];
   unread: number;
   before: string | null;
   read_before?: number;
@@ -65,7 +65,6 @@ export function NotificationPanel({
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const moreInFlight = useRef(false);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const requestSequence = useRef(0);
   const load = async (more = false) => {
     if (more && (moreInFlight.current || !data.before)) return;
@@ -74,7 +73,7 @@ export function NotificationPanel({
     const seq = ++requestSequence.current;
     try {
       const result: Page = await api(
-        `notifications?unread=${unreadOnly}${more && data.before ? `&before=${encodeURIComponent(data.before)}` : ""}`,
+        `notifications?grouped=true&unread=${unreadOnly}${more && data.before ? `&before=${encodeURIComponent(data.before)}` : ""}`,
       );
       if (seq !== requestSequence.current) return;
       setData((old) => ({
@@ -109,18 +108,20 @@ export function NotificationPanel({
   }, [open, unreadOnly, unreadCount]);
   useEffect(() => {
     if (!open) return;
-    const pending = data.items.filter(
-      (item) =>
-        item.execution &&
-        [
-          "queued",
-          "dispatching",
-          "running",
-          "waiting_user",
-          "paused",
-          "unknown",
-        ].includes(item.execution.state || ""),
-    );
+    const pending = data.items
+      .map((group) => group.latest)
+      .filter(
+        (item) =>
+          item.execution &&
+          [
+            "queued",
+            "dispatching",
+            "running",
+            "waiting_user",
+            "paused",
+            "unknown",
+          ].includes(item.execution.state || ""),
+      );
     if (!pending.length) return;
     let canceled = false;
     let inFlight = false;
@@ -141,11 +142,14 @@ export function NotificationPanel({
         ...old,
         items: old.items.map((item) => {
           const result = results.find(
-            (r) => r.status === "fulfilled" && r.value.id === item.id,
+            (r) => r.status === "fulfilled" && r.value.id === item.latest.id,
           );
           return result?.status === "fulfilled" &&
-            result.value.revision === item.revision
-            ? { ...item, execution: result.value.execution }
+            result.value.revision === item.latest.revision
+            ? {
+                ...item,
+                latest: { ...item.latest, execution: result.value.execution },
+              }
             : item;
         }),
       }));
@@ -212,17 +216,25 @@ export function NotificationPanel({
       setBusy(false);
     }
   };
-  // Producer identity, never title or execution ID: one task spans many runs,
-  // while distinct tasks can legitimately have the same display name.
-  const bySource = new Map<string, Notice[]>();
-  for (const item of data.items) {
-    const source = item.source || `notice:${item.id}`;
-    const group = bySource.get(source) || [];
-    group.push(item);
-    bySource.set(source, group);
-  }
-  const groups = [...bySource.entries()];
-  const renderNotice = (item: Notice) => (
+  const readGroup = async (group: NoticeGroup) => {
+    setBusy(true);
+    setError("");
+    try {
+      await api("notifications", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "read_group",
+          arguments: { group_id: group.id, before: group.read_before },
+        }),
+      });
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const renderNotice = (item: Notice, compact = false) => (
     <article
       className={`notification-card ${item.unread ? "unread" : ""}`}
       key={item.id}
@@ -246,7 +258,11 @@ export function NotificationPanel({
         )}
         {item.payload.title}
       </h3>
-      <p className="notification-body">{item.payload.body}</p>
+      <p
+        className={`notification-body ${compact ? "notification-preview" : ""}`}
+      >
+        {item.payload.body}
+      </p>
       {item.payload.url && (
         <a
           className="notification-source"
@@ -419,75 +435,16 @@ export function NotificationPanel({
             {error}
           </p>
         )}
-        {groups.map(([source, items]) => {
-          const latest = items[0];
-          const isExpanded = expanded.has(source);
-          const unread = items.filter((item) => item.unread).length;
-          const important = items.filter(
-            (item) => item.payload.priority === "important",
-          ).length;
-          const label =
-            latest.payload.origin?.task_title ||
-            (latest.source === "assistant"
-              ? "助手"
-              : latest.source?.startsWith("task:")
-                ? "后台任务"
-                : latest.source || "通知");
-          return (
-            <section
-              className="notification-group"
-              key={source}
-              aria-label={label}
-            >
-              <div className="notification-group-heading">
-                <span className="notification-group-name" title={label}>
-                  {label}
-                </span>
-                <span className="notification-group-count">
-                  {data.before ? "已加载 " : ""}
-                  {items.length} 条
-                  {unread > 0 && (
-                    <span className="notification-group-unread">
-                      {" "}
-                      · {unread} 未读
-                    </span>
-                  )}
-                  {important > 0 && <span> · {important} 重要</span>}
-                </span>
-              </div>
-              {renderNotice(latest)}
-              {items.length > 1 && (
-                <>
-                  <button
-                    className="notification-group-toggle"
-                    aria-expanded={isExpanded}
-                    aria-controls={`notice-group-${encodeURIComponent(source)}`}
-                    onClick={() =>
-                      setExpanded((old) => {
-                        const next = new Set(old);
-                        if (next.has(source)) next.delete(source);
-                        else next.add(source);
-                        return next;
-                      })
-                    }
-                  >
-                    <ChevronDown size={14} aria-hidden="true" />
-                    {isExpanded
-                      ? "收起较早通知"
-                      : `展开较早 ${items.length - 1} 条`}
-                  </button>
-                  <div
-                    id={`notice-group-${encodeURIComponent(source)}`}
-                    hidden={!isExpanded}
-                    className="notification-group-history"
-                  >
-                    {isExpanded && items.slice(1).map(renderNotice)}
-                  </div>
-                </>
-              )}
-            </section>
-          );
-        })}
+        {data.items.map((group) => (
+          <NotificationGroup
+            key={group.id}
+            group={group}
+            api={api}
+            busy={busy}
+            onRead={() => void readGroup(group)}
+            renderNotice={renderNotice}
+          />
+        ))}
         {!data.items.length && !error && (
           <div className="task-empty">
             <Bell size={28} strokeWidth={1.4} />

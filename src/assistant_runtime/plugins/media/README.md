@@ -411,3 +411,9 @@ Validation: `scripts/check.py --group media --group tasks`. Protocol fixtures an
 local filesystem tests cover lost write acknowledgments, changed preconditions, restore
 conflicts, symlinks, nested downloads, cancellation, aggregate notices and scoped grants.
 They are separate from installed-service and cloud-account acceptance.
+
+Notification association follows the saved operation/batch `caller_run`, even after the
+execution ends. Without a parent task, operation/batch IDs provide source-scoped group
+keys. The media adapter owns these links; generic notifications owns grouping, paging
+and read state. Legacy foreground-attributed notices are linked using durable receipts
+through the internal notification capability, without republishing or altering content.

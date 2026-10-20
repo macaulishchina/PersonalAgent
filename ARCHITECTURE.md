@@ -541,6 +541,15 @@ records remain in `state/events/`. Recording itself starts no model, notificatio
 memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
 and [source onboarding](src/assistant_runtime/plugins/observations/README.md).
 
+Notification associations are independent of producer ownership and event deduplication.
+The notifications plugin owns source-scoped group identity, stable group/member pagination
+and snapshot-bounded acknowledgements. Task execution defaults and explicit topic keys
+are evidence-based; no title/time similarity or business-completion inference is used.
+Trusted producer adapters may enrich legacy associations through internal `NotificationLink`,
+never exposed as caller-supplied IPC/MCP authority. Media carries its stored execution
+origin through its outbox and restores only its own historical operation links. Original
+content, revisions and delivery receipts are not rewritten or replayed by grouping.
+
 ## Optional public web search
 
 `SearchRequest` is the shared internal/MCP/CLI contract. The optional search plugin owns
