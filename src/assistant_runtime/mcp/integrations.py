@@ -32,7 +32,8 @@ def create_server(client, caller_run=None, can_manage=False):
         ),
     )
 
-    async def call(action, **arguments):
+    # Routing is positional-only: business fields may also be named action.
+    async def call(action, /, **arguments):
         return await client.invoke(IntegrationRequest(action, arguments, caller_run))
 
     @server.tool(annotations=READ)

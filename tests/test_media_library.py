@@ -11,7 +11,11 @@ import unittest
 from unittest.mock import patch
 import uuid
 
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
+
 from assistant_runtime.kernel.contracts import MediaRequest
+from assistant_runtime.mcp.media import create_server
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.repository import MediaRepository
 from assistant_runtime.plugins.media.settings import MediaSettings
@@ -351,8 +355,15 @@ class BatchTest(unittest.IsolatedAsyncioTestCase):
             "action": "transfer",
             "items": [{"share_url": "https://www.alipan.com/s/testshare", "file_id": "video"}],
         }
-        first = await self.plugin.request(MediaRequest("batch", args))
-        again = await self.plugin.request(MediaRequest("batch", args))
+        async with Client(create_server(self.runtime)) as client:
+            first = (await client.call_tool("submit_media_batch", args)).structured_content
+        # Reconnect after a lost caller reply; the same UUID still identifies one batch.
+        async with Client(create_server(self.runtime)) as client:
+            again = (await client.call_tool("submit_media_batch", args)).structured_content
+            with self.assertRaisesRegex(ToolError, "conflicts"):
+                await client.call_tool(
+                    "submit_media_batch", {**args, "items": [{**args["items"][0], "file_id": "other"}]}
+                )
         self.assertEqual(first, again)
         ident = first["batch_id"]
 
@@ -378,16 +389,53 @@ class BatchTest(unittest.IsolatedAsyncioTestCase):
             "items": [{"share_url": "https://www.alipan.com/s/testshare", "file_id": "video"}],
         }
         self.dependencies.runs["run"] = {"state": "running", "task_id": "task", "resources": []}
-        with self.assertRaisesRegex(ValueError, "resource"):
-            await self.plugin.request(MediaRequest("batch", args, "run"))
-        result = await self.plugin.request(MediaRequest("batch", args))
-        ident = result["batch_id"]
-        self.plugin.batches.cancel(ident, "assistant")
+        async with Client(create_server(self.runtime, "run")) as client:
+            with self.assertRaisesRegex(ToolError, "resource"):
+                await client.call_tool("submit_media_batch", args)
+            self.assertEqual(self.store.db.execute("SELECT count(*) FROM media_batches").fetchone()[0], 0)
+            self.dependencies.runs["run"]["resources"] = ["media:movies"]
+            result = (await client.call_tool("submit_media_batch", args)).structured_content
+            ident = result["batch_id"]
+            saved = json.loads(
+                self.store.db.execute("SELECT data FROM media_batches WHERE id=?", (ident,)).fetchone()[0]
+            )
+            self.assertEqual(saved["caller_run"], "run")
+            self.assertEqual(result["owner"], "task:task")
+            fetched = (await client.call_tool("get_media_batch", {"batch_id": ident})).structured_content
+            self.assertEqual(fetched, result)
+            await client.call_tool("cancel_media_batch", {"batch_id": ident})
         data = json.loads(
             self.store.db.execute("SELECT data FROM media_batches WHERE id=?", (ident,)).fetchone()[0]
         )
         await self.plugin.batches.tick(ident, "assistant", data)
         self.assertEqual(self.plugin.batches.get(ident)["state"], "cancelled")
+        self.assertNotIn("copy", self.provider.calls)
+
+    async def test_mcp_download_batch_persists_action_and_rejects_invalid_intent(self):
+        args = {
+            "request_id": str(uuid.uuid4()),
+            "target": "movies",
+            "action": "download",
+            "items": [{"file_id": "video"}],
+        }
+        async with Client(create_server(self.runtime)) as client:
+            for invalid in (
+                {"action": "trash"},
+                {"items": []},
+                {"items": [{"file_id": "v", "caller_run": "other"}]},
+            ):
+                with self.subTest(invalid=invalid), self.assertRaises(ToolError):
+                    await client.call_tool("submit_media_batch", {**args, **invalid})
+            self.assertEqual(self.store.db.execute("SELECT count(*) FROM media_batches").fetchone()[0], 0)
+            result = (await client.call_tool("submit_media_batch", args)).structured_content
+        saved = json.loads(
+            self.store.db.execute(
+                "SELECT data FROM media_batches WHERE id=?", (result["batch_id"],)
+            ).fetchone()[0]
+        )
+        self.assertEqual(saved["action"], "download")
+        self.assertEqual(saved["items"][0]["arguments"], args["items"][0])
+        self.assertIsNone(saved["caller_run"])
         self.assertNotIn("copy", self.provider.calls)
 
     async def test_cancelling_reused_operation_detaches_without_cancelling_original(self):

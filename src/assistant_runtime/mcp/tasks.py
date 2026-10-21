@@ -13,7 +13,8 @@ def create_server(client, caller_run=None):
         instructions="Manage durable background work without blocking the conversation. Create only user-authorized work. Get models before selecting execution.model and reasoning_effort; explain selection in execution.reason. The host may enforce fixed settings. Use stable UUID request_id for idempotent creation. Triggers: immediate; date with timezone-aware ISO at; interval with seconds; cron with expression/timezone; event with source(device/task), id, metric, operator(eq/gt/lt), value, duration_seconds, cooldown_seconds, hysteresis; or event with source=records, types (1..16 exact names), optional source_id/subject, merge_seconds (default 3), cooldown_seconds (30), max_age_seconds (300), capacity (128). Durable records subscriptions consume only new observations; no historical replay on create/resume/update. Baselines/corrections/deletions are not triggers. Query get_task_event_inbox and get_task_execution_trace to explain trigger decisions and execution. Execution kind: codex or reminder (no model). long_term uses a persistent Goal. Query run_id before steering/canceling; pause_task changes future scheduling only. Child tasks inherit scope. Never claim actions completed from memory.",
     )
 
-    async def call(action, **arguments):
+    # Routing is positional-only: business fields may also be named action.
+    async def call(action, /, **arguments):
         return await client.invoke(TaskRequest(action, arguments, caller_run))
 
     @server.tool(annotations=READ)

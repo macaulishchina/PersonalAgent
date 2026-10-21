@@ -18,6 +18,7 @@ from assistant_runtime.kernel.contracts import (
     Control,
     DeviceObservation,
     MemoryRequest,
+    MediaRequest,
     SensorReading,
     VideoCapture,
     CameraMotion,
@@ -27,10 +28,28 @@ from assistant_runtime.mcp.catalog import MEMORY_TOOLS, DEVICE_TOOLS
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.device import create_server as device_server
 from assistant_runtime.mcp.memory import create_server as memory_server
+from assistant_runtime.mcp.media import create_server as media_server
 from assistant_runtime.plugins.codex.mcp import server_config
 
 
 class McpTest(unittest.IsolatedAsyncioTestCase):
+    async def test_media_batch_keeps_business_action_separate_from_route_and_caller(self):
+        for caller in (None, "task-run"):
+            for action in ("transfer", "download"):
+                with self.subTest(caller=caller, action=action):
+                    receipt = {"batch_id": "batch", "state": "queued"}
+                    handler = SimpleNamespace(invoke=AsyncMock(return_value=receipt))
+                    arguments = {
+                        "request_id": "request",
+                        "target": "series",
+                        "action": action,
+                        "items": [{"file_id": "video"}],
+                    }
+                    async with Client(media_server(handler, caller)) as client:
+                        result = await client.call_tool("submit_media_batch", arguments)
+                    handler.invoke.assert_awaited_once_with(MediaRequest("batch", arguments, caller))
+                    self.assertEqual(result.structured_content, receipt)
+
     async def test_recording_tool_returns_references_without_loading_video_bytes(self):
         result = {"video": {"id": "a" * 32}, "attachments": [{"id": "a" * 32, "type": "video/mp4"}]}
         handler = SimpleNamespace(invoke=AsyncMock(return_value=result), status=AsyncMock())

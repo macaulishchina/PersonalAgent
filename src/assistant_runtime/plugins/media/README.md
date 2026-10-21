@@ -455,6 +455,14 @@ same throughput or download permission. OpenList credentials are optional for th
 
 ## Ownership and reliability
 
+MCP dispatch keeps the capability route separate from business arguments: internal
+routing parameters are positional-only, so `MediaRequest("batch", {"action":
+"transfer", ...}, caller_run)` can carry both without Python argument collisions.
+Caller identity remains bound by the server, not supplied in business fields.
+Batch regression tests invoke the registered FastMCP tools through a client into the
+runtime/plugin, covering reconnect/retry, conflicting UUIDs, authorization, persisted
+caller identity and cancellation; direct plugin tests alone do not verify this boundary.
+
 `MediaRequest` and the bounded local IPC are the only framework seam. MCP only maps
 schemas/results, including QR images; SDK work runs in killed/reaped, deadline-bound
 child processes in the one project environment. aligo's legacy default config path
