@@ -276,6 +276,7 @@ class DecisionsPlugin:
                     "voice_intent": "assistant",
                     "event_relevance": "tasks",
                     "model_profile": "tasks",
+                    "model_review": "tasks",
                 }.get(request.kind, "mcp:background" if request.caller_run else "mcp:foreground")
                 reference = (request.caller_run + ":" if request.caller_run else "") + request.reference
                 job = prepare(

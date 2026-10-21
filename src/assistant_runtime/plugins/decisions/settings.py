@@ -24,6 +24,7 @@ class DecisionSettings:
             "voice_intent": 0.98,
             "event_relevance": 0.98,
             "model_profile": 0.90,
+            "model_review": 0.90,
             "selection": 0.90,
         }
     )

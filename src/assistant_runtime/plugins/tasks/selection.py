@@ -26,6 +26,7 @@ GUIDANCE = (
 class ModelPolicy:
     default_profile: str = "fast"
     max_upgrades: int = 1
+    review_mode: str = "shadow"
     fallbacks: dict = field(default_factory=dict)
     profiles: dict = field(
         default_factory=lambda: {
@@ -43,9 +44,13 @@ class ModelPolicy:
             "max_upgrades",
             "profiles",
             "fallbacks",
+            "review_mode",
         }:
             raise ValueError("Unknown task model policy settings")
         result = cls()
+        result.review_mode = data.get("review_mode", "shadow")
+        if not isinstance(result.review_mode, str) or result.review_mode not in {"off", "shadow"}:
+            raise ValueError("Model review supports off or shadow only")
         result.default_profile = data.get("default_profile", result.default_profile)
         result.max_upgrades = data.get("max_upgrades", result.max_upgrades)
         result.fallbacks = data.get("fallbacks", {})
@@ -100,6 +105,7 @@ class ModelPolicy:
             "version": 1,
             "default_profile": self.default_profile,
             "max_upgrades": self.max_upgrades,
+            "review_mode": self.review_mode,
             "fallbacks": self.fallbacks,
             "guidance": GUIDANCE,
             "profiles": {

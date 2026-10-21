@@ -10,6 +10,8 @@ model = "auto"
 reasoning_effort = "auto"
 
 [tasks.model_policy]
+# Observe evidence-based recommendations; never overrides the selected model.
+review_mode = "shadow"
 default_profile = "fast"
 max_upgrades = 1
 

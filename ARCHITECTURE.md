@@ -598,3 +598,9 @@ confirmed safe handoff. Explicit ordered fallbacks are owned by models (no-tool 
 Mem0 extraction can bind to the no-tool API capability, retaining its source policy
 and local embeddings. See [model access](src/assistant_runtime/plugins/models/README.md)
 for configuration, limits, deployment and acceptance boundaries.
+
+Task model selection owns evidence and policy. Its optional `model_review` worker uses
+the decisions capability for observational, complete model/native-effort comparisons.
+Caller assessments are not verified user constraints; prior run evidence is read by
+tasks within scope. Review receipts never modify execution, tool permissions or
+provider state. The existing dispatch/fallback/upgrade owners remain authoritative.

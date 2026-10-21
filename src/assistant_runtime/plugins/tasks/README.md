@@ -545,3 +545,64 @@ framework does not independently prove a domain goal. For media watches, verify 
 known final episode range, requested storage level and absence of unresolved operations;
 no search hits is not completion evidence. Unknown totals require continued tracking or
 user clarification. Tests live in `test_task_self_schedule`.
+
+## Evidence-based model review (observation only)
+
+`tasks.model_policy.review_mode = "shadow"` (default; `"off"` disables) adds an
+asynchronous review of the initial dispatch choice. There is intentionally no active
+mode yet. Existing selection, user-requested concrete models, fixed instance settings,
+ordered fallbacks and controlled upgrades retain their behavior. The review never
+starts/replays tools, changes a run, or treats execution completion as goal success.
+The decisions plugin must be enabled, consented and in active mode for the bounded
+query; its global off switch still prevents all network calls.
+
+Agents should supply the following optional, bounded `execution.assessment`:
+
+```json
+{
+  "acceptance": "Read back the destination and verify the intended objects",
+  "procedure": "Existing transfer tool; search candidates still need identity checks",
+  "uncertainties": ["Two candidates disagree about the object's identity"],
+  "user_preference": "Exact explicit model/speed preference, only if the user stated one",
+  "prior_run_id": "related execution ID when retrying"
+}
+```
+
+Omit absent fields rather than inventing evidence. `uncertainties` allows up to four
+300-character statements; other text fields are at most 500 characters. The framework
+reads the referenced run itself and captures its state, selected model/effort and a
+bounded, explicitly labelled executor summary. Background references must belong to
+the parent's task or its children and the same workspace. This is reported evidence,
+not independent verification of external effects. Source modules continue owning tools
+and their operation receipts; there is no media-specific routing logic.
+
+Caller-supplied choices/assessment are assistant recommendations. A `user_preference`
+claim is saved as unverified and never becomes authority. Trusted fixed instance values
+remain constraints. A future override mode must establish a trusted user-constraint
+channel before overriding any existing explicit choice; this phase does not override
+such choices at all. Supplying fake `source` or `user_verified` fields is rejected.
+
+The independent `model_review` question sees task facts and full legal model/effort
+pairs, but not the baseline recommendation/reason as separate advice. It does not
+create a universal scale between different providers' native efforts. Candidates come
+from configured tiers plus the explicitly selected custom model, filtered by the live
+catalog and instance constraints. The task prompt may itself contain preferences, so
+this is not a claim of a statistically blinded experiment.
+
+One owned worker and a 16-entry queue bound review work; launch never waits for it.
+The worker has a four-second total deadline and keeps the existing three-second Jev
+active deadline by default. Saturation, unavailable support, fixed choices and errors
+produce explicit skip/fallback records. Restart marks queued/running reviews interrupted
+without replay. Identical facts/candidates use a stable digest to reuse existing decision
+receipts; cache eviction can cause a later review, not an execution replay. No daily
+call cap is added. Credentials/raw media remain prohibited and inputs retain the
+16-KiB decisions limit; oversized inputs fall back, rather than silently losing facts.
+
+Inspect `run.data.model_review` using task get or `get_task_execution_trace`. It includes
+initial selection/source, candidate recommendation, receipt ID, disagreement, timing and
+`applied=false`. Original facts live in `spec.execution.assessment` and
+`spec.execution.selection.prior_execution`. Compare these alongside model-selection
+segments, tool trace, duration and verified task outcomes. Disagreement is not evidence
+that Jev was correct; provider-reported completion is not a quality label. Do not enable
+correction until representative evaluations show improved outcomes without unacceptable
+latency/cost. Existing evidence/checkpoint-based upgrades remain unchanged.

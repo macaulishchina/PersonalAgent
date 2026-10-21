@@ -42,6 +42,7 @@ GROUPS = {
         "tasks",
         "task_events",
         "task_models",
+        "model_review",
         "task_self_schedule",
     },
     "media": {"media", "media_providers", "media_downloads", "media_library", "media_search"},

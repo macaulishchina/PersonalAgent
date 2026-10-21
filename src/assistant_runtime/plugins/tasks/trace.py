@@ -61,6 +61,7 @@ class TaskTrace:
             "task_id": run["task_id"],
             "state": run["state"],
             "trigger_context": run["data"].get("trigger_context"),
+            "model_review": run["data"].get("model_review"),
             "thread_id": run["data"].get("thread_id"),
             "turn_id": run["data"].get("turn_id"),
             "items": [{"seq": row[0], "at": row[1], **json.loads(row[2])} for row in rows[:limit]],

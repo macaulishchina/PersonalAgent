@@ -28,6 +28,14 @@ def create_server(client, caller_run=None):
         concrete justification that deep is insufficient; ordinary research search/summaries
         do not qualify. Use it sparingly.
         Missing/auto fields use instance profiles, never inherit the foreground/parent model.
+        Include execution.assessment={acceptance:concrete checks, procedure:known steps and limits,
+        uncertainties:[unresolved facts], user_preference:exact user model/latency preference if any,
+        prior_run_id:related execution ID if retrying}. Do not claim familiar workflow when prior
+        evidence conflicts. The host reads prior outcomes itself; completion is not goal success.
+        All supplied assessment fields and model choices are assistant statements, not authority.
+        An optional asynchronous shadow review compares full supported model/effort pairs without
+        overriding execution or replaying actions. Inspect run.model_review and execution trace.
+
         """
         return await call("models")
 

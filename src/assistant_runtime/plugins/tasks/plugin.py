@@ -19,6 +19,7 @@ from .event_inbox import EventInbox, subscription, validate_subscription
 from .trace import TaskTrace
 from .selection import ModelPolicy
 from .model_advice import select_execution
+from .model_review import ModelReview, assessment, evidence
 from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
 from .self_schedule import SelfSchedule, policy as schedule_policy, completion_policy
 from .fallbacks import ModelFallbacks
@@ -72,6 +73,7 @@ class TasksPlugin:
         self.upgrades = ModelUpgrades(self)
         self.self_schedule = SelfSchedule(self)
         self.fallbacks = ModelFallbacks(self)
+        self.model_review = ModelReview(self)
         self.falling_back = set()
         self.upgrading = set()
         self.scheduler = None
@@ -121,6 +123,8 @@ class TasksPlugin:
             self.schedule(definition)
         self.scheduler.resume()
         self.started = True
+        self.model_review.recover()
+        context.spawn(self.model_review.worker(), "model-review")
         context.spawn(self.worker(), "dispatch-and-deliver")
         context.spawn(self.finalize_finished(), "finalize-executions")
         context.spawn(self.watch_events(), "event-rules")
@@ -379,6 +383,7 @@ class TasksPlugin:
             "device_id",
             "profile",
             "selection",
+            "assessment",
         }:
             raise ValueError("Invalid task execution")
         if requested.get("kind", "codex") not in {"codex", "reminder", "device_query"}:
@@ -390,7 +395,11 @@ class TasksPlugin:
         elif requested.get("kind") == "reminder":
             s["execution"] = {"kind": "reminder"}
         else:
+            declared = assessment(requested.get("assessment"))
+            prior = evidence(self, declared, caller, s["workspace"])
             s["execution"] = await select_execution(self, requested, s["title"] + "\n" + s["prompt"])
+            s["execution"]["assessment"] = declared
+            s["execution"]["selection"]["prior_execution"] = prior
             if caller and self.repo.run(caller)["state"] not in {"running", "waiting_user"}:
                 raise ValueError("Parent execution ended during task model selection")
         return s
@@ -751,13 +760,18 @@ class TasksPlugin:
                         k: v for k, v in spec["execution"].items() if k not in {"selection", "profile"}
                     }
                     requested["reason"] = "执行前应用实例固定配置"
+                    assessment_data = spec["execution"].get("assessment", {})
+                    prior = spec["execution"].get("selection", {}).get("prior_execution")
                     spec["execution"] = await self.model_policy.resolve(
                         self.executor, requested, self.settings.execution
                     )
+                    spec["execution"]["assessment"] = assessment_data
+                    spec["execution"]["selection"]["prior_execution"] = prior
                 await self.executor.select(spec["execution"]["model"], spec["execution"]["reasoning_effort"])
                 if self.repo.run(ident)["state"] != "queued":
                     return
                 run = self.repo.update_run(ident, "dispatching", spec=spec)
+                self.model_review.enqueue(run)
                 await self.executor.launch(run, directory)
         except Exception as exc:
             # A provider request may have executed before its reply was lost.
