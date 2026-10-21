@@ -18,6 +18,8 @@ GUIDANCE = (
     "Task length and number of steps do not by themselves require deeper reasoning. "
     "Explain uncertainty, available procedure and verification in execution.reason. "
     "Declare model_source/effort_source as assistant for your recommendations, user only for explicit user choices. "
+    "Source labels require corresponding choices; redundant assistant labels on missing/auto fields are ignored. "
+    "Free-form user_preference is context, not a model/effort lock; encode explicit user choices in those fields. "
     "Active Jev correction may change assistant recommendations; user/fixed/unlabelled explicit fields stay protected. "
     "Never inherit the parent/main model merely because it created the task. "
     "Network errors, offline devices, missing tools and uncertain side effects need reconciliation, not a stronger model."
@@ -124,7 +126,10 @@ class ModelPolicy:
             },
         }
 
-    def validate(self, requested, fixed):
+    @staticmethod
+    def normalize(requested):
+        """Drop empty recommendation provenance; never guess an explicit user choice."""
+        requested = dict(requested)
         for choice_field, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
             value = requested.get(source)
             if value is not None and value not in ("assistant", "user"):
@@ -132,8 +137,14 @@ class ModelPolicy:
             explicit = requested.get(choice_field) not in (None, "auto") or (
                 choice_field == "model" and requested.get("profile") not in (None, "auto")
             )
-            if value is not None and not explicit:
+            if value == "user" and not explicit:
                 raise ValueError(source + " requires an explicit choice")
+            if value is None or not explicit:
+                requested.pop(source, None)
+        return requested
+
+    def validate(self, requested, fixed):
+        requested = self.normalize(requested)
         profile = requested.get("profile")
         if profile in (None, "auto"):
             profile = self.default_profile
@@ -199,6 +210,7 @@ class ModelPolicy:
         return {ident: option for _, ident, option in unique.values()}
 
     async def resolve(self, executor, requested, fixed):
+        requested = self.normalize(requested)
         profile = self.validate(requested, fixed)
         reason = requested.get("reason")
         reason = reason or (

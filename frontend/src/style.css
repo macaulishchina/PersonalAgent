@@ -324,6 +324,72 @@ p {
   font-size: 11px;
   opacity: 0.65;
 }
+.tool-result {
+  margin: 1px 0 9px 16px;
+  max-width: 100%;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.tool-result-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.tool-result-link:hover {
+  text-decoration: underline;
+}
+.tool-result-link svg {
+  flex: none;
+}
+.tool-result-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+.tool-result-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.tool-result-more {
+  margin-top: 2px;
+}
+.tool-result-more summary span {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.tool-result-more summary .tool-result-collapse {
+  display: none;
+}
+.tool-result-more[open] summary .tool-result-preview {
+  display: none;
+}
+.tool-result-more[open] summary .tool-result-collapse {
+  display: inline;
+}
+.tool-result-more summary svg {
+  flex: none;
+}
+.tool-result-text {
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+}
+.tool-result-error {
+  color: #df8e85;
+}
 .tool-activity.failed .tool-status {
   color: #df8e85;
   opacity: 1;
@@ -1201,9 +1267,49 @@ p {
   justify-content: flex-end;
   gap: 8px;
 }
-.task-message {
-  border-left: 3px solid #789980;
+.task-report > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  cursor: pointer;
+  list-style: none;
+}
+.task-report > summary::-webkit-details-marker {
+  display: none;
+}
+.task-report-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.task-report > summary svg {
+  flex: none;
+  color: var(--muted);
+}
+.task-report[open] > summary svg {
+  transform: rotate(180deg);
+}
+.task-report[open] .task-report-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.task-report-content {
+  border-left: 2px solid var(--line);
   padding-left: 14px;
+  margin: 8px 0 4px;
+}
+.task-report-link {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.task-report-content small {
+  color: var(--muted);
+}
+.report-message {
+  min-width: 0;
 }
 @media (max-width: 600px) {
   .task-layer,

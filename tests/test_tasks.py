@@ -781,6 +781,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_and_result_are_silent(self):
         d = await self.create(execution={"kind": "reminder"})
+        self.assertEqual(self.chat.get("job:" + d["id"])["task_id"], d["id"])
         self.plugin.due(d["id"])
         r = self.plugin.repo.runs(d["id"])[0]
         await self.plugin.launch(r)
@@ -791,6 +792,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
         self.assertIn("authorized task", m["text"])
         self.assertEqual(m["source"], "notification")
+        self.assertEqual(m["task_id"], d["id"])
         self.host.voice.say.assert_not_awaited()
         self.host.backend.import_voice_messages.assert_awaited_once()
 

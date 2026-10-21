@@ -98,6 +98,26 @@ context leaves the host. See `plugins/decisions/README.md` for use rules and acc
 
 `conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. Foreground Codex handles conversational delegation; the optional tasks plugin owns durable background work through an injected executor adapter.
 
+Completed built-in task creation/query and webpage fetch tools may carry a bounded,
+display-only `tool_summary`. The Codex adapter extracts allowlisted fields from MCP
+results; conversation persists them with the existing message/SSE lifecycle. Web
+renders task links into the existing detail drawer, creation-time model/effort,
+query-time state/progress, and page provenance/truncation. It adds no model calls,
+pollers or task actions. Raw specifications, webpage bodies, credentials and URL
+query strings are excluded; absent/legacy summaries keep the original tool row.
+Restoration preserves saved summaries without backfilling old history. A successful
+tool call is distinct from a successful task outcome.
+
+Conversation headers distinguish text, voice-channel replies, task reports and
+other notifications using recorded source/kind, never prose inference. These
+categories do not merge into one reply group. Reports collapse to one title line;
+full Markdown and attachments remain inside the expandable detail. Task/notification
+producers persist an optional task reference with each report. Legacy notification
+links resolve once on expansion through the existing authenticated notification
+query; association must match its producer source. A voice-channel label is not
+a physical playout receipt. Presentation does not alter delivery, read state,
+speech policy or task scheduling.
+
 Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.
 
 Live native voice and task inference have distinct context windows even on one provider thread. The conversation owner explicitly transfers confirmed voice messages through the provider's context-only import method, and Web messages/results through its live context adapter. A local playback gate enforces silent Web replies because the experimental native interface may generate audio even for assistant-role context updates. Physical voice user turns restore playback. Background task delivery is client-managed so Web tasks do not acquire automatic spoken results. Temporary sync failures are visible; context sync never invokes another task.

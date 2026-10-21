@@ -60,6 +60,9 @@ class ChatChannel:
             text=content(item),
             turn_id="notification:" + item["id"],
             attachments=attachments,
+            task_id=origin.get("task_id")
+            if origin.get("task_id") and item["source"] == "task:" + origin["task_id"]
+            else None,
         )
 
 

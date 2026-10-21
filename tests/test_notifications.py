@@ -127,7 +127,14 @@ class NotificationsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.host.conversation.store.get("run:run-one"))
         await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
         self.assertEqual(self.host.conversation.store.get("run:run-one")["attachments"], resolved)
+        self.assertEqual(self.host.conversation.store.get("run:run-one")["task_id"], "task-one")
         self.host.conversation.media.resolve.assert_called_once_with(refs)
+
+    async def test_ordinary_notification_does_not_infer_task_from_title_or_body(self):
+        notice = await self.publish(title="任务已完成", body="task_id: made-up")
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        row = self.host.conversation.store.get(f"notification:{notice['id']}:session-one")
+        self.assertIsNone(row["task_id"])
 
     async def test_receipt_survives_reopen_and_session_change(self):
         a = await self.publish()

@@ -25,6 +25,10 @@ def create_server(client, caller_run=None):
         Declare model_source="assistant" for your own model/profile recommendation and
         effort_source="assistant" for your own explicit effort. Use "user" only when the
         user explicitly chose that field. Never label your inference as a user choice.
+        Omit a source label when its value is missing/auto; redundant assistant labels
+        are ignored, but a user label without its concrete choice is rejected.
+        assessment.user_preference is advisory context, never a hard selection lock;
+        encode explicit user choices in the model/profile/effort fields and their sources.
         With review_mode=active, Jev may correct assistant recommendations using legal pairs;
         user choices, instance-fixed fields and unlabelled explicit choices remain protected.
         A missing/auto field is selectable; a profile default is not an effort lock.

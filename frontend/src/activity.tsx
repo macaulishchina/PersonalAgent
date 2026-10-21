@@ -12,6 +12,8 @@ export function ActivityPanel({
   unreadCount,
   onReference,
   onOpenMedia,
+  selectedTaskId,
+  onSelectTask,
 }: {
   section: PanelSection | null;
   onClose: () => void;
@@ -20,6 +22,8 @@ export function ActivityPanel({
   unreadCount: number;
   onReference: (notice: { id: string; title: string }) => void;
   onOpenMedia: (url: string) => void;
+  selectedTaskId: string | null;
+  onSelectTask: (id: string | null) => void;
 }) {
   const lastSection = useRef<PanelSection>("tasks");
   if (section) lastSection.current = section;
@@ -40,6 +44,8 @@ export function ActivityPanel({
         >
           <TaskPanel
             open={section === "tasks"}
+            selectedId={selectedTaskId}
+            setSelectedId={onSelectTask}
             onClose={onClose}
             api={api}
             nonce={nonce}

@@ -1,6 +1,7 @@
 """Active model correction: concrete candidates, user locks, bounded fallback."""
 
 import asyncio
+import copy
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -70,7 +71,13 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             return self.result("fast_medium", 0.28)
 
         with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge):
-            d = await self.create(execution=self.recommendation(model_source="user"))
+            d = await self.create(
+                execution=self.recommendation(
+                    model_source="user",
+                    reasoning_effort="auto",
+                    assessment={"user_preference": "User specified the model; effort is unspecified"},
+                )
+            )
         e = d["spec"]["execution"]
         self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6-luna", "medium"))
         self.assertEqual(e["model_source"], "user")
@@ -86,12 +93,102 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             for execution in (
                 self.recommendation(model_source="user", effort_source="user"),
                 {"model": "gpt-6-luna", "reasoning_effort": "low", "reason": "Legacy explicit choice"},
-                self.recommendation(assessment={"user_preference": "Use the model I specified"}),
             ):
                 d = await self.create(execution=execution)
                 self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
                 self.assertEqual(d["spec"]["execution"]["reasoning_effort"], "low")
         judge.assert_not_awaited()
+
+    async def test_missing_effort_and_unspecified_preference_do_not_block_creation_or_review(self):
+        self.enable()
+        requested = self.recommendation(
+            assessment={"user_preference": "用户要求后台任务推荐，未指定模型或思考深度。"}
+        )
+        del requested["reasoning_effort"]
+        original = copy.deepcopy(requested)
+
+        async def judge(runtime, request):
+            self.assertEqual(request.state["assessment"], requested["assessment"])
+            self.assertGreater(len({o["reasoning_effort"] for o in request.state["options"].values()}), 1)
+            return self.result()
+
+        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge) as decision:
+            d = await self.create(execution=requested)
+        e = d["spec"]["execution"]
+        self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual(e["selection"]["model_review"]["protected"], {})
+        self.assertNotIn("effort_source", e)
+        self.assertNotIn("effort_source", e["selection"]["agent_request"])
+        self.assertEqual(requested, original)
+        decision.assert_awaited_once()
+
+    async def test_preference_prose_is_advisory_without_keyword_classification(self):
+        self.enable()
+        for preference in ("未指定", "希望快一些", "Use the model I specified", "No model preference"):
+            with (
+                self.subTest(preference=preference),
+                patch(
+                    "assistant_runtime.plugins.tasks.model_advice.decide", return_value=self.result()
+                ) as judge,
+            ):
+                d = await self.create(
+                    execution=self.recommendation(assessment={"user_preference": preference})
+                )
+                e = d["spec"]["execution"]
+                self.assertEqual(e["model"], "gpt-6.1-sol")
+                self.assertEqual(e["selection"]["model_review"]["protected"], {})
+                self.assertEqual(judge.await_args.args[1].state["assessment"]["user_preference"], preference)
+                judge.assert_awaited_once()
+
+    async def test_empty_recommendation_sources_normalize_in_all_modes_and_fallback(self):
+        self.enable()
+        for mode in ("off", "shadow", "active"):
+            self.plugin.model_policy.review_mode = mode
+            for value in (None, "auto"):
+                with (
+                    self.subTest(mode=mode, value=value),
+                    patch(
+                        "assistant_runtime.plugins.tasks.model_advice.decide",
+                        return_value={"status": "fallback", "choice": None, "reason": "transport_failed"},
+                    ) as judge,
+                ):
+                    requested = {
+                        "model": value,
+                        "reasoning_effort": value,
+                        "model_source": "assistant",
+                        "effort_source": "assistant",
+                    }
+                    d = await self.create(execution=requested)
+                    e = d["spec"]["execution"]
+                    self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6-luna", "low"))
+                    self.assertNotIn("model_source", e)
+                    self.assertNotIn("effort_source", e)
+                    judge.assert_awaited_once()
+        self.host.config.decisions["enabled"] = False
+        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+            d = await self.create(execution={"model_source": "assistant", "effort_source": "assistant"})
+            self.assertNotIn("effort_source", d["spec"]["execution"])
+            judge.assert_not_called()
+
+    async def test_user_sources_need_actual_choices_and_invalid_sources_still_fail(self):
+        self.enable()
+        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+            for source, field in (("model_source", "model"), ("effort_source", "reasoning_effort")):
+                for missing in ({}, {field: None}, {field: "auto"}):
+                    with (
+                        self.subTest(source=source, missing=missing),
+                        self.assertRaisesRegex(ValueError, source),
+                    ):
+                        await self.create(execution={**missing, source: "user"})
+                with self.assertRaisesRegex(ValueError, source):
+                    await self.create(execution={source: "inferred"})
+            # Even an explicit profile only chooses a model tier, not an effort.
+            with self.assertRaisesRegex(ValueError, "effort_source"):
+                await self.create(
+                    execution={"profile": "fast", "reason": "User preference", "effort_source": "user"}
+                )
+            judge.assert_not_called()
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM job_definitions").fetchone()[0], 0)
 
     async def test_threshold_timeout_and_disabled_keep_original_without_second_judgment(self):
         self.enable()
@@ -111,7 +208,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             return self.result()
 
         with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=slow):
-            d = await self.create(execution=self.recommendation())
+            d = await self.create(execution=self.recommendation(reasoning_effort="auto"))
         self.assertEqual(d["spec"]["execution"]["selection"]["model_review"]["decision"]["reason"], "timeout")
         self.host.config.decisions["enabled"] = False
         with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:

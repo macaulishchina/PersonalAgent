@@ -75,14 +75,17 @@ export function TaskPanel({
   api,
   nonce,
   onOpenMedia,
+  selectedId,
+  setSelectedId,
 }: {
   open: boolean;
   onClose: () => void;
   api: (path: string, options?: RequestInit) => Promise<any>;
   nonce: () => string;
   onOpenMedia: (url: string) => void;
+  selectedId: string | null;
+  setSelectedId: (id: string | null) => void;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const backButton = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const previousSelection = useRef<string | null>(null);
@@ -127,8 +130,13 @@ export function TaskPanel({
   const [reply, setReply] = useState<{ runId: string; action: string } | null>(
     null,
   );
-  useEffect(() => setHistoryOpen(false), [selectedId]);
   const [replyText, setReplyText] = useState("");
+  useEffect(() => {
+    setHistoryOpen(false);
+    setReply(null);
+    setReplyText("");
+    setActionError("");
+  }, [selectedId]);
   const refresh = async () => {
     await current.refresh();
   };

@@ -29,6 +29,10 @@ class ConversationStore:
                 created REAL NOT NULL, attached INTEGER NOT NULL DEFAULT 0
             );
         """)
+        if "tool_summary" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
+            self.db.execute("ALTER TABLE chat_messages ADD COLUMN tool_summary TEXT")
+        if "task_id" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
+            self.db.execute("ALTER TABLE chat_messages ADD COLUMN task_id TEXT")
 
     def get(self, ident):
         row = self.db.execute("SELECT * FROM chat_messages WHERE id=?", (ident,)).fetchone()
@@ -46,9 +50,12 @@ class ConversationStore:
             "turn_id",
             "attachments",
             "updated",
+            "tool_summary",
+            "task_id",
         )
         result = dict(zip(keys, row))
         result["attachments"] = json.loads(result["attachments"])
+        result["tool_summary"] = json.loads(result["tool_summary"]) if result["tool_summary"] else None
         return result
 
     def emit(self, session, kind, data, message_id=None):
@@ -75,15 +82,30 @@ class ConversationStore:
         turn_id=None,
         attachments=None,
         updated_at=None,
+        tool_summary=None,
+        task_id=None,
     ):
         old = self.get(ident)
         if old and old["session_id"] != session:
             raise ValueError("Message belongs to another session")
         text = text[:200000]
         attachments = attachments if attachments is not None else (old["attachments"] if old else [])
-        values = (role, source, kind, text, status, turn_id, attachments)
+        tool_summary = tool_summary if tool_summary is not None else (old["tool_summary"] if old else None)
+        task_id = task_id if task_id is not None else (old["task_id"] if old else None)
+        values = (role, source, kind, text, status, turn_id, attachments, tool_summary, task_id)
         if old and values == tuple(
-            old[k] for k in ("role", "source", "kind", "text", "status", "turn_id", "attachments")
+            old[k]
+            for k in (
+                "role",
+                "source",
+                "kind",
+                "text",
+                "status",
+                "turn_id",
+                "attachments",
+                "tool_summary",
+                "task_id",
+            )
         ):
             return old
         with self.db:
@@ -94,10 +116,13 @@ class ConversationStore:
             if seq % 500 == 0:
                 self.db.execute("DELETE FROM chat_events WHERE seq < ?", (seq - 20000,))
             self.db.execute(
-                """INSERT INTO chat_messages VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """INSERT INTO chat_messages
+                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET role=excluded.role,source=excluded.source,
                 kind=excluded.kind,text=excluded.text,status=excluded.status,
-                turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated""",
+                turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated,
+                tool_summary=excluded.tool_summary,task_id=excluded.task_id""",
                 (
                     ident,
                     session,
@@ -105,6 +130,8 @@ class ConversationStore:
                     *values[:6],
                     json.dumps(attachments),
                     time.time() if updated_at is None else updated_at,
+                    json.dumps(tool_summary) if tool_summary is not None else None,
+                    task_id,
                 ),
             )
         return self.get(ident)

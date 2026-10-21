@@ -2,6 +2,8 @@
 
 import json
 
+from .tool_display import tool_display
+
 
 def tool_name(item):
     """Use precise actions when projecting historical overloaded MCP calls."""
@@ -135,6 +137,11 @@ def task_event(method, params):
     )
     event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
     if kind == "mcpToolCall" and method == "item/completed":
+        display = tool_display(item)
+        if display:
+            event["tool_summary"] = display
+            if display["outcome"] == "failed":
+                event["status"] = "failed"
         images, attachments = image_content(
             item.get("result"), task_result=item.get("server") == "tasks" and item.get("tool") == "get_task"
         )

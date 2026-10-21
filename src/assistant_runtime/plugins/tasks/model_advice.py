@@ -10,6 +10,7 @@ from ...kernel.decisions import decide, fallback
 
 
 async def select_execution(plugin, requested, objective, prior=None):
+    requested = plugin.model_policy.normalize(requested)
     if plugin.model_policy.review_mode == "active":
         return await select_active(plugin, requested, objective, prior)
     policy, fixed = plugin.model_policy, plugin.settings.execution
@@ -122,11 +123,8 @@ async def select_active(plugin, requested, objective, prior):
         if fixed[key] != "auto" or explicit and requested.get(source) != "assistant":
             locks[key] = baseline[key]
     declared = requested.get("assessment", {})
-    # Free-form preferences are not parsed into permissions. If not represented
-    # by field provenance, conservatively keep the original selection.
-    if declared.get("user_preference") and "user" not in origins.values():
-        locks = {k: baseline[k] for k in ("model", "reasoning_effort")}
-        origins["preference"] = "unresolved_user_preference"
+    # Preference prose informs the judgment; only explicit field provenance and
+    # instance settings impose locks. Do not infer constraints from wording.
     config = plugin.host.config.decisions
     enabled = (
         config.get("enabled", True)

@@ -752,6 +752,7 @@ class TasksPlugin:
             status="complete",
             text=d["spec"]["title"] + " · " + plan_label(d),
             turn_id="job:" + d["id"],
+            task_id=d["id"],
         )
 
     async def launch(self, run):
@@ -905,6 +906,7 @@ class TasksPlugin:
                         status="complete",
                         text=text,
                         turn_id="run:" + r["id"],
+                        task_id=r["task_id"],
                         attachments=self.host.conversation.media.resolve(r["data"].get("attachments", []))
                         if r["data"].get("attachments")
                         else None,

@@ -18,10 +18,14 @@ import {
   Quote,
   LoaderCircle,
   WifiOff,
+  MessageSquare,
 } from "lucide-react";
 import "./style.css";
 import { ActivityPanel, type PanelSection } from "./activity";
 import { MessageMedia, ImagePreview, type Attachment } from "./message-media";
+import { ToolResult, toolOutcome, type ToolSummary } from "./tool-result";
+import { isReport, messageChannel, reportTask } from "./message-presentation";
+import { TaskReport } from "./task-report";
 
 type Message = {
   id: string;
@@ -34,6 +38,8 @@ type Message = {
   attachments: Attachment[];
   updated: number;
   turn_id?: string | null;
+  tool_summary?: ToolSummary | null;
+  task_id?: string | null;
 };
 type MessageGroup = {
   id: string;
@@ -184,6 +190,8 @@ const toolLabels: Record<string, string> = {
   create_task: "创建后台任务",
   list_tasks: "查看任务",
   get_task: "查看任务进度",
+  list_task_models: "查看可用模型",
+  fetch_webpage: "读取网页",
   supplement_task: "补充任务要求",
   cancel_task_run: "取消本次执行",
   pause_task: "暂停任务计划",
@@ -216,7 +224,16 @@ function groupMessages(messages: Message[]): MessageGroup[] {
     const nearby =
       last && Math.abs(message.updated - last.messages.at(-1)!.updated) <= 300;
     // One reply owns its tools; unrelated turns or long gaps get their own header/copy action.
-    if (last?.role === message.role && !nextTurn && (sameTurn || nearby)) {
+    const sameChannel =
+      last && messageChannel(last.messages[0]) === messageChannel(message);
+    if (
+      last?.role === message.role &&
+      sameChannel &&
+      !isReport(message) &&
+      !isReport(last.messages[0]) &&
+      !nextTurn &&
+      (sameTurn || nearby)
+    ) {
       last.messages.push(message);
       last.turn_id ||= message.turn_id;
     } else
@@ -247,7 +264,10 @@ function ToolActivity({
     interrupted: "已取消",
     unknown: "未确认",
   };
-  const status = labels[message.status] || "未确认";
+  const status =
+    message.tool_summary && ["complete", "failed"].includes(message.status)
+      ? toolOutcome(message.tool_summary)
+      : labels[message.status] || "未确认";
   return (
     <span className={"tool-activity" + (failed ? " failed" : "")} title={name}>
       <span
@@ -262,9 +282,13 @@ function ToolActivity({
 function MessageEntry({
   message: m,
   onOpen,
+  onOpenTask,
+  onResolvedTask,
 }: {
   message: Message;
   onOpen: (url: string) => void;
+  onOpenTask: (id: string) => void;
+  onResolvedTask: (id: string) => void;
 }) {
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
@@ -278,7 +302,7 @@ function MessageEntry({
       className={
         "message " +
         m.role +
-        (["task", "notification"].includes(m.kind) ? " task-message" : "") +
+        (isReport(m) ? " report-message" : "") +
         (detail ? " detail" + (!detail.body ? " simple-tool" : "") : "")
       }
       data-message-id={m.id}
@@ -286,7 +310,31 @@ function MessageEntry({
         detail ? detail.label : m.role === "user" ? "你的消息" : "助手消息"
       }
     >
-      {detail ? (
+      {isReport(m) ? (
+        <TaskReport
+          message={m}
+          onOpenTask={onOpenTask}
+          onResolvedTask={onResolvedTask}
+          loadNotice={(id) =>
+            api("notifications", {
+              method: "POST",
+              body: JSON.stringify({ action: "get", arguments: { id } }),
+            })
+          }
+          renderBody={(text) => (
+            <div className="message-body">
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {text}
+              </Markdown>
+            </div>
+          )}
+        >
+          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+        </TaskReport>
+      ) : detail ? (
         <>
           {!detail.body ? (
             <ToolActivity message={m} name={detail.name} label={detail.label} />
@@ -309,6 +357,9 @@ function MessageEntry({
                 </Markdown>
               </div>
             </details>
+          )}
+          {m.tool_summary && (
+            <ToolResult value={m.tool_summary} onOpenTask={onOpenTask} />
           )}
           <MessageMedia attachments={m.attachments} onOpen={onOpen} />
         </>
@@ -350,14 +401,21 @@ function ConversationGroup({
   copied,
   onCopy,
   onOpen,
+  onOpenTask,
 }: {
   group: MessageGroup;
   name: string;
   copied: string;
   onCopy: (id: string, text: string) => Promise<void>;
   onOpen: (url: string) => void;
+  onOpenTask: (id: string) => void;
 }) {
   const user = group.role === "user";
+  const [resolvedTask, setResolvedTask] = useState<string | null>(null);
+  const channel =
+    resolvedTask || reportTask(group.messages[0])
+      ? "report"
+      : messageChannel(group.messages[0]);
   const speaker = user ? "你" : name;
   const date = new Date(group.messages[0].updated * 1000);
   const text = group.messages
@@ -373,6 +431,33 @@ function ConversationGroup({
     >
       <div className="message-meta">
         <span className="speaker">{speaker}</span>
+        {!user && (
+          <span
+            className="source-badge"
+            title={
+              channel === "voice" ? "语音回复，可能因插话而中断" : undefined
+            }
+          >
+            {channel === "voice" ? (
+              <AudioLines size={12} />
+            ) : channel === "report" ? (
+              <ListTodo size={12} />
+            ) : channel === "notification" ? (
+              <Bell size={12} />
+            ) : (
+              <MessageSquare size={12} />
+            )}
+            {
+              {
+                voice: "语音",
+                text: "文字",
+                report: "任务报告",
+                notification: "通知",
+                legacy: "历史记录",
+              }[channel]
+            }
+          </span>
+        )}
         <time
           dateTime={date.toISOString()}
           title={date.toLocaleString("zh-CN")}
@@ -395,7 +480,7 @@ function ConversationGroup({
             语音
           </span>
         )}
-        {group.messages.every((m) => m.kind === "legacy") && (
+        {user && group.messages.every((m) => m.kind === "legacy") && (
           <span className="source-badge">历史记录</span>
         )}
         {!user && text && (
@@ -411,7 +496,13 @@ function ConversationGroup({
         )}
       </div>
       {group.messages.map((m) => (
-        <MessageEntry key={m.id} message={m} onOpen={onOpen} />
+        <MessageEntry
+          key={m.id}
+          message={m}
+          onOpen={onOpen}
+          onOpenTask={onOpenTask}
+          onResolvedTask={setResolvedTask}
+        />
       ))}
     </section>
   );
@@ -455,6 +546,7 @@ function ResponseActivity({
 }
 function App() {
   const [activePanel, setActivePanel] = useState<PanelSection | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [notificationContext, setNotificationContext] = useState<{
     id: string;
     title: string;
@@ -802,6 +894,8 @@ function App() {
       {authorized && (
         <ActivityPanel
           section={activePanel}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={setSelectedTaskId}
           onClose={() => setActivePanel(null)}
           unreadCount={state.notifications_unread || 0}
           api={api}
@@ -875,6 +969,10 @@ function App() {
                 copied={copied}
                 onCopy={copy}
                 onOpen={setZoom}
+                onOpenTask={(id) => {
+                  setSelectedTaskId(id);
+                  setActivePanel("tasks");
+                }}
               />
             ))}
             {responseLabel && (

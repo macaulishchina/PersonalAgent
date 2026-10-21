@@ -1,6 +1,7 @@
 """Conversation consistency under duplicate delivery, correction and recovery."""
 
 import asyncio
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from assistant_runtime.config import Config
 from assistant_runtime.conversation.service import Conversation
 from assistant_runtime.conversation.store import ConversationStore
 from assistant_runtime.plugins.codex.conversation import task_event
+from assistant_runtime.plugins.codex.tool_display import tool_display
 from assistant_runtime.store import Store
 
 
@@ -34,6 +36,120 @@ class Owned:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         for c in reversed(self.cleanups):
             await c()
+
+
+class ToolDisplayTest(unittest.TestCase):
+    def item(self, server, tool, data, structured=True):
+        result = (
+            {"structuredContent": data}
+            if structured
+            else {"content": [{"type": "text", "text": json.dumps(data)}]}
+        )
+        return {"type": "mcpToolCall", "id": "tool1", "server": server, "tool": tool, "result": result}
+
+    def test_created_configuration_is_result_not_requested_recommendation(self):
+        item = self.item(
+            "tasks",
+            "create_task",
+            {
+                "id": "t1",
+                "spec": {
+                    "title": "转存影片",
+                    "prompt": "private task instructions",
+                    "execution": {
+                        "model": "luna",
+                        "reasoning_effort": "low",
+                        "selection": {"private": "evidence"},
+                    },
+                },
+            },
+            structured=False,
+        )
+        item["arguments"] = {"execution": {"model": "astra", "reasoning_effort": "high"}}
+        summary = tool_display(item)
+        self.assertEqual(
+            summary,
+            {
+                "kind": "create_task",
+                "outcome": "completed",
+                "task_id": "t1",
+                "title": "转存影片",
+                "model": "luna",
+                "effort": "low",
+            },
+        )
+        self.assertNotIn("tool_summary", task_event("item/started", {"item": item}))
+        self.assertEqual(task_event("item/completed", {"item": item})["tool_summary"], summary)
+
+    def test_query_prefers_active_snapshot_and_bounds_existing_progress(self):
+        data = {
+            "task": {"id": "t1", "spec": {"title": "计划"}},
+            "active_runs": [
+                {"state": "running", "data": {"progress": "正在核验" * 400, "spec": {"prompt": "secret"}}}
+            ],
+            "runs": [{"state": "completed", "data": {"progress": "旧结果"}}],
+        }
+        summary = tool_display(self.item("tasks", "get_task", data))
+        self.assertEqual(summary["state"], "running")
+        self.assertEqual(len(summary["summary"]), 1200)
+        self.assertTrue(summary["summary_truncated"])
+        data["active_runs"] = []
+        data["runs"] = [{"state": "failed", "data": {"progress": "资源不可用"}}]
+        event = task_event("item/completed", {"item": self.item("tasks", "get_task", data)})
+        self.assertEqual(event["status"], "complete")  # Query succeeded, execution failed.
+        self.assertEqual(event["tool_summary"]["state"], "failed")
+        data["runs"] = []
+        self.assertEqual(tool_display(self.item("tasks", "get_task", data))["state"], "")
+
+    def test_fetch_whitelist_errors_and_private_url_parameters(self):
+        data = {
+            "state": "completed",
+            "url": "https://example.com/page#section",
+            "title": "文章",
+            "provider": "deepseek",
+            "elapsed_ms": 681,
+            "content": "large private body",
+            "provider_request_id": "private trace",
+            "truncated": True,
+            "cached": False,
+        }
+        item = self.item("search", "fetch_webpage", data)
+        summary = tool_display(item)
+        self.assertEqual(summary["url"], "https://example.com/page")
+        self.assertEqual(summary["domain"], "example.com")
+        self.assertTrue(summary["truncated"])
+        self.assertNotIn("content", summary)
+        self.assertNotIn("provider_request_id", summary)
+        for url in (
+            "https://user:password@example.com",
+            "https://example.com/?token=secret",
+            "javascript:alert(1)",
+            "https://[invalid",
+        ):
+            data["url"] = url
+            self.assertNotIn("url", tool_display(item))
+            self.assertNotIn("secret", json.dumps(tool_display(item)))
+        data.update(state="failed", error={"code": "page_unavailable", "message": "secret"})
+        event = task_event("item/completed", {"item": item})
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["tool_summary"]["error_code"], "page_unavailable")
+        self.assertNotIn("message", event["tool_summary"])
+
+    def test_untrusted_servers_and_malformed_results_keep_plain_tool_row(self):
+        item = self.item("external", "create_task", {"id": "t1", "spec": {"title": "fake"}})
+        self.assertIsNone(tool_display(item))
+        item["server"] = "tasks"
+        for result in (
+            None,
+            [],
+            {"structuredContent": []},
+            {"content": [{"type": "text", "text": "not json"}]},
+            {"structuredContent": {"id": "../../private"}},
+        ):
+            item["result"] = result
+            self.assertIsNone(tool_display(item))
+        item["result"] = {"isError": True, "content": [{"type": "text", "text": "private exception"}]}
+        self.assertEqual(tool_display(item), {"kind": "create_task", "outcome": "failed"})
 
 
 def fixture(root):
@@ -74,6 +190,36 @@ def fixture(root):
 
 
 class ConversationStoreTest(unittest.TestCase):
+    def test_legacy_schema_summary_persistence_and_dedup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Store(Path(temp) / "db")
+            base.db.execute("""CREATE TABLE chat_messages (
+                id TEXT PRIMARY KEY, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                role TEXT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL,
+                text TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                turn_id TEXT, attachments TEXT NOT NULL DEFAULT '[]', updated REAL NOT NULL)""")
+            base.db.execute(
+                "INSERT INTO chat_messages VALUES('old','s',1,'assistant','task','detail','调用工具', 'complete',NULL,'[]',1)"
+            )
+            s = ConversationStore(base)
+            self.assertIsNone(s.get("old")["tool_summary"])
+            self.assertIsNone(s.get("old")["task_id"])
+            summary = {"kind": "create_task", "outcome": "completed", "task_id": "task1"}
+            s.put("new", "s", kind="detail", status="complete", tool_summary=summary)
+            cursor = s.cursor()
+            s.put("new", "s", kind="detail", status="complete", tool_summary=summary)
+            self.assertEqual(cursor, s.cursor())
+            s = ConversationStore(base)
+            self.assertEqual(s.get("new")["tool_summary"], summary)
+            self.assertEqual(s.changes("s", 0)[-1]["data"]["tool_summary"], summary)
+            report = s.put("report", "s", kind="task", task_id="task1", text="报告", status="complete")
+            s.put("report", "s", kind="task", text="更新的报告", status="complete")
+            self.assertEqual(s.get("report")["task_id"], "task1")
+            self.assertEqual(s.get("report")["ordinal"], report["ordinal"])
+            s = ConversationStore(base)
+            self.assertEqual(s.history("s")[-1]["task_id"], "task1")
+            base.db.close()
+
     def test_stream_final_correction_order_and_replay(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Store(Path(temp) / "db")
@@ -130,6 +276,35 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["message"]["id"], results[1]["message"]["id"])
         with self.assertRaises(ValueError):
             await c.submit(ident, "不同任务", [])
+
+    async def test_tool_summary_uses_existing_timeline_without_dispatch_or_history_backfill(self):
+        c = self.host.conversation
+        item = {
+            "id": "created",
+            "type": "mcpToolCall",
+            "server": "tasks",
+            "tool": "create_task",
+            "result": {
+                "structuredContent": {
+                    "id": "t1",
+                    "spec": {
+                        "title": "转存资源",
+                        "execution": {"model": "sol", "reasoning_effort": "medium"},
+                    },
+                }
+            },
+        }
+        event = task_event("item/completed", {"turnId": "turn", "item": item})
+        c.provider_event(event)
+        row = c.store.get("task:session:created")
+        self.assertEqual(row["tool_summary"]["task_id"], "t1")
+        self.assertEqual(row["tool_summary"]["model"], "sol")
+        c.provider_event(event, restored=True)
+        self.assertEqual(c.store.get(row["id"])["tool_summary"], row["tool_summary"])
+        c.provider_event({**event, "message_id": "old"}, restored=True)
+        self.assertIsNone(c.store.get("task:session:old")["tool_summary"])
+        self.host.backend.submit.assert_not_awaited()
+        self.host.voice.instruct.assert_not_awaited()
 
     async def test_uncertain_dispatch_is_not_automatically_replayed(self):
         self.host.backend.submit.side_effect = TimeoutError()

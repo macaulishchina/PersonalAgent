@@ -281,6 +281,7 @@ class Conversation:
                 turn_id=turn,
                 status=event["status"],
                 attachments=references or None,
+                tool_summary=None if restored else event.get("tool_summary"),
                 updated_at=old["updated"]
                 if old and (restored or event.get("images") or event.get("attachments"))
                 else None,

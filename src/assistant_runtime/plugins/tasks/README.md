@@ -575,8 +575,13 @@ Explicit recommendations should include `execution.model_source="assistant"` for
 model/profile and `execution.effort_source="assistant"` for an explicit effort. Use
 `"user"` only for fields explicitly chosen by the user. User/fixed fields are filtered
 out of Jev's change space. Unlabelled explicit fields are conservatively protected,
-including older plans. A user-chosen model does not lock an unspecified effort. Unknown
-free-form user preferences without field provenance keep the baseline unchanged.
+including older plans. A user-chosen model does not lock an unspecified effort.
+At the shared selection boundary, redundant `assistant` source labels on missing/auto
+values are removed without changing the caller's input. `user` labels still require
+a concrete model/profile or effort; defaults are not explicit user choices. Invalid
+source values are rejected. Free-form `assessment.user_preference` only informs Jev;
+it never adds selection locks, even when nonempty. Encode actual user choices in the
+corresponding structured fields and sources, not solely in preference prose.
 Declarations only restrict this choice; they are not verified user authorization and
 cannot grant tools, resources or rights. User constraints persist through execution
 updates unless the caller supplies an explicit user-directed replacement. No semantic
