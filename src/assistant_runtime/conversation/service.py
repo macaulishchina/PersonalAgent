@@ -9,10 +9,11 @@ import time
 import uuid
 
 from ..kernel.runtime import Manifest
-from ..kernel.contracts import Control, NotificationRequest
+from ..kernel.contracts import Control, NotificationRequest, ConversationFeedbackRequest
 from .store import ConversationStore
 from .media import MediaAttachments, MAX_BYTES
 from .feedback import Feedback, spoken_result
+from .task_replies import TaskReplies
 from ..kernel.speech import FeedbackIntent, RequestRef
 
 
@@ -36,6 +37,7 @@ class Conversation:
         self.last_state = None
         self.tasks = set()
         self.feedback = Feedback(self.store.db)
+        self.task_replies = TaskReplies(self)
         self.feedback_lock = asyncio.Lock()
         self.voice_revision = 0
         self.spoken_focus = None
@@ -51,6 +53,7 @@ class Conversation:
 
     async def start(self, context):
         self.context = context
+        context.register(ConversationFeedbackRequest, self.task_replies.request)
         context.spawn(self.save_images(), "reply-images")
         self.store.recover(self.session)
         self.feedback.recover(self.session)
@@ -484,12 +487,14 @@ class Conversation:
             spoken = "我来处理“" + text + "”。" if len(text) <= 65 else "请求已收到，我先核对具体操作。"
             await self.deliver_ack(turn, focus, spoken)
 
-    async def speech_feedback(self, turn, focus, kind, text):
+    async def speech_feedback(self, turn, focus, kind, text, *, delivery_id=None):
         interaction = getattr(self.host, "interaction", None)
         if interaction and interaction.ready:
             if len(text) > 240:
                 text = "这次返回的结果比较长，需要我展开说明吗？"
-            intent = FeedbackIntent(RequestRef(turn, focus[1]), kind, text, time.monotonic() + 30)
+            intent = FeedbackIntent(
+                RequestRef(delivery_id or turn, focus[1]), kind, text, time.monotonic() + 30
+            )
             result = await interaction.output.say(intent, lambda: self.feedback_allowed(turn))
             if result != "completed":
                 raise RuntimeError("Speech delivery " + result)
@@ -499,6 +504,7 @@ class Conversation:
             )
 
     async def task_done(self, turn_id, text, status):
+        self.task_replies.close(turn_id)
         try:
             await self.deliver_result(turn_id, text, status)
         except Exception:

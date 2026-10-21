@@ -370,7 +370,48 @@ completion preference; changing progress while waiting does not repeat a questio
 Questions use their structured identity, never a match against task titles. The main
 reply can acknowledge delegation without a second automatic “created/enabled” message.
 
-Task results now enter the notifications outbox before completion acknowledgement.
+### Result delivery ownership
+
+`create_task(feedback_owner="background")` (default) hands both work and result notification
+responsibility to the background. Use `feedback_owner="conversation"` only for immediate,
+non-Goal work whose result the current main turn explicitly takes responsibility for.
+The originating session/turn/input revision is captured by the server before asynchronous
+model selection and persisted atomically with task creation. Clients cannot supply an
+identity. This creation choice covers only the first execution/round; later occurrences,
+continuations and other tasks are independent. `notify_completion` remains the on/off
+policy and `notify_voice` the background voice preference, not ownership switches.
+
+`get_task` includes `run.feedback`: owner, round, version, state and delivery receipt.
+It is read-only: querying or inspecting a result never takes over responsibility.
+Main may explicitly call `transfer_task_feedback(run_id, round, version, owner)` with
+`owner="conversation"` to take responsibility, or `"background"` to hand it off. The
+server checks current conversation availability, caller identity and the latest round/version.
+Background callers cannot impersonate the main turn. Stale versions must be reread;
+committed or delivered results return `transferred=false`, without recalling/reissuing them.
+
+At completion, tasks freezes the delivery payload/owner and commits it before transport.
+Conversation writes one stable result card, with task link and registered attachments,
+immediately; voice uses the existing output path. No model-generated answer is needed
+before delivery. Main can add interpretation, but should not repeat the result verbatim.
+Turn completion/interruption, new input, voice exit and restart recovery release outstanding
+ownership when delivery checks that turn. There is no elapsed-time ownership rule.
+
+An RPC error/timeout does **not** imply failure to deliver: the same result identity is
+retried until its stored receipt or explicit release is known. Inaccessible conversation
+capability keeps a visible task-plugin health error, not an unverified opposite-channel
+send. Once released, ordinary durable notifications take over. Uncertain speech is not
+replayed; a silent inbox notice shares the existing card. Output receipts do not claim the
+user heard/read anything. Delivery is bounded/concurrent and does not stall task dispatch.
+
+Implementation: tasks owns `job_result_claims` / `job_result_feedback`; conversation owns
+`chat_result_receipts` / turn lifecycle. `ConversationFeedbackRequest` is internal, absent
+from IPC/MCP. The Codex adapter has no new protocol/prose acknowledgement heuristics.
+`tests/test_task_feedback.py` covers handoffs, conflicts, query independence, terminal races,
+turn exit, restart, lost replies, speech uncertainty and attachment projection without
+hardware/model calls. Real voice timing is left to everyday evaluation.
+
+Background-owned results enter the notifications outbox before completion acknowledgement;
+conversation-owned results require their durable conversation receipt.
 `notify_completion=false` keeps routine monitoring runs out of the chat/inbox; agents
 explicitly publish new events through notifications MCP. Automatic failure notifications also respect this setting.
 The notifications plugin owns quiet-hour deferral and transport recovery.

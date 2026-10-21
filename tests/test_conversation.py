@@ -27,6 +27,9 @@ class Owned:
         self.tasks.append(task)
         return task
 
+    def register(self, request_type, handler):
+        pass
+
     def own(self, callback):
         self.cleanups.append(callback)
 

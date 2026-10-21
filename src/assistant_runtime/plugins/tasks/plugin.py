@@ -23,6 +23,7 @@ from .model_review import ModelReview, assessment, evidence
 from .upgrades import ModelUpgrades, pending as pending_upgrade, replace as replace_upgrade
 from .self_schedule import SelfSchedule, policy as schedule_policy, completion_policy
 from .fallbacks import ModelFallbacks
+from .feedback import TaskFeedback
 
 
 RUN_LABELS = {
@@ -54,6 +55,8 @@ class TasksPlugin:
         self.settings = TaskSettings.parse(host.config.tasks)
         self.model_policy = ModelPolicy.parse(self.settings.model_policy)
         self.repo = TaskRepository(host.store.db)
+        self.feedback = TaskFeedback(self)
+        self.delivering_results = set()
         self.event_inbox = EventInbox(self)
         self.trace = TaskTrace(self.repo)
         self.upgrades = ModelUpgrades(self)
@@ -464,6 +467,8 @@ class TasksPlugin:
             raise ValueError(
                 "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
             )
+        if a == "transfer_feedback":
+            return await self.feedback.transfer(args, caller)
         if a == "repair_resources":
             from .resources import repair_resources
 
@@ -527,6 +532,7 @@ class TasksPlugin:
             definition = self.repo.definition(ident)
             runs, active, before, updates = self.repo.run_page(ident, args)
             for run in [*runs, *active, *updates]:
+                run["feedback"] = self.feedback.describe(run)
                 references = run["data"].get("attachments")
                 if references:
                     run["data"]["attachments"] = self.host.conversation.media.resolve(references)
@@ -546,7 +552,14 @@ class TasksPlugin:
             request_id = str(args["request_id"])
             uuid.UUID(request_id)
             fingerprint = hashlib.sha256(
-                json.dumps(args["spec"], sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
+                json.dumps(
+                    args["spec"]
+                    if args.get("feedback_owner", "background") == "background"
+                    else [args["spec"], args["feedback_owner"]],
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode()
             ).hexdigest()
             old = self.repo.db.execute(
                 "SELECT id,fingerprint FROM job_definitions WHERE request_id=?", (request_id,)
@@ -555,7 +568,14 @@ class TasksPlugin:
                 if old[1] != fingerprint:
                     raise ValueError("Task request ID reused with different contents")
                 return self.repo.definition(old[0])
+            feedback_context = await self.feedback.capture(args.get("feedback_owner", "background"), caller)
             spec = await self.validate_spec(args["spec"], caller)
+            if feedback_context and (
+                spec["trigger"]["kind"] != "immediate" or spec["long_term"] or not spec["notify_completion"]
+            ):
+                raise ValueError(
+                    "Conversation feedback on creation requires immediate non-Goal work with completion enabled"
+                )
             event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
             now, ident = time.time(), uuid.uuid4().hex
             at = next_time(spec["trigger"], self.settings.timezone, now)
@@ -564,6 +584,13 @@ class TasksPlugin:
                     "INSERT OR IGNORE INTO job_definitions(id,request_id,fingerprint,state,spec,next_at,created,updated) VALUES(?,?,?,'enabled',?,?,?,?)",
                     (ident, request_id, fingerprint, json.dumps(spec, ensure_ascii=False), at, now, now),
                 )
+                if (
+                    self.repo.db.execute(
+                        "SELECT id FROM job_definitions WHERE request_id=?", (request_id,)
+                    ).fetchone()[0]
+                    == ident
+                ):
+                    self.feedback.bind(ident, feedback_context)
                 if (
                     subscription(spec)
                     and self.repo.db.execute(
@@ -853,40 +880,13 @@ class TasksPlugin:
                 if r["state"] in TERMINAL:
                     self.host.workfiles.finish(self.owner(r))
                     if not r["data"].get("completion_delivered"):
-                        try:
-                            if r["data"]["spec"].get("notify_completion", True):
-                                await self.host.runtime.invoke(
-                                    NotificationRequest(
-                                        "publish",
-                                        {
-                                            "kind": "result",
-                                            "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
-                                            "title": r["data"]["spec"]["title"]
-                                            + " · "
-                                            + (
-                                                "本次执行结束"
-                                                if r["state"] == "completed"
-                                                else RUN_LABELS[r["state"]]
-                                            ),
-                                            "body": (r["data"].get("progress") or RUN_SUMMARIES[r["state"]])[
-                                                :8000
-                                            ],
-                                            "voice": r["data"]["spec"]["notify_voice"],
-                                        },
-                                        r["id"],
-                                    )
-                                )
-                            self.repo.update_run(
-                                r["id"],
-                                completion_delivered=True,
-                                artifacts=self.host.workfiles.artifacts(self.owner(r)),
-                            )
-                            self.notification_error = None
-                        except Exception as exc:
-                            self.notification_error = str(exc)[:240]
-                            # Don't acknowledge the run revision until its outbox receipt is durable.
-                            # Stable event identity makes retry after a crash safe.
-                            continue
+                        if (
+                            r["id"] not in self.delivering_results
+                            and len(self.delivering_results) < self.settings.concurrency
+                        ):
+                            self.delivering_results.add(r["id"])
+                            self.context.spawn(self.deliver_result(r), "task-result:" + r["id"])
+                        continue
                 elif r["state"] in {"waiting_user", "unknown"}:
                     # User participation is distinct from routine completion preferences.
                     # Same structured request survives retries and progress-only revisions.
@@ -919,6 +919,49 @@ class TasksPlugin:
                     )
             self.archive_finished({r["task_id"] for r in runs if r["state"] in TERMINAL})
             await asyncio.sleep(0.5)
+
+    @staticmethod
+    def result_payload(r):
+        return {
+            "kind": "result",
+            "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
+            "title": r["data"]["spec"]["title"]
+            + " · "
+            + ("本次执行结束" if r["state"] == "completed" else RUN_LABELS[r["state"]]),
+            "body": (r["data"].get("progress") or RUN_SUMMARIES[r["state"]])[:8000],
+            "voice": r["data"]["spec"]["notify_voice"],
+        }
+
+    async def deliver_result(self, r):
+        try:
+            feedback_receipt = {"route": "disabled"}
+            if r["data"]["spec"].get("notify_completion", True):
+                feedback_receipt = await self.feedback.deliver(
+                    r,
+                    self.result_payload(r),
+                )
+                if feedback_receipt is None:
+                    return
+            # An asynchronous delivery cannot acknowledge a newer execution round.
+            latest = self.repo.run(r["id"])
+            if latest["state"] != r["state"] or latest["data"].get("completion_round", 0) != r["data"].get(
+                "completion_round", 0
+            ):
+                return
+            self.repo.update_run(
+                r["id"],
+                completion_delivered=True,
+                completion_feedback=feedback_receipt,
+                artifacts=self.host.workfiles.artifacts(self.owner(r)),
+            )
+            self.notification_error = None
+        except Exception as exc:
+            self.notification_error = str(exc)[:240]
+            # Don't acknowledge the run revision until its outbox receipt is durable.
+            # Stable event identity makes retry after a crash safe.
+            return
+        finally:
+            self.delivering_results.discard(r["id"])
 
     async def fallback_run(self, ident):
         try:

@@ -83,6 +83,9 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.host.store.db.commit()
         owner = object.__new__(TasksPlugin)
         owner.repo = repo
+        from assistant_runtime.plugins.tasks.feedback import TaskFeedback
+
+        owner.feedback = TaskFeedback(owner)
         self.host.runtime.plugins = {"tasks": SimpleNamespace()}
         self.host.runtime.invoke = AsyncMock(side_effect=owner.request)
         response = await self.client.get(

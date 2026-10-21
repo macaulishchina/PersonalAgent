@@ -21,6 +21,7 @@ TASK_TOOLS = (
     "create_task",
     "list_tasks",
     "get_task",
+    "transfer_task_feedback",
     "get_task_event_inbox",
     "get_task_execution_trace",
     "update_task",

@@ -39,6 +39,7 @@ GROUPS = {
     "tasks": {
         "notifications",
         "notification_groups",
+        "task_feedback",
         "tasks",
         "task_events",
         "task_models",

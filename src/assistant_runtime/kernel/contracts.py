@@ -111,6 +111,15 @@ class NotificationLink:
 
 
 @dataclass(frozen=True)
+class ConversationFeedbackRequest:
+    """Internal conversation binding/result submission, never exposed through MCP/IPC."""
+
+    action: str
+    context: dict[str, str] = field(default_factory=dict)
+    result: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class TaskRequest:
     action: str
     arguments: dict[str, Any] = field(default_factory=dict)

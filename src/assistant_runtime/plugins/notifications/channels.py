@@ -45,6 +45,10 @@ class ChatChannel:
             else None
         )
         ident = f"notification:{item['id']}:{chat.session}"
+        if trusted and item["event_key"].startswith("task-result:"):
+            projected = chat.store.get(item["event_key"])
+            if projected and projected["session_id"] == chat.session and projected.get("task_id") == task_id:
+                ident = projected["id"]
         # Preserve a previously delivered projection's identity across upgrades.
         # Only the exact notification reference may reuse an old run card.
         previous = chat.store.get("run:" + origin["run_id"]) if trusted and origin.get("run_id") else None

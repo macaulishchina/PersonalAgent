@@ -84,6 +84,26 @@ class Groups:
         """Enrich a bounded timeline page without rewriting messages or delivery state."""
         references = {}
         for message in messages:
+            # Conversation-owned results are an alternate projection of the same execution.
+            match = re.fullmatch(r"task-result:([a-f0-9]{32}):[0-9]+", message.get("turn_id") or "")
+            if (
+                message.get("role") == "assistant"
+                and message.get("kind") == "task"
+                and match
+                and message.get("task_id")
+            ):
+                task, run = message["task_id"], match[1]
+                title = message.get("text", "").split("\n", 1)[0]
+                group, _ = association("task:" + task, "", {"title": title, "origin": {"run_id": run}})
+                message["report_group"] = {
+                    "id": group,
+                    "title": title,
+                    "kind": "result",
+                    "task_id": task,
+                    "run_id": run,
+                    "important": False,
+                }
+                continue
             if message.get("role") != "assistant" or message.get("kind") != "notification":
                 continue
             match = re.fullmatch(r"notification:([A-Za-z0-9_-]{1,128})", message.get("turn_id") or "")

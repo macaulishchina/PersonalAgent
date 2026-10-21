@@ -265,6 +265,9 @@ class ReplyImageHttpTest(unittest.IsolatedAsyncioTestCase):
         owner = object.__new__(TasksPlugin)
         owner.host = self.host
         owner.repo = TaskRepository(self.host.store.db)
+        from assistant_runtime.plugins.tasks.feedback import TaskFeedback
+
+        owner.feedback = TaskFeedback(owner)
         ident = uuid.uuid4().hex
         spec = {
             "title": "requested snapshot",

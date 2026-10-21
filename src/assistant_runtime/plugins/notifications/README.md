@@ -52,8 +52,13 @@ record cannot be demoted to silent progress. Untyped historical records retain t
 original reminder behavior; this change does not rewrite old history or replay it.
 
 Task definitions and ordinary running/pause progress stay in task storage and the task
-panel, not separate chat cards. Only notifications writes new task feedback into chat.
-Tasks publishes one execution result per completion round using its durable key;
+panel, not separate chat cards. Tasks commits a result owner per execution/completion round.
+Background-owned results use this outbox; conversation-owned results use the conversation's
+internal delivery capability and stable result card, without an unread notification.
+A released turn returns the result here; uncertain speech creates a silent notice and
+reuses the existing result card. Delivery timeouts alone never transfer ownership.
+Both projections use the same execution group; progress queries change neither ownership
+nor read state. Tasks publishes one background result per completion round using its durable key;
 continuation starts a new round. Waiting-for-user/unknown states publish attention,
 even with routine completion notices disabled, deduplicated by run/round/state and the
 structured question request. Progress text revisions do not repeat that request.

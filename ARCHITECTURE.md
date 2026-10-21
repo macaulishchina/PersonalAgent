@@ -126,12 +126,29 @@ unread reminders or chat/context/voice deliveries. Results and attention use the
 existing durable channel outbox. Producers may mark normal results `report_with_task`:
 the owner defers them to a pending execution report, preserving standalone, event-only
 and late result reminders. Retry keeps the first publication's resolved purpose. Task lifecycle state remains in tasks; definitions
-and ordinary progress no longer write parallel chat messages. Tasks publishes results
-and user-participation/unknown-state alerts through notifications only. Result report
-identity is execution/completion-round scoped; event corrections keep their notification
-identity. Chat is a session-scoped projection of that canonical notice, including
-registered task result attachments, not another report producer. Historical messages
-are retained without replay or text-based regrouping.
+and ordinary progress no longer write parallel chat messages. Tasks owns a durable,
+execution/completion-round-scoped result delivery record. Its explicit owner is background
+(default delegation) or a server-bound conversation turn/input revision. Creation may retain
+conversation ownership; `transfer_task_feedback` changes it with a round/version check.
+Reading progress never transfers ownership or proves delivery. Completion commits one
+immutable output decision before transport; already committed/delivered output cannot be
+recalled. A confirmed transfer affects only that execution round, not future occurrences.
+
+Conversation ownership uses the internal `ConversationFeedbackRequest` capability to submit
+a registered result card immediately, with existing speech output for a live voice turn.
+It does not wait for model paraphrasing or infer acknowledgements from prose. Ended,
+interrupted, superseded or recovered turns explicitly release undelivered results to the
+notification outbox. A lost capability reply retries the same delivery ID; a timeout does
+not transfer ownership. Unknown speech becomes a silent notification, reusing its visible
+result card rather than replaying audio. Waiting-for-user/unknown execution alerts remain
+independent important notices. No execution is replayed by delivery recovery.
+
+Task delivery workers are bounded by configured task concurrency and cannot block scheduling
+or unrelated result delivery. Conversation receipts and task ownership are private SQLite
+state; successful submission is not proof of human reading/hearing. Conversation and inbox
+projections share execution grouping, task links and registered attachments. Historical
+messages remain intact, without replay or text-based regrouping. No business timeout or
+wait-for-model timer decides delivery ownership.
 
 The notification owner enriches each bounded Web history/SSE page with existing
 source-scoped group identity; no message migration or extra browser polling is needed.

@@ -69,11 +69,12 @@ def create_server(client, caller_run=None):
         ] = None,
         notify_voice: bool = False,
         notify_completion: bool | None = None,
+        feedback_owner: str = "background",
         auto_archive: bool | None = None,
         self_schedule: dict | None = None,
         self_completion: dict | None = None,
     ) -> dict:
-        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. For authorized automatic ending, self_completion={condition:concrete stopping criteria} permits complete_own_task after verification. No grant is inferred from a prompt; children cannot receive either permission."""
+        """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. feedback_owner=background hands result delivery to the background (default). Set conversation ONLY when you are explicitly retaining responsibility to wait for and answer this immediate task; its result is projected immediately into this conversation without a separate unread notice. Do not repeat that report verbatim; add only useful interpretation. If handing off and moving on, use background. get_task never transfers ownership. Use transfer_task_feedback with the returned execution round/version to explicitly take back or hand off an existing run. Ending/interruption of the owning turn releases undelivered results; no timer decides ownership. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. For authorized automatic ending, self_completion={condition:concrete stopping criteria} permits complete_own_task after verification. No grant is inferred from a prompt; children cannot receive either permission."""
         spec = {
             "title": title,
             "prompt": prompt,
@@ -93,7 +94,7 @@ def create_server(client, caller_run=None):
             spec["self_schedule"] = self_schedule
         if workspace:
             spec["workspace"] = workspace
-        return await call("create", request_id=request_id, spec=spec)
+        return await call("create", request_id=request_id, spec=spec, feedback_owner=feedback_owner)
 
     @server.tool(annotations=READ)
     async def list_tasks(
@@ -119,8 +120,21 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def get_task(task_id: str, before: str | None = None, limit: int = 20) -> dict:
-        """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers. Top-level attachments are registered media from attachment_run_id (the page's newest run), displayed by the conversation UI. An empty attachment list is not a delivered picture; do not claim one was sent from prose alone. Older run media stays associated with that run."""
+        """Get a page of runs (limit 1–50; use returned before for older runs), plus a separate bounded active_runs snapshot, definition revision, execution IDs, model choices, progress, questions and results. Each run.feedback exposes result owner, round, version and durable delivery receipt. Querying does not acquire ownership or acknowledge delivery. Run data includes started_at, finished_at and duration_seconds when measured. Duration excludes queue and explicit pauses, includes waiting for answers. Top-level attachments are registered media from attachment_run_id (the page's newest run), displayed by the conversation UI. An empty attachment list is not a delivered picture; do not claim one was sent from prose alone. Older run media stays associated with that run."""
         return await call("get", task_id=task_id, before=before, limit=limit)
+
+    @server.tool(annotations=WRITE)
+    async def transfer_task_feedback(run_id: str, round: int, version: int, owner: str) -> dict:
+        """Foreground only: explicitly transfer this execution's result delivery responsibility.
+
+        Read get_task's run.feedback for round/version. owner=conversation takes responsibility
+        in the CURRENT server-bound turn; background hands it off. Mere interest/progress queries
+        do not transfer. A delivered/committed result returns transferred=false and cannot be
+        recalled or re-notified. Conflict: reread before deciding again. No execution or schedule
+        is changed. After taking ownership keep this turn active until the result arrives; the
+        framework publishes it directly, without waiting for model prose. Ended turns release it.
+        """
+        return await call("transfer_feedback", run_id=run_id, round=round, version=version, owner=owner)
 
     @server.tool(annotations=READ)
     async def get_task_event_inbox(task_id: str) -> dict:
