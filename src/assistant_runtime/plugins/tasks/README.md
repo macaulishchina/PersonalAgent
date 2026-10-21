@@ -546,15 +546,46 @@ known final episode range, requested storage level and absence of unresolved ope
 no search hits is not completion evidence. Unknown totals require continued tracking or
 user clarification. Tests live in `test_task_self_schedule`.
 
-## Evidence-based model review (observation only)
+## Evidence-based model review and active selection
 
-`tasks.model_policy.review_mode = "shadow"` (default; `"off"` disables) adds an
-asynchronous review of the initial dispatch choice. There is intentionally no active
-mode yet. Existing selection, user-requested concrete models, fixed instance settings,
-ordered fallbacks and controlled upgrades retain their behavior. The review never
-starts/replays tools, changes a run, or treats execution completion as goal success.
-The decisions plugin must be enabled, consented and in active mode for the bounded
-query; its global off switch still prevents all network calls.
+`tasks.model_policy.review_mode` supports `off`, `shadow` (default) and `active`.
+Off/shadow keep existing missing-field selection behavior; shadow additionally observes
+initial dispatch asynchronously. Active uses one bounded pre-execution decision on task
+creation or explicit execution edits, replacing missing-field support rather than making
+two selection calls. It never reselects running work or changes saved recurring plans
+merely because the service restarts. Unrelated edits preserve execution verbatim.
+
+```toml
+[tasks.model_policy]
+review_mode = "active"
+
+[decisions.thresholds]
+model_review = 0.2
+```
+
+The candidate probability must meet this configurable threshold (0..1; default 0.90).
+It is not a measured execution-success probability. Other decision thresholds retain
+their existing minimum 0.5. The decisions global enabled/consent/mode switches still
+apply. `active_timeout_seconds` (default 3 seconds) also bounds catalog/review/adoption
+work after validating the original selection. Failure, timeout, missing support or an
+invalid recommendation keeps that valid original selection/default without a second
+Jev query, model retry or tool replay.
+
+Explicit recommendations should include `execution.model_source="assistant"` for a
+model/profile and `execution.effort_source="assistant"` for an explicit effort. Use
+`"user"` only for fields explicitly chosen by the user. User/fixed fields are filtered
+out of Jev's change space. Unlabelled explicit fields are conservatively protected,
+including older plans. A user-chosen model does not lock an unspecified effort. Unknown
+free-form user preferences without field provenance keep the baseline unchanged.
+Declarations only restrict this choice; they are not verified user authorization and
+cannot grant tools, resources or rights. User constraints persist through execution
+updates unless the caller supplies an explicit user-directed replacement. No semantic
+verification of the caller's attribution is claimed.
+
+Active receipts record original/selected pairs, field origins, protected values,
+threshold, decision receipt, adoption and whether the pair actually changed. Dispatch
+copies this receipt into `run.data.model_review`, without an additional shadow call.
+Existing fallback chains and checkpoint-based upgrades remain separate owners.
 
 Agents should supply the following optional, bounded `execution.assessment`:
 
@@ -576,11 +607,9 @@ the parent's task or its children and the same workspace. This is reported evide
 not independent verification of external effects. Source modules continue owning tools
 and their operation receipts; there is no media-specific routing logic.
 
-Caller-supplied choices/assessment are assistant recommendations. A `user_preference`
-claim is saved as unverified and never becomes authority. Trusted fixed instance values
-remain constraints. A future override mode must establish a trusted user-constraint
-channel before overriding any existing explicit choice; this phase does not override
-such choices at all. Supplying fake `source` or `user_verified` fields is rejected.
+Caller-supplied facts remain assistant statements. Free-form `user_preference` is
+unverified; field provenance provides conservative selection locks, not authority.
+Supplying fake `source` or `user_verified` fields inside assessment is rejected.
 
 The independent `model_review` question sees task facts and full legal model/effort
 pairs, but not the baseline recommendation/reason as separate advice. It does not
@@ -589,7 +618,7 @@ from configured tiers plus the explicitly selected custom model, filtered by the
 catalog and instance constraints. The task prompt may itself contain preferences, so
 this is not a claim of a statistically blinded experiment.
 
-One owned worker and a 16-entry queue bound review work; launch never waits for it.
+In shadow mode, one owned worker and a 16-entry queue bound review work; launch never waits for it.
 The worker has a four-second total deadline and keeps the existing three-second Jev
 active deadline by default. Saturation, unavailable support, fixed choices and errors
 produce explicit skip/fallback records. Restart marks queued/running reviews interrupted
@@ -600,9 +629,8 @@ call cap is added. Credentials/raw media remain prohibited and inputs retain the
 
 Inspect `run.data.model_review` using task get or `get_task_execution_trace`. It includes
 initial selection/source, candidate recommendation, receipt ID, disagreement, timing and
-`applied=false`. Original facts live in `spec.execution.assessment` and
+adoption state (`applied=false` in shadow). Original facts live in `spec.execution.assessment` and
 `spec.execution.selection.prior_execution`. Compare these alongside model-selection
 segments, tool trace, duration and verified task outcomes. Disagreement is not evidence
-that Jev was correct; provider-reported completion is not a quality label. Do not enable
-correction until representative evaluations show improved outcomes without unacceptable
-latency/cost. Existing evidence/checkpoint-based upgrades remain unchanged.
+that Jev was correct; provider-reported completion is not a quality label. Active correction is explicitly opt-in; deployment of a low threshold is not evidence
+of improved accuracy. Existing evidence/checkpoint-based upgrades remain unchanged.

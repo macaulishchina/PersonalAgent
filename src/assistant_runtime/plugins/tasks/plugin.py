@@ -282,7 +282,7 @@ class TasksPlugin:
         self.repo.update_run(ident, state, **data)
         return True
 
-    async def validate_spec(self, value, caller=None):
+    async def validate_spec(self, value, caller=None, *, preserved_execution=None):
         allowed = {
             "title",
             "prompt",
@@ -384,8 +384,13 @@ class TasksPlugin:
             "profile",
             "selection",
             "assessment",
+            "model_source",
+            "effort_source",
         }:
             raise ValueError("Invalid task execution")
+        if preserved_execution is not None:
+            s["execution"] = json.loads(json.dumps(preserved_execution))
+            return s
         if requested.get("kind", "codex") not in {"codex", "reminder", "device_query"}:
             raise ValueError("Unknown execution kind")
         if requested.get("kind") == "device_query":
@@ -397,7 +402,7 @@ class TasksPlugin:
         else:
             declared = assessment(requested.get("assessment"))
             prior = evidence(self, declared, caller, s["workspace"])
-            s["execution"] = await select_execution(self, requested, s["title"] + "\n" + s["prompt"])
+            s["execution"] = await select_execution(self, requested, s["title"] + "\n" + s["prompt"], prior)
             s["execution"]["assessment"] = declared
             s["execution"]["selection"]["prior_execution"] = prior
             if caller and self.repo.run(caller)["state"] not in {"running", "waiting_user"}:
@@ -634,6 +639,20 @@ class TasksPlugin:
         if a == "update":
             if args.get("revision") != d["revision"]:
                 raise ValueError("Task changed; read latest revision")
+            if "execution" in args["changes"]:
+                replacement = args["changes"]["execution"]
+                if not isinstance(replacement, dict):
+                    raise ValueError("Invalid task execution")
+                replacement = dict(replacement)
+                old_execution = d["spec"]["execution"]
+                for key, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
+                    if old_execution.get(source) == "user" and replacement.get(source) != "user":
+                        if replacement.get(key) not in (None, "auto", old_execution[key]):
+                            raise ValueError(
+                                "Changing a user choice requires explicit user-directed replacement"
+                            )
+                        replacement.update({key: old_execution[key], source: "user"})
+                args = {**args, "changes": {**args["changes"], "execution": replacement}}
             combined = {**d["spec"], **args["changes"]}
             if "execution" not in args["changes"] and combined["execution"].get("profile") == "custom":
                 combined["execution"] = {k: v for k, v in combined["execution"].items() if k != "profile"}
@@ -642,7 +661,10 @@ class TasksPlugin:
                 "changes"
             ]:
                 combined.pop("auto_archive", None)
-            spec = await self.validate_spec(combined)
+            spec = await self.validate_spec(
+                combined,
+                preserved_execution=d["spec"]["execution"] if "execution" not in args["changes"] else None,
+            )
             if "execution" not in args["changes"] and all(
                 spec["execution"].get(k) == d["spec"]["execution"].get(k)
                 for k in ("model", "reasoning_effort")

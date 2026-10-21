@@ -206,10 +206,11 @@ warmup/timeout configuration without sending device commands. It never runs on a
 Protocol references: [API](https://docs.typesafe.ai/api),
 [models](https://docs.typesafe.ai/models), [confidence](https://docs.typesafe.ai/confidence).
 
-Task-owned `model_review` (threshold 0.90) is a separate, observation-only question.
+Task-owned `model_review` (default threshold 0.90, configurable 0..1) is a separate selection question.
 It selects one complete legal model/native-effort pair from task facts and reported
 prior-execution evidence. Unlike the existing `model_profile` missing-field support,
-it does not use two independent profile/effort answers and never changes execution.
-Its receipt is attached to the initial task dispatch for comparison; confidence is
+it does not use two independent profile/effort answers. Tasks may adopt a suggestion
+only in configured active mode, before execution, after filtering protected fields.
+Its receipt is attached to the task selection and dispatch for comparison; confidence is
 not a measured probability that the selected execution model will succeed. See the
 tasks README for queue bounds, provenance, reuse, restart and adoption criteria.

@@ -79,6 +79,18 @@ class ModelReview:
         p = self.plugin
         if run["data"].get("model_review"):
             return
+        if p.model_policy.review_mode == "active":
+            receipt = run["data"]["spec"]["execution"].get("selection", {}).get("model_review")
+            self.save(
+                run["id"],
+                {
+                    **(receipt or {}),
+                    "mode": "active",
+                    "state": "selected" if receipt else "skipped",
+                    "reason": None if receipt else "existing_selection_preserved",
+                },
+            )
+            return
         config = p.host.config.decisions
         reason = (
             "disabled"

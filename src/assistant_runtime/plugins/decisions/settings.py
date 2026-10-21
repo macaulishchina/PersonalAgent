@@ -61,8 +61,10 @@ class DecisionSettings:
             raise ValueError("Unknown decision threshold")
         result.thresholds = {**defaults, **result.thresholds}
         if any(
-            type(v) not in (int, float) or not math.isfinite(v) or not 0.5 <= v <= 1
-            for v in result.thresholds.values()
+            type(v) not in (int, float)
+            or not math.isfinite(v)
+            or not (0 if kind == "model_review" else 0.5) <= v <= 1
+            for kind, v in result.thresholds.items()
         ):
             raise ValueError("Invalid decision threshold")
         return result

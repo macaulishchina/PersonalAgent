@@ -628,7 +628,11 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.request(
                 TaskRequest(
                     "update",
-                    {"task_id": d["id"], "revision": d["revision"], "changes": {"prompt": "stale edit"}},
+                    {
+                        "task_id": d["id"],
+                        "revision": d["revision"],
+                        "changes": {"prompt": "stale edit", "execution": {}},
+                    },
                 )
             )
         )

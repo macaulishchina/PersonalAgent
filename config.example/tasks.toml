@@ -10,7 +10,8 @@ model = "auto"
 reasoning_effort = "auto"
 
 [tasks.model_policy]
-# Observe evidence-based recommendations; never overrides the selected model.
+# off: original selection; shadow: observe; active: correct assistant recommendations.
+# Active threshold: decisions.thresholds.model_review (0..1, default 0.90).
 review_mode = "shadow"
 default_profile = "fast"
 max_upgrades = 1

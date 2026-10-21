@@ -22,8 +22,13 @@ def create_server(client, caller_run=None):
         checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep|ultra,
         reason:...}; concrete model/effort overrides are allowed with a reason and validated.
         Profile and reasoning_effort are independent: select either or both using this catalog.
-        Leave a field missing/auto for one optional joint Jev suggestion; it cannot overwrite
-        an explicit field or instance-fixed value. Defaults are fallbacks, not effort locks.
+        Declare model_source="assistant" for your own model/profile recommendation and
+        effort_source="assistant" for your own explicit effort. Use "user" only when the
+        user explicitly chose that field. Never label your inference as a user choice.
+        With review_mode=active, Jev may correct assistant recommendations using legal pairs;
+        user choices, instance-fixed fields and unlabelled explicit choices remain protected.
+        A missing/auto field is selectable; a profile default is not an effort lock.
+        off/shadow retain the existing missing-field support without overriding explicit choices.
         Reserve ultra for exceptionally complex reasoning or original scientific research with
         concrete justification that deep is insufficient; ordinary research search/summaries
         do not qualify. Use it sparingly.
@@ -33,8 +38,10 @@ def create_server(client, caller_run=None):
         prior_run_id:related execution ID if retrying}. Do not claim familiar workflow when prior
         evidence conflicts. The host reads prior outcomes itself; completion is not goal success.
         All supplied assessment fields and model choices are assistant statements, not authority.
-        An optional asynchronous shadow review compares full supported model/effort pairs without
-        overriding execution or replaying actions. Inspect run.model_review and execution trace.
+        review_mode selects off, shadow (asynchronous observation) or active (one bounded
+        pre-execution decision). Failure/timeout preserves your valid original recommendation.
+        Inspect execution.selection.model_review and the run execution trace. No running-model
+        changes or action replays; unrelated task edits do not trigger reselection.
 
         """
         return await call("models")

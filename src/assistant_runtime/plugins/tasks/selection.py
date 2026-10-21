@@ -17,6 +17,8 @@ GUIDANCE = (
     "high or above needs difficult reasoning, not a long task. Prefer the lightest adequate effort. "
     "Task length and number of steps do not by themselves require deeper reasoning. "
     "Explain uncertainty, available procedure and verification in execution.reason. "
+    "Declare model_source/effort_source as assistant for your recommendations, user only for explicit user choices. "
+    "Active Jev correction may change assistant recommendations; user/fixed/unlabelled explicit fields stay protected. "
     "Never inherit the parent/main model merely because it created the task. "
     "Network errors, offline devices, missing tools and uncertain side effects need reconciliation, not a stronger model."
 )
@@ -49,8 +51,8 @@ class ModelPolicy:
             raise ValueError("Unknown task model policy settings")
         result = cls()
         result.review_mode = data.get("review_mode", "shadow")
-        if not isinstance(result.review_mode, str) or result.review_mode not in {"off", "shadow"}:
-            raise ValueError("Model review supports off or shadow only")
+        if not isinstance(result.review_mode, str) or result.review_mode not in {"off", "shadow", "active"}:
+            raise ValueError("Model review supports off, shadow or active")
         result.default_profile = data.get("default_profile", result.default_profile)
         result.max_upgrades = data.get("max_upgrades", result.max_upgrades)
         result.fallbacks = data.get("fallbacks", {})
@@ -123,6 +125,15 @@ class ModelPolicy:
         }
 
     def validate(self, requested, fixed):
+        for choice_field, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
+            value = requested.get(source)
+            if value is not None and value not in ("assistant", "user"):
+                raise ValueError("Invalid " + source)
+            explicit = requested.get(choice_field) not in (None, "auto") or (
+                choice_field == "model" and requested.get("profile") not in (None, "auto")
+            )
+            if value is not None and not explicit:
+                raise ValueError(source + " requires an explicit choice")
         profile = requested.get("profile")
         if profile in (None, "auto"):
             profile = self.default_profile
@@ -228,4 +239,11 @@ class ModelPolicy:
             "reason": reason,
             "resolved": resolved,
         }
-        return {"kind": "codex", **resolved, "profile": actual, "reason": reason, "selection": selection}
+        return {
+            "kind": "codex",
+            **resolved,
+            "profile": actual,
+            "reason": reason,
+            "selection": selection,
+            **{k: requested[k] for k in ("model_source", "effort_source") if k in requested},
+        }

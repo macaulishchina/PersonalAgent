@@ -138,7 +138,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
         # Recovery records unfinished observations, never calls a provider.
         self.executor.launch.assert_not_awaited()
         with self.assertRaises(ValueError):
-            ModelPolicy.parse({"review_mode": "active"})
+            ModelPolicy.parse({"review_mode": "invalid"})
 
     async def test_slow_review_does_not_block_launch_and_failure_is_isolated(self):
         self.host.config.decisions.update(enabled=True, external_data_consent=True)
