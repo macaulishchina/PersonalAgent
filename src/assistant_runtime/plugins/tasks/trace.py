@@ -70,6 +70,7 @@ class TaskTrace:
             "outcome_scope": "provider_reported",
             "model_selections": run["data"].get("model_selections", []),
             "model_fallback": run["data"].get("model_fallback"),
+            "resource_repairs": run["data"].get("resource_repairs", []),
             "model_upgrades": [
                 {k: v for k, v in u.items() if k != "request"} for u in run["data"].get("model_upgrades", [])
             ],

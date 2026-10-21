@@ -31,6 +31,9 @@ class NotificationsPlugin:
             raise ValueError("Register a unique notification channel before startup")
         self.channels[name] = adapter
 
+    def project_chat(self, messages):
+        self.repo.groups.project_chat(messages)
+
     async def start(self, context):
         if set(self.settings.channels) - self.channels.keys():
             raise ValueError("Configured notification channel is not registered")

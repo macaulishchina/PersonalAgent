@@ -579,6 +579,7 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
                     "code": 200,
                     "data": {
                         "name": "movie.mkv",
+                        "is_dir": False,
                         "size": 100,
                         "raw_url": url + "/download?signed-secret=private",
                     },
@@ -591,6 +592,9 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
             return web.Response(status=206, body=bytes.fromhex("1a45dfa3") + b"x" * 4092)
 
         app.router.add_post("/api/auth/login", login)
+        app.router.add_get(
+            "/api/me", lambda request: web.json_response({"code": 200, "data": {"base_path": ""}})
+        )
         app.router.add_post("/api/fs/list", listing)
         app.router.add_post("/api/fs/get", get)
         app.router.add_get("/download", download)

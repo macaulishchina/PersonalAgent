@@ -59,6 +59,52 @@ class GroupTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    async def test_chat_projection_reuses_associations_without_rewriting_history(self):
+        first = await self.notice("first", "one")
+        second = await self.notice("second", "one", priority="important")
+        other = await self.notice("other", "two")
+        for notice in (first, second, other):
+            await self.plugin.channels["chat"].deliver(notice)
+        chat = self.host.conversation.store
+        raw = chat.history("session-one")
+        cursor, unread = chat.cursor(), self.repo.unread_count()
+        messages = chat.history("session-one")
+        statements = []
+        self.repo.db.set_trace_callback(statements.append)
+        try:
+            self.plugin.project_chat(messages)
+        finally:
+            self.repo.db.set_trace_callback(None)
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(messages[0]["report_group"]["id"], messages[1]["report_group"]["id"])
+        self.assertNotEqual(messages[0]["report_group"]["id"], messages[2]["report_group"]["id"])
+        self.assertTrue(messages[1]["report_group"]["important"])
+        self.assertEqual(messages[0]["report_group"]["run_id"], "one")
+        self.assertEqual(messages[0]["task_id"], "task-a")
+        self.assertEqual(chat.history("session-one"), raw)
+        self.assertEqual((chat.cursor(), self.repo.unread_count()), (cursor, unread))
+
+    async def test_chat_projection_handles_missing_and_restored_associations(self):
+        notice = await self.notice("legacy")
+        await self.plugin.channels["chat"].deliver(notice)
+        chat = self.host.conversation.store
+        original = chat.history("session-one")
+        await self.plugin.link(NotificationLink("assistant", "legacy", "one"))
+        messages = chat.history("session-one")
+        messages += [
+            {"role": "assistant", "kind": "notification", "turn_id": "notification:missing"},
+            {"role": "user", "kind": "notification", "turn_id": "notification:" + notice["id"]},
+            {"role": "assistant", "kind": "notification", "turn_id": "notification:bad:id"},
+        ]
+        self.plugin.project_chat(messages)
+        self.assertEqual(messages[0]["report_group"]["id"], self.repo.get(notice["id"])["group_id"])
+        # Legacy association repair deliberately preserves the original payload;
+        # an opaque group identity cannot fabricate a missing task/run link.
+        self.assertIsNone(messages[0]["task_id"])
+        self.assertIsNone(messages[0]["report_group"]["run_id"])
+        self.assertTrue(all("report_group" not in m for m in messages[1:]))
+        self.assertEqual(chat.history("session-one"), original)
+
     async def test_group_pages_and_member_pages_do_not_depend_on_loaded_items(self):
         stamp = time.time() - 10
         with patch("time.time", return_value=stamp):

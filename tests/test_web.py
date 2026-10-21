@@ -324,6 +324,41 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             r = await other.get(self.base + attachment["url"])
             self.assertEqual(r.status, 401)
 
+    async def test_report_group_projection_matches_history_and_sse(self):
+        import json
+        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.kernel.contracts import NotificationRequest
+
+        notifications = NotificationsPlugin(self.host)
+        notice = await notifications.request(
+            NotificationRequest(
+                "publish",
+                {
+                    "event_key": "report",
+                    "title": "完成",
+                    "body": "原始详情",
+                    "group_key": "batch:one",
+                    "priority": "important",
+                },
+            )
+        )
+        cursor = self.host.conversation.store.cursor()
+        await notifications.channels["chat"].deliver(notice)
+        await self.login()
+        response = await self.client.get(self.base + "/api/messages")
+        messages = (await response.json())["messages"]
+        message = next(m for m in messages if m.get("turn_id") == "notification:" + notice["id"])
+        self.assertEqual(message["report_group"]["id"], notice["group_id"])
+        self.assertTrue(message["report_group"]["important"])
+        response = await self.client.get(self.base + "/api/events?after=" + str(cursor))
+        async with asyncio.timeout(3):
+            data = await response.content.readuntil(b"\n\n")
+        response.close()
+        event = json.loads(next(line[6:] for line in data.decode().splitlines() if line.startswith("data: ")))
+        self.assertEqual(event["data"]["report_group"], message["report_group"])
+        self.assertEqual(event["data"]["text"], message["text"])
+        self.assertTrue(notifications.repo.get(notice["id"])["unread"])
+
     async def test_events_replay_latest_message_and_reset_future_cursor(self):
         await self.login()
         c = self.host.conversation

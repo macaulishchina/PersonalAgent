@@ -172,9 +172,20 @@ class Downloads:
             self.repo.change(ident, "cancelled")
             return
         self.repo.change(ident, "checking")
-        download = await self.plugin.provider.call(
-            "download_url", {**intent["destination"], "file_id": intent["file_id"]}
-        )
+        backend = intent.get("file_backend", "native")
+        if backend != self.settings.files_for(intent["destination"]["account"]):
+            raise MediaError("target_configuration_changed")
+        if backend == "openlist":
+            from .openlist_library import OpenListLibrary
+
+            library = OpenListLibrary(self.plugin.library)
+            if library.binding(intent["target"]) != intent["backend_binding"]:
+                raise MediaError("target_configuration_changed")
+            download = await library.files(intent["target"]).download(intent["path"])
+        else:
+            download = await self.plugin.provider.call(
+                "download_url", {**intent["destination"], "file_id": intent["file_id"]}
+            )
         metadata = download["file"]
         if (
             metadata.get("type") != "file"
@@ -266,9 +277,30 @@ class Downloads:
     async def receive(self, ident, result, metadata, files, offset):
         url = result.get("url", "")
         parsed = urlsplit(url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        intent = self.repo.get(ident)["data"]["intent"]
+        proxy = False
+        if intent.get("file_backend") == "openlist":
+            from .openlist_library import OpenListLibrary
+            from urllib.parse import quote
+
+            library = OpenListLibrary(self.plugin.library)
+            binding = library.binding(intent["target"])
+            expected = (
+                binding["url"] + "/p" + quote(library.files(intent["target"]).path(intent["path"]), safe="/")
+            )
+            proxy = url.split("?", 1)[0] == expected and binding == intent["backend_binding"]
+            if not proxy:
+                raise MediaError("invalid_original_download_url")
+        if (
+            (parsed.scheme != "https" and not (proxy and parsed.scheme == "http"))
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             raise MediaError("invalid_original_download_url")
         provider_headers = result.get("headers", {})
+        if proxy and provider_headers:
+            raise MediaError("invalid_download_headers")
         if (
             not isinstance(provider_headers, dict)
             or set(provider_headers) - {"Referer", "User-Agent", "Cookie"}
@@ -298,6 +330,11 @@ class Downloads:
             async with self.plugin.download_session.get(
                 url, headers=headers, timeout=timeout, allow_redirects=False, auto_decompress=False
             ) as response:
+                if proxy and response.status == 403:
+                    # The configured OpenList mount may forbid proxying. Its 403
+                    # can also originate upstream; do not infer an expired URL or
+                    # repeatedly retry a permission/configuration failure.
+                    raise MediaError("openlist_proxy_forbidden")
                 if response.status in {401, 403, 410}:
                     raise MediaError("download_url_expired")
                 if response.status == 429 or response.status >= 500:

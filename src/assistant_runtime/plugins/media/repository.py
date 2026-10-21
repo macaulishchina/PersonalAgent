@@ -7,6 +7,8 @@ import time
 import uuid
 from contextvars import ContextVar
 
+from .openlist_sync import track
+
 CURRENT_BATCH = ContextVar("media_batch", default=None)
 
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -35,6 +37,8 @@ class MediaRepository:
                 updated REAL NOT NULL, due REAL NOT NULL, data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS media_due ON media_operations(state,due);
             CREATE INDEX IF NOT EXISTS media_page ON media_operations(created DESC,id DESC);
+            CREATE INDEX IF NOT EXISTS media_sync_due ON media_operations(
+                json_extract(data,'$.openlist_sync.state'),json_extract(data,'$.openlist_sync.due'));
             CREATE UNIQUE INDEX IF NOT EXISTS media_identity ON media_operations(identity)
                 WHERE state NOT IN ('failed','cancelled');
             CREATE TABLE IF NOT EXISTS media_account(id TEXT PRIMARY KEY,state TEXT NOT NULL,generation INTEGER);
@@ -156,6 +160,7 @@ class MediaRepository:
         if item["state"] != state:
             data["stages"] = (data["stages"] + [{"state": state, "at": now}])[-16:]
         data.update(changes)
+        track(data, state, self.settings, now)
         if state in TERMINAL and item["state"] not in TERMINAL:
             data["duration_seconds"] = round(now - item["created_at"], 3)
             data["finished_at"] = now
@@ -266,10 +271,12 @@ class MediaRepository:
                     "file",
                     "saved_file_id",
                     "verification",
+                    "cloud_verification",
                     "duration_seconds",
                     "error",
                     "stages",
                     "openlist",
+                    "openlist_sync",
                     "progress",
                     "local_path",
                     "steps",

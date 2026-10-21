@@ -2,7 +2,7 @@
 
 Optional `media` plugin + independent `media` MCP/CLI. Requires `notifications`.
 PanSou searches public candidates; account-scoped Aliyun/Quark adapters own share/auth protocol;
-OpenList supplies read verification. Plans and AI decisions remain in tasks.
+OpenList supplies read verification and an optional reusable filesystem backend. Plans and AI decisions remain in tasks.
 There is no media scheduler, arbitrary-URL downloader, TV controller or new model endpoint.
 
 ## Setup
@@ -16,8 +16,9 @@ that these sources found nothing. Discovery spans supported public platforms; Al
 
 ## Accounts and provider capabilities
 
-`media.accounts.<alias>.provider` selects `aliyun` or `quark`. Each target requires
-an explicit `account` alias, `folder_id` and `openlist_path`; Aliyun additionally
+`media.accounts.<alias>.provider` selects `aliyun`, `quark`, or an already mounted `openlist` storage. Each target requires
+an explicit `account` alias and `openlist_path`; native acquisition providers also require
+`folder_id`, and Aliyun additionally
 requires `drive_id`. An alias owns `state/media/credentials/<alias>/` and one credential
 lease. Aliyun is the default account definition when the accounts table is omitted;
 targets still must explicitly bind it. Multiple accounts of one provider are supported.
@@ -76,6 +77,152 @@ and update saved references consistently in one transaction. Discard the disposa
 inspection cache. Preserve task/operation receipts and evidence; do not reset submitted
 operations or recreate cloud writes. Verify against a restored backup before applying.
 There is one runtime format, no dual-read legacy path or startup data migration.
+
+## Reusable OpenList filesystem backend
+
+### Synchronizing confirmed cloud changes
+
+Both native and OpenList file backends persist an `openlist_sync` receipt atomically
+with each confirmed step (including partial/cancelled plans) or completed acquisition.
+Trash, restore, rename, mkdir and acquisition refresh the affected parent; moves refresh
+both parents. This tracks assistant-owned operations, not arbitrary changes made by
+other clients; those remain subject to OpenList cache expiry or explicit refresh.
+
+The media-owned worker uses `/api/fs/list` with `refresh=true` and a one-item page.
+It coalesces same-target directory refreshes across up to 64 due operations, handles
+at most 32 directory groups per pass, and debounces for one second. Each directory
+has a generation so a late refresh cannot acknowledge a newer change. Pending work
+survives restart; eight bounded exponential-backoff attempts end in a visible failure.
+No additional cloud mutation is issued on failure, shutdown or retry. Completed
+acquisitions retain their separate file-visibility check, without forcing another
+directory refresh. Directory refresh success is not content-integrity verification.
+Sync receipts and manual sync retries preserve the cloud operation's retry deadline
+and attempt count, including plans that have only partially completed.
+
+`get_media_operation`/list results expose `openlist_sync` (`pending`, `synced`, `failed`)
+and per-directory attempts, errors and observation times. `verify_media_operation`
+requeues synchronization, including old completed or partially completed library
+operations, without resubmitting the plan. Logs contain operation IDs and error codes,
+not credentials or upstream response bodies. Cloud identity/provider/endpoint changes
+block an old sync; correcting an explicit OpenList path for the same cloud root is allowed.
+
+Native folder IDs are resolved through the existing scoped `Library.destination`;
+OpenList mount paths are never inferred from native cloud ancestor names. Keep
+`targets.*.openlist_path` aligned with the actual mounted root. The shared private
+OpenList credentials must match the server user's `base_path`. OpenList v4.2.7 requires
+write-content (upload/mkdir) permission for forced refresh, even when the endpoint
+only reads a directory. Runtime does not grant permissions or widen account scope.
+No admin token or cloud Cookie is borrowed for synchronization.
+
+`test_media_openlist_sync` covers transaction rollback, coalescing, both move parents,
+partial completion, restart/cancellation, late refresh generations, retry bounds,
+mapping/identity checks and retained post-acquisition visibility evidence.
+
+Acquisition and mounted-file management are separate responsibilities. `provider`
+selects the share/auth adapter. `media.file_backend` defaults to `openlist`; each
+account can override `file_backend = "native"` or `"openlist"`. Existing Aliyun and
+Quark instance/template accounts explicitly use `native`. The implicit default Aliyun
+account also remains native. There is no automatic fallback, and no provider-ID/path
+conversion. A native acquisition account can use OpenList for its existing-file
+management without replacing share inspection/copy/auth. `list_media_files` and
+transfer destination IDs remain native acquisition tools; `browse_media_library`,
+preview/apply and download select the configured file backend.
+
+For another mounted storage, set `provider = "openlist"` and configure targets with
+only `account` and `openlist_path`. No bespoke adapter or duplicate cloud Cookie is
+needed for these filesystem capabilities. Public-share acquisition does not become
+available merely because a storage is mounted. New native providers can use the same
+`OpenListFiles` port; it owns only bounded protocol IO. `OpenListLibrary` binds its
+path semantics to the existing plans, queue, grants and download worker. No kernel
+contract, new scheduler or second operation database is introduced.
+
+Use `media_capabilities.accounts.<alias>.files` for the selected backend, addressing
+and supported actions. OpenList cloud browsing uses `path` relative to the target;
+its `ol_...` references are explicitly path identities, never cloud IDs. Changes are
+`mkdir(path)`, `rename(path,name)`, `move(path,folder)`; use existing preview/apply tools.
+Only individual files may be renamed/moved, with extension preserved, no overwrites,
+no implicit directory traversal, no cross-target move or automatic parent creation.
+Permission and actual driver support are checked by OpenList at execution time;
+implementation availability is not proof of every mounted driver's support.
+
+Keep `state/media/credentials/openlist.json` private (0600), containing
+`username`, `password`, and `base_path` (the exact OpenList user root, `/` for admin).
+A saved token is also accepted. The port checks `/api/me` against that root before
+filesystem operations. Use a suitably scoped OpenList account; never borrow its
+administrator database or widen an existing playback account automatically. The
+account must allow the chosen filesystem operations. Browsing uses normal cached reads,
+and downloads need read access plus upstream hashes. Fresh precondition/readback scans
+use `refresh=true`, which OpenList v4.2.7 ties to mkdir/upload (write-content) permission;
+rename/move-only permissions are insufficient for managed mutations. Missing permission
+is reported, never automatically granted. OpenList owns cloud credentials;
+the assistant owns only its OpenList login. Expired read authentication retries once;
+a rejected write is not replayed in the HTTP adapter. Update private credentials and
+explicitly resume the same operation. Startup checks standalone OpenList accounts for
+auth recovery. An OpenList outage never switches to the native implementation.
+
+Each plan captures the endpoint, account definition, target and original metadata.
+Preview and submission both check conflicts and preconditions. Submission is persisted
+before HTTP IO. Success requires a fresh directory readback, not HTTP acceptance or a
+queued upstream task. Returned task IDs are preserved without arbitrary upstream
+messages/URLs. Lost replies never replay writes: hash-backed rename/move can reconcile
+by observed content and old-path absence; without that evidence they remain uncertain.
+Rename/move may legitimately change the upstream modification time. It is checked
+before submission, but result comparison uses type, size and any available content
+hash instead; acknowledgment and source absence are still required without a hash.
+Lost mkdir acknowledgment remains uncertain even if a same-name folder exists. These
+are observed path states, not stable cloud object identities. Confirmed rename/move
+marks the former path absent. External concurrent modifications cannot be made atomic
+by the generic OpenList API; conflicts or ambiguous observations require attention.
+Paginated listings are bounded live pages, not a consistent filesystem snapshot.
+
+`download_media(target, path, request_id)` and download batches with `items=[{path:...}]`
+use the existing local destination, durable progress, Range resume, cancellation,
+whole-file validation and atomic publication. Only a configured same-origin `/p/`
+proxy URL is used; returned `raw_url`/site URLs and redirects are ignored. OpenList
+API tokens and upstream Cookies never enter the download worker or receipts. The
+upstream mount should serve original files; a transcode/length/hash mismatch fails.
+The mount must permit OpenList proxy downloads. A proxy HTTP 403 is surfaced as
+`openlist_proxy_forbidden`, without assuming an expired URL or automatically retrying
+a permission/configuration rejection. Check the mount and upstream permissions;
+the assistant does not enable proxying or widen permissions on its own.
+A valid upstream MD5, SHA-1 or SHA-256 is mandatory. Missing hashes are reported as
+`download_checksum_unavailable`, not silently replaced by size-only verification.
+Queued path downloads capture metadata to detect replacement before starting.
+
+Generic remove/copy, permanent deletion, recycle-bin restoration, share transfer,
+capacity and interactive cloud login are not advertised as OpenList filesystem actions.
+In particular, `/api/fs/remove` may permanently delete files for some drivers. Native
+Aliyun/Quark trash/restore remain available under their native backend. Switching a
+backend requires reconciling in-flight work first: old plans/downloads fail their
+binding check rather than silently operating through the new backend. Config is
+restart-applied; this implementation does not migrate historical cloud IDs to paths.
+
+Validation: `test_media_openlist` is part of the media test group. Real HTTP fixtures
+cover scope and pagination, malformed/incomplete responses, auth expiry, denied writes,
+no-overwrite checks, lost acknowledgments, restart, cancellation, backend changes,
+MCP grants, path batches and complete checksum-verified downloads. An isolated real
+OpenList v4.2.7 container separately verified mkdir/rename/move/readback. Original proxy Range bytes and denial of writes by a scoped read-only account were
+also checked. Its Local driver omitted upstream hashes; the download interface correctly refused to claim
+checksum completion. This does not establish every cloud driver's acceptance.
+
+Real-cloud acceptance (2026-10-21, installed OpenList v4.2.7): dedicated synthetic
+65,588-byte files were uploaded through OpenList, separately from ordinary media.
+AliyundriveOpen and Quark both passed mkdir, list/readback, rename and move; Quark's
+eventually visible move was reconciled from its persisted receipt without resubmission.
+Aliyun's SHA-1-backed rename also recovered after deliberately discarding the actual
+write reply and reopening the operation database. Without a hash, Quark correctly
+kept that lost-reply operation uncertain. Cancellation before submission sent no write.
+Quark's original proxy returned HTTP 206 and all bytes matched the uploaded fixture,
+but its driver exposed no upstream hash, so the shared verified-download workflow
+correctly refused enqueueing with `download_checksum_unavailable`. Aliyun exposed
+SHA-1, but the existing mount forbade proxying (HTTP 403, `proxy not allowed`); the user
+chose to retain that configuration, so full shared-worker cloud download/resume is
+not accepted for either mount. These are separate from passing HTTP-fixture download
+tests. Production media configuration remained unchanged and both accounts stayed
+native. Test file names/parents were restored; dedicated test folders were retained.
+Upload here only provisioned acceptance fixtures and is not an advertised media action.
+The mounted root was changed externally during testing: an OpenList path must follow
+the current mounted root, not blindly append the native cloud folder hierarchy.
 
 ## Search and late results
 
@@ -208,7 +355,28 @@ mount_path = "/mnt/P"
 
 Targets are explicit account/drive/folder bindings. Only configured targets may
 receive transfers; arbitrary filesystem or cloud paths cannot be tool arguments.
-`scripts/prepare_media.py --config config/config.toml --create-targets` creates/reuses
+`openlist_path` independently identifies that target directory in OpenList's mounted
+namespace, not its full cloud ancestry. A mount rooted at cloud `影视` may expose
+`/夸克网盘/电视剧`; never insert another `影视` component. Descendants append only
+the provider-verified path below the configured target. The OpenList account's
+`base_path` is a third, separate access boundary; it is checked against `/api/me`.
+
+Every native transfer must pass a fresh saved-file read by ID before completion:
+account-bound destination, file ID, parent ID, name, size, type and available source
+checksum must agree. The receipt is returned as `cloud_verification` with observation
+time and checked fields. Submission acknowledgments and stale list entries alone do
+not finish a transfer. This gate is shared by every native provider.
+
+`verify_media_operation` re-reads the cloud file and checks OpenList independently,
+without resubmitting a copy. Its cloud evidence can become `unconfirmed` even though
+the historical operation completed earlier. Report that distinction if a file moved
+or disappeared. Only `openlist.path_verified=true` exposes a verified `path`; failed
+checks expose `configured_path` as configuration evidence, never a working link.
+Name/size visibility is explicitly weaker than a matching checksum. Mapping changes
+can be rechecked against current configuration without invalidating a cloud save.
+
+`scripts/prepare_media.py --config config/config.toml --create-targets
+--movies-openlist-path /实际挂载/电影 --series-openlist-path /实际挂载/电视剧` creates/reuses
 only `影视/电影` and `影视/电视剧` on the resource drive and prints configuration.
 `--apply-config` applies it with a private prior-config backup. It preserves unrelated
 settings and refuses to replace existing media configuration. Run before enabling
@@ -336,6 +504,14 @@ No estimated transfer percentage is invented for a server-side cloud copy.
 
 Main conversation uses media tools within user intent. Background reads require an
 active task execution; transfer/resume/cancel also require `resources=["media:TARGET"]`.
+Before creating any write task, foreground reads `media_capabilities.target_bindings`
+and binds the exact target's `task_resource` after matching provider/account to user
+intent. `series` and `quark_series` are distinct configured targets, not synonyms.
+Missing bindings are an internal delegation problem: foreground verifies existing user
+authorization and uses the tasks repair interface at a stopped boundary, or creates a
+scoped follow-up for an ended task. Users should not have to specify resource keys or
+repeat authorization. Background code still fails before submitting a write and cannot
+self-grant, borrow another target's grant, or infer authorization from prompt text.
 Background management is limited to that task definition's operations. No interactive
 login, target configuration, arbitrary credential input or unrelated account changes.
 Task traces already record MCP calls; each operation also records its originating run

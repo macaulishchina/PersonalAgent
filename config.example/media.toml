@@ -1,13 +1,19 @@
 # 影视搜索、转存和下载。账号别名绑定私有凭据目录，不在配置中填写 Cookie/token。
 # 按需取消注释并填入通过实际目录查询获得的 ID。
+# openlist_path 单独填写 OpenList 实际展示路径，不能照抄云盘完整路径。
+# 例如挂载根已经是云盘“影视”，电视剧路径就是 /夸克网盘/电视剧；不再加 /影视。
+# 下面路径仅是示例；网页路径可见性与云盘转存成功分别核验。
 # [media]
 # search_url = "http://127.0.0.1:8888"
 # openlist_url = "http://127.0.0.1:5244"
+# file_backend = "openlist" # 新账号默认复用；账号可明确覆盖为 native。
 #
 # [media.accounts.aliyun]
 # provider = "aliyun"
+# file_backend = "native" # 已有阿里接入保持自身文件实现。
 # [media.accounts.quark]
 # provider = "quark"
+# file_backend = "native" # 已有夸克接入保持自身文件实现。
 #
 # [media.targets.aliyun_movies]
 # account = "aliyun"
@@ -30,3 +36,16 @@
 # path = "/mnt/Q/openlist/media/电视剧"
 # staging_path = "/mnt/Q/openlist/temp/media-downloads"
 # mount_path = "/mnt/Q"
+
+# 其它已经挂载在 OpenList 的存储，无需在助手里再次提供网盘凭据：
+# [media.accounts.mounted_drive]
+# provider = "openlist"
+# [media.targets.mounted_movies]
+# account = "mounted_drive"
+# openlist_path = "/其它网盘/影视/电影"
+# 不填写虚构的 drive_id/folder_id；通过相对 path 浏览和管理。
+# 如已有原生转存适配器，只需该账号 file_backend = "openlist" 即可复用文件管理；
+# provider 和转存目标的原生 ID 保留不变。native 不会在失败后自动切到 OpenList。
+# OpenList 私有凭据及权限见 media/README.md；所用账号需有对应操作和强制刷新权限。
+# 支持浏览、建目录、重命名、同一目标内移动；不将 remove 等同于安全回收站。
+# 下载复用现有 local_targets；驱动须提供 MD5/SHA1/SHA256，否则明确拒绝下载。

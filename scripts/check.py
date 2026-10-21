@@ -46,7 +46,17 @@ GROUPS = {
         "model_choice",
         "task_self_schedule",
     },
-    "media": {"media", "media_providers", "media_downloads", "media_library", "media_search", "media_quark"},
+    "media": {
+        "media",
+        "media_providers",
+        "media_downloads",
+        "media_library",
+        "media_search",
+        "media_quark",
+        "media_openlist",
+        "media_openlist_sync",
+        "media_verification",
+    },
     "memory": {"mem0", "memory"},
     "web": {"reply_images", "reply_videos", "web"},
 }

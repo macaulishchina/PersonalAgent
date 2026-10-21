@@ -37,9 +37,13 @@ class Batches:
             or not 1 <= len(entries) <= 100
         ):
             raise ValueError("Batch requires transfer/download and 1..100 explicit items")
-        self.p.provider.require(binding["account"], "copy" if action == "transfer" else "download_url")
+        openlist_download = (
+            action == "download" and self.p.settings.files_for(binding["account"]) == "openlist"
+        )
+        if not openlist_download:
+            self.p.provider.require(binding["account"], "copy" if action == "transfer" else "download_url")
         fields = (
-            {"file_id"}
+            ({"path"} if openlist_download else {"file_id"})
             if action == "download"
             else {
                 "share_url",
@@ -55,7 +59,11 @@ class Batches:
             }
         )
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) - fields or "file_id" not in entry:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) - fields
+                or ("path" if openlist_download else "file_id") not in entry
+            ):
                 raise ValueError("Invalid batch item fields")
             if action == "transfer":
                 from .search import share_provider
@@ -87,6 +95,8 @@ class Batches:
             "caller_run": caller,
             "created_at": time.time(),
             "binding": dict(self.p.target(target)),
+            "file_backend": self.p.settings.files_for(binding["account"]),
+            "file_endpoint": self.p.settings.openlist_url if openlist_download else None,
             "items": [{"arguments": e, "state": "pending"} for e in entries],
         }
         with self.db:
@@ -171,7 +181,15 @@ class Batches:
                     >= self.p.settings.queue_capacity
                 ):
                     break  # Backpressure, not a failed media acquisition.
-                if self.p.target(data["target"]) != data["binding"]:
+                if self.p.target(data["target"]) != data["binding"] or (
+                    data["action"] == "download"
+                    and self.p.settings.files_for(data["binding"]["account"])
+                    != data.get("file_backend", "native")
+                    or (
+                        data.get("file_endpoint") is not None
+                        and data["file_endpoint"] != self.p.settings.openlist_url
+                    )
+                ):
                     entry.update(state="failed", error="target_configuration_changed")
                     continue
                 if data.get("cancel_requested"):

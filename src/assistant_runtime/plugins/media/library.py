@@ -82,7 +82,7 @@ class Library:
                 >= self.p.settings.max_operations
             ):
                 raise ValueError("Library catalog capacity reached")
-        data.update(file=file, binding=dict(self.p.target(target)), **extra)
+        data.update(file=file, binding=dict(self.p.target(target)), **{"present": True, **extra})
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO media_assets VALUES(?,?,?,?,?)",
@@ -165,6 +165,10 @@ class Library:
             raise ValueError("Unknown library location")
         target = args["target"]
         root = self.p.target(target)
+        if self.p.settings.files_for(root["account"]) == "openlist":
+            from .openlist_library import OpenListLibrary
+
+            return await OpenListLibrary(self).preview(args, owner)
         changes = args.get("changes")
         if not isinstance(changes, list) or not 1 <= len(changes) <= 100:
             raise ValueError("A library plan requires 1..100 changes")
@@ -266,6 +270,8 @@ class Library:
             "destination": data["root"],
             "plan_id": args["plan_id"],
         }
+        if data.get("file_backend") == "openlist":
+            intent.update(file_backend="openlist", backend_binding=data["backend_binding"])
         if data.get("location") == "local":
             intent.update(location="local", local_binding=data["local_binding"])
         # A lost apply reply remains recoverable even after the preview expires.
@@ -289,6 +295,14 @@ class Library:
             from .local_library import LocalLibrary
 
             return await LocalLibrary(self).process(item)
+        if intent.get("file_backend", "native") != self.p.settings.files_for(
+            intent["destination"]["account"]
+        ):
+            raise MediaError("target_configuration_changed")
+        if intent.get("file_backend") == "openlist":
+            from .openlist_library import OpenListLibrary
+
+            return await OpenListLibrary(self).process(item)
         steps = item["data"]["steps"]
         for step in steps:
             if step["state"] == "completed":
@@ -499,9 +513,11 @@ class Library:
         for _, data in assets:
             data = json.loads(data)
             if definition and data.get("season") == definition["season"]:
-                if (definition["required_state"] == "cloud" and not data.get("trashed")) or (
-                    definition["required_state"] == "local" and data.get("local_verified")
-                ):
+                if (
+                    definition["required_state"] == "cloud"
+                    and not data.get("trashed")
+                    and data.get("present", True)
+                ) or (definition["required_state"] == "local" and data.get("local_verified")):
                     episodes.add(data.get("episode"))
         total = definition and definition["total_episodes"]
         missing = sorted(set(range(1, total + 1)) - episodes) if total else None

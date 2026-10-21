@@ -146,6 +146,7 @@ class FakeProvider:
         self.entered = asyncio.Event()
         self.login = None
         self.video = dict(VIDEO)
+        self.folder_id = "folder"
 
     async def call(self, action, args=None):
         self.calls.append(action)
@@ -164,10 +165,15 @@ class FakeProvider:
             return dict(self.video)
         if action == "list":
             return {"items": copy.deepcopy(self.items), "marker": None}
+        if action == "file":
+            file = next((v for v in self.items if v["file_id"] == args["file_id"]), None)
+            if file is None:
+                raise MediaError("file_not_found")
+            return {"parent_file_id": self.folder_id, **copy.deepcopy(file)}
         if action == "capacity":
             return {"total": 1000, "used": 0}
         if action == "copy":
-            self.items = [{**self.video, "file_id": "saved"}]
+            self.items = [{**self.video, "file_id": "saved", "parent_file_id": args["folder_id"]}]
             if self.hold_copy:
                 self.entered.set()
                 await self.hold_copy.wait()
@@ -266,13 +272,72 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
         caps = await self.runtime.invoke(MediaRequest("capabilities", {}))
         self.assertIn("quark", caps["discovery"]["platforms"])
         self.assertEqual(caps["acquisition_providers"], ["aliyun"])
+        self.assertEqual(
+            caps["target_bindings"]["movies"],
+            {"account": "aliyun", "provider": "aliyun", "task_resource": "media:movies"},
+        )
 
     async def test_transfer_copies_once_and_verifies_content(self):
         item = await self.submit()
         done = await self.wait_state(item["operation_id"], "completed")
         self.assertEqual(self.provider.calls.count("copy"), 1)
         self.assertEqual(done["data"]["saved_file_id"], "saved")
+        self.assertEqual(done["data"]["cloud_verification"]["folder_id"], "folder")
+        self.assertEqual(done["data"]["cloud_verification"]["state"], "verified")
+        self.assertIn("file", self.provider.calls)
         await self.submit()
+        self.assertEqual(self.provider.calls.count("copy"), 1)
+
+    async def test_reverify_detects_missing_file_without_copying_again(self):
+        item = await self.submit()
+        await self.wait_state(item["operation_id"], "completed")
+        self.provider.items = []
+        result = await self.runtime.invoke(MediaRequest("verify", {"operation_id": item["operation_id"]}))
+        self.assertEqual(result["cloud_verification"]["state"], "unconfirmed")
+        self.assertEqual(result["cloud_verification"]["error"], "file_not_found")
+        self.assertEqual(self.provider.calls.count("copy"), 1)
+
+    async def test_copy_ack_and_matching_list_cannot_complete_wrong_parent(self):
+        self.provider.hold_copy = asyncio.Event()
+        item = await self.submit()
+        await asyncio.wait_for(self.provider.entered.wait(), 2)
+        self.provider.items[0]["parent_file_id"] = "wrong-folder"
+        self.provider.hold_copy.set()
+        async with asyncio.timeout(2):
+            while True:
+                saved = self.plugin.repo.get(item["operation_id"])
+                if saved["data"].get("error") == "cloud_file_verification_mismatch":
+                    break
+                await asyncio.sleep(0.005)
+        self.assertEqual(saved["state"], "verifying")
+        self.assertNotIn("cloud_verification", saved["data"])
+        self.assertEqual(self.provider.calls.count("copy"), 1)
+        self.assertFalse(any("已转存" in n.get("title", "") for n in self.dependencies.notices))
+        self.assertIsNone(
+            self.store.db.execute(
+                "SELECT 1 FROM media_outbox WHERE key=?", ("media-complete:" + item["operation_id"],)
+            ).fetchone()
+        )
+
+    async def test_reverify_uses_current_mount_without_recopying(self):
+        from unittest.mock import AsyncMock
+
+        item = await self.submit()
+        await self.wait_state(item["operation_id"], "completed")
+        target = self.plugin.settings.targets["movies"]
+        target["openlist_path"] = "/mounted-directly/movies"
+        self.plugin.openlist.verify = AsyncMock(
+            return_value={
+                "state": "visible",
+                "path_verified": True,
+                "path": "/mounted-directly/movies/movie.mkv",
+            }
+        )
+        result = await self.runtime.invoke(MediaRequest("verify", {"operation_id": item["operation_id"]}))
+        self.assertEqual(result["cloud_verification"]["state"], "verified")
+        self.assertEqual(
+            self.plugin.openlist.verify.await_args.args[0]["openlist_path"], target["openlist_path"]
+        )
         self.assertEqual(self.provider.calls.count("copy"), 1)
 
     async def test_download_requires_configured_destination_and_background_resource(self):
@@ -326,6 +391,8 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.openlist.verify = AsyncMock(side_effect=RuntimeError("private-failure-detail"))
         item = await self.submit()
         done = await self.wait_state(item["operation_id"], "completed")
+        await self.plugin.verify_openlist(done)
+        done = self.plugin.repo.get(item["operation_id"])
         self.assertEqual(done["data"]["openlist"]["state"], "openlist_unavailable")
         self.assertNotIn("private-failure-detail", json.dumps(self.plugin.repo.public(done)))
 

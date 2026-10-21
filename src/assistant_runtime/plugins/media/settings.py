@@ -27,7 +27,10 @@ def identifier(value):
 
 @dataclass
 class MediaSettings:
-    accounts: dict = field(default_factory=lambda: {"aliyun": {"provider": "aliyun"}})
+    accounts: dict = field(
+        default_factory=lambda: {"aliyun": {"provider": "aliyun", "file_backend": "native"}}
+    )
+    file_backend: str = "openlist"
     search_url: str = "http://127.0.0.1:8888"
     openlist_url: str = ""
     timeout_seconds: int = 15
@@ -42,6 +45,8 @@ class MediaSettings:
         if not isinstance(data, dict) or set(data) - cls.__dataclass_fields__.keys():
             raise ValueError("Unknown media settings")
         result = cls(**data)
+        if not isinstance(result.file_backend, str) or result.file_backend not in {"native", "openlist"}:
+            raise ValueError("Unknown media file backend")
         result.search_url = endpoint(result.search_url)
         if not isinstance(result.openlist_url, str):
             raise ValueError("OpenList URL must be a string")
@@ -61,11 +66,19 @@ class MediaSettings:
             identifier(name)
             if (
                 not isinstance(account, dict)
-                or set(account) != {"provider"}
+                or set(account) - {"provider", "file_backend"}
+                or "provider" not in account
                 or not isinstance(account["provider"], str)
-                or account["provider"] not in {"aliyun", "quark"}
+                or account["provider"] not in {"aliyun", "quark", "openlist"}
             ):
                 raise ValueError("Media account requires a supported provider")
+            backend = account.get("file_backend", result.file_backend)
+            if (
+                not isinstance(backend, str)
+                or backend not in {"native", "openlist"}
+                or (account["provider"] == "openlist" and backend != "openlist")
+            ):
+                raise ValueError("Invalid media account file backend")
         if not isinstance(result.targets, dict) or len(result.targets) > 32:
             raise ValueError("Media targets must be a table with at most 32 entries")
         for name, target in result.targets.items():
@@ -76,19 +89,25 @@ class MediaSettings:
                 or target["account"] not in result.accounts
             ):
                 raise ValueError("Media targets require a configured account")
-            fields = {"account", "folder_id", "openlist_path"}
+            fields = {"account", "openlist_path"}
+            if result.accounts[target["account"]]["provider"] != "openlist":
+                fields.add("folder_id")
             if result.accounts[target["account"]]["provider"] == "aliyun":
                 fields.add("drive_id")
             if set(target) != fields:
                 raise ValueError("Invalid media target fields for provider")
             if "drive_id" in target:
                 identifier(target["drive_id"])
-            identifier(target["folder_id"])
+            if "folder_id" in target:
+                identifier(target["folder_id"])
             path = target["openlist_path"]
             if (
                 not isinstance(path, str)
                 or not path.startswith("/")
                 or len(path) > 1000
+                or "\\" in path
+                or "%" in path
+                or any(ord(c) < 32 for c in path)
                 or any(part in {".", ".."} for part in path.split("/"))
             ):
                 raise ValueError("Invalid media target OpenList path")
@@ -115,3 +134,6 @@ class MediaSettings:
             if final == stage or final.is_relative_to(stage) or stage.is_relative_to(final):
                 raise ValueError("Download staging must be outside the published library")
         return result
+
+    def files_for(self, account):
+        return self.accounts[account].get("file_backend", self.file_backend)

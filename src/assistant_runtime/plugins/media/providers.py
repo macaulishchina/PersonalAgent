@@ -7,6 +7,7 @@ from .errors import MediaError
 from .quark import Quark
 
 CAPABILITIES = {
+    "openlist": frozenset(),
     "aliyun": frozenset(
         {
             "status",
@@ -61,6 +62,8 @@ class Providers:
             self.adapters[account] = (
                 adapters[account]
                 if adapters is not None
+                else None
+                if definition["provider"] == "openlist"
                 else {"aliyun": Aliyun, "quark": Quark}[definition["provider"]](
                     root, changed, account=account
                 )
@@ -68,11 +71,13 @@ class Providers:
 
     def claim(self):
         for adapter in self.adapters.values():
-            adapter.claim()
+            if adapter is not None:
+                adapter.claim()
 
     async def close(self):
         for adapter in self.adapters.values():
-            await adapter.close()
+            if adapter is not None:
+                await adapter.close()
 
     def resolve(self, account=None, *, provider=None):
         candidates = [k for k, v in self.accounts.items() if provider is None or v["provider"] == provider]

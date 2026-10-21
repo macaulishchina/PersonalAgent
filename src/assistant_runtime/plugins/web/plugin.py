@@ -140,6 +140,7 @@ class WebPlugin:
         store = self.conversation.store
         before = int(request.query["before"]) if request.query.get("before") else None
         messages = store.history(self.conversation.session, before)
+        self.project_reports(messages)
         return web.json_response(
             {
                 "messages": messages,
@@ -148,6 +149,11 @@ class WebPlugin:
                 "before": messages[0]["ordinal"] if len(messages) == 60 else None,
             }
         )
+
+    def project_reports(self, messages):
+        owner = getattr(self.host, "notifications", None)
+        if owner:
+            owner.project_chat(messages)
 
     async def send(self, request):
         data = await self.object_body(request)
@@ -251,6 +257,7 @@ class WebPlugin:
                 if events is None:
                     await response.write(b"event: reset\ndata: {}\n\n")
                     break
+                self.project_reports([e["data"] for e in events if e["kind"] == "message" and e["data"]])
                 payload = ""
                 for event in events:
                     cursor = event["seq"]

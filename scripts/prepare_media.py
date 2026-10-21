@@ -93,7 +93,7 @@ async def prepare(args):
                 "account": "aliyun",
                 "drive_id": drive,
                 "folder_id": ident_folder,
-                "openlist_path": args.mount_path.rstrip("/") + "/影视/" + name,
+                "openlist_path": getattr(args, ident + "_openlist_path").rstrip("/") or "/",
             }
         save(root / "targets.json", targets)
         snippet = "\n[media]\nsearch_url = " + json.dumps(args.search_url) + "\n"
@@ -154,10 +154,20 @@ def main():
     parser.add_argument("--apply-config", action="store_true")
     parser.add_argument("--search-url", default="http://127.0.0.1:8888")
     parser.add_argument("--openlist-url", default="")
-    parser.add_argument("--mount-path", default="/阿里云盘")
+    parser.add_argument(
+        "--movies-openlist-path", help="Exact mounted OpenList movie directory, independent of cloud ancestry"
+    )
+    parser.add_argument(
+        "--series-openlist-path",
+        help="Exact mounted OpenList series directory, independent of cloud ancestry",
+    )
     args = parser.parse_args()
     if args.apply_config and not args.create_targets:
         parser.error("--apply-config requires --create-targets")
+    if args.create_targets and (not args.movies_openlist_path or not args.series_openlist_path):
+        parser.error(
+            "--create-targets requires --movies-openlist-path and --series-openlist-path; cloud names cannot determine OpenList mounts"
+        )
     asyncio.run(prepare(args))
 
 

@@ -8,6 +8,49 @@ import {
 
 type Notice = { source?: string; payload?: { origin?: { task_id?: string } } };
 
+export function ReportCollection({
+  messages,
+  children,
+  onOpenTask,
+}: {
+  messages: (MessageOrigin & { text: string })[];
+  children: ReactNode;
+  onOpenTask: (id: string) => void;
+}) {
+  const latest = messages.at(-1)!;
+  const important = messages.filter((m) => m.report_group?.important);
+  const focus = important.at(-1) || latest;
+  const title = latest.report_group!.title;
+  const summary = reportContent(focus.text).title;
+  const taskId = reportTask(latest);
+  return (
+    <details className="task-report report-collection">
+      <summary title={`${title} · ${summary}`}>
+        <span className="task-report-title">
+          {title}
+          {summary !== title && ` · ${summary}`}
+        </span>
+        {important.length > 0 && (
+          <span className="report-important">{important.length} 条重要</span>
+        )}
+        <span className="report-count">{messages.length} 条进展</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </summary>
+      <div className="task-report-content">
+        {taskId && (
+          <button
+            className="tool-result-link task-report-link"
+            onClick={() => onOpenTask(taskId)}
+          >
+            查看对应任务 <ArrowUpRight size={14} aria-hidden="true" />
+          </button>
+        )}
+        {children}
+      </div>
+    </details>
+  );
+}
+
 export function TaskReport({
   message,
   renderBody,

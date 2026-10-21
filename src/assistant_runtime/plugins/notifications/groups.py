@@ -78,6 +78,38 @@ class Groups:
                         "UPDATE notifications SET group_id=?,group_title=? WHERE id=?", (group, title, ident)
                     )
 
+    def project_chat(self, messages):
+        """Enrich a bounded timeline page without rewriting messages or delivery state."""
+        references = {}
+        for message in messages:
+            if message.get("role") != "assistant" or message.get("kind") != "notification":
+                continue
+            match = re.fullmatch(r"notification:([A-Za-z0-9_-]{1,128})", message.get("turn_id") or "")
+            if match:
+                references.setdefault(match[1], []).append(message)
+        if not references:
+            return
+        placeholders = ",".join("?" for _ in references)
+        rows = self.db.execute(
+            f"SELECT id,source,group_id,group_title,payload FROM notifications WHERE id IN ({placeholders})",
+            tuple(references),
+        ).fetchall()
+        for ident, source, group_id, title, raw in rows:
+            payload = json.loads(raw)
+            origin = payload.get("origin", {})
+            task = origin.get("task_id")
+            trusted_task = task if task and source == "task:" + task else None
+            for message in references[ident]:
+                message["report_group"] = {
+                    "id": group_id,
+                    "title": title,
+                    "run_id": origin.get("run_id") if trusted_task else None,
+                    "task_id": trusted_task,
+                    "important": payload.get("priority") == "important",
+                }
+                if trusted_task:
+                    message["task_id"] = trusted_task
+
     def list(self, unread=False, before=None, limit=20):
         if type(unread) is not bool:
             raise ValueError("unread must be boolean")

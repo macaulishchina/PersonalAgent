@@ -1,6 +1,8 @@
 """Independent task MCP; thin typed capability mapping, no scheduler/provider code."""
 
 from fastmcp import FastMCP
+from typing import Annotated
+from pydantic import Field
 from ..kernel.contracts import TaskRequest
 from .memory import READ, WRITE
 
@@ -59,7 +61,12 @@ def create_server(client, caller_run=None):
         execution: dict | None = None,
         long_term: bool = False,
         workspace: str | None = None,
-        resources: list[str] | None = None,
+        resources: Annotated[
+            list[str] | None,
+            Field(
+                description="Internal resource bindings for the user's authorized objective. Discover exact keys from the owning capability before delegation (media_capabilities.target_bindings for media). Match provider/account, not a guessed generic alias. Bind necessary scope yourself; users need not supply resource keys or repeat existing authorization. Children must stay within parent resources."
+            ),
+        ] = None,
         notify_voice: bool = False,
         notify_completion: bool | None = None,
         auto_archive: bool | None = None,
@@ -129,6 +136,27 @@ def create_server(client, caller_run=None):
     async def update_task(task_id: str, revision: int, changes: dict) -> dict:
         """Foreground management only; background callers must use update_own_task_schedule for preauthorized scheduling. Change future executions with optimistic revision checking; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Explicit user authorization may grant/revoke self_schedule. Active executions keep their creation-time settings; use supplement for active work."""
         return await call("update", task_id=task_id, revision=revision, changes=changes)
+
+    @server.tool(annotations=WRITE)
+    async def repair_task_run_resources(
+        run_id: str, revision: int, resources: list[str], reason: str
+    ) -> dict:
+        """Foreground only: correct internal resource bindings using EXISTING user authorization.
+
+        Read get_task for the run revision. resources replaces this run's complete resource list;
+        reason must identify the original user request and explain the binding mistake.
+        Do not ask users to name internal resource keys or repeat an already authorized request.
+        Discover exact resource keys from the owning capability before binding; never guess aliases.
+        Pause running work first and confirm it stopped. Only queued, paused or waiting executions
+        with no active turn can be repaired; child/unknown/ended executions are rejected.
+        No resumption, tool replay, future-definition edit or unrelated grant occurs. Inspect pending
+        operations before continue/supplement. For future runs use update_task; for an ended task
+        create a scoped follow-up from its evidence and reconcile existing operations first.
+        New objectives or destructive actions outside the original request still need user approval.
+        """
+        return await call(
+            "repair_resources", run_id=run_id, revision=revision, resources=resources, reason=reason
+        )
 
     @server.tool(annotations=WRITE)
     async def update_own_task_schedule(

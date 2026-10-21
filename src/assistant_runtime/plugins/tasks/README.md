@@ -232,6 +232,22 @@ Depth is limited to three and each definition has at most sixteen direct childre
 These are trusted local agents with the configured Codex sandbox, not security sandboxes.
 Semantic authorization remains part of the instructions and tool approval policy.
 
+Resource identifiers are internal delegation details, not a second user consent step.
+Foreground must resolve the authorized target through its owning capability before
+creating work; for media, use `media_capabilities.target_bindings` and its exact account,
+provider and `task_resource`. Never infer a provider from a generic target alias.
+An existing user request authorizes its necessary scope, not unrelated destructive work.
+
+`repair_task_run_resources(run_id, revision, resources, reason)` lets foreground correct
+one execution's complete resource list using that original request. Pause and confirm
+running work stopped first. Only queued, paused or waiting runs without an active turn
+can change; launching, child, unknown and ended executions fail closed. Run revision is
+checked, and before/after bindings plus the reason are persisted in `resource_repairs`
+and exposed by execution trace (bounded to 32 corrections). The tool does not resume,
+replay actions, change model selection, update future definitions or affect another run.
+Future definitions use `update_task`; archived work needs a correctly scoped follow-up
+that reconciles existing operation IDs. Background callers cannot repair their own grants.
+
 ## Controlled self scheduling
 
 Foreground creation/update may record an explicit user grant on a reusable timed plan:

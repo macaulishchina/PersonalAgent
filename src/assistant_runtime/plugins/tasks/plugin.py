@@ -448,7 +448,14 @@ class TasksPlugin:
             lock = self.run_locks.setdefault(request.caller_run, asyncio.Lock())
             async with lock:
                 return await self._request(request)
-        if request.action in {"continue", "cancel_run", "pause_run", "supplement", "upgrade_model"}:
+        if request.action in {
+            "continue",
+            "cancel_run",
+            "pause_run",
+            "supplement",
+            "upgrade_model",
+            "repair_resources",
+        }:
             lock = self.run_locks.setdefault(request.arguments["run_id"], asyncio.Lock())
             async with lock:
                 return await self._request(request)
@@ -471,6 +478,10 @@ class TasksPlugin:
             raise ValueError(
                 "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
             )
+        if a == "repair_resources":
+            from .resources import repair_resources
+
+            return repair_resources(self, args)
         if a in {"reschedule_self", "complete_self"}:
             return self.self_schedule.request(args, caller, complete=a == "complete_self")
         if a == "upgrade_model":

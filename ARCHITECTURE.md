@@ -120,6 +120,14 @@ query; association must match its producer source. A voice-channel label is not
 a physical playout receipt. Presentation does not alter delivery, read state,
 speech policy or task scheduling.
 
+The notification owner enriches each bounded Web history/SSE page with existing
+source-scoped group identity; no message migration or extra browser polling is needed.
+Adjacent reports with the same group and execution share a collapsed progress card.
+An intervening message or different execution starts a new card. Counts describe only
+loaded reports, never completed files; important reports remain visible in the summary.
+Original reports, attachments, ordering, task links and copy content remain available.
+Missing associations leave reports separate instead of guessing from titles or time.
+
 Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.
 
 Live native voice and task inference have distinct context windows even on one provider thread. The conversation owner explicitly transfers confirmed voice messages through the provider's context-only import method, and Web messages/results through its live context adapter. A local playback gate enforces silent Web replies because the experimental native interface may generate audio even for assistant-role context updates. Physical voice user turns restore playback. Background task delivery is client-managed so Web tasks do not acquire automatic spoken results. Temporary sync failures are visible; context sync never invokes another task.
@@ -483,6 +491,17 @@ It reuses tasks for tracking plans, notifications for delivery and the standard 
 reporter for observations. PanSou, account-scoped Aliyun/Quark and OpenList remain separate adapters; the
 kernel only adds `MediaRequest`. Explicit account aliases bind targets and credentials;
 capability discovery reports per-account actions and rejects unsupported operations.
+Mounted-file management has a separate configurable `file_backend`: native adapters
+or the reusable OpenList filesystem port. OpenList path references never masquerade as
+cloud IDs; its plans and downloads reuse media's durable queue, grants and verification.
+Native share acquisition remains independent. New mounted storages can bind the
+OpenList backend without copying cloud credentials. Missing upstream hashes and unsafe
+recycle semantics stay explicit capability limits; there is no automatic backend fallback.
+Confirmed cloud changes atomically mark affected directories in each media operation's
+`openlist_sync` receipt. A lifecycle-owned worker coalesces bounded refreshes and retries
+only reads; cache synchronization never changes cloud-operation success or replays writes.
+Native folder IDs resolve below the configured cloud root into the explicit OpenList mount
+mapping. Move refreshes both parents; partial batches retain their completed-step refreshes.
 Aliyun auth uses bounded owned SDK subprocesses; Quark uses bounded HTTP with private
 Cookie rotation. Async provider copy receipts are durably stored before observation;
 one credential lease/lock owns refresh and atomic replacement. Credentials stay private,
@@ -501,6 +520,15 @@ Submitted/unknown writes reconcile on restart instead of replay. Background writ
 require an active task and its explicit `media:TARGET` resource; interactive login stays
 in the main conversation. Cloud completion, OpenList availability and physical playback
 are different evidence. See the [media plugin](src/assistant_runtime/plugins/media/README.md).
+Transfer completion requires a fresh provider-neutral file identity/parent/metadata
+readback. `cloud_verification` and mounted-path visibility are separate timed receipts;
+OpenList paths are explicit mappings, never inferred from cloud ancestry. Revalidation
+does not replay copy, and unverified paths cannot be published as verified locations.
+Capability discovery supplies exact target/account/provider resource bindings before
+delegation. The tasks owner exposes revision-checked, foreground-only correction of a
+stopped run's resources, with a persisted before/after receipt and no automatic replay.
+Internal binding errors do not require users to repeat existing semantic authorization;
+background tasks cannot promote themselves or cross parent scope.
 
 Public discovery also stays in media: bounded explicit title/alias fan-out through
 PanSou, platform/share identity normalization, immutable pages, durable bounded search

@@ -1000,6 +1000,16 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
                 client.invoke.await_args.args[0],
                 TaskRequest("supplement", {"run_id": "r", "text": "new instructions"}, "parent-run"),
             )
+            repair = {
+                "run_id": "r",
+                "revision": 7,
+                "resources": ["media:quark_series"],
+                "reason": "User requested Quark transfer",
+            }
+            await mcp.call_tool("repair_task_run_resources", repair)
+            self.assertEqual(
+                client.invoke.await_args.args[0], TaskRequest("repair_resources", repair, "parent-run")
+            )
 
     async def test_model_catalog_rejects_unsupported_selection(self):
         client = SimpleNamespace(
@@ -1342,6 +1352,113 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.provider_update(run["id"], "completed")
         self.assertFalse(self.plugin.provider_update(run["id"], None, attachments=[]))
         self.assertEqual(self.plugin.repo.run(run["id"])["data"]["attachments"], [ref])
+
+    async def test_foreground_resource_repair_is_scoped_persistent_and_not_execution(self):
+        from assistant_runtime.plugins.media.plugin import MediaPlugin
+        from assistant_runtime.plugins.tasks.repository import TaskRepository
+
+        task = await self.create(resources=["media:series"], auto_archive=False)
+        run = self.plugin.repo.enqueue(task, "repair", "paused")
+        other = self.plugin.repo.enqueue(task, "unrelated", "paused")
+        args = {
+            "run_id": run["id"],
+            "revision": run["revision"],
+            "resources": ["media:quark_series"],
+            "reason": "User requested Quark series transfer; creation bound the Aliyun target by mistake.",
+        }
+        with self.assertRaisesRegex(ValueError, "general task management"):
+            await self.plugin.request(TaskRequest("repair_resources", args, run["id"]))
+        repaired = await self.plugin.request(TaskRequest("repair_resources", args))
+        self.assertEqual(repaired["state"], "paused")
+        self.assertEqual(repaired["data"]["spec"]["resources"], ["media:quark_series"])
+        self.assertEqual(self.plugin.repo.definition(task["id"])["spec"]["resources"], ["media:series"])
+        self.assertEqual(self.plugin.repo.run(other["id"])["data"]["spec"]["resources"], ["media:series"])
+        self.executor.launch.assert_not_awaited()
+        self.executor.supplement.assert_not_awaited()
+        with self.assertRaisesRegex(ValueError, "latest revision"):
+            await self.plugin.request(TaskRequest("repair_resources", args))
+        restored = TaskRepository(self.store.db).run(run["id"])
+        self.assertEqual(restored["data"]["resource_repairs"][0]["before"], ["media:series"])
+        trace = await self.plugin.request(TaskRequest("trace", {"run_id": run["id"]}))
+        self.assertEqual(trace["resource_repairs"], restored["data"]["resource_repairs"])
+        same = await self.plugin.request(
+            TaskRequest("repair_resources", {**args, "revision": repaired["revision"]})
+        )
+        self.assertEqual(same["revision"], repaired["revision"])
+        await self.plugin.request(TaskRequest("continue", {"run_id": run["id"], "text": "Reconcile first"}))
+        self.assertEqual(self.plugin.repo.run(run["id"])["data"]["spec"]["resources"], ["media:quark_series"])
+        self.plugin.repo.update_run(run["id"], "running")
+        media = MediaPlugin(self.host)
+        self.assertEqual(await media.authorize(run["id"], "quark_series"), "task:" + task["id"])
+        with self.assertRaisesRegex(ValueError, "media:series"):
+            await media.authorize(run["id"], "series")
+
+    async def test_resource_repair_rejects_unsafe_boundaries_and_invalid_scope(self):
+        task = await self.create(auto_archive=False)
+        run = self.plugin.repo.enqueue(task, "boundary", "paused")
+
+        async def repair(**values):
+            current = self.plugin.repo.run(run["id"])
+            return await self.plugin.request(
+                TaskRequest(
+                    "repair_resources",
+                    {
+                        "run_id": run["id"],
+                        "revision": current["revision"],
+                        "resources": ["media:quark_series"],
+                        "reason": "Existing user request",
+                        **values,
+                    },
+                )
+            )
+
+        for state in ("running", "dispatching", "unknown", "completed", "failed", "canceled"):
+            self.plugin.repo.update_run(run["id"], state)
+            with self.assertRaisesRegex(ValueError, "Pause"):
+                await repair()
+        self.plugin.repo.update_run(run["id"], "waiting_user", turn_active=True)
+        with self.assertRaisesRegex(ValueError, "Pause"):
+            await repair()
+        self.plugin.repo.update_run(run["id"], "paused", turn_active=False)
+        for collection in (self.plugin.launching, self.plugin.upgrading, self.plugin.falling_back):
+            collection.add(run["id"])
+            with self.assertRaisesRegex(ValueError, "Pause"):
+                await repair()
+            collection.remove(run["id"])
+        for resources in ([""], ["x", "x"], [" x"], [1], "all", list(map(str, range(17)))):
+            with self.assertRaisesRegex(ValueError, "bounded unique"):
+                await repair(resources=resources)
+        with self.assertRaisesRegex(ValueError, "bounded unique"):
+            await repair(reason=" ")
+        current = self.plugin.repo.run(run["id"])
+        self.plugin.repo.update_run(run["id"], spec={**current["data"]["spec"], "parent_id": "parent"})
+        with self.assertRaisesRegex(ValueError, "parent delegation"):
+            await repair()
+        self.plugin.repo.update_run(run["id"], spec=current["data"]["spec"])
+        self.plugin.repo.update_definition(task["id"], state="archived")
+        with self.assertRaisesRegex(ValueError, "Task has ended"):
+            await repair()
+
+    async def test_resource_repair_preserves_exclusive_locks(self):
+        task = await self.create(auto_archive=False)
+        run = self.plugin.repo.enqueue(task, "repair-lock", "waiting_user")
+        owner = await self.create(resources=["media:quark_series"], auto_archive=False)
+        other = self.plugin.repo.enqueue(owner, "owner", "unknown")
+        args = {
+            "run_id": run["id"],
+            "revision": run["revision"],
+            "resources": ["media:quark_series"],
+            "reason": "User requested Quark",
+        }
+        for state in ("unknown", "running", "dispatching", "waiting_user"):
+            self.plugin.repo.update_run(other["id"], state)
+            with self.assertRaisesRegex(ValueError, "resource is busy"):
+                await self.plugin.request(TaskRequest("repair_resources", args))
+            self.assertEqual(self.plugin.repo.run(run["id"])["data"]["spec"]["resources"], [])
+        self.plugin.repo.update_run(other["id"], "completed")
+        repaired = await self.plugin.request(TaskRequest("repair_resources", args))
+        self.assertEqual(repaired["state"], "waiting_user")
+        self.assertEqual(repaired["data"]["spec"]["resources"], ["media:quark_series"])
 
     async def test_one_shot_native_goal_keeps_media_authority_between_turns(self):
         from assistant_runtime.plugins.media.plugin import MediaPlugin

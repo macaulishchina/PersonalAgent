@@ -9,6 +9,9 @@ from .providers import Providers, CAPABILITIES
 from .errors import MediaError
 from .downloads import Downloads
 from .openlist import OpenList
+from .openlist_sync import OpenListSync
+from .openlist_library import OpenListLibrary
+from .openlist_files import ACTIONS as OPENLIST_ACTIONS
 from .repository import MediaRepository, TERMINAL
 from .search import PanSou, share_id, share_provider, extraction_code
 from .search_history import SearchHistory
@@ -16,6 +19,7 @@ from .search_candidates import DISCOVERY_PLATFORMS
 from .settings import MediaSettings, identifier
 from .library import Library, filename
 from .batches import Batches
+from .verification import cloud_binding, readback
 
 
 class MediaPlugin:
@@ -57,6 +61,7 @@ class MediaPlugin:
         self.openlist = OpenList(
             self.session, self.settings.openlist_url, self.root / "credentials" / "openlist.json"
         )
+        self.openlist_sync = OpenListSync(self)
         self.reporter = context.event_reporter()
         context.own(self.reporter.close)
         self.repo.recover()
@@ -65,6 +70,7 @@ class MediaPlugin:
         context.register(MediaRequest, self.request)
         context.spawn(self.worker(), "acquisitions")
         context.spawn(self.library.worker(), "library")
+        context.spawn(self.openlist_sync.worker(), "openlist-sync")
         context.spawn(self.batches.worker(), "batches")
         self.downloads = Downloads(self)
         context.spawn(self.downloads.worker(), "downloads")
@@ -88,7 +94,15 @@ class MediaPlugin:
         if not run or run["state"] not in {"running", "waiting_user"}:
             raise ValueError("Media tools require an active task execution")
         if target and "media:" + target not in run.get("resources", []):
-            raise ValueError("Background transfer requires the task resource media:" + target)
+            raise ValueError(
+                "Background transfer requires the task resource media:"
+                + target
+                + ". Internal delegation binding mismatch; no write submitted. "
+                "Foreground must verify the original user request and correct the run binding "
+                "with repair_task_run_resources after stopping it, or create a correctly scoped "
+                "follow-up for an ended task. Do not ask the user to supply internal resource keys "
+                "or repeat existing authorization. A background task cannot grant itself access."
+            )
         return "task:" + run["task_id"]
 
     async def request(self, request):
@@ -125,7 +139,7 @@ class MediaPlugin:
                 "version",
                 "parent_file_id",
             },
-            "download": {"request_id", "target", "file_id"},
+            "download": {"request_id", "target", "file_id", "path"},
             "get": {"operation_id"},
             "list": {"before", "limit", "collection"},
             "cancel": {"operation_id"},
@@ -151,7 +165,20 @@ class MediaPlugin:
         if action == "capabilities":
             return {
                 "accounts": {
-                    name: {**definition, "actions": sorted(CAPABILITIES[definition["provider"]])}
+                    name: {
+                        **definition,
+                        "actions": sorted(CAPABILITIES[definition["provider"]]),
+                        "files": {
+                            "backend": self.settings.files_for(name),
+                            "addressing": "relative_path"
+                            if self.settings.files_for(name) == "openlist"
+                            else "file_id",
+                            "actions": list(OPENLIST_ACTIONS)
+                            if self.settings.files_for(name) == "openlist"
+                            else sorted(CAPABILITIES[definition["provider"]]),
+                            "download_requires_upstream_hash": True,
+                        },
+                    }
                     for name, definition in self.settings.accounts.items()
                 },
                 "discovery": {
@@ -162,8 +189,18 @@ class MediaPlugin:
                     "coverage": "partial",
                     "identity_verification_required": True,
                 },
-                "acquisition_providers": sorted({a["provider"] for a in self.settings.accounts.values()}),
+                "acquisition_providers": sorted(
+                    {a["provider"] for a in self.settings.accounts.values() if a["provider"] != "openlist"}
+                ),
                 "targets": list(self.settings.targets),
+                "target_bindings": {
+                    name: {
+                        "account": target["account"],
+                        "provider": self.settings.accounts[target["account"]]["provider"],
+                        "task_resource": "media:" + name,
+                    }
+                    for name, target in self.settings.targets.items()
+                },
                 "cloud": "See each account actions; unsupported actions fail before submission",
                 "limits": {"change_items": 100, "directory_depth": 16, "conflict_scan": 1000},
                 "local": ["list", "mkdir", "rename", "move", "trash", "restore"],
@@ -180,6 +217,14 @@ class MediaPlugin:
                 )
             if args.get("location", "cloud") != "cloud":
                 raise ValueError("Unknown library location")
+            if self.settings.files_for(self.target(args["target"])["account"]) == "openlist":
+                if args.get("folder_id") is not None:
+                    raise ValueError("OpenList browsing uses relative path, not folder_id")
+                return await OpenListLibrary(self.library).listing(
+                    args["target"], args.get("path", ""), args.get("marker", "")
+                )
+            if args.get("path"):
+                raise ValueError("Native browsing uses folder_id, not path")
             return await self.library.listing(args["target"], args.get("folder_id"), args.get("marker", ""))
         if action == "preview":
             await self.authorize(request.caller_run, args["target"])
@@ -218,7 +263,7 @@ class MediaPlugin:
 
             async def status(account):
                 try:
-                    await self.provider.call("status", {"account": account})
+                    await self.account_status(account)
                     error = None
                 except MediaError as exc:
                     error = exc.code
@@ -249,7 +294,9 @@ class MediaPlugin:
                 values[field] = value
             return await self.search_history.inspect(self.provider, values, args.get("refresh", False))
         if action == "files":
-            target, _ = await self.library.destination(args.get("target"), args.get("folder_id"))
+            target_name = args.get("target")
+            self.provider.require(self.target(target_name)["account"], "list")
+            target, _ = await self.library.destination(target_name, args.get("folder_id"))
             marker = args.get("marker", "")
             if not isinstance(marker, str) or len(marker) > 2000:
                 raise ValueError("Invalid media file cursor")
@@ -311,6 +358,10 @@ class MediaPlugin:
             target_id = args.get("target")
             target = dict(self.target(target_id))
             await self.authorize(request.caller_run, target_id)
+            if self.settings.files_for(target["account"]) == "openlist":
+                return await OpenListLibrary(self.library).enqueue_download(args, owner, request.caller_run)
+            if args.get("path") is not None:
+                raise ValueError("Native downloads use file_id, not path")
             self.provider.require(target["account"], "download_url")
             if target_id not in self.settings.local_targets:
                 raise ValueError("No local download destination configured for this target")
@@ -354,10 +405,18 @@ class MediaPlugin:
         if action == "verify":
             if type(args.get("probe", False)) is not bool:
                 raise ValueError("probe must be boolean")
+            self.openlist_sync.retry(item["id"])
             if item["state"] != "completed":
-                return self.repo.public(item)
+                return self.repo.public(self.repo.get(item["id"]))
             if item["data"]["intent"].get("kind") in {"download", "library"}:
-                return self.repo.public(item)
+                return self.repo.public(self.repo.get(item["id"]))
+            try:
+                _, evidence = await readback(
+                    self, item, item["data"]["saved_file_id"], item["data"]["verification"]
+                )
+            except MediaError as exc:
+                evidence = {"state": "unconfirmed", "error": exc.code, "observed_at": time.time()}
+            self.repo.change(item["id"], item["state"], cloud_verification=evidence)
             await self.verify_openlist(item, probe=args.get("probe", False))
             return self.repo.public(self.repo.get(item["id"]))
         await self.authorize(request.caller_run, item["data"]["intent"]["target"])
@@ -399,10 +458,26 @@ class MediaPlugin:
         self.repo.resume_auth(account)
         self.wakeup.set()
 
+    async def account_status(self, account):
+        if self.settings.accounts[account]["provider"] != "openlist":
+            return await self.provider.call("status", {"account": account})
+        targets = [name for name, binding in self.settings.targets.items() if binding["account"] == account]
+        if not targets:
+            raise MediaError("openlist_no_targets")
+        try:
+            for target in targets:
+                await OpenListLibrary(self.library).files(target).listing()
+        except MediaError as exc:
+            if exc.code == "auth_required":
+                self.repo.account_state("auth_required", account=account)
+            raise
+        self.repo.account_state("ready", account=account)
+        return {"state": "ready"}
+
     async def restore_authorization(self):
         for account in self.settings.accounts:
             try:
-                await self.provider.call("status", {"account": account})
+                await self.account_status(account)
             except MediaError:
                 continue
             self.login_completed(account)
@@ -436,11 +511,15 @@ class MediaPlugin:
     async def process(self, item):
         ident, data = item["id"], item["data"]
         intent = data["intent"]
-        if self.target(intent["target"]) != intent.get("root_destination", intent["destination"]):
+        if cloud_binding(self.target(intent["target"])) != cloud_binding(
+            intent.get("root_destination", intent["destination"])
+        ):
             raise MediaError("target_configuration_changed")
         if item["state"] == "queued":
             self.repo.change(ident, "checking")
-            if self.target(intent["target"]) != intent.get("root_destination", intent["destination"]):
+            if cloud_binding(self.target(intent["target"])) != cloud_binding(
+                intent.get("root_destination", intent["destination"])
+            ):
                 raise MediaError("target_configuration_changed")
             if "root_destination" in intent:
                 await self.library.destination(intent["target"], intent["destination"]["folder_id"])
@@ -528,11 +607,13 @@ class MediaPlugin:
     async def complete(self, ident, file):
         item = self.repo.get(ident)
         intent = item["data"]["intent"]
+        actual, evidence = await readback(
+            self, item, file["file_id"], file["verification"], before_rename=True
+        )
         if intent.get("desired_name"):
             self.repo.change(
                 ident, "verifying", organization_file_id=file["file_id"], verification=file["verification"]
             )
-            actual = await self.provider.call("file", {**intent["destination"], "file_id": file["file_id"]})
             if actual["name"] != intent["desired_name"]:
                 if item["data"].get("rename_submitted"):
                     raise MediaError("rename_result_unconfirmed", uncertain=True)
@@ -552,14 +633,17 @@ class MediaPlugin:
                     if not exc.uncertain:
                         self.repo.change(ident, "verifying", rename_submitted=False)
                     raise
-                actual = await self.provider.call(
-                    "file", {**intent["destination"], "file_id": file["file_id"]}
-                )
+                actual, evidence = await readback(self, item, file["file_id"], file["verification"])
                 if actual["name"] != intent["desired_name"]:
                     raise MediaError("rename_result_unconfirmed", uncertain=True)
-            self.repo.change(ident, "verifying", file=actual)
         self.repo.change(
-            ident, "completed", saved_file_id=file["file_id"], verification=file["verification"], error=None
+            ident,
+            "completed",
+            file=actual,
+            saved_file_id=file["file_id"],
+            verification=file["verification"],
+            cloud_verification=evidence,
+            error=None,
         )
         item = self.repo.get(ident)
         known = {
@@ -573,7 +657,8 @@ class MediaPlugin:
             trashed=False,
             **{k: intent[k] for k in ("collection", "season", "episode", "version") if k in intent},
         )
-        await self.verify_openlist(item)
+        # Directory synchronization is persisted with completion and runs independently.
+        # Explicit verification retains the separate file visibility/probe operation.
         # Operation facts and pending notice commit together; a lost publish ack
         # reuses the same notification key instead of executing copy again.
         self.reporter.offer(
@@ -585,9 +670,17 @@ class MediaPlugin:
 
     async def verify_openlist(self, item, probe=False):
         try:
-            result = await self.openlist.verify(
-                item["data"]["intent"]["destination"], item["data"]["file"], probe=probe
-            )
+            intent = item["data"]["intent"]
+            if cloud_binding(self.target(intent["target"])) != cloud_binding(
+                intent.get("root_destination", intent["destination"])
+            ):
+                raise MediaError("target_configuration_changed")
+            # Resolve only below the configured cloud root. OpenList may mount any
+            # ancestor/subdirectory: its independent root is never inferred from cloud names.
+            target, _ = await self.library.destination(intent["target"], intent["destination"]["folder_id"])
+            result = await self.openlist.verify(target, item["data"]["file"], probe=probe)
+        except MediaError as exc:
+            result = {"state": exc.code}
         except Exception:
             # Read integration failure cannot revoke an already verified cloud copy.
             result = {"state": "openlist_unavailable"}

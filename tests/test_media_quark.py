@@ -360,9 +360,10 @@ class MultiAccountTest(unittest.IsolatedAsyncioTestCase):
 
     def add_quark(self):
         q = AsyncCopyProvider()
+        q.folder_id = "quark-folder"
         q.video.pop("content_hash")
         q.video.pop("content_hash_name")
-        self.plugin.settings.accounts["quark"] = {"provider": "quark"}
+        self.plugin.settings.accounts["quark"] = {"provider": "quark", "file_backend": "native"}
         self.plugin.settings.targets["quark_series"] = {
             "account": "quark",
             "folder_id": "quark-folder",
@@ -425,7 +426,7 @@ class MultiAccountTest(unittest.IsolatedAsyncioTestCase):
             },
             "assistant",
         )
-        q.items = [{**q.video, "file_id": "saved"}]
+        q.items = [{**q.video, "file_id": "saved", "parent_file_id": target["folder_id"]}]
         self.plugin.repo.change(
             item["id"], "submitting", file=q.video, submitted=True, copy_receipt={"task_id": "async-copy"}
         )

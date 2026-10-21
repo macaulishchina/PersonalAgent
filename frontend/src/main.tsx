@@ -24,10 +24,16 @@ import "./style.css";
 import { ActivityPanel, type PanelSection } from "./activity";
 import { MessageMedia, ImagePreview, type Attachment } from "./message-media";
 import { ToolResult, toolOutcome, type ToolSummary } from "./tool-result";
-import { isReport, messageChannel, reportTask } from "./message-presentation";
-import { TaskReport } from "./task-report";
+import {
+  isReport,
+  messageChannel,
+  reportTask,
+  groupMessages,
+  type MessageOrigin,
+} from "./message-presentation";
+import { TaskReport, ReportCollection } from "./task-report";
 
-type Message = {
+type Message = MessageOrigin & {
   id: string;
   ordinal: number;
   role: string;
@@ -214,38 +220,6 @@ function messageDetail(message: Message) {
   // Earlier voice-task replies were stored as details despite being plain prose.
   return null;
 }
-function groupMessages(messages: Message[]): MessageGroup[] {
-  const groups: MessageGroup[] = [];
-  for (const message of messages) {
-    const last = groups.at(-1);
-    const sameTurn = message.turn_id && message.turn_id === last?.turn_id;
-    const nextTurn =
-      message.turn_id && last?.turn_id && message.turn_id !== last.turn_id;
-    const nearby =
-      last && Math.abs(message.updated - last.messages.at(-1)!.updated) <= 300;
-    // One reply owns its tools; unrelated turns or long gaps get their own header/copy action.
-    const sameChannel =
-      last && messageChannel(last.messages[0]) === messageChannel(message);
-    if (
-      last?.role === message.role &&
-      sameChannel &&
-      !isReport(message) &&
-      !isReport(last.messages[0]) &&
-      !nextTurn &&
-      (sameTurn || nearby)
-    ) {
-      last.messages.push(message);
-      last.turn_id ||= message.turn_id;
-    } else
-      groups.push({
-        id: message.id,
-        role: message.role,
-        turn_id: message.turn_id,
-        messages: [message],
-      });
-  }
-  return groups;
-}
 function ToolActivity({
   message,
   name,
@@ -423,6 +397,15 @@ function ConversationGroup({
     .map((m) => m.text)
     .filter(Boolean)
     .join("\n\n");
+  const entries = group.messages.map((m) => (
+    <MessageEntry
+      key={m.id}
+      message={m}
+      onOpen={onOpen}
+      onOpenTask={onOpenTask}
+      onResolvedTask={setResolvedTask}
+    />
+  ));
   return (
     <section
       className={"message-group " + group.role}
@@ -495,15 +478,13 @@ function ConversationGroup({
           </button>
         )}
       </div>
-      {group.messages.map((m) => (
-        <MessageEntry
-          key={m.id}
-          message={m}
-          onOpen={onOpen}
-          onOpenTask={onOpenTask}
-          onResolvedTask={setResolvedTask}
-        />
-      ))}
+      {group.messages.length > 1 && isReport(group.messages[0]) ? (
+        <ReportCollection messages={group.messages} onOpenTask={onOpenTask}>
+          {entries}
+        </ReportCollection>
+      ) : (
+        entries
+      )}
     </section>
   );
 }
