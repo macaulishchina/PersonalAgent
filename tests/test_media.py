@@ -103,6 +103,24 @@ class RepositoryTest(unittest.TestCase):
         self.assertEqual(first["data"]["duration_seconds"], second["data"]["duration_seconds"])
         self.assertEqual(self.db.execute("SELECT count(*) FROM media_outbox").fetchone()[0], 1)
 
+    def test_delegated_success_is_progress_but_standalone_success_and_failure_are_reminders(self):
+        import json
+
+        for caller in (None, "run-one"):
+            item = self.repo.create(str(uuid.uuid4()), intent(file_id=str(uuid.uuid4())), "assistant", caller)
+            self.repo.change(item["id"], "completed", file=VIDEO)
+            raw = self.db.execute(
+                "SELECT payload FROM media_outbox WHERE key=?", ("media-complete:" + item["id"],)
+            ).fetchone()[0]
+            self.assertEqual(json.loads(raw)["kind"], "result")
+            self.assertEqual(json.loads(raw).get("report_with_task", False), bool(caller))
+        failure = self.repo.create(str(uuid.uuid4()), intent(file_id="fail"), "assistant", "run-one")
+        self.repo.change(failure["id"], "failed")
+        raw = self.db.execute(
+            "SELECT payload FROM media_outbox WHERE key=?", ("media-attention:" + failure["id"],)
+        ).fetchone()[0]
+        self.assertEqual(json.loads(raw)["kind"], "attention")
+
     def test_auth_notice_is_transition_scoped_and_retry_does_not_duplicate(self):
         self.repo.account_state("auth_required")
         self.repo.account_state("auth_required")

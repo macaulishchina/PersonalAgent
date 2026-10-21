@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, ChevronDown } from "lucide-react";
 import {
+  needsAttention,
   reportContent,
   reportTask,
   type MessageOrigin,
@@ -18,22 +19,23 @@ export function ReportCollection({
   onOpenTask: (id: string) => void;
 }) {
   const latest = messages.at(-1)!;
-  const important = messages.filter((m) => m.report_group?.important);
+  const important = messages.filter(needsAttention);
   const focus = important.at(-1) || latest;
   const title = latest.report_group!.title;
   const summary = reportContent(focus.text).title;
+  const heading =
+    summary === title || summary.startsWith(title + " · ")
+      ? summary
+      : `${title} · ${summary}`;
   const taskId = reportTask(latest);
   return (
     <details className="task-report report-collection">
-      <summary title={`${title} · ${summary}`}>
-        <span className="task-report-title">
-          {title}
-          {summary !== title && ` · ${summary}`}
-        </span>
+      <summary title={heading}>
+        <span className="task-report-title">{heading}</span>
         {important.length > 0 && (
-          <span className="report-important">{important.length} 条重要</span>
+          <span className="report-important">{important.length} 条需关注</span>
         )}
-        <span className="report-count">{messages.length} 条进展</span>
+        <span className="report-count">{messages.length} 条记录</span>
         <ChevronDown size={14} aria-hidden="true" />
       </summary>
       <div className="task-report-content">
@@ -58,6 +60,7 @@ export function TaskReport({
   loadNotice,
   onOpenTask,
   onResolvedTask,
+  showSource = false,
 }: {
   message: MessageOrigin & { text: string };
   renderBody: (text: string) => ReactNode;
@@ -65,8 +68,14 @@ export function TaskReport({
   loadNotice: (id: string) => Promise<Notice>;
   onOpenTask: (id: string) => void;
   onResolvedTask: (id: string) => void;
+  showSource?: boolean;
 }) {
   const { title, body } = reportContent(message.text);
+  const source = showSource ? message.report_group?.title : undefined;
+  const heading =
+    source && title !== source && !title.startsWith(source + " · ")
+      ? `${source} · ${title}`
+      : title;
   const [linkedTask, setLinkedTask] = useState<string | null>(null);
   const taskId = reportTask(message) || linkedTask;
   const [loading, setLoading] = useState(false);
@@ -110,8 +119,17 @@ export function TaskReport({
       className="task-report"
       onToggle={(event) => void resolve(event.currentTarget.open)}
     >
-      <summary title={title}>
-        <span className="task-report-title">{title}</span>
+      <summary title={heading}>
+        <span className="task-report-title">{heading}</span>
+        {message.report_group?.kind && (
+          <span className="notification-type">
+            {
+              { progress: "进展", result: "结果", attention: "提醒" }[
+                message.report_group.kind
+              ]
+            }
+          </span>
+        )}
         <ChevronDown size={14} aria-hidden="true" />
       </summary>
       <div className="task-report-content">

@@ -14,6 +14,14 @@ The image digest is the tested upstream artifact; upgrade deliberately and rever
 Search coverage is partial, source labels are untrusted and no result means only
 that these sources found nothing. Discovery spans supported public platforms; Aliyun and Quark acquisition are implemented; configured accounts determine availability. Refresh does not add providers, accounts or sources.
 
+Media completion facts use the shared notification purpose contract: successful
+operations/batches publish `result`, with `report_with_task=true` when delegated.
+Pending task reports cover those facts as silent progress; event-only monitoring and
+late results still receive result reminders. Standalone successes publish `result`; failed/uncertain operations and expired authentication publish
+`attention`. Progress remains queryable in notification group history without unread
+badges or duplicate chat reports. Task execution results remain owned by tasks; media
+never marks the whole user objective complete from one successful operation.
+
 ## Accounts and provider capabilities
 
 `media.accounts.<alias>.provider` selects `aliyun`, `quark`, or an already mounted `openlist` storage. Each target requires

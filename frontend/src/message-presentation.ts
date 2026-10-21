@@ -8,6 +8,7 @@ export type MessageOrigin = {
   turn_id?: string | null;
   report_group?: {
     id: string;
+    kind?: "progress" | "result" | "attention";
     title: string;
     run_id: string | null;
     task_id: string | null;
@@ -15,32 +16,44 @@ export type MessageOrigin = {
   };
 };
 
-/** Only adjacent, explicitly associated reports may share a card. */
-export function sameReportGroup(a: MessageOrigin, b: MessageOrigin) {
-  const x = a.report_group,
-    y = b.report_group;
+/** Durable association, scoped to its recorded task/run; purpose is a member property. */
+function reportGroupKey(message: MessageOrigin) {
+  const group = message.report_group;
+  return isReport(message) && group?.id
+    ? "report:" + JSON.stringify([group.id, group.task_id, group.run_id])
+    : null;
+}
+
+export function needsAttention(message: MessageOrigin) {
   return Boolean(
-    isReport(a) &&
-    isReport(b) &&
-    x?.id &&
-    y?.id &&
-    x.id === y.id &&
-    x.run_id === y.run_id &&
-    x.task_id === y.task_id,
+    message.report_group?.important ||
+    message.report_group?.kind === "attention",
   );
 }
 
 export function groupMessages<T extends MessageOrigin & { updated: number }>(
   messages: T[],
 ) {
-  const groups: {
+  type Group = {
     id: string;
     role: string;
     turn_id?: string | null;
     messages: T[];
-  }[] = [];
+  };
+  const ordinary: Group[] = [];
+  const reports = new Map<string, Group>();
+  let last: Group | undefined;
   for (const message of messages) {
-    const last = groups.at(-1);
+    const key = reportGroupKey(message);
+    if (key) {
+      const existing = reports.get(key);
+      if (existing) existing.messages.push(message);
+      else
+        reports.set(key, { id: key, role: message.role, messages: [message] });
+      // Removing reports must not accidentally join unrelated conversational replies.
+      last = undefined;
+      continue;
+    }
     const previous = last?.messages.at(-1);
     const sameTurn = message.turn_id && message.turn_id === last?.turn_id;
     const nextTurn =
@@ -55,19 +68,39 @@ export function groupMessages<T extends MessageOrigin & { updated: number }>(
       !isReport(previous) &&
       !nextTurn &&
       (sameTurn || nearby);
-    if (last && previous && (sameReportGroup(previous, message) || sameReply)) {
+    if (last && sameReply) {
       last.messages.push(message);
       last.turn_id ||= message.turn_id;
     } else {
-      groups.push({
+      last = {
         id: message.id,
         role: message.role,
         turn_id: message.turn_id,
         messages: [message],
-      });
+      };
+      ordinary.push(last);
     }
   }
-  return groups;
+  // Only report projections move. Ordinary conversation retains its recorded order.
+  const collections = [...reports.values()];
+  for (const group of collections) {
+    group.messages.sort((a, b) => a.updated - b.updated);
+  }
+  const updated = (group: Group) => group.messages.at(-1)!.updated;
+  collections.sort((a, b) => updated(a) - updated(b));
+  const result: Group[] = [];
+  let index = 0;
+  for (const group of ordinary) {
+    while (
+      index < collections.length &&
+      updated(collections[index]) < group.messages[0].updated
+    ) {
+      result.push(collections[index++]);
+    }
+    result.push(group);
+  }
+  result.push(...collections.slice(index));
+  return result;
 }
 
 export function isReport(message: MessageOrigin) {
@@ -88,6 +121,7 @@ export function reportTask(message: MessageOrigin): string | null {
 
 export function messageChannel(message: MessageOrigin) {
   if (isReport(message)) {
+    if (message.report_group?.kind === "attention") return "attention";
     return reportTask(message) ||
       message.kind === "task" ||
       message.id.startsWith("run:")

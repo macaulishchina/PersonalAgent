@@ -30,6 +30,83 @@ class GroupTest(unittest.IsolatedAsyncioTestCase):
             NotificationRequest("publish", {"event_key": key, "title": "相同标题", "body": "内容", **kw}, run)
         )
 
+    async def test_parent_report_coverage_never_silences_event_only_monitors(self):
+        covered = await self.notice("operation-one", "one", kind="result", report_with_task=True)
+        self.assertEqual(covered["payload"]["kind"], "progress")
+        self.assertFalse(covered["unread"])
+        self.assertEqual(covered["deliveries"], [])
+        with self.repo.db:
+            self.repo.db.execute(
+                "UPDATE job_runs SET data=? WHERE id='two'",
+                (json.dumps({"spec": {"title": "同名任务", "notify_completion": False}}),),
+            )
+        monitor = await self.notice("operation-two", "two", kind="result", report_with_task=True)
+        self.assertEqual(monitor["payload"]["kind"], "result")
+        self.assertTrue(monitor["unread"])
+        standalone = await self.notice("standalone", kind="result", report_with_task=True)
+        self.assertEqual(standalone["payload"]["kind"], "result")
+        repeated = await self.notice("operation-one", "two", kind="result", report_with_task=True)
+        self.assertEqual(repeated["id"], covered["id"])
+        self.assertEqual(repeated["payload"]["kind"], "progress")
+        self.assertEqual(repeated["revision"], 1)
+        quiet = await self.notice("quiet", "two", kind="progress")
+        self.assertFalse(quiet["unread"])
+        with self.repo.db:
+            self.repo.db.execute(
+                "UPDATE job_runs SET data=? WHERE id='one'",
+                (json.dumps({"spec": {"title": "同名任务"}, "completion_delivered": True}),),
+            )
+        late = await self.notice("late-result", "one", kind="result", report_with_task=True)
+        self.assertEqual(late["payload"]["kind"], "result")
+        self.assertTrue(late["unread"])
+        retry = await self.notice("operation-one", "one", kind="result", report_with_task=True)
+        self.assertEqual(retry["id"], covered["id"])
+        self.assertFalse(retry["unread"])
+
+    async def test_result_after_execution_ends_is_not_hidden_by_pending_final_report(self):
+        covered = await self.notice("before-finish", "one", kind="result", report_with_task=True)
+        with self.repo.db:
+            self.repo.db.execute(
+                "UPDATE job_runs SET data=? WHERE id='one'",
+                (
+                    json.dumps(
+                        {
+                            "spec": {"title": "同名任务"},
+                            "finished_at": time.time(),
+                            "completion_delivered": False,
+                        }
+                    ),
+                ),
+            )
+        late = await self.notice("after-finish", "one", kind="result", report_with_task=True)
+        self.assertEqual(late["payload"]["kind"], "result")
+        self.assertTrue(late["unread"])
+        self.assertTrue(late["deliveries"])
+        self.assertEqual(late["group_id"], covered["group_id"])
+        retry = await self.notice("before-finish", "one", kind="result", report_with_task=True)
+        self.assertEqual(retry["id"], covered["id"])
+        self.assertEqual(retry["deliveries"], [])
+        self.assertEqual(retry["revision"], 1)
+
+    async def test_quiet_progress_cannot_bury_result_or_actionable_reminder(self):
+        result = await self.notice("result", "one", kind="result")
+        await self.notice("progress", "one", kind="progress")
+        other = await self.notice("other", "two", kind="progress")
+        groups = self.repo.groups.list(unread=True)
+        self.assertEqual(len(groups["items"]), 1)
+        self.assertEqual(groups["items"][0]["latest"]["id"], result["id"])
+        self.assertEqual(groups["items"][0]["unread"], 1)
+        self.assertEqual(groups["items"][0]["total"], 2)
+        attention = await self.notice("attention", "one", kind="attention", priority="important")
+        await self.notice("late-progress", "one", kind="progress")
+        group = self.repo.groups.list(unread=True)["items"][0]
+        self.assertEqual(group["latest"]["id"], attention["id"])
+        self.assertEqual(self.repo.groups.read(group["id"], group["read_before"])["marked_read"], 2)
+        by_id = {g["id"]: g for g in self.repo.groups.list()["items"]}
+        self.assertEqual(by_id[group["id"]]["latest"]["id"], result["id"])
+        self.assertEqual(by_id[other["group_id"]]["unread"], 0)
+        self.assertEqual(len(self.repo.groups.members(group["id"])["items"]), 4)
+
     async def test_explicit_association_scope_and_cross_run_event_deduplication(self):
         a = await self.notice("first", "one")
         b = await self.notice("second", "one")

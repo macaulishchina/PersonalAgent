@@ -7,6 +7,8 @@ import math
 import re
 import time
 
+from .policy import ALERT_SQL
+
 
 def association(source, key, payload):
     explicit = payload.get("group", {})
@@ -102,6 +104,7 @@ class Groups:
             for message in references[ident]:
                 message["report_group"] = {
                     "id": group_id,
+                    **({"kind": payload["kind"]} if "kind" in payload else {}),
                     "title": title,
                     "run_id": origin.get("run_id") if trusted_task else None,
                     "task_id": trusted_task,
@@ -117,9 +120,9 @@ class Groups:
         stamp, last = page_cursor(scope, before, limit)
         created, ident = last or (0, "")
         rows = self.db.execute(
-            """
+            f"""
             SELECT group_id,max(created) AS latest,count(*) AS total,
-              sum(CASE WHEN read_revision<revision AND (expires IS NULL OR expires>?) THEN 1 ELSE 0 END) AS unread,
+              sum(CASE WHEN {ALERT_SQL} AND read_revision<revision AND (expires IS NULL OR expires>?) THEN 1 ELSE 0 END) AS unread,
               sum(CASE WHEN json_extract(payload,'$.priority')='important' AND (expires IS NULL OR expires>?) THEN 1 ELSE 0 END) AS important
             FROM notifications WHERE created<=? GROUP BY group_id
             HAVING (?=0 OR unread>0) AND (?=0 OR latest<? OR (latest=? AND group_id<?))
@@ -130,8 +133,12 @@ class Groups:
         items = []
         for group, latest, total, count, important in rows[:limit]:
             row = self.db.execute(
-                "SELECT id FROM notifications WHERE group_id=? AND created<=? ORDER BY created DESC,id DESC LIMIT 1",
-                (group, stamp),
+                f"""SELECT id FROM notifications WHERE group_id=? AND created<=?
+                ORDER BY CASE
+                  WHEN {ALERT_SQL} AND read_revision<revision AND (expires IS NULL OR expires>?) THEN 2
+                  WHEN json_extract(payload,'$.kind')='result' THEN 1 ELSE 0 END DESC,
+                  created DESC,id DESC LIMIT 1""",
+                (group, stamp, stamp),
             ).fetchone()
             notice = self.repo.get(row[0])
             items.append(
@@ -189,8 +196,8 @@ class Groups:
             raise ValueError("Group read requires its snapshot timestamp")
         with self.db:
             count = self.db.execute(
-                """UPDATE notifications SET read_revision=revision WHERE group_id=?
-                AND read_revision<revision AND updated<=? AND (expires IS NULL OR expires>?)""",
+                f"""UPDATE notifications SET read_revision=revision WHERE group_id=?
+                AND {ALERT_SQL} AND read_revision<revision AND updated<=? AND (expires IS NULL OR expires>?)""",
                 (group_id, before, time.time()),
             ).rowcount
         return {"marked_read": count, "unread": self.repo.unread_count()}

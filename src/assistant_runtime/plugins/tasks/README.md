@@ -362,6 +362,14 @@ only to managed task areas and saves private evidence under `state/acceptance/ta
 Do not count fake tests as provider/hardware acceptance. No camera or microphone capture
 is needed to validate this plugin.
 
+Task definitions, startup and ordinary progress are available in the task panel and
+tool results, without separate chat cards. The notifications owner is the single task
+feedback delivery path: typed results per execution/completion round and deduplicated
+attention for waiting-user/unknown states. Attention is independent of the routine
+completion preference; changing progress while waiting does not repeat a question.
+Questions use their structured identity, never a match against task titles. The main
+reply can acknowledge delegation without a second automatic “created/enabled” message.
+
 Task results now enter the notifications outbox before completion acknowledgement.
 `notify_completion=false` keeps routine monitoring runs out of the chat/inbox; agents
 explicitly publish new events through notifications MCP. Automatic failure notifications also respect this setting.

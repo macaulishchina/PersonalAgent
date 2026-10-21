@@ -99,7 +99,7 @@ export function NotificationGroup({
           {group.title}
         </span>
         <span className="notification-group-count">
-          {group.total} 条进展
+          {group.total} 条记录
           {group.unread > 0 && (
             <span className="notification-group-unread">
               {" "}
@@ -119,16 +119,16 @@ export function NotificationGroup({
         >
           <ChevronDown size={14} aria-hidden="true" />
           {expanded
-            ? "收起进展"
+            ? "收起记录"
             : group.total > 1
-              ? `展开 ${group.total} 条进展`
+              ? `展开 ${group.total} 条记录`
               : "查看详情"}
         </button>
         {group.unread > 0 && (
           <button
             className="notification-group-toggle"
             disabled={busy}
-            title="标记本组当前所有未读进展；之后的新进展保持未读"
+            title="标记本组当前所有未读提醒；之后的新提醒保持未读"
             aria-label={`本组已读：${group.title}`}
             onClick={onRead}
           >
@@ -150,14 +150,14 @@ export function NotificationGroup({
             {error}
           </p>
         )}
-        {expanded && loading && <p className="task-hint">正在加载进展…</p>}
+        {expanded && loading && <p className="task-hint">正在加载记录…</p>}
         {expanded && (page.before || error) && (
           <button
             className="older"
             disabled={loading}
             onClick={() => void load(page.before)}
           >
-            加载更早进展
+            加载更早记录
           </button>
         )}
       </div>

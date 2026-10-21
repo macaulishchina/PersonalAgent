@@ -779,14 +779,38 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    async def test_running_progress_stays_in_task_but_clarification_is_delivered_once(self):
+        definition = await self.create(notify_completion=False, auto_archive=False)
+        run = self.plugin.repo.enqueue(definition, "feedback-test", "running")
+        self.plugin.repo.update_run(run["id"], progress="working", turn_active=False)
+        await asyncio.sleep(0.65)
+        self.assertEqual(self.chat.history("main"), [])
+        questions = [{"question": "Which device?"}]
+        self.plugin.repo.update_run(run["id"], "waiting_user", questions=questions)
+        for _ in range(30):
+            if self.chat.history("main"):
+                break
+            await asyncio.sleep(0.1)
+        notices = self.host.notifications.repo.list()["items"]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]["payload"]["kind"], "attention")
+        self.assertIn("Which device?", self.chat.history("main")[0]["text"])
+        self.plugin.repo.update_run(run["id"], progress="still waiting")
+        await asyncio.sleep(0.65)
+        self.assertEqual(len(self.host.notifications.repo.list()["items"]), 1)
+        self.assertEqual(len(self.chat.history("main")), 1)
+        self.assertIsNone(self.chat.get("run:" + run["id"]))
+        self.assertEqual(self.plugin.repo.run(run["id"])["data"]["progress"], "still waiting")
+
     async def test_context_and_result_are_silent(self):
         d = await self.create(execution={"kind": "reminder"})
-        self.assertEqual(self.chat.get("job:" + d["id"])["task_id"], d["id"])
+        self.assertIsNone(self.chat.get("job:" + d["id"]))
         self.plugin.due(d["id"])
         r = self.plugin.repo.runs(d["id"])[0]
         await self.plugin.launch(r)
         for _ in range(30):
-            m = self.chat.get("run:" + r["id"])
+            messages = self.chat.history(self.host.conversation.session)
+            m = next((m for m in messages if m.get("task_id") == d["id"]), None)
             if m and self.host.backend.import_voice_messages.await_count:
                 break
             await asyncio.sleep(0.1)
@@ -882,7 +906,9 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("duration_seconds", notice["payload"]["origin"])
         await self.runtime.invoke(NotificationRequest("read", {"id": notice["id"], "revision": 1}))
         before = await self.runtime.invoke(NotificationRequest("get", {"id": notice["id"]}))
-        self.assertEqual(before["execution"], {"kind": "event", "state": "running", "duration_seconds": None})
+        self.assertEqual(
+            before["execution"], {"kind": "attention", "state": "running", "duration_seconds": None}
+        )
         with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=172.45):
             self.plugin.repo.update_run(run["id"], "completed")
         after = await self.runtime.invoke(NotificationRequest("get", {"id": notice["id"]}))

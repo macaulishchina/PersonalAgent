@@ -25,12 +25,6 @@ from .self_schedule import SelfSchedule, policy as schedule_policy, completion_p
 from .fallbacks import ModelFallbacks
 
 
-PLAN_LABELS = {
-    "enabled": "计划已启用",
-    "paused": "后续触发已暂停",
-    "archived": "任务已归档",
-    "terminated": "任务已终止",
-}
 RUN_LABELS = {
     "queued": "等待启动",
     "dispatching": "正在启动",
@@ -49,14 +43,6 @@ RUN_SUMMARIES = {
     "canceled": "本次执行已取消。",
     "missed": "本次计划未启动，已跳过。",
 }
-
-
-def plan_label(definition):
-    if definition["state"] != "enabled":
-        return PLAN_LABELS[definition["state"]]
-    if definition["spec"]["trigger"]["kind"] == "event":
-        return "事件监听已启用"
-    return "定时计划已启用" if definition["next_at"] is not None else "无待触发计划"
 
 
 class TasksPlugin:
@@ -593,7 +579,6 @@ class TasksPlugin:
                 raise ValueError("Task request ID reused with different contents")
             d = self.repo.definition(saved[0])
             self.schedule(d)
-            self.publish_definition(d)
             return d
         if a == "workfiles":
             return {
@@ -738,7 +723,6 @@ class TasksPlugin:
         else:
             raise ValueError("Unknown task operation")
         self.schedule(d)
-        self.publish_definition(d)
         return d
 
     @staticmethod
@@ -751,20 +735,6 @@ class TasksPlugin:
     @staticmethod
     def owner(run):
         return f"tasks/{run['task_id']}/{run['id']}"
-
-    def publish_definition(self, d):
-        if not d["spec"].get("notify_completion", True):
-            return
-        self.host.conversation.store.put(
-            "job:" + d["id"],
-            self.host.conversation.session,
-            source="background",
-            kind="task",
-            status="complete",
-            text=d["spec"]["title"] + " · " + plan_label(d),
-            turn_id="job:" + d["id"],
-            task_id=d["id"],
-        )
 
     async def launch(self, run):
         ident = run["id"]
@@ -880,16 +850,6 @@ class TasksPlugin:
                         "run_" + r["state"],
                         r["id"],
                     )
-                text = (
-                    r["data"]["spec"]["title"]
-                    + " · "
-                    + RUN_LABELS[r["state"]]
-                    + "\n\n"
-                    + r["data"].get("progress", "")
-                )
-                questions = r["data"].get("questions", [])
-                if questions:
-                    text += "\n\n" + "\n".join(q["question"] for q in questions)
                 if r["state"] in TERMINAL:
                     self.host.workfiles.finish(self.owner(r))
                     if not r["data"].get("completion_delivered"):
@@ -899,6 +859,7 @@ class TasksPlugin:
                                     NotificationRequest(
                                         "publish",
                                         {
+                                            "kind": "result",
                                             "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
                                             "title": r["data"]["spec"]["title"]
                                             + " · "
@@ -926,20 +887,32 @@ class TasksPlugin:
                             # Don't acknowledge the run revision until its outbox receipt is durable.
                             # Stable event identity makes retry after a crash safe.
                             continue
-                elif r["data"]["spec"].get("notify_completion", True):
-                    self.host.conversation.store.put(
-                        "run:" + r["id"],
-                        self.host.conversation.session,
-                        source="background",
-                        kind="task",
-                        status="complete",
-                        text=text,
-                        turn_id="run:" + r["id"],
-                        task_id=r["task_id"],
-                        attachments=self.host.conversation.media.resolve(r["data"].get("attachments", []))
-                        if r["data"].get("attachments")
-                        else None,
+                elif r["state"] in {"waiting_user", "unknown"}:
+                    # User participation is distinct from routine completion preferences.
+                    # Same structured request survives retries and progress-only revisions.
+                    questions = r["data"].get("questions", [])
+                    identity = hashlib.sha256(json.dumps(questions, sort_keys=True).encode()).hexdigest()[:24]
+                    body = "\n".join(q["question"] for q in questions) or (
+                        RUN_LABELS[r["state"]] + "。请打开任务查看详情。"
                     )
+                    try:
+                        await self.host.runtime.invoke(
+                            NotificationRequest(
+                                "publish",
+                                {
+                                    "event_key": f"task-attention:{r['id']}:{r['data'].get('completion_round', 0)}:{r['state']}:{identity}",
+                                    "kind": "attention",
+                                    "priority": "important",
+                                    "title": r["data"]["spec"]["title"] + " · " + RUN_LABELS[r["state"]],
+                                    "body": body[:8000],
+                                },
+                                r["id"],
+                            )
+                        )
+                        self.notification_error = None
+                    except Exception as exc:
+                        self.notification_error = str(exc)[:240]
+                        continue
                 with self.repo.db:
                     self.repo.db.execute(
                         "UPDATE job_runs SET delivered=? WHERE id=?", (r["revision"], r["id"])

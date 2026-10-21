@@ -51,6 +51,83 @@ class NotificationsTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_progress_is_durable_silent_and_corrections_do_not_create_unread(self):
+        progress = await self.publish(kind="progress", group_key="work")
+        self.assertFalse(progress["unread"])
+        self.assertEqual(progress["deliveries"], [])
+        self.assertEqual(self.repo.unread_count(), 0)
+        self.assertEqual(self.repo.list(unread=True)["items"], [])
+        self.assertEqual(self.repo.groups.list(unread=True)["items"], [])
+        self.assertEqual(self.repo.groups.list()["items"][0]["total"], 1)
+        for channel in self.plugin.channels:
+            self.assertFalse(await self.plugin.deliver_once(channel, self.plugin.channels[channel]))
+        update = await self.publish(id=progress["id"], revision=1, body="new progress")
+        self.assertEqual(update["payload"]["kind"], "progress")
+        self.assertEqual(update["revision"], 2)
+        self.assertFalse(update["unread"])
+        self.assertEqual(update["deliveries"], [])
+        self.assertEqual(self.repo.get(update["id"])["read_revision"], 0)
+        self.assertEqual(self.repo.read_all(self.repo.list()["read_before"])["marked_read"], 0)
+        self.assertEqual(self.host.conversation.store.history("session-one"), [])
+
+    async def test_progress_promotes_to_attention_once_and_result_updates_same_chat_projection(self):
+        progress = await self.publish(kind="progress")
+        attention = await self.publish(id=progress["id"], revision=1, kind="attention", body="need input")
+        self.assertTrue(attention["unread"])
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        self.repo.mark_read(attention["id"], 2)
+        result = await self.publish(id=attention["id"], revision=2, kind="result", body="verified result")
+        retry = await self.publish(id=attention["id"], revision=2, kind="result", body="verified result")
+        self.assertEqual(retry["revision"], 3)
+        self.assertEqual(retry["id"], progress["id"])
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        history = self.host.conversation.store.history("session-one")
+        self.assertEqual(len(history), 1)
+        self.assertIn("verified result", history[0]["text"])
+        self.assertTrue(result["unread"])
+        with self.assertRaisesRegex(ValueError, "demoted"):
+            await self.publish(id=result["id"], revision=3, kind="progress")
+
+    async def test_invalid_or_interrupting_progress_is_rejected_before_persistence(self):
+        for args in (
+            {"kind": "other"},
+            {"kind": []},
+            {"kind": "progress", "voice": True},
+            {"kind": "progress", "priority": "important"},
+        ):
+            with self.assertRaises(ValueError):
+                await self.publish(**args)
+        self.assertEqual(self.repo.list()["items"], [])
+
+    async def test_pre_type_publication_lost_ack_keeps_original_receipt_after_upgrade(self):
+        payload = self.plugin.validate({"event_key": "stable", "title": "Result", "body": "done"})
+        payload.pop("kind")
+        payload["origin"] = {}
+        original = self.repo.publish("assistant", "stable", payload, ["chat", "context"])
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        self.repo.mark_read(original["id"], 1)
+        retried = await self.publish(event_key="stable", title="Result", body="done", kind="result")
+        self.assertEqual(retried["id"], original["id"])
+        self.assertEqual(retried["fingerprint"], original["fingerprint"])
+        self.assertEqual(retried["revision"], 1)
+        self.assertFalse(retried["unread"])
+        self.assertEqual(
+            next(d for d in retried["deliveries"] if d["channel"] == "chat")["state"], "delivered"
+        )
+        with self.assertRaisesRegex(ValueError, "different content"):
+            await self.publish(event_key="stable", title="Result", body="different", kind="result")
+
+    async def test_progress_restart_does_not_enqueue_delivery_or_invent_read_ack(self):
+        progress = await self.publish(kind="progress")
+        restarted = NotificationsPlugin(self.host)
+        for name, adapter in restarted.channels.items():
+            restarted.repo.recover(name, adapter.replay_safe)
+            self.assertIsNone(restarted.repo.claim(name))
+        result = restarted.repo.get(progress["id"])
+        self.assertFalse(result["unread"])
+        self.assertEqual(result["read_revision"], 0)
+        self.assertEqual(result["revision"], 1)
+
     async def test_read_all_covers_pages_but_preserves_new_and_corrected_notices(self):
         now = time.time()
         with patch("assistant_runtime.plugins.notifications.repository.time.time", return_value=now):
@@ -119,16 +196,59 @@ class NotificationsTest(unittest.IsolatedAsyncioTestCase):
         )
         self.host.conversation.media = SimpleNamespace(resolve=Mock(return_value=resolved))
         payload = {
+            "kind": "result",
             "title": "Task finished",
             "body": "Requested capture",
             "origin": {"task_id": "task-one", "run_id": "run-one"},
         }
-        self.repo.publish("task:task-one", "task-result:run-one:0", payload, ["chat"])
-        self.assertIsNone(self.host.conversation.store.get("run:run-one"))
+        notice = self.repo.publish("task:task-one", "opaque-result-id", payload, ["chat"])
+        message_id = f"notification:{notice['id']}:session-one"
+        self.assertIsNone(self.host.conversation.store.get(message_id))
         await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
-        self.assertEqual(self.host.conversation.store.get("run:run-one")["attachments"], resolved)
-        self.assertEqual(self.host.conversation.store.get("run:run-one")["task_id"], "task-one")
+        self.assertEqual(self.host.conversation.store.get(message_id)["attachments"], resolved)
+        self.assertEqual(self.host.conversation.store.get(message_id)["task_id"], "task-one")
         self.host.conversation.media.resolve.assert_called_once_with(refs)
+
+    async def test_old_delivered_result_is_updated_without_a_second_chat_card(self):
+        payload = {
+            "title": "Result",
+            "body": "same result",
+            "origin": {"task_id": "task-one", "run_id": "run-one"},
+        }
+        notice = self.repo.publish("task:task-one", "task-result:run-one:0", payload, ["chat"])
+        self.host.conversation.store.put(
+            "run:run-one",
+            "session-one",
+            source="notification",
+            kind="notification",
+            text="previous projection",
+            status="complete",
+            turn_id="notification:" + notice["id"],
+            task_id="task-one",
+        )
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        rows = self.host.conversation.store.history("session-one")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "run:run-one")
+        self.assertIn("same result", rows[0]["text"])
+
+    async def test_typed_attention_does_not_borrow_result_attachments_from_event_key(self):
+        self.host.runtime = SimpleNamespace(invoke=AsyncMock())
+        payload = {
+            "kind": "attention",
+            "title": "Check this",
+            "body": "need input",
+            "origin": {"task_id": "task-one", "run_id": "run-one"},
+        }
+        self.repo.publish("task:task-one", "task-result:run-one:0", payload, ["chat"])
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        self.host.runtime.invoke.assert_not_awaited()
+        self.assertEqual(len(self.host.conversation.store.history("session-one")), 1)
+        payload.update(kind="result", report_with_task=True)
+        self.repo.publish("task:task-one", "operation-result", payload, ["chat"])
+        await self.plugin.deliver_once("chat", self.plugin.channels["chat"])
+        self.host.runtime.invoke.assert_not_awaited()
+        self.assertEqual(len(self.host.conversation.store.history("session-one")), 2)
 
     async def test_ordinary_notification_does_not_infer_task_from_title_or_body(self):
         notice = await self.publish(title="任务已完成", body="task_id: made-up")

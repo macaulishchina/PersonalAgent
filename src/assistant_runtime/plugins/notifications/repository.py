@@ -7,6 +7,7 @@ import time
 import uuid
 
 from .groups import Groups, association
+from .policy import ALERT_SQL, kind
 
 
 class Notifications:
@@ -61,7 +62,7 @@ class Notifications:
         )
         item = dict(zip(keys, row))
         item["payload"] = json.loads(item["payload"])
-        item["unread"] = item["read_revision"] < item["revision"]
+        item["unread"] = kind(item["payload"]) != "progress" and item["read_revision"] < item["revision"]
         item["expired"] = item["expires"] is not None and item["expires"] <= time.time()
         item["deliveries"] = [
             dict(zip(("channel", "state", "attempts", "error"), r))
@@ -74,7 +75,7 @@ class Notifications:
 
     def unread_count(self):
         return self.db.execute(
-            "SELECT count(*) FROM notifications WHERE read_revision<revision AND (expires IS NULL OR expires>?)",
+            f"SELECT count(*) FROM notifications WHERE {ALERT_SQL} AND read_revision<revision AND (expires IS NULL OR expires>?)",
             (time.time(),),
         ).fetchone()[0]
 
@@ -84,7 +85,7 @@ class Notifications:
         read_before = time.time()
         cursor = self.get(before) if before else None
         rows = self.db.execute(
-            """SELECT id FROM notifications WHERE (?=0 OR (read_revision<revision AND (expires IS NULL OR expires>?)))
+            f"""SELECT id FROM notifications WHERE (?=0 OR ({ALERT_SQL} AND read_revision<revision AND (expires IS NULL OR expires>?)))
             AND (? IS NULL OR created<? OR (created=? AND id<?))
             ORDER BY created DESC,id DESC LIMIT ?""",
             (
@@ -170,8 +171,8 @@ class Notifications:
             raise ValueError("read_all requires the inbox snapshot timestamp")
         with self.db:
             count = self.db.execute(
-                """UPDATE notifications SET read_revision=revision
-                WHERE read_revision<revision AND updated<=?
+                f"""UPDATE notifications SET read_revision=revision
+                WHERE {ALERT_SQL} AND read_revision<revision AND updated<=?
                 AND (expires IS NULL OR expires>?)""",
                 (before, time.time()),
             ).rowcount

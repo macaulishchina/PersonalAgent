@@ -161,6 +161,8 @@ class Batches:
                     "media-batch:" + ident + ":" + state,
                     "媒体批次结果",
                     f"{completed}/{len(data['items'])} 项完成。状态：{label}。批次：{ident}",
+                    kind="result" if state == "completed" else "attention",
+                    report_with_task=state == "completed" and bool(data.get("caller_run")),
                 )
                 data["notified_states"] = [*data.get("notified_states", []), state]
                 self.db.execute("UPDATE media_batches SET data=? WHERE id=?", (canonical(data), ident))

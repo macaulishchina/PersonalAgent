@@ -27,6 +27,7 @@ import { ToolResult, toolOutcome, type ToolSummary } from "./tool-result";
 import {
   isReport,
   messageChannel,
+  needsAttention,
   reportTask,
   groupMessages,
   type MessageOrigin,
@@ -258,11 +259,13 @@ function MessageEntry({
   onOpen,
   onOpenTask,
   onResolvedTask,
+  showReportSource = false,
 }: {
   message: Message;
   onOpen: (url: string) => void;
   onOpenTask: (id: string) => void;
   onResolvedTask: (id: string) => void;
+  showReportSource?: boolean;
 }) {
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
@@ -287,6 +290,7 @@ function MessageEntry({
       {isReport(m) ? (
         <TaskReport
           message={m}
+          showSource={showReportSource}
           onOpenTask={onOpenTask}
           onResolvedTask={onResolvedTask}
           loadNotice={(id) =>
@@ -386,12 +390,16 @@ function ConversationGroup({
 }) {
   const user = group.role === "user";
   const [resolvedTask, setResolvedTask] = useState<string | null>(null);
-  const channel =
-    resolvedTask || reportTask(group.messages[0])
+  const latest = isReport(group.messages[0])
+    ? group.messages.at(-1)!
+    : group.messages[0];
+  const channel = group.messages.some(needsAttention)
+    ? "attention"
+    : !latest.report_group?.kind && (resolvedTask || reportTask(latest))
       ? "report"
-      : messageChannel(group.messages[0]);
+      : messageChannel(latest);
   const speaker = user ? "你" : name;
-  const date = new Date(group.messages[0].updated * 1000);
+  const date = new Date(latest.updated * 1000);
   const text = group.messages
     .filter((m) => !messageDetail(m))
     .map((m) => m.text)
@@ -404,6 +412,7 @@ function ConversationGroup({
       onOpen={onOpen}
       onOpenTask={onOpenTask}
       onResolvedTask={setResolvedTask}
+      showReportSource={group.messages.length === 1}
     />
   ));
   return (
@@ -425,7 +434,7 @@ function ConversationGroup({
               <AudioLines size={12} />
             ) : channel === "report" ? (
               <ListTodo size={12} />
-            ) : channel === "notification" ? (
+            ) : channel === "notification" || channel === "attention" ? (
               <Bell size={12} />
             ) : (
               <MessageSquare size={12} />
@@ -436,6 +445,7 @@ function ConversationGroup({
                 text: "文字",
                 report: "任务报告",
                 notification: "通知",
+                attention: "需要关注",
                 legacy: "历史记录",
               }[channel]
             }

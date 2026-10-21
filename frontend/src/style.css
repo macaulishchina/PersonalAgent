@@ -1721,3 +1721,13 @@ p {
 .notification-body {
   overflow-wrap: anywhere;
 }
+
+.notification-type {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 8px;
+}

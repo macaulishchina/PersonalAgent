@@ -66,10 +66,21 @@ class MediaRepository:
                 )
         return self.account(account)
 
-    def enqueue(self, key, title, body):
+    def enqueue(self, key, title, body, *, kind="attention", report_with_task=False):
         self.db.execute(
             "INSERT OR IGNORE INTO media_outbox VALUES(?,?)",
-            (key, canonical({"event_key": key, "title": title, "body": body})),
+            (
+                key,
+                canonical(
+                    {
+                        "event_key": key,
+                        "title": title,
+                        "body": body,
+                        "kind": kind,
+                        **({"report_with_task": True} if report_with_task else {}),
+                    }
+                ),
+            ),
         )
 
     def create(self, request_id, intent, owner, caller_run=None, *, initial=None):
@@ -181,6 +192,8 @@ class MediaRepository:
                     + (" 已下载到本地并通过完整校验。耗时 " if local else " 已在目标网盘核验。耗时 ")
                     + str(data["duration_seconds"])
                     + " 秒。",
+                    kind="result",
+                    report_with_task=bool(data.get("caller_run")),
                 )
             elif state in {"failed", "uncertain"} and state != item["state"] and not data.get("batch_id"):
                 self.enqueue(

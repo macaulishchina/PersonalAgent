@@ -8,6 +8,7 @@ from ...kernel.contracts import NotificationRequest, NotificationLink, TaskReque
 from .settings import NotificationSettings
 from .repository import Notifications
 from .groups import association
+from . import policy
 from .channels import ChatChannel, ContextChannel, VoiceChannel, Deferred
 
 
@@ -56,6 +57,9 @@ class NotificationsPlugin:
                 "task_id": row[0],
                 "run_id": caller,
                 "task_title": run_data["spec"]["title"],
+                "reports_completion": run_data["spec"].get("notify_completion", True)
+                and run_data.get("finished_at") is None
+                and not run_data.get("completion_delivered", False),
                 **(
                     {"duration_seconds": run_data["duration_seconds"]}
                     if run_data.get("finished_at") is not None
@@ -78,6 +82,8 @@ class NotificationsPlugin:
             "revision",
             "group_key",
             "group_title",
+            "kind",
+            "report_with_task",
         }
         if set(args) - allowed:
             raise ValueError("Unknown notification fields")
@@ -109,17 +115,31 @@ class NotificationsPlugin:
             raise ValueError("Invalid notification priority/voice")
         if args.get("voice") and "voice" not in self.channels:
             raise ValueError("Voice notifications disabled")
+        kind = args.get("kind", "attention")
+        if not isinstance(kind, str) or kind not in policy.KINDS:
+            raise ValueError("Notification kind must be progress, result or attention")
+        if kind == "progress" and (args.get("voice") or args.get("priority") == "important"):
+            raise ValueError("Progress is silent; use attention for an important or spoken update")
+        covered = args.get("report_with_task", False)
+        if type(covered) is not bool or (
+            covered and (kind != "result" or args.get("voice") or args.get("priority") == "important")
+        ):
+            raise ValueError("report_with_task requires a normal, unspoken result")
         self.group_fields(args)
         return {
-            key: args.get(key, default)
-            for key, default in (
-                ("title", ""),
-                ("body", ""),
-                ("url", ""),
-                ("priority", "normal"),
-                ("voice", False),
-                ("expires_at", None),
-            )
+            **({"report_with_task": True} if covered else {}),
+            **{
+                key: args.get(key, default)
+                for key, default in (
+                    ("kind", "attention"),
+                    ("title", ""),
+                    ("body", ""),
+                    ("url", ""),
+                    ("priority", "normal"),
+                    ("voice", False),
+                    ("expires_at", None),
+                )
+            },
         }
 
     @staticmethod
@@ -175,7 +195,7 @@ class NotificationsPlugin:
             if run and run["task_id"] != task_id:
                 run = None
             item["execution"] = {
-                "kind": "result" if item["event_key"].startswith("task-result:") else "event",
+                "kind": policy.kind(item["payload"]),
                 "state": run["state"] if run else None,
                 "duration_seconds": run["duration_seconds"] if run else origin.get("duration_seconds"),
             }
@@ -208,13 +228,37 @@ class NotificationsPlugin:
                     old = self.repo.get(row[0])
             if old and args.get("id") and not request.caller_run:
                 source = old["source"]
+            if payload.get("report_with_task"):
+                if old and old["payload"].get("report_with_task"):
+                    payload["kind"] = old["payload"]["kind"]
+                elif request.caller_run and origin.get("reports_completion"):
+                    payload["kind"] = "progress"
+
             if old:
+                if "report_with_task" not in args and old["payload"].get("report_with_task"):
+                    payload["report_with_task"] = True
+                if action == "publish" and not args.get("id") and "kind" not in old["payload"]:
+                    # A pre-type publication may have committed just before an upgrade.
+                    # Retrying that event preserves its receipt; purpose changes require update.
+                    payload.pop("kind", None)
+                    payload.pop("report_with_task", None)
+                if "kind" not in args:
+                    if "kind" in old["payload"]:
+                        payload["kind"] = old["payload"]["kind"]
+                    else:
+                        payload.pop("kind", None)
+                if policy.kind(payload) == "progress" and policy.kind(old["payload"]) != "progress":
+                    raise ValueError("A delivered result/attention cannot be demoted to silent progress")
+                if policy.kind(payload) == "progress" and (
+                    payload["voice"] or payload["priority"] == "important"
+                ):
+                    raise ValueError("Progress is silent; use attention for an important or spoken update")
                 if action == "update" and group and group != old["payload"].get("group"):
                     raise ValueError("Notification association cannot be changed")
                 if not group and old["payload"].get("group"):
                     payload["group"] = old["payload"]["group"]
                 payload["origin"] = old["payload"].get("origin", {})
-            channels = list(self.settings.channels) + (["voice"] if payload["voice"] else [])
+            channels = policy.channels(payload, self.settings.channels)
             return self.repo.publish(
                 source,
                 args.get("event_key", ""),

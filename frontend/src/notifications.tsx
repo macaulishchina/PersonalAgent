@@ -20,6 +20,7 @@ export type Notice = {
   expired: boolean;
   created: number;
   payload: {
+    kind?: "progress" | "result" | "attention";
     title: string;
     body: string;
     url: string;
@@ -27,7 +28,7 @@ export type Notice = {
     origin?: { task_title?: string; duration_seconds?: number };
   };
   execution?: {
-    kind: "result" | "event";
+    kind: "progress" | "result" | "attention";
     state: string | null;
     duration_seconds?: number | null;
   };
@@ -256,6 +257,13 @@ export function NotificationPanel({
             重要
           </span>
         )}
+        <span className="notification-type">
+          {item.payload.kind === "progress"
+            ? "进展"
+            : item.payload.kind === "result"
+              ? "结果"
+              : "提醒"}
+        </span>
         {item.payload.title}
       </h3>
       <p
@@ -276,11 +284,11 @@ export function NotificationPanel({
       )}
       {item.payload.origin?.task_title && (
         <p className="task-hint">
-          {item.execution?.kind === "event"
-            ? "事件提醒"
+          {item.execution?.kind === "progress"
+            ? "任务进展"
             : item.execution?.kind === "result"
               ? "运行结果"
-              : "来自"}
+              : "提醒来自"}
           ：{item.payload.origin.task_title}
           {typeof (
             item.execution?.duration_seconds ??

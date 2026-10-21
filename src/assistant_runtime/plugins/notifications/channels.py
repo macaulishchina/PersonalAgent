@@ -4,6 +4,7 @@ from typing import Protocol
 import time
 
 from ...kernel.contracts import TaskRequest
+from .policy import kind
 
 
 class Deferred(Exception):
@@ -33,13 +34,26 @@ class ChatChannel:
     async def deliver(self, item):
         chat = self.host.conversation
         origin = item["payload"].get("origin", {})
-        run_id = origin.get("run_id") if item["event_key"].startswith("task-result:") else None
-        ident = "run:" + run_id if run_id else f"notification:{item['id']}:{chat.session}"
-        previous = chat.store.db.execute(
-            "SELECT session_id FROM chat_messages WHERE id=?", (ident,)
-        ).fetchone()
-        if previous and previous[0] != chat.session:
-            ident = f"notification:{item['id']}:{chat.session}"
+        task_id = origin.get("task_id")
+        trusted = isinstance(task_id, str) and item["source"] == "task:" + task_id
+        result = kind(item["payload"]) == "result" or (
+            "kind" not in item["payload"] and item["event_key"].startswith("task-result:")
+        )  # Preserve registered attachments on pending pre-type execution receipts.
+        run_id = (
+            origin.get("run_id")
+            if trusted and result and not item["payload"].get("report_with_task")
+            else None
+        )
+        ident = f"notification:{item['id']}:{chat.session}"
+        # Preserve a previously delivered projection's identity across upgrades.
+        # Only the exact notification reference may reuse an old run card.
+        previous = chat.store.get("run:" + origin["run_id"]) if trusted and origin.get("run_id") else None
+        if (
+            previous
+            and previous["session_id"] == chat.session
+            and previous["turn_id"] == "notification:" + item["id"]
+        ):
+            ident = previous["id"]
         attachments = None
         if run_id:
             try:

@@ -120,12 +120,26 @@ query; association must match its producer source. A voice-channel label is not
 a physical playout receipt. Presentation does not alter delivery, read state,
 speech policy or task scheduling.
 
+Notification purpose is producer-declared (`progress`, `result`, `attention`) and
+independent of source/group identity. Progress is persisted for inspection without
+unread reminders or chat/context/voice deliveries. Results and attention use the
+existing durable channel outbox. Producers may mark normal results `report_with_task`:
+the owner defers them to a pending execution report, preserving standalone, event-only
+and late result reminders. Retry keeps the first publication's resolved purpose. Task lifecycle state remains in tasks; definitions
+and ordinary progress no longer write parallel chat messages. Tasks publishes results
+and user-participation/unknown-state alerts through notifications only. Result report
+identity is execution/completion-round scoped; event corrections keep their notification
+identity. Chat is a session-scoped projection of that canonical notice, including
+registered task result attachments, not another report producer. Historical messages
+are retained without replay or text-based regrouping.
+
 The notification owner enriches each bounded Web history/SSE page with existing
 source-scoped group identity; no message migration or extra browser polling is needed.
-Adjacent reports with the same group and execution share a collapsed progress card.
-An intervening message or different execution starts a new card. Counts describe only
-loaded reports, never completed files; important reports remain visible in the summary.
-Original reports, attachments, ordering, task links and copy content remain available.
+Reports with the same group and execution share a collapsed card across intervening
+messages. Purpose stays on each member; attention remains visible in the summary.
+Collections follow their latest member update, while ordinary dialogue keeps its recorded
+relative order. Different executions remain separate. Counts describe only loaded reports,
+never completed files. Original reports, attachments, task links and copy content remain available.
 Missing associations leave reports separate instead of guessing from titles or time.
 
 Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.

@@ -148,7 +148,6 @@ class SelfSchedule:
                 raise ValueError("Schedule request ID reused with different contents")
             current = self.repo.definition(run["task_id"])
             self.plugin.schedule(current)
-            self.plugin.publish_definition(current)
             return json.loads(prior[1])  # Confirmed receipt, never a second mutation.
         if run["state"] != "running" or not run["data"].get("turn_active") or not run["data"].get("turn_id"):
             raise ValueError("Self scheduling requires a running provider turn")
@@ -217,5 +216,4 @@ class SelfSchedule:
             on_update=lambda _: self.record(caller, args["request_id"], fingerprint, receipt),
         )
         self.plugin.schedule(saved)
-        self.plugin.publish_definition(saved)
         return receipt
