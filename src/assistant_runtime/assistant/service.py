@@ -68,6 +68,9 @@ class AssistantService:
         self.dialogue = Dialogue(config.voice_follow_up_seconds)
         self.reconnect_task = None
         self.voice_decision_task = None
+        from ..interaction.voice_control import VoiceControl
+
+        self.voice_control = VoiceControl(self)
         from assistant_runtime.bootstrap import compose
 
         self.runtime = compose(self)
@@ -399,12 +402,7 @@ class AssistantService:
                         if cmd:
                             await self.control(cmd)
                         elif (
-                            self.config.decisions.get("external_data_consent", False)
-                            and len(text) <= 80
-                            and any(
-                                word in text
-                                for word in ("结束", "退下", "安静", "停", "别说", "取消", "不用", "陪", "聊")
-                            )
+                            self.config.decisions.get("external_data_consent", False) and 0 < len(text) <= 800
                         ):
                             # No new external route is enabled before consent.
                             pending = getattr(self, "voice_decision_task", None)
@@ -415,7 +413,9 @@ class AssistantService:
                                     text,
                                     event["epoch"],
                                     self.input_count,
-                                    getattr(self.backend, "active_turn", None),
+                                    self.voice_control.capture_turn()
+                                    if hasattr(self, "voice_control")
+                                    else None,
                                     getattr(
                                         getattr(self, "conversation", None),
                                         "voice_revision",
@@ -448,7 +448,7 @@ class AssistantService:
 
     async def _voice_decision(self, text, epoch, revision, turn, focus):
         from ..kernel.contracts import DecisionQuery
-        from ..kernel.decisions import decide
+        from ..kernel.decisions import decide, report_decision
 
         result = await decide(
             self.runtime,
@@ -456,27 +456,61 @@ class AssistantService:
                 "voice_intent",
                 f"voice-control:{self.backend.session_id}:{epoch}:{revision}",
                 {"utterance": text, "execution_active": bool(turn)},
+                summary=text[:800],
+                input_version=f"{epoch}:{revision}:{focus}",
             ),
         )
+        if result["status"] != "ok":
+            await report_decision(self.runtime, result, "rejected", "original_voice_route", turn)
+            return
         if (
-            result["status"] != "ok"
-            or not self.active
+            not self.active
             or self.quiet_active()
             or self.voice.epoch != epoch
             or self.input_count != revision
-            or getattr(getattr(self, "conversation", None), "voice_revision", self.input_count) != focus
+            or self.conversation.voice_revision != focus
         ):
+            await report_decision(self.runtime, result, "rejected", "stale_input", turn)
             return
         choice = result["choice"]
         if choice in {"sleep", "stop", "chat"}:
             await self.control(Control(choice))
-        elif (
-            choice == "cancel"
-            and turn
-            and self.backend.active_turn == turn
-            and any(word in text for word in ("任务", "执行"))
-        ):
-            await self.control(Control("cancel", turn))
+            await report_decision(self.runtime, result, "adopted", "local_voice_control", turn)
+        elif choice in {"correct", "supplement"}:
+            await self.voice_control.offer(result, text, epoch, revision, turn, focus)
+        elif choice in {"cancel", "takeover"}:
+            if not hasattr(self, "voice_control"):
+                # Minimal hosts without native coordination cannot claim scoped takeover.
+                await report_decision(self.runtime, result, "rejected", "scope_unavailable", turn)
+                return
+            await self.player.stop()
+
+            def current():
+                return (
+                    self.active
+                    and self.voice.epoch == epoch
+                    and self.input_count == revision
+                    and self.conversation.voice_revision == focus
+                )
+
+            confirmed = await self.voice_control.stop(turn, current)
+            if not current():
+                await report_decision(self.runtime, result, "unknown", "input_changed_during_stop", turn)
+                return
+            await report_decision(
+                self.runtime,
+                result,
+                "adopted" if confirmed else "unknown",
+                "scoped_stop_confirmed" if confirmed else "stop_unconfirmed",
+                turn,
+            )
+            await self.speak(
+                "已停止后续操作，已经发出的动作可能已生效。"
+                if confirmed
+                else "还不能确认当前操作已停止，请先核对。"
+            )
+        else:
+            await report_decision(self.runtime, result, "rejected", "native_handling", turn)
 
     async def _reconnect(self):
         try:
@@ -504,7 +538,7 @@ class AssistantService:
             self.recovering = False
 
     async def control(self, cmd):
-        if cmd.kind not in {"sleep", "stop", "cancel", "volume", "progress", "chat"}:
+        if cmd.kind not in {"sleep", "stop", "cancel", "takeover", "volume", "progress", "chat"}:
             raise ValueError(
                 "Voice input/output are fixed by startup configuration; runtime switching is disabled"
             )
@@ -530,6 +564,24 @@ class AssistantService:
                     log.info("Stop applied locally; provider notification unavailable")
 
             self.context.spawn(notify_stop(), "notify-stop")
+        elif cmd.kind == "takeover" or (
+            cmd.kind == "cancel" and getattr(self, "active", False) and hasattr(self, "voice_control")
+        ):
+            owner = getattr(self, "voice_control", None)
+            turn = cmd.value or (owner.capture_turn() if owner else None)
+            epoch, revision = self.voice.epoch, self.input_count
+            await self.player.stop()
+
+            def current():
+                return self.active and self.voice.epoch == epoch and self.input_count == revision
+
+            stopped = await owner.stop(turn, current) if owner else False
+            if current():
+                await self.speak(
+                    "已停止后续操作，已经发出的动作可能已生效。"
+                    if stopped
+                    else "还不能确认当前操作已停止，请先核对。"
+                )
         elif cmd.kind == "cancel":
             await self.player.stop()
             cancelled = (
@@ -755,11 +807,24 @@ class AssistantService:
                 writer.close()
                 await writer.wait_closed()
                 return
+            elif action == "voice-decision":
+                from ..kernel.contracts import VoiceDecisionRequest
+
+                result = await self.runtime.invoke(
+                    VoiceDecisionRequest(d["action"], d.get("arguments", {}), d.get("caller_run"))
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
             elif action == "decisions":
-                from ..kernel.contracts import DecisionRequest, DecisionQuery
+                from ..kernel.contracts import DecisionRequest, DecisionQuery, DecisionOutcome
 
                 request = (
-                    DecisionQuery(**d.get("arguments", {}), caller_run=d.get("caller_run"))
+                    DecisionOutcome(**d.get("arguments", {}))
+                    if d["action"] == "outcome"
+                    else DecisionQuery(**d.get("arguments", {}), caller_run=d.get("caller_run"))
                     if d["action"] == "judge"
                     else DecisionRequest(d["action"], d.get("arguments", {}))
                 )

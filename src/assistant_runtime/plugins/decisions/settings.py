@@ -19,15 +19,21 @@ class DecisionSettings:
     warmup_enabled: bool = True
     keepalive_seconds: int = 120
     dns_cache_seconds: int = 300
-    thresholds: dict = field(
-        default_factory=lambda: {
-            "voice_intent": 0.98,
-            "event_relevance": 0.98,
-            "model_profile": 0.90,
-            "model_review": 0.90,
-            "selection": 0.90,
+    default_threshold: float = 0.6
+    concurrency: int = 4
+    timezone: str = "Asia/Shanghai"
+    thresholds: dict = field(default_factory=dict)
+    scenes: dict = field(default_factory=dict)
+
+    def policy(self, kind):
+        defaults = {"voice_intent": "parallel", "selection": "parallel"}
+        values = self.scenes.get(kind, {})
+        return {
+            "enabled": self.enabled and values.get("enabled", True),
+            "mode": "shadow" if self.mode == "shadow" else values.get("mode", defaults.get(kind, "direct")),
+            "threshold": values.get("threshold", self.thresholds.get(kind, self.default_threshold)),
+            "timeout_seconds": values.get("timeout_seconds", self.active_timeout_seconds),
         }
-    )
 
     @classmethod
     def parse(cls, data):
@@ -45,6 +51,7 @@ class DecisionSettings:
             raise ValueError("Invalid Jev model")
         for key, low, high in (
             ("queue_size", 1, 128),
+            ("concurrency", 2, 16),
             ("retention", 100, 10000),
             ("max_age_seconds", 1, 300),
             ("keepalive_seconds", 15, 600),
@@ -56,15 +63,36 @@ class DecisionSettings:
             value = getattr(result, key)
             if type(value) not in (int, float) or not math.isfinite(value) or not 0.1 <= value <= maximum:
                 raise ValueError("Invalid decision timeout")
-        defaults = cls().thresholds
-        if not isinstance(result.thresholds, dict) or set(result.thresholds) - defaults.keys():
+        from zoneinfo import ZoneInfo
+        from .questions import VERSIONS
+
+        try:
+            ZoneInfo(result.timezone)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("Invalid decision archive timezone") from exc
+        if not isinstance(result.thresholds, dict) or set(result.thresholds) - VERSIONS.keys():
             raise ValueError("Unknown decision threshold")
-        result.thresholds = {**defaults, **result.thresholds}
-        if any(
-            type(v) not in (int, float)
-            or not math.isfinite(v)
-            or not (0 if kind == "model_review" else 0.5) <= v <= 1
-            for kind, v in result.thresholds.items()
-        ):
+        if not isinstance(result.scenes, dict) or set(result.scenes) - VERSIONS.keys():
+            raise ValueError("Unknown decision scene")
+        for values in result.scenes.values():
+            if not isinstance(values, dict) or set(values) - {
+                "enabled",
+                "mode",
+                "threshold",
+                "timeout_seconds",
+            }:
+                raise ValueError("Invalid decision scene policy")
+            if type(values.get("enabled", True)) is not bool or values.get("mode", "direct") not in {
+                "direct",
+                "parallel",
+                "shadow",
+            }:
+                raise ValueError("Invalid decision scene mode")
+            timeout = values.get("timeout_seconds", result.active_timeout_seconds)
+            if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0.1 <= timeout <= 5:
+                raise ValueError("Invalid decision scene timeout")
+        probabilities = [result.default_threshold, *result.thresholds.values()]
+        probabilities.extend(v["threshold"] for v in result.scenes.values() if "threshold" in v)
+        if any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1 for v in probabilities):
             raise ValueError("Invalid decision threshold")
         return result

@@ -71,30 +71,32 @@ Disconnect recovery runs as a tracked task, leaving the event consumer available
 
 ## Shared conversation and Web entrance
 
-Optional `plugins/decisions/` owns bounded semantic support through `DecisionQuery`.
-`kernel.decisions.decide` returns an explicit original-workflow fallback when the
-plugin/provider is disabled, unavailable, uncertain or past its deadline. The plugin
-executes no actions. After explicit external-context consent, owners may adopt a
-closed-set recommendation: the assistant supplements unhandled short voice controls,
-tasks may select an automatic model profile or skip a clearly unrelated inbox batch,
-and independent decisions MCP offers evidence-based choices to main/background agents.
-Owners retain authorization, current-state revalidation and execution receipts. Exact
-rules and known local controls bypass inference. Native automatic handoff is not a
-pre-execution approval boundary; this integration does not claim to intercept it.
-`DecisionRequest` exposes local status, paging, manual samples and labels. Optional
-shadow mode observes bounded `DecisionSample` publications without affecting work.
-The provider reads its own secret without changing child environments; private,
-off-loop receipts retain hashes/references, versioned answers, token usage and HTTP
-latency, not another copy of conversation/event text. Bounded deadlines, auth suspension,
-backoff and no uncertain replay isolate this paid dependency. Usage counts are
-informational; the framework imposes no daily or lifetime call-count cap.
-One provider-owned HTTP pool retains idle connections for up to 120 seconds. A single
-owned, asynchronous startup metadata GET warms that pool after consent/credential
-checks and `Runtime.ready`; it performs no inference, does not gate readiness or serialize judgments,
-and is cancelled on shutdown. There is no recurring keepwarm. Active fallback retains
-a 3-second total deadline, including receipt IO, independently of prewarming.
-The global switch defaults on; new instances must explicitly consent before active
-context leaves the host. See `plugins/decisions/README.md` for use rules and acceptance.
+Optional `plugins/decisions/` owns closed semantic judgments, not execution. Owners
+use `DecisionQuery` directly or the owned `submit_decision` helper; agents use MCP.
+`DecisionOutcome` records owner adoption separately from provider success. Trusted
+scenes choose shadow, parallel or direct use; only the owner commits actions after
+checking authorization, input version and operation identity. Native automatic
+handoff is not an approval boundary. Voice corrections are suggestions until the
+foreground executor confirms through `VoiceDecisionRequest`; no second user turn is
+submitted. Unknown stops prohibit replacement; cancelling a run never archives a plan.
+
+The global threshold defaults to 0.6; scene overrides are explicit (instance model
+review: 0.2). Policies are restart-only, hashed and recorded per invocation. Four
+bounded workers include one reserved for voice control; ordinary traffic also leaves
+one queue slot free. Equivalent calls share provider work, not adoption identities.
+Total active deadlines include admission and IO. Failure, cancellation and stale
+answers cannot replay actions; absent/disabled Jev preserves original workflows.
+
+Private date-based JSONL archives retain bounded owner summaries, policy, probabilities,
+latencies and adoption/outcome links without automatic expiry. Full input, credentials
+and raw media are excluded. A bounded SQLite receipt/audit index serves recent queries;
+index pruning never deletes archives. An independent bounded writer keeps logging off
+the control path; drops/write failures remain visible, shutdown drains queued entries.
+Synthetic acceptance and unlabelled usage are separate cohorts. Provider outage/recovery
+uses deduplicated notifications; quota exhaustion and all other faults preserve business
+fallback. There is no local daily call cap, automatic paid retry or periodic keepwarm.
+The shared HTTP pool and one asynchronous metadata warmup remain adapter-owned.
+See `plugins/decisions/README.md` for contracts, configuration and acceptance limits.
 
 `conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. Foreground Codex handles conversational delegation; the optional tasks plugin owns durable background work through an injected executor adapter.
 

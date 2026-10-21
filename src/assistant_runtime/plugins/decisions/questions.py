@@ -273,6 +273,9 @@ def prepare(sample, source, model):
         "reference": sample.reference,
         "observed_at": sample.observed_at,
         "source": source,
+        "cohort": "synthetic"
+        if source == "manual" or sample.reference.startswith("synthetic")
+        else "unlabelled",
         "model_requested": model,
         "question_version": version,
         "choices": list(q["criteria"]),

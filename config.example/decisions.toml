@@ -1,0 +1,27 @@
+# 快速决策。修改后重启生效；密钥 TYPESAFE_API_KEY 留在 .env。
+[decisions]
+enabled = true
+external_data_consent = false
+mode = "active"
+model = "jev-1.13.0"
+default_threshold = 0.6
+active_timeout_seconds = 3
+concurrency = 4
+queue_size = 32
+retention = 2000 # 仅近期查询索引，不清理按日期归档的日志。
+timezone = "Asia/Shanghai"
+timeout_seconds = 8
+max_age_seconds = 30
+warmup_enabled = true
+keepalive_seconds = 120
+dns_cache_seconds = 300
+
+[decisions.thresholds]
+model_review = 0.2
+
+# 场景默认继承全局值；只在实际需要时启用覆盖。
+# [decisions.scenes.voice_intent]
+# enabled = true
+# mode = "parallel" # direct / parallel / shadow；模式不授予动作权限。
+# threshold = 0.6
+# timeout_seconds = 3

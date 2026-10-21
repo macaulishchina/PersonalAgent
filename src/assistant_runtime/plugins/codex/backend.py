@@ -359,6 +359,28 @@ class CodexBackend:
                 interrupted = True
         return interrupted
 
+    async def control_checkpoint(self, turn, *, stopped=False):
+        """Read provider evidence; never infer a stop from interrupt RPC acceptance."""
+        data = await self.client.request("thread/read", {"threadId": self.thread_id, "includeTurns": True})
+        record = next((t for t in data["thread"].get("turns", []) if t["id"] == turn), None)
+        if not record or (stopped and record.get("status") not in {"interrupted", "completed", "failed"}):
+            return False
+        if not stopped and self.active_turn != turn:
+            return False
+        for item in record.get("items", []):
+            if item.get("type") not in {"mcpToolCall", "commandExecution", "fileChange"}:
+                continue
+            if item.get("server") == "decisions" and item.get("tool") == "confirm_voice_decision":
+                continue
+            if item.get("status") not in {"completed", "failed", "declined"}:
+                return False
+        terminals = await self.client.request("thread/backgroundTerminals/list", {"threadId": self.thread_id})
+        return (
+            (stopped or self.active_turn == turn)
+            and not terminals.get("data")
+            and not terminals.get("nextCursor")
+        )
+
     async def _speech(self, text, turn):
         if self.config.backend == "native":
             return  # Conversation submits the eligible final result once.

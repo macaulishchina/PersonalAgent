@@ -43,9 +43,9 @@ flowchart TD
   the existing 3-second upper limit. Failure uses the existing execution model to
   understand/clarify; it does not synthesize guessed device arguments.
 - Explicit stop/sleep/volume/progress controls bypass Jev. `我自己来` in the command
-  path terminates only its associated task and checks its recorded execution state.
+  path cancels only its associated execution and checks its recorded execution state.
   Unconfirmed stop prevents a replacement; already-issued device effects cannot be
-  retracted. Native dialogue still has the provider's documented takeover limitations.
+  retracted. Native dialogue uses the shared versioned voice-control confirmation owner; native handoff remains non-interceptable.
 - Dialogue receives the original buffered utterance once. Do not also submit its
   transcription as a task: native voice may already delegate it. Web remains the
   existing independent entrance and history projection.
@@ -147,3 +147,17 @@ The local Paraformer adapter cannot provide an exact speech-end timestamp; its
 endpoint detection time and present that as human speech-end latency. First feedback
 is measured at the shared player's actual voiced write, not at TTS submission.
 Two-stage low-confidence wake verification remains disabled and independent.
+
+
+## Native voice decision confirmation
+
+`voice_control.py` is independent of opt-in local ASR/TTS. Accepted native transcripts
+can produce bounded parallel Jev suggestions. Correction/supplement requires the
+foreground execution model's explicit confirmation, not keyword inference from its
+reply. `get_voice_decision` returns the current text/identity; `confirm_voice_decision`
+claims it before IO. New input, voice epoch or expiry rejects old confirmations.
+Only recorded voice-turn task links are eligible; multiple linked tasks require
+clarification. A correction pauses the active run before continuation, avoiding
+one-shot auto-archive races. Failed/lost stop stays unknown with no new action.
+This is not a global device action gate or a new native user submission. A provider
+that cannot expose a safe checkpoint keeps the operation unconfirmed.

@@ -5,6 +5,7 @@ include = [
   "voice.toml",
   "devices.toml",
   "models.toml",
+  "decisions.toml",
   "tasks.toml",
   "memory.toml",
   "media.toml",

@@ -114,8 +114,8 @@ class JevProvider:
             connector=aiohttp.TCPConnector(
                 keepalive_timeout=self.settings.keepalive_seconds,
                 ttl_dns_cache=self.settings.dns_cache_seconds,
-                limit=2,
-                limit_per_host=2,
+                limit=self.settings.concurrency + 1,
+                limit_per_host=self.settings.concurrency + 1,
             ),
             timeout=aiohttp.ClientTimeout(total=self.settings.timeout_seconds),
             trust_env=True,
@@ -176,6 +176,8 @@ class JevProvider:
             ) as response:
                 if response.status in {401, 403}:
                     raise DecisionError("authentication_failed")
+                if response.status == 402:
+                    raise DecisionError("quota_exhausted")
                 if response.status == 429:
                     raise DecisionError("rate_limited")
                 if response.status != 200:

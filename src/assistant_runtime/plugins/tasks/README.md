@@ -639,3 +639,10 @@ adoption state (`applied=false` in shadow). Original facts live in `spec.executi
 segments, tool trace, duration and verified task outcomes. Disagreement is not evidence
 that Jev was correct; provider-reported completion is not a quality label. Active correction is explicitly opt-in; deployment of a low threshold is not evidence
 of improved accuracy. Existing evidence/checkpoint-based upgrades remain unchanged.
+
+
+Decision adoption now records its own observation after model policy validation.
+The decisions service owns the global threshold (0.6); model-review override is 0.2
+in the example/instance configuration. Raw provider confidence is not measured task
+success. Selection receipts preserve the per-call decision ID for later execution
+comparison; event-inbox stale decisions are rejected explicitly before dispatch.

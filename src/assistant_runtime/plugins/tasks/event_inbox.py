@@ -4,7 +4,7 @@ import asyncio
 import time
 
 from ...kernel.contracts import EventRequest, DecisionSample, DecisionQuery
-from ...kernel.decisions import decide, fallback
+from ...kernel.decisions import decide, fallback, report_decision
 from ...kernel.event_reporting import identifier
 
 
@@ -276,6 +276,13 @@ class EventInbox:
             self.decision(task, entry[0], "assigned", now, run["id"])
         self.db.execute("UPDATE job_subscriptions SET last_dispatch=? WHERE task_id=?", (now, task))
 
+    def report(self, advice, status, reason, run_id):
+        if advice.get("decision_id"):
+            self.plugin.context.spawn(
+                report_decision(self.plugin.host.runtime, advice, status, reason, run_id),
+                "event-decision-outcome",
+            )
+
     async def prepare(self, run):
         """Revalidate queued references before model/device dispatch, never replay a run."""
         context = run["data"].get("trigger_context")
@@ -306,6 +313,7 @@ class EventInbox:
                     "event_relevance",
                     "event-run:" + run["id"],
                     {"objective": run["data"]["spec"]["prompt"], "event": {"batch": records}},
+                    summary=run["data"]["spec"]["title"][:600] + " · " + str(len(records)) + " events",
                 ),
             )
             refreshed = []
@@ -324,12 +332,17 @@ class EventInbox:
                     )
                 return False
             if refreshed != valid:
+                self.report(advice, "rejected", "events_changed", run["id"])
                 advice = fallback("events_changed")
             valid = refreshed
         current = self.repo.run(run["id"])
         if current["state"] != "queued":
+            if advice:
+                self.report(advice, "rejected", "run_changed", run["id"])
             return False
         if not valid:
+            if advice:
+                self.report(advice, "rejected", "events_expired", run["id"])
             self.repo.update_run(
                 run["id"],
                 "missed",
@@ -337,6 +350,14 @@ class EventInbox:
                 progress="触发事件已过期、更正或删除，本次未启动。",
             )
             return False
+        if advice:
+            skip = advice["status"] == "ok" and advice["choice"] == "irrelevant"
+            self.report(
+                advice,
+                "adopted" if skip else "rejected",
+                "irrelevant_batch" if skip else "original_event_dispatch",
+                run["id"],
+            )
         if advice and advice["status"] == "ok" and advice["choice"] == "irrelevant":
             self.repo.update_run(
                 run["id"],

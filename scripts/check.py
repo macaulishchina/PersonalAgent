@@ -35,7 +35,7 @@ GROUPS = {
         "video_recording",
     },
     "events": {"events", "event_sources", "event_reporting"},
-    "decisions": {"decisions", "decisions_transport"},
+    "decisions": {"decisions", "decisions_transport", "decision_service", "voice_decision_control"},
     "tasks": {
         "notifications",
         "notification_groups",

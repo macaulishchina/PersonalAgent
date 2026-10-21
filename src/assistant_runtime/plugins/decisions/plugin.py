@@ -4,14 +4,27 @@ import asyncio
 from collections import Counter
 import re
 import time
+import uuid
+import json
+import hashlib
+import logging
+from dataclasses import asdict
 
-from ...kernel.contracts import DecisionRequest, DecisionSample, DecisionQuery, TaskRequest
+from ...kernel.contracts import (
+    DecisionRequest,
+    DecisionSample,
+    DecisionQuery,
+    DecisionOutcome,
+    TaskRequest,
+    NotificationRequest,
+)
 from ...kernel.decisions import fallback
 from ...kernel.runtime import Manifest
 from .errors import DecisionError
-from .questions import prepare
+from .questions import prepare, VERSIONS, validate_public_state
 from .repository import Receipts
 from .settings import DecisionSettings
+from .scheduling import DecisionQueue
 
 
 class DecisionsPlugin:
@@ -22,7 +35,7 @@ class DecisionsPlugin:
         self.root = host.config.root
         self.provider = provider
         self.receipts = Receipts(host.config.state_dir / "decisions", self.settings)
-        self.queue = asyncio.Queue(maxsize=self.settings.queue_size)
+        self.queue = DecisionQueue(self.settings.queue_size)
         self.counts = Counter()
         self.error = None
         self.auth_blocked = True
@@ -31,11 +44,21 @@ class DecisionsPlugin:
         self.context = None
         self.provider_lock = asyncio.Lock()
         self.waiters = {}
-        self.working = False
+        self.working = 0
+        self.audit_error = None
+        self.audit_queue = asyncio.Queue(maxsize=128)
+        self.audit_dropped = 0
+        self.outage = None
+        self.calls = {}
+        self.policy_version = hashlib.sha256(
+            json.dumps(asdict(self.settings), sort_keys=True).encode()
+        ).hexdigest()[:16]
 
     async def start(self, context):
         self.context = context
         context.own(self.receipts.close)
+        context.own(self.drain_audit)
+        context.spawn(self.audit_worker(), "archive")
         await self.receipts.call("open")
         if self.settings.enabled:
             try:
@@ -56,8 +79,10 @@ class DecisionsPlugin:
         context.own(unsubscribe)
         context.register(DecisionRequest, self.request)
         context.register(DecisionQuery, self.judge)
+        context.register(DecisionOutcome, self.outcome)
         context.spawn(self.listen(), "samples")
-        context.spawn(self.worker(), "evaluate")
+        for index in range(self.settings.concurrency):
+            context.spawn(self.worker(index == self.settings.concurrency - 1), "evaluate:" + str(index))
         if (
             self.settings.enabled
             and self.settings.external_data_consent
@@ -89,6 +114,8 @@ class DecisionsPlugin:
             except DecisionError as exc:
                 self.error = str(exc)
                 self.auth_blocked = True
+                if self.settings.external_data_consent:
+                    self.health_changed(str(exc))
 
     def enqueue(self, sample, source):
         if not self.settings.enabled:
@@ -127,11 +154,12 @@ class DecisionsPlugin:
             finally:
                 self.events.task_done()
 
-    async def worker(self):
+    async def worker(self, interactive_only=False):
         while True:
-            job = await self.queue.get()
-            self.working = True
+            job = await self.queue.get(interactive_only)
+            self.working += 1
             claimed = False
+            started = time.monotonic()
             try:
                 age = time.time() - job["observed_at"]
                 skip = (
@@ -150,22 +178,22 @@ class DecisionsPlugin:
                 claimed = True
                 started = time.monotonic()
                 try:
-                    async with self.provider_lock:
-                        remaining = (
-                            job.get("deadline", time.monotonic() + self.settings.timeout_seconds)
-                            - time.monotonic()
-                        )
-                        try:
-                            async with asyncio.timeout(max(0.001, remaining)):
-                                result = await self.provider.evaluate(job)
-                        except TimeoutError:
-                            raise DecisionError("timeout") from None
+                    remaining = (
+                        job.get("deadline", time.monotonic() + self.settings.timeout_seconds)
+                        - time.monotonic()
+                    )
+                    try:
+                        async with asyncio.timeout(max(0.001, remaining)):
+                            result = await self.provider.evaluate(job)
+                    except TimeoutError:
+                        raise DecisionError("timeout") from None
                 except asyncio.CancelledError:
                     await self.receipts.call(
                         "finish", job["id"], "unknown", {"error": "shutdown_during_request"}
                     )
                     raise
                 except DecisionError as exc:
+                    self.health_changed(str(exc))
                     self.error = str(exc)
                     self.failures += 1
                     if str(exc) in {"authentication_failed", "credential_missing", "credential_invalid"}:
@@ -179,7 +207,10 @@ class DecisionsPlugin:
                         {"error": str(exc), "latency_ms": round((time.monotonic() - started) * 1000)},
                     )
                 else:
-                    self.error, self.failures = None, 0
+                    if not self.auth_blocked:
+                        self.health_changed(None)
+                        self.retry_at = 0
+                        self.error, self.failures = None, 0
                     await self.receipts.call(
                         "finish",
                         job["id"],
@@ -200,23 +231,38 @@ class DecisionsPlugin:
                     except Exception:
                         pass  # On restart, any outstanding intent becomes unknown.
             finally:
-                future = self.waiters.pop(job["id"], None)
-                if future is not None and not future.done():
-                    try:
-                        future.set_result(await self.receipts.call("find", job["id"]))
-                    except Exception:
-                        future.set_result(None)
-                self.working = False
+                row = None
+                try:
+                    row = await self.receipts.call("find", job["id"])
+                    await self.audit(
+                        {
+                            "stage": "provider_result",
+                            "receipt_id": job["id"],
+                            "kind": job["kind"],
+                            "source": job["source"],
+                            "reference": job["reference"],
+                            "result": row,
+                            "queue_ms": round(max(0, started - job.get("queued_at", started)) * 1000),
+                        }
+                    )
+                except Exception:
+                    pass
+                # A duplicate observation cannot settle the owning worker's waiters.
+                if row is None or row["state"] != "dispatching":
+                    future = self.waiters.pop(job["id"], None)
+                    if future is not None and not future.done():
+                        future.set_result(row)
+                self.working -= 1
                 self.queue.task_done()
 
-    def result(self, row):
+    def result(self, row, policy=None):
         if row is None:
             return fallback("receipt_unavailable")
         if row["state"] != "completed":
             return fallback(row.get("error", row["state"]), row["id"])
         answer = row["answer"]
         choice = answer["choice"]
-        threshold = self.settings.thresholds[row["kind"]]
+        threshold = (policy or self.settings.policy(row["kind"]))["threshold"]
         if row["kind"] == "model_profile":
             fields = {
                 key: value["choice"]
@@ -250,20 +296,170 @@ class DecisionsPlugin:
             "probability_threshold": threshold,
         }
 
+    async def audit(self, entry):
+        try:
+            self.audit_queue.put_nowait({"at": time.time(), **entry})
+        except asyncio.QueueFull:
+            self.audit_dropped += 1
+            self.audit_error = "archive_queue_full"
+            logging.getLogger(__name__).warning("decision_archive_queue_full")
+
+    async def write_audit(self, entry):
+        try:
+            await self.receipts.call("audit", entry)
+            self.audit_error = None
+        except Exception:
+            self.audit_dropped += 1
+            self.audit_error = "archive_unavailable"
+            logging.getLogger(__name__).warning("decision_archive_unavailable")
+
+    async def audit_worker(self):
+        while True:
+            entry = await self.audit_queue.get()
+            try:
+                await self.write_audit(entry)
+            finally:
+                self.audit_queue.task_done()
+
+    async def drain_audit(self):
+        while not self.audit_queue.empty():
+            entry = self.audit_queue.get_nowait()
+            try:
+                await self.write_audit(entry)
+            finally:
+                self.audit_queue.task_done()
+
+    def health_changed(self, error):
+        if error and self.outage:
+            return
+        if not error and not self.outage:
+            return
+        previous = self.outage
+        self.outage = {"id": uuid.uuid4().hex, "error": error} if error else None
+        episode = self.outage or previous
+
+        async def notify():
+            try:
+                await self.context.runtime.invoke(
+                    NotificationRequest(
+                        "publish",
+                        {
+                            "event_key": "decision-service:"
+                            + episode["id"]
+                            + (":failed" if error else ":recovered"),
+                            "group_key": "decision-service",
+                            "group_title": "快速决策服务",
+                            "title": "Jev 暂不可用，业务沿用原逻辑" if error else "Jev 已恢复",
+                            "body": "错误类别：" + error
+                            if error
+                            else "后续请求可以继续使用快速决策。之前的操作不会重放。",
+                            "voice": False,
+                        },
+                    ),
+                    timeout=2,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning("decision_health_notification_unavailable")
+
+        if self.context:
+            self.context.spawn(notify(), "decision-health")
+
+    async def outcome(self, request):
+        if (
+            not re.fullmatch(r"[0-9a-f]{32}", request.decision_id)
+            or request.status not in {"adopted", "rejected", "suggested", "completed", "failed", "unknown"}
+            or not re.fullmatch(r"[a-z_]{1,80}", request.reason)
+            or request.operation_id is not None
+            and (not isinstance(request.operation_id, str) or len(request.operation_id) > 160)
+        ):
+            raise ValueError("Invalid decision outcome")
+        await self.audit({**self.calls.get(request.decision_id, {}), "stage": "adoption", **asdict(request)})
+        return {"queued": self.audit_error is None, "durability": "asynchronous_archive"}
+
     async def judge(self, request):
-        if not self.settings.enabled:
+        ident = uuid.uuid4().hex
+        if not isinstance(request.kind, str) or request.kind not in VERSIONS:
+            await self.audit({"decision_id": ident, "stage": "result", "reason": "invalid_kind"})
+            return {**fallback("invalid_kind"), "decision_id": ident}
+        policy = self.settings.policy(request.kind)
+        if not policy["enabled"] or not self.settings.external_data_consent:
+            reason = "disabled" if not policy["enabled"] else "external_data_not_authorized"
+            await self.audit(
+                {"decision_id": ident, "kind": request.kind, "stage": "result", "reason": reason}
+            )
+            return {**fallback(reason), "decision_id": ident}
+        meta = {
+            "decision_id": ident,
+            "kind": request.kind,
+            "policy_version": self.policy_version,
+            "policy": policy,
+            "caller_run": request.caller_run,
+            "input_version": request.input_version,
+        }
+        # Validate before logging any caller-supplied free text, including summaries.
+        try:
+            if (
+                request.kind not in VERSIONS
+                or not isinstance(request.summary, str)
+                or len(request.summary) > 800
+            ):
+                raise ValueError("Invalid decision summary")
+            if not isinstance(request.input_version, str) or len(request.input_version) > 160:
+                raise ValueError("Invalid input version")
+            validate_public_state(
+                {
+                    "summary": request.summary,
+                    "reference": request.reference,
+                    "caller_run": request.caller_run,
+                    "input_version": request.input_version,
+                }
+            )
+            job = prepare(
+                DecisionSample(request.kind, request.reference, request.state),
+                "validation",
+                self.settings.model,
+            )
+        except (ValueError, TypeError, RecursionError):
+            await self.audit({"decision_id": ident, "stage": "result", "reason": "invalid_request"})
+            return {**fallback("invalid_request"), "decision_id": ident}
+        meta.update(
+            summary=request.summary,
+            reference=request.reference,
+            input_hash=job["input_hash"],
+            candidates=job["choices"],
+            question_version=job["question_version"],
+        )
+        self.calls[ident] = meta
+        if len(self.calls) > self.settings.retention:
+            del self.calls[next(iter(self.calls))]
+        started = time.monotonic()
+        await self.audit({**meta, "stage": "requested"})
+        try:
+            result = await self._judge(request, policy, started + policy["timeout_seconds"], meta)
+        except asyncio.CancelledError:
+            await self.audit({**meta, "stage": "result", "status": "cancelled", "reason": "caller_cancelled"})
+            raise
+        result = {
+            **result,
+            "decision_id": ident,
+            "policy_version": self.policy_version,
+            "mode": policy["mode"],
+            "probability_threshold": policy["threshold"],
+        }
+        await self.audit(
+            {**meta, "stage": "result", **result, "total_ms": round((time.monotonic() - started) * 1000)}
+        )
+        return result
+
+    async def _judge(self, request, policy, deadline, meta):
+        if not policy["enabled"]:
             return fallback("disabled")
-        # Every NEW active route is disabled until explicit data/decision consent.
-        # No active request reaches preparation, persistence or HTTP before it.
         if not self.settings.external_data_consent:
             return fallback("external_data_not_authorized")
-        if self.settings.mode != "active":
-            return fallback("shadow_mode")
         if self.auth_blocked:
             return fallback("credential_unavailable")
         if time.monotonic() < self.retry_at:
             return fallback("provider_backoff")
-        deadline = time.monotonic() + self.settings.active_timeout_seconds
         try:
             async with asyncio.timeout_at(deadline):
                 if request.caller_run is not None:
@@ -282,41 +478,55 @@ class DecisionsPlugin:
                 job = prepare(
                     DecisionSample(request.kind, reference, request.state), source, self.settings.model
                 )
+                meta["receipt_id"] = job["id"]
+                await self.audit({**meta, "stage": "linked"})
                 row = await self.receipts.call("find", job["id"])
                 future = self.waiters.get(job["id"])
-                if row and future is None:
-                    return self.result(row)
+                if row and row["state"] != "dispatching" and future is None:
+                    return (
+                        fallback("shadow_mode", row["id"])
+                        if policy["mode"] == "shadow"
+                        else self.result(row, policy)
+                    )
                 if future is None:
-                    if self.working or not self.queue.empty():
-                        return fallback("provider_busy")
+                    if row is None and self.queue.full(interactive=request.kind == "voice_intent"):
+                        return fallback("queue_full")
                     future = asyncio.get_running_loop().create_future()
                     self.waiters[job["id"]] = future
-                    job["active"] = True
-                    job["deadline"] = deadline
-                    self.queue.put_nowait(job)
-                return self.result(await asyncio.shield(future))
+                    if row is None:
+                        job.update(active=True, deadline=deadline, queued_at=time.monotonic(), policy=policy)
+                        self.queue.put_nowait(job)
+                if policy["mode"] == "shadow":
+                    return fallback("shadow_mode", job["id"])
+                return self.result(await asyncio.shield(future), policy)
         except TimeoutError:
             self.counts["active_timeout"] += 1
-            return fallback("timeout")
+            return fallback("timeout", meta.get("receipt_id"))
         except Exception:
             self.counts["active_failed"] += 1
-            return fallback("decision_unavailable")
+            return fallback("decision_unavailable", meta.get("receipt_id"))
 
     async def request(self, request):
         action, args = request.action, request.arguments
         if not isinstance(args, dict):
             raise ValueError("Decision arguments must be an object")
         if action == "status" and not args:
-            return {**await self.receipts.call("status"), **self.diagnostics()}
+            return {
+                **await self.receipts.call("status"),
+                "audit": await self.receipts.call("audit_status"),
+                **self.diagnostics(),
+            }
         if action == "capabilities" and not args:
             return {
                 **self.diagnostics(),
-                "kinds": list(self.settings.thresholds),
+                "kinds": list(VERSIONS),
                 "guidance": "Use only for bounded semantic choices with evidence. Code handles exact rules. On fallback continue your original reasoning/workflow; never retry an action or claim authorization/completion from a judgment.",
             }
         if action == "reload" and not args:
             await self.reload()
             return self.diagnostics()
+        if action == "archive":
+            return await self.receipts.call("archive", args)
         if action == "list" and not set(args) - {"limit", "before"}:
             limit, before = args.get("limit", 20), args.get("before")
             if (
@@ -356,7 +566,13 @@ class DecisionsPlugin:
             "queue_capacity": self.settings.queue_size,
             "active_timeout_seconds": self.settings.active_timeout_seconds,
             "transport": self.provider.diagnostics() if self.provider is not None else None,
-            "thresholds": self.settings.thresholds,
+            "thresholds": {k: self.settings.policy(k)["threshold"] for k in VERSIONS},
+            "policies": {k: self.settings.policy(k) for k in VERSIONS},
+            "policy_version": self.policy_version,
+            "archive_error": self.audit_error,
+            "archive_dropped": self.audit_dropped,
+            "concurrency": self.settings.concurrency,
+            "in_flight": self.working,
             "retry_in_seconds": max(0, round(self.retry_at - time.monotonic())),
             "session_counts": dict(self.counts),
             "bus_dropped": self.context.runtime.dropped.get("decision-shadow", 0) if self.context else 0,

@@ -1,14 +1,38 @@
-# Optional semantic support
+# Fast semantic decisions
 
-`decisions` is the single owner of TypeSafe Jev. It answers small, closed semantic
-questions; it never executes actions, grants permission, verifies effects or replaces
-Codex. Main and background agents share its independent MCP, limits and receipts.
-Exact rules, arithmetic, known controls and ordinary straightforward choices stay local.
+`decisions` owns TypeSafe Jev transport, admission, policy and observations. It does
+not grant permissions, execute tools or certify effects. Exact controls, arithmetic
+and known rules remain local. Main/background agents and framework owners share the
+same provider pool and receipt model. Kernel contracts remain standard-library only.
 
-## Configuration and credentials
+## Use and ownership
 
-Install the `decisions` extra in the existing `.venv`. The default plugin list includes
-`decisions`; instances with an explicit list must add it. Defaults:
+- Direct module use: `await decide(runtime, DecisionQuery(kind, reference, state,
+  summary=..., input_version=...))`. Inputs are detached and bounded to 16 KiB.
+- Owned parallel use: `submit_decision(context, request, consume, current=...)`.
+  It cannot deliver stale answers; the consumer still validates operation scope.
+- Shadow: observe through `DecisionSample` or configure a scene as `shadow`. The
+  caller receives original-workflow fallback, never an actionable choice.
+- Direct/parallel: both return validated choices; the caller's execution structure
+  determines whether it waits or runs concurrently. Configuration never spawns a
+  second executor or gives a general MCP caller direct action authority.
+- `report_decision(runtime, result, status, reason, operation_id)` records adoption,
+  rejection, suggestion or known outcome. Returning `ok` is only a judgment result.
+- MCP `decision_support_status` and `judge_options` retain bounded advisory access.
+  `get_voice_decision`/`confirm_voice_decision` dispatch to the voice owner, not this
+  plugin. Background identities cannot confirm foreground voice changes.
+
+Trusted scenes live in `questions.py`: voice intent, event relevance, unresolved
+model profile, joint model review, and generic selection. Adding a scene requires
+versioned question/state validation, bounded owner summary, meaningful fallback,
+owner adoption handling and tests. User text/options are data, never instructions.
+A missing/disabled plugin uses the original path; cancellation propagates, rather
+than starting fallback work. Do not loop on judgment failures or replay actions.
+
+## Configuration
+
+Use the separate `config/decisions.toml` included by the root configuration. Changes
+require restart; `decisions reload` reloads credentials only, not policy. Defaults:
 
 ```toml
 [decisions]
@@ -16,201 +40,151 @@ enabled = true
 external_data_consent = false
 mode = "active"
 model = "jev-1.13.0"
+default_threshold = 0.6
 active_timeout_seconds = 3
+concurrency = 4
+queue_size = 32
+retention = 2000 # Recent indexes only; archives are never pruned by this limit.
+timezone = "Asia/Shanghai"
 timeout_seconds = 8
+max_age_seconds = 30
 warmup_enabled = true
 keepalive_seconds = 120
 dns_cache_seconds = 300
-queue_size = 32
-retention = 2000
-max_age_seconds = 30
 
 [decisions.thresholds]
-voice_intent = 0.98
-event_relevance = 0.98
-model_profile = 0.90
-selection = 0.90
+model_review = 0.2
+
+# Optional overrides, not required for each scene:
+# [decisions.scenes.voice_intent]
+# enabled = true
+# mode = "parallel" # shadow / parallel / direct
+# threshold = 0.6
+# timeout_seconds = 3
 ```
 
-Set `external_data_consent=true` only after the instance owner authorizes sending
-judgment-relevant voice text, event content, task objectives, tool-result summaries
-and candidate options to `api.typesafe.ai`. Credentials and raw audio/video are never
-valid inputs. The global `enabled` switch defaults on; consent defaults off for new
-instances. Set `enabled=false` and restart to use original logic everywhere. Removing
-the plugin also leaves those paths usable. `mode="shadow"` restores observation-only
-operation; active callers receive fallback. There is no local daily or lifetime
-call-count cap. To stop external requests, use the enabled switch.
-When upgrading an older instance, remove the retired `daily_limit` setting from its
-configuration; there is no replacement quota setting.
+Scene threshold overrides precede `thresholds[kind]`, then the global threshold.
+Default modes: voice/selection parallel, task-model/event direct. Global shadow
+forces all scenes to observation-only. Policies are hashed, with effective values
+recorded per invocation. The threshold uses the selected candidate probability,
+not provider `confidence` and not an empirically calibrated accuracy guarantee.
+`uncertain` always falls back. Model-profile's legacy two-question result still
+requires each adopted field to meet its own threshold; joint model review selects
+one legal pair. User choices and fixed settings remain task-owned protections.
 
-Put `TYPESAFE_API_KEY=...` in the root `.env` (mode 600), or the service environment.
-Environment takes precedence. Dotenv interpolation is disabled; variables are never
-exported to child processes. The adapter alone reads the key. Its HTTPS endpoint is
-fixed; redirects are refused. Missing credentials, optional dependencies or provider
-failure degrade this capability only. Disabled startup does not import the HTTP adapter.
-After a key change, CLI `decisions reload` re-enables future requests, without replaying
-old failures. This explicitly authorized paid service is never a paid fallback for Codex.
+`TYPESAFE_API_KEY` belongs in the private root `.env` or environment. Explicit
+instance consent covers curated text/context only; credentials and raw audio/video
+are rejected. The structural guard is not a universal secret detector: owners must
+provide safe, bounded summaries. No daily/lifetime request-count limit is imposed.
 
-## Owner integration and adoption rules
+## Scheduling and failure
 
-The stdlib `DecisionQuery(kind, reference, state, caller_run)` contract and
-`kernel.decisions.decide` form the optional seam. The answer is either `status="ok"`
-with a validated choice/receipt, or `status="fallback"`, `choice=null`, a reason and
-`fallback="use_original_logic"`. Owners always retain final validation and execution.
-Cancellation propagates rather than starting fallback work.
+Three ordinary workers plus one interactive-only worker are the default. Interactive
+voice control has queue priority and a reserved queue slot; running calls are not
+preempted. Queue and concurrency are bounded. Equal in-flight inputs share one
+provider request, but every caller gets its own decision ID and adoption record.
+A canceled waiter cannot cancel other waiters or deliver a late action. Pending
+work is volatile and not replayed after process restart.
 
-- Voice: accepted short, unhandled control-like text may be evaluated in an owned
-  background coroutine. Known local commands run immediately. Only high-probability
-  sleep, stop, continuous-chat and explicitly scoped current-task cancellation are
-  adopted. Epoch, input revision, interaction focus and captured task identity must
-  remain current. Other intents keep native handling. This does not intercept native
-  automatic handoff, implement a new pre-execution gate, or prove physical takeover.
-- Task models: missing profile and/or reasoning effort use one joint `model_profile`
-  recommendation among bounded account-supported combinations. Fixed instance values
-  and explicit agent fields filter the candidates and cannot be overwritten; fully
-  determined choices, single-combination cases, reminders and direct device queries
-  bypass semantic inference. Existing policy/catalog validation still resolves the
-  model; unavailable recommendations revert to the original default. Selection evidence
-  and fallback reasons are saved with the task's existing model-selection receipt.
-- Event inbox: only already-admitted, valid recorded events are eligible. A whole
-  batch is skipped only when all events are clearly unrelated, above the configured
-  threshold. Unknown/low-probability/failing judgments follow original dispatch.
-  Events and queued-run state are revalidated after the wait, including failures;
-  corrections/deletions/expiry invalidate stale input. Skipping preserves event history
-  and records its reason in run trace. Event recording never waits for inference.
-- MCP: `decision_support_status` describes availability and use rules locally;
-  `judge_options` accepts a stable canonical UUID, bounded question/context and 1..15
-  named candidates. `uncertain` is reserved. Use real evidence when this can reduce
-  reasoning, not for an obvious choice or to judge whether an action happened.
-  Background callers must still be running/waiting for the user. Failure is ordinary
-  structured fallback, not a tool exception that requires replaying work.
+The active deadline includes queuing and receipt IO. A bounded archive queue keeps callers from awaiting an archive write. Receipt and
+archive IO share one serial storage worker; disk stalls can cause bounded judgment
+fallback, but cannot block the audio loop. Provider response history
+is committed before delivering a usable result; unavailable receipt storage therefore
+falls back, preserving the business workflow. Shutdown drains accepted archive work.
+Log drops and IO failures remain visible as health/counter information, not silent
+claims of complete coverage.
 
-Main/background registration uses the shared builtin MCP catalog. No third-party
-registry entry, global Codex config, main voice binding or memory policy changes.
-MCP instructions require agents to continue their original reasoning on fallback,
-never loop on the tool or report optional judgment failure as user-task failure.
+The HTTP adapter owns one reusable session, with `concurrency + 1` connections for
+judgments and optional startup metadata warmup. Warmup starts after Runtime.ready,
+is bounded, performs no inference and never holds a judgment slot. There is no paid
+keepwarm, automatic HTTP retry, or model switching. Auth failures suspend until
+credential reload/restart; other faults back off. Quota failure (HTTP 402), rate
+limits, timeouts and network faults are explicit. One notification opens an outage;
+repeated failures are suppressed, recovery is reported. Missing notifications do
+not block original business workflows.
 
-Voice intent, event relevance and bounded candidate selection use question version 2;
-model profile uses version 6 with `objective` and 1..32 `options`, each a closed
-`{profile, model, reasoning_effort}` combination keyed as `profile_effort` (e.g.
-`deep_high`). Verified API candidates with `none` effort remain eligible in both
-profile selection and the independent effort question; missing support is never invented. The adapter batches two small native Choice questions in one HTTP
-request, validating both responses and retaining each probability distribution.
-`field_choices` contains only fields above their confidence threshold; other fields
-are null. `confidence_scope=per_field` never claims a joint probability. `choice`
-is the raw combined candidate (or `uncertain`), not authority to apply an uncertain
-field. The task owner adopts only confident unresolved fields and validates the final
-combination. Token usage is recorded once for the whole response, not summed twice.
-No arbitrary model names or efforts are generated. The new model-profile version invalidates only that
-kind's cached decisions; old objective-only model samples must supply options.
-Profiles are `fast / balanced / deep / ultra`, plus `custom` for an explicitly supplied
-model outside those mappings. `ultra` is reserved for exceptional
-reasoning/original research with concrete justification that `deep` is insufficient;
-ordinary research search/summaries do not qualify. Every kind includes `uncertain`. Thresholds apply to the selected
-option's probability; provider `confidence` is also retained but is not measured accuracy.
-Shadow producers publish `DecisionSample` without awaiting it. Active mode does not
-also consume those publications, avoiding duplicate evaluation. CLI manual fixtures
-remain effect-free in both modes. Active, shadow and manual inputs all require the
-same explicit external-context consent.
+## Voice and event adoption
 
-## Data minimization and reliability
+Known local speech controls bypass inference. Other bounded accepted native text
+can be classified without a keyword-only admission gate. Sleep, stop and chat may
+apply locally after epoch/input/focus checks; cancel/takeover requires a uniquely
+associated operation and stop readback. Correction/supplement is only a suggestion
+until the foreground executor explicitly confirms it via the voice owner. Confirmation
+is claimed before side effects, so a lost response cannot repeat the handoff.
 
-Owners supply only relevant text/state summaries. JSON over 16 KiB is rejected, never
-silently truncated. A structural guard rejects known credential fields, bearer/private
-key strings and raw-media payload fields. It is not a general secret detector: producers
-must curate inputs and must not include credentials disguised as ordinary text.
-Inputs are detached and transient. Private SQLite retains source/reference, input hash,
-byte count, question version, choice IDs, requested/actual model, probabilities, tokens,
-latency, errors and optional expected labels; it does not duplicate raw conversation,
-event content, question text or candidate descriptions.
+Native automatic handoff remains a notification, not an approval hook. Context-only
+suggestion injection is not a second user submission. A safe foreground checkpoint
+must exclude unknown/in-flight tools and terminals; background correction pauses the
+related original run before continuation; a later scheduled run cannot inherit that binding. No confirmation can archive an entire schedule.
+Multiple targets, changed focus or unverified stops require clarification/reconciliation.
+The optional local ASR/TTS path stays disabled until its own acoustic acceptance.
 
-One HTTP worker, a bounded 32-entry queue and a separate 64-entry observation subscription
-isolate producers. Active requests have a 3-second total deadline by default and fail
-fast when another judgment is busy. Identical in-flight requests share one attempt.
-Late results cannot call owner actions. Receipt IO uses one owned thread, at most 16
-outstanding requests, and caller cancellation does not wait for slow SQLite; shutdown
-queues close after pending IO and drains the executor. Overflow is a coverage gap,
-not a failure of primary work. Queued input is volatile and not replayed after restart.
+Event recording never waits for judgment. Only a batch whose admitted, current events
+are all classified irrelevant may be skipped. Events and run state are re-read after
+judgment; invalidation is explicitly recorded. Uncertainty/failure preserves dispatch.
 
-The adapter owns one HTTP session with at most two connections (one judgment plus one
-startup metadata request), a 120-second idle reuse window and a 300-second DNS cache.
-These are client ceilings, not a promise that the server or proxy retains connections.
-DNS caching does not pin an established connection or override TLS validation.
-After enabled/consent/credential checks, startup schedules one owned asynchronous
-`GET /v1/models` after `Runtime.ready`, limited to 3 seconds (or a shorter provider
-timeout) and 64 KiB. Plugin initialization does not consume that network budget.
-It sends no judgment state and performs no model inference. It does not hold the
-judgment lock, delay readiness or change judgment authentication/backoff on failure.
-Shutdown cancels it before closing the shared session. Set `warmup_enabled=false`
-to disable it. Credential reload does not repeat it. No periodic keepwarm, paid dummy
-inference, automatic warmup retry or maintenance request is scheduled.
+## Archives and queries
 
-Status reports sanitized warmup outcome and the latest judgment's connection reuse,
-DNS time, connection time, response-header wait and total HTTP time. Connection time
-includes DNS/TCP/TLS and any proxy handshake; response wait includes network and server
-work, not just inference. Missing phase times mean that phase was not observed.
+`state/decisions/archive/YYYY-MM-DD.jsonl` is a private, append-only daily archive in
+the configured timezone. No automatic time/total-size deletion. Records include:
 
-Intent and UTC-day attempt count commit before HTTP. The count includes failed,
-timed-out and unconfirmed calls and is informational only, never an admission limit.
-No automatic HTTP retries occur. Auth failures suspend until explicit
-reload/restart; other failures back off up to 15 minutes. Restart marks unfinished
-intents unknown. Same source/reference/input digest/question version/model deduplicates
-within retained receipts; changed input is a new judgment. A failed identity is not
-retried after reload. Unknown outcomes never imply permission to replay an action.
+- invocation/receipt IDs, scene, caller/operation link, input hash/version;
+- bounded owner summary, candidate IDs, question/policy version and effective settings;
+- selected candidate and probability distribution, usage and provider/queue/total latency;
+- result/fallback, owner suggestion/adoption/rejection and any reported operation outcome.
 
-The newest 2000 receipts are retained (100..10000 configurable); SQLite has a 128 MiB
-page ceiling. The existing private filename is `state/decisions/shadow.sqlite3` in either
-mode, preserving earlier receipts and usage counts. Paging/results are bounded. Statistics
-cover retained receipts, not lifetime usage. `source:kind` separates manual fixtures
-from live cohorts; baseline-parser agreement is distinct from labelled accuracy.
-Latency is HTTP time, not evidence of faster end-to-end tasks. New active cohorts need
-normal-use evidence before claiming accuracy or savings.
-
-## Management, tests and acceptance
-
-Local CLI through the existing private Unix socket:
+Complete judgment input, original media and credentials are excluded. Provider returns
+and business adoption are different stages. `shadow.sqlite3` remains the bounded recent
+receipt/audit index; pruning it never removes date archives. Historical data is preserved;
+missing historical adoption remains unknown. Synthetic-prefixed/manual fixtures are
+separate cohorts, not evidence of normal household accuracy. Status statistics describe
+retained indexes, not lifetime accuracy or task success.
 
 ```sh
 personal-agent --config config/config.toml decisions status
 personal-agent --config config/config.toml decisions list '{"limit":20}'
-personal-agent --config config/config.toml decisions get '{"id":"64-character-receipt-id"}'
-personal-agent --config config/config.toml decisions evaluate '{"kind":"voice_intent","reference":"synthetic:exit:1","state":{"utterance":"退下吧","execution_active":false}}'
-personal-agent --config config/config.toml decisions label '{"id":"64-character-receipt-id","expected":"sleep"}'
-personal-agent --config config/config.toml decisions reload
+personal-agent --config config/config.toml decisions archive '{"day":"2026-10-21","limit":50}'
+personal-agent --config config/config.toml decisions archive '{"day":"2026-10-21","kind":"voice_intent","status":"adopted"}'
 ```
 
-Manual evaluate acknowledges only volatile admission; poll get/list for committed output.
-List defaults to 20, maximum 100, with a before cursor. Labels stay local.
+Archive filters also include `decision_id` and `operation_id`; `next_offset` is passed
+as `offset`. Each read scans at most 4 MiB and returns at most 100 records; an empty
+page may still have a continuation cursor. Configuration is validated by Config.load;
+status exposes effective scene policies, index statistics, queue pressure and faults.
 
-Use `scripts/check.py --group decisions --group tasks --group codex` during development,
-then the full check before deployment. Tests exercise real runtime/storage/inbox and
-local HTTP framing, deadlines, cancellation, missing/disabled service, privacy guards,
-coalescing, calls beyond the former daily cap, restart, model fallbacks and concurrent event invalidation. Fake
-providers establish contracts, not live-provider success. Explicit paid acceptance:
+## Verification and rollout
 
-```sh
-.venv/bin/python scripts/verify_decisions.py --config config/config.toml
-.venv/bin/python scripts/verify_decisions_transport.py --config config/config.toml
-```
+Run `scripts/check.py --group decisions --group tasks --group speech --group codex`
+during development and the full gate after final edits. Tests cover policy inheritance,
+concurrency/reserved capacity, deduplication with separate caller outcomes, cancellation,
+late results, daily archives, write failure, shutdown, voice confirmation and unknown
+side effects. Pure protocol tests do not establish real microphone/room or device success.
 
-Synthetic fixtures cover all kinds and the installed active MCP/capability paths,
-without speech, device actions or launching tasks. Private acceptance evidence includes
-matches, fallback reasons and latency. These small fixtures do not measure household
-accuracy. Real voice adoption and task benefits require normal use after deployment.
+Explicit synthetic acceptance scripts remain opt-in. Measure complete user-response
+latency and actual adoption separately from HTTP duration. Do not enable a new native
+voice behavior solely because a mocked checkpoint passed. If the provider cannot
+expose a reliable boundary, retain advisory/unconfirmed behavior and document that
+limitation rather than reconstructing the native voice stack.
 
-Transport acceptance explicitly makes three synthetic paid judgments: after metadata
-warmup, immediately again, and after 20 seconds idle (past the old 15-second default).
-It records actual reuse and timings in private instance storage, and checks installed
-warmup/timeout configuration without sending device commands. It never runs on a timer.
 
-Protocol references: [API](https://docs.typesafe.ai/api),
-[models](https://docs.typesafe.ai/models), [confidence](https://docs.typesafe.ai/confidence).
+### Acceptance evidence (2026-10-21)
 
-Task-owned `model_review` (default threshold 0.90, configurable 0..1) is a separate selection question.
-It selects one complete legal model/native-effort pair from task facts and reported
-prior-execution evidence. Unlike the existing `model_profile` missing-field support,
-it does not use two independent profile/effort answers. Tasks may adopt a suggestion
-only in configured active mode, before execution, after filtering protected fields.
-Its receipt is attached to the task selection and dispatch for comparison; confidence is
-not a measured probability that the selected execution model will succeed. See the
-tasks README for queue bounds, provenance, reuse, restart and adoption criteria.
+The reviewed implementation passed the full gate: 776 tests with no skips, including format/lint/types and the
+frontend build. Isolated Jev synthetic correction/takeover judgments passed after
+metadata warmup; a cold request also exercised the unchanged 3-second timeout and
+backoff. These few examples are not an accuracy estimate.
+
+A real isolated subscription thread accepted context-only injection both before
+and during a turn without creating another turn. Interrupt followed by provider
+readback reached a stopped checkpoint. This does not establish that native voice
+handoffs expose an approval gate, or that an issued external action can be undone.
+
+After idle restart, a synthetic request through the installed local capability
+transport returned `correct` in 258 ms and produced linked request/result/adoption
+archive records. Its outcome was explicitly rejected as `synthetic_no_effect`;
+no device action or audio playback was requested. Instance policy is 0.6 globally,
+0.2 for model review, concurrency 4 and a 3-second active deadline. The existing
+unknown historical task was retained, not replayed. By user choice, physical voice correction, supplement and takeover will be assessed
+through normal daily use and subsequent log/feedback review; no dedicated voice
+acceptance session is scheduled. The existing synthetic results do not establish
+real-world voice accuracy.

@@ -37,6 +37,27 @@ class DecisionQuery:
     reference: str
     state: dict[str, Any]
     caller_run: str | None = None
+    summary: str = ""
+    input_version: str = ""
+
+
+@dataclass(frozen=True)
+class DecisionOutcome:
+    """Owner observation; never permission to execute an action."""
+
+    decision_id: str
+    status: str
+    reason: str
+    operation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class VoiceDecisionRequest:
+    """Foreground confirmation of a current, scoped voice suggestion."""
+
+    action: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    caller_run: str | None = None
 
 
 @dataclass(frozen=True)

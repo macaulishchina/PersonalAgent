@@ -1,20 +1,6 @@
-# 主会话订阅模型、API 接入及 Jev 判断。密钥留在实例根目录 .env。
+# 主会话订阅模型和 API 接入。密钥留在实例根目录 .env。
 codex_model = "gpt-6.1-sol"
 codex_reasoning_effort = "high"
-
-[decisions]
-enabled = true
-external_data_consent = false
-mode = "active"
-model = "jev-1.13.0"
-queue_size = 32
-retention = 2000
-timeout_seconds = 8
-active_timeout_seconds = 3
-max_age_seconds = 30
-warmup_enabled = true
-keepalive_seconds = 120
-dns_cache_seconds = 300
 
 [model_api]
 execution_max_output_tokens = 16384

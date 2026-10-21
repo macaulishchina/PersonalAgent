@@ -851,6 +851,24 @@ class TasksPlugin:
             for r in runs:
                 if r["revision"] <= r["delivered"]:
                     continue
+                if r["state"] in {"completed", "failed", "canceled", "unknown"}:
+                    from ...kernel.decisions import report_decision
+
+                    selection = r["data"]["spec"].get("execution", {}).get("selection", {})
+                    decision = selection.get("model_review", {}).get("decision") or selection.get(
+                        "decision_support", {}
+                    )
+                    await report_decision(
+                        self.host.runtime,
+                        decision,
+                        "completed"
+                        if r["state"] == "completed"
+                        else "failed"
+                        if r["state"] == "failed"
+                        else "unknown",
+                        "run_" + r["state"],
+                        r["id"],
+                    )
                 text = (
                     r["data"]["spec"]["title"]
                     + " · "

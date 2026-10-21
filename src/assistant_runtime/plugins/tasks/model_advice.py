@@ -6,10 +6,29 @@ import math
 import hashlib
 
 from ...kernel.contracts import DecisionQuery
-from ...kernel.decisions import decide, fallback
+from ...kernel.decisions import decide, fallback, report_decision
+
+
+def reject(result, reason):
+    return {**result, **fallback(reason, result.get("receipt_id"))}
 
 
 async def select_execution(plugin, requested, objective, prior=None):
+    selected = await _select_execution(plugin, requested, objective, prior)
+    selection = selected["selection"]
+    review = selection.get("model_review", {})
+    result = review.get("decision") or selection.get("decision_support", {})
+    applied = review.get("applied", result.get("status") == "ok")
+    await report_decision(
+        plugin.host.runtime,
+        result,
+        "adopted" if applied else "rejected",
+        "validated_model_choice" if applied else "original_model_choice",
+    )
+    return selected
+
+
+async def _select_execution(plugin, requested, objective, prior=None):
     requested = plugin.model_policy.normalize(requested)
     if plugin.model_policy.review_mode == "active":
         return await select_active(plugin, requested, objective, prior)
@@ -47,6 +66,7 @@ async def select_execution(plugin, requested, objective, prior=None):
                     "model_profile",
                     "task-model:" + hashlib.sha256(objective.encode()).hexdigest(),
                     {"objective": objective, "options": options},
+                    summary=objective[:800],
                 ),
             )
     proposed = requested
@@ -69,7 +89,7 @@ async def select_execution(plugin, requested, objective, prior=None):
             choose_effort = choose_effort and effort is not None
         else:
             candidate = None
-            advice = fallback("low_confidence", advice.get("receipt_id"))
+            advice = reject(advice, "low_confidence")
     if candidate:
         proposed = {
             **requested,
@@ -80,13 +100,13 @@ async def select_execution(plugin, requested, objective, prior=None):
         if choose_effort:
             proposed["reasoning_effort"] = candidate["reasoning_effort"]
     elif advice["status"] == "ok":
-        advice = fallback("invalid_execution_option", advice.get("receipt_id"))
+        advice = reject(advice, "invalid_execution_option")
     try:
         selected = await policy.resolve(plugin.executor, proposed, fixed)
     except Exception:
         if proposed is requested:
             raise
-        advice = fallback("suggested_execution_unavailable", advice.get("receipt_id"))
+        advice = reject(advice, "suggested_execution_unavailable")
         selected = await policy.resolve(plugin.executor, requested, fixed)
         candidate = None
     if candidate:
@@ -133,7 +153,14 @@ async def select_active(plugin, requested, objective, prior):
     )
     result = fallback("protected_selection" if len(locks) == 2 else "disabled")
     selected, candidate = baseline, None
-    threshold = config.get("thresholds", {}).get("model_review", 0.90)
+    threshold = (
+        config.get("scenes", {})
+        .get("model_review", {})
+        .get(
+            "threshold",
+            config.get("thresholds", {}).get("model_review", config.get("default_threshold", 0.6)),
+        )
+    )
     if enabled and len(locks) < 2:
         try:
             async with asyncio.timeout(config.get("active_timeout_seconds", 3)):
@@ -157,7 +184,10 @@ async def select_active(plugin, requested, objective, prior):
                         json.dumps(state, sort_keys=True, ensure_ascii=False).encode()
                     ).hexdigest()
                     result = await decide(
-                        plugin.host.runtime, DecisionQuery("model_review", "task-review:" + digest, state)
+                        plugin.host.runtime,
+                        DecisionQuery(
+                            "model_review", "task-review:" + digest, state, summary=objective[:800]
+                        ),
                     )
                     if result["status"] == "ok":
                         candidate = options.get(result.get("choice"))
@@ -168,10 +198,10 @@ async def select_active(plugin, requested, objective, prior):
                             or not math.isfinite(probability)
                             or not threshold <= probability <= 1
                         ):
-                            result = fallback("invalid_or_low_probability", result.get("receipt_id"))
+                            result = reject(result, "invalid_or_low_probability")
                             candidate = None
                         elif any(candidate[k] != v for k, v in locks.items()):
-                            result = fallback("protected_selection", result.get("receipt_id"))
+                            result = reject(result, "protected_selection")
                             candidate = None
                         else:
                             proposed = {
@@ -188,9 +218,9 @@ async def select_active(plugin, requested, objective, prior):
                             if any(selected[k] != candidate[k] for k in ("model", "reasoning_effort")):
                                 raise ValueError("Resolved model does not match decision")
         except TimeoutError:
-            selected, candidate, result = baseline, None, fallback("timeout")
+            selected, candidate, result = baseline, None, reject(result, "timeout")
         except Exception:
-            selected, candidate, result = baseline, None, fallback("review_unavailable")
+            selected, candidate, result = baseline, None, reject(result, "review_unavailable")
     record = {
         "mode": "active",
         "threshold": threshold,

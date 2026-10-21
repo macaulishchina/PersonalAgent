@@ -185,7 +185,7 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
         ):
             await self.subject.route(request, {}, 1)
         calls = [c.args[0].action for c in self.host.runtime.invoke.await_args_list]
-        self.assertEqual(calls, ["terminate"])
+        self.assertEqual(calls, ["get"])
         self.assertEqual(request.state, "unknown")
 
     async def test_ending_attention_preserves_task_but_invalidates_speech(self):

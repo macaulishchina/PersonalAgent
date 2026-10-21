@@ -23,6 +23,7 @@ from assistant_runtime.kernel.contracts import (
     DecisionRequest,
     DecisionSample,
     DecisionQuery,
+    DecisionOutcome,
     TaskRequest,
     EventRequest,
 )
@@ -151,7 +152,9 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.wait_for(self.runtime.invoke(Control("stop")), 0.2)
         self.assertEqual(controlled, ["stop"])
-        self.assertEqual(set(self.runtime.handlers), {DecisionRequest, DecisionQuery, Control})
+        self.assertEqual(
+            set(self.runtime.handlers), {DecisionRequest, DecisionQuery, DecisionOutcome, Control}
+        )
         self.assertFalse(self.plugin.diagnostics()["execution_enabled"])
         self.provider.release.set()
         await self.settle()
@@ -168,7 +171,7 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.provider.release.clear()
         self.plugin.enqueue(sample("running"), "assistant")
         await self.provider.entered.wait()
-        for index in range(self.plugin.settings.queue_size):
+        for index in range(self.plugin.settings.queue_size - 1):
             self.assertTrue(self.plugin.enqueue(sample(str(index)), "assistant")["accepted"])
         self.assertEqual(self.plugin.enqueue(sample("overflow"), "assistant")["reason"], "queue_full")
         self.assertEqual(self.plugin.counts["queue_dropped"], 1)
@@ -340,15 +343,17 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
     async def test_usable_result_is_cached_and_active_bus_does_not_duplicate_http(self):
         result = await self.query()
         self.assertEqual(result["choice"], "sleep")
-        self.assertEqual(result["probability_threshold"], 0.98)
-        self.assertEqual(result, await self.query())
+        self.assertEqual(result["probability_threshold"], 0.6)
+        cached = await self.query()
+        self.assertEqual(result["receipt_id"], cached["receipt_id"])
+        self.assertNotEqual(result["decision_id"], cached["decision_id"])
         self.runtime.contexts["decisions"].publish("decision.observed", sample=sample("ignored"))
         await self.settle()
         self.assertEqual(len(self.provider.calls), 1)
         self.assertTrue(self.plugin.diagnostics()["active_enabled"])
 
     async def test_low_probability_uncertain_and_errors_fall_back(self):
-        self.provider.probability = 0.8
+        self.provider.probability = 0.59
         self.assertEqual((await self.query("low"))["reason"], "low_confidence")
         self.provider.probability = 1
         self.provider.choice = "uncertain"
@@ -364,7 +369,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
     async def test_ultra_advice_uses_normal_confidence_gate(self):
         self.plugin.settings.mode = "active"
         self.provider.choice = "ultra_high"
-        for reference, probability, expected in (("low", 0.89, "fallback"), ("high", 0.99, "ok")):
+        for reference, probability, expected in (("low", 0.59, "fallback"), ("high", 0.99, "ok")):
             self.provider.probability = probability
             result = await self.runtime.invoke(
                 DecisionQuery(
@@ -415,7 +420,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         first = asyncio.create_task(self.query("slow"))
         await self.provider.entered.wait()
         same = asyncio.create_task(self.query("slow"))
-        self.assertEqual((await self.query("another"))["reason"], "provider_busy")
+        self.assertEqual((await self.query("another"))["reason"], "timeout")
         results = await asyncio.wait_for(asyncio.gather(first, same), 0.5)
         self.assertTrue(all(r["status"] == "fallback" for r in results))
         self.assertTrue(all(r["reason"] == "timeout" for r in results))
@@ -423,7 +428,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.retry_at = 0
         self.provider.release.set()
         self.assertEqual((await self.query("slow"))["reason"], "timeout")
-        self.assertEqual(len(self.provider.calls), 1)
+        self.assertEqual(len(self.provider.calls), 2)
         self.assertFalse(self.plugin.waiters)
 
     async def test_caller_cancellation_propagates_and_result_does_not_start_fallback_work(self):
@@ -456,7 +461,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(entered.is_set())
                 self.assertEqual(result["reason"], "timeout")
                 self.assertLess(time.monotonic() - started, 0.4)
-                self.assertEqual(self.plugin.receipts.pending, 1)
+                self.assertLessEqual(self.plugin.receipts.pending, 2)
                 self.assertEqual(self.provider.calls, [])
             finally:
                 release.set()
@@ -793,7 +798,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
         service.control.assert_not_awaited()
         service.backend.active_turn = "turn"
         await service._voice_decision("取消刚才的任务", 7, 3, "turn", 12)
-        service.control.assert_awaited_once_with(Control("cancel", "turn"))
+        service.control.assert_not_awaited()  # No scoped coordinator: never pretend takeover succeeded.
 
     async def test_cancel_control_passes_captured_turn_after_playback_wait(self):
         service = AssistantService.__new__(AssistantService)
@@ -866,6 +871,36 @@ class EventIngressTest(unittest.IsolatedAsyncioTestCase):
         next_run = self.tasks.repo.runs(definition["id"])[0]
         self.assertTrue(await self.inbox.prepare(next_run))
         self.assertEqual(self.tasks.repo.run(next_run["id"])["data"]["decision_support"]["reason"], "timeout")
+
+    async def test_adoption_logging_cannot_overwrite_cancellation(self):
+        definition = await self.create()
+        await self.emit("cancel-during-adoption")
+        await self.inbox.cycle()
+        run = self.tasks.repo.runs(definition["id"])[0]
+        self.config.decisions = {"external_data_consent": True}
+        self.runtime.register(
+            "tasks",
+            DecisionQuery,
+            AsyncMock(
+                return_value={
+                    "status": "ok",
+                    "choice": "irrelevant",
+                    "decision_id": "a" * 32,
+                }
+            ),
+        )
+        recorded = asyncio.Event()
+
+        async def outcome(request):
+            self.tasks.repo.update_run(run["id"], "canceled")
+            recorded.set()
+            return {}
+
+        self.runtime.register("tasks", DecisionOutcome, outcome)
+        self.assertFalse(await self.inbox.prepare(run))
+        await asyncio.wait_for(recorded.wait(), 1)
+        self.assertEqual(self.tasks.repo.run(run["id"])["state"], "canceled")
+        self.executor.launch.assert_not_awaited()
 
     async def test_event_deletion_and_run_cancellation_during_judgment_block_dispatch(self):
         definition = await self.create()

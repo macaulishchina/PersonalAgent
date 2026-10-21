@@ -268,6 +268,9 @@ class AssistantPlugin:
     async def start(self, context):
         self.service.context = context
         context.register(Control, self.service.control)
+        from .kernel.contracts import VoiceDecisionRequest
+
+        context.register(VoiceDecisionRequest, self.service.voice_control.request)
 
         async def trigger(request):
             accepted = await self.service.wake(source=request.source)

@@ -104,7 +104,7 @@ MEDIA_TOOLS = (
     "get_media_login",
 )
 
-DECISION_TOOLS = ("decision_support_status", "judge_options")
+DECISION_TOOLS = ("decision_support_status", "judge_options", "get_voice_decision", "confirm_voice_decision")
 
 SERVICES = {
     "search": {"tools": ("search_capabilities", "search_web", "fetch_webpage"), "task_context": True},

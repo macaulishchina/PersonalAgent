@@ -357,7 +357,11 @@ class Interaction:
             return False
         if not operation.task_id:
             raise RuntimeError("Prior submission is unknown; cannot safely replace it")
-        await self.host.runtime.invoke(TaskRequest("terminate", {"task_id": operation.task_id}), timeout=15)
+        page = await self.host.runtime.invoke(TaskRequest("get", {"task_id": operation.task_id}))
+        runs = page.get("active_runs", [])
+        if len(runs) != 1:
+            raise RuntimeError("No unique related execution to stop")
+        await self.host.runtime.invoke(TaskRequest("cancel_run", {"run_id": runs[0]["id"]}), timeout=15)
         page = await self.host.runtime.invoke(TaskRequest("get", {"task_id": operation.task_id}))
         if any(r["state"] in {"running", "dispatching", "unknown"} for r in page["runs"]):
             raise RuntimeError("In-flight execution could not be confirmed stopped")

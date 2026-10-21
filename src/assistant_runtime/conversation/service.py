@@ -272,6 +272,18 @@ class Conversation:
         elif kind == "message" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
+            summary = event.get("tool_summary") or {}
+            binding = self.feedback.get(turn) if turn else None
+            if (
+                not restored
+                and summary.get("kind") == "create_task"
+                and summary.get("outcome") == "completed"
+                and binding
+                and binding.get("source") == "voice"
+                and binding.get("epoch") == self.host.voice.epoch
+                and hasattr(self.host, "voice_control")
+            ):
+                self.host.voice_control.bind(turn, summary["task_id"])
             references = self.media.resolve(event.get("attachments", []))
             self.store.put(
                 mid,

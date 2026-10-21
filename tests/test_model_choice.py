@@ -262,11 +262,13 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["spec"]["execution"]["model"], "gpt-6-luna")
         self.assertEqual(updated["spec"]["execution"]["model_source"], "user")
 
-    def test_only_model_review_accepts_lower_threshold_and_uses_candidate_probability(self):
+    def test_global_threshold_and_explicit_override_use_candidate_probability(self):
         settings = DecisionSettings.parse({"thresholds": {"model_review": 0.2}})
-        self.assertEqual(settings.thresholds["voice_intent"], 0.98)
-        with self.assertRaises(ValueError):
-            DecisionSettings.parse({"thresholds": {"voice_intent": 0.2}})
+        self.assertEqual(settings.policy("voice_intent")["threshold"], 0.6)
+        self.assertEqual(
+            DecisionSettings.parse({"thresholds": {"voice_intent": 0.2}}).policy("voice_intent")["threshold"],
+            0.2,
+        )
         for invalid in (-0.1, 1.1, float("nan"), True):
             with self.assertRaises(ValueError):
                 DecisionSettings.parse({"thresholds": {"model_review": invalid}})

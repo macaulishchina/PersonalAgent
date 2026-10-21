@@ -35,6 +35,8 @@ def parse_command(text, wake_words=()):
         return Control("sleep")
     if s in {"停", "停止", "停一下", "别说了", "停止播放", "暂停播报", "停止播报", "暂停播放"}:
         return Control("stop")
+    if s in {"我自己来", "我来操作", "我自己操作"}:
+        return Control("takeover")
     if s in {"取消任务", "取消当前任务", "停止任务", "终止任务", "不用做了"}:
         return Control("cancel")
     if s in {"结束对话", "结束聊天", "结束会话", "结束当前会话", "回到待机", "退出对话", "再见", "拜拜"}:

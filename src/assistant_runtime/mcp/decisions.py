@@ -3,8 +3,8 @@
 import uuid
 
 from fastmcp import FastMCP
-from ..kernel.contracts import DecisionQuery, DecisionRequest
-from ..kernel.decisions import decide, fallback
+from ..kernel.contracts import DecisionQuery, DecisionRequest, VoiceDecisionRequest
+from ..kernel.decisions import decide, fallback, report_decision
 from .memory import READ
 
 
@@ -45,18 +45,43 @@ def create_server(client, caller_run=None):
                 return fallback("disabled_or_context_not_authorized")
             if str(uuid.UUID(request_id)) != request_id:
                 return fallback("invalid_request_id")
-            return await decide(
+            result = await decide(
                 client,
                 DecisionQuery(
                     "selection",
                     "mcp:" + request_id,
                     {"question": question, "context": context, "options": options},
                     caller_run,
+                    summary=question[:800],
                 ),
             )
+            await report_decision(
+                client,
+                result,
+                "suggested" if result["status"] == "ok" else "rejected",
+                "mcp_advisory" if result["status"] == "ok" else "original_workflow",
+                caller_run,
+            )
+            return result
         except (ValueError, TypeError, AttributeError):
             return fallback("invalid_request")
         except Exception:
             return fallback("decision_transport_unavailable")
+
+    @server.tool(annotations=READ)
+    async def get_voice_decision() -> dict:
+        """Foreground only: inspect a current voice correction/supplement suggestion, not an executed action."""
+        return await client.invoke(VoiceDecisionRequest("get", caller_run=caller_run))
+
+    @server.tool(annotations={**READ, "readOnlyHint": False})
+    async def confirm_voice_decision(decision_id: str, accept: bool) -> dict:
+        """Foreground only. Confirm AFTER understanding the user's current correction/supplement.
+
+        Host validates focus and target and owns the handoff. Do not separately repeat the
+        operation or resubmit the utterance. Unknown means reconcile, never retry an action.
+        """
+        return await client.invoke(
+            VoiceDecisionRequest("confirm", {"decision_id": decision_id, "accept": accept}, caller_run)
+        )
 
     return server

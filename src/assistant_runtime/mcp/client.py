@@ -20,12 +20,16 @@ from ..kernel.contracts import (
     SearchRequest,
     DecisionRequest,
     DecisionQuery,
+    DecisionOutcome,
+    VoiceDecisionRequest,
 )
 
 from ..kernel.models import ModelRequest
 
 Request = (
     ModelRequest
+    | VoiceDecisionRequest
+    | DecisionOutcome
     | DecisionQuery
     | DecisionRequest
     | MediaRequest
@@ -58,11 +62,15 @@ class LocalRuntimeClient:
     async def invoke(self, request: Request) -> dict:
         if isinstance(request, ModelRequest):
             payload = {"command": "models", **asdict(request)}
+        elif isinstance(request, VoiceDecisionRequest):
+            payload = {"command": "voice-decision", **asdict(request)}
+        elif isinstance(request, DecisionOutcome):
+            payload = {"command": "decisions", "action": "outcome", "arguments": asdict(request)}
         elif isinstance(request, DecisionQuery):
             payload = {
                 "command": "decisions",
                 "action": "judge",
-                "arguments": {"kind": request.kind, "reference": request.reference, "state": request.state},
+                "arguments": {k: v for k, v in asdict(request).items() if k != "caller_run"},
                 "caller_run": request.caller_run,
             }
         elif isinstance(request, DecisionRequest):

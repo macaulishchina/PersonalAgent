@@ -55,6 +55,8 @@ class Receipts:
             seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
             kind TEXT NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS attempts (day TEXT PRIMARY KEY, count INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS decision_audit_index (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
         """)
         with self.db:
             self.db.execute("UPDATE receipts SET state='unknown' WHERE state='dispatching'")
@@ -143,8 +145,9 @@ class Receipts:
         groups = {}
         for kind, state, raw in rows:
             data = json.loads(raw)
+            cohort = "synthetic" if data.get("reference", "").startswith("synthetic") else data["source"]
             group = groups.setdefault(
-                data["source"] + ":" + kind,
+                cohort + ":" + kind,
                 {
                     "kind": kind,
                     "source": data["source"],
@@ -183,4 +186,44 @@ class Receipts:
             "groups": groups,
             "attempts_today": count[0] if count else 0,
             "attempt_day": self.day(),
+        }
+
+    def _audit(self, entry):
+        from .audit import append
+
+        append(self.directory, self.settings.timezone, entry)
+        metadata = {k: entry[k] for k in ("stage", "kind", "status", "reason", "total_ms") if k in entry}
+        with self.db:
+            self.db.execute("INSERT INTO decision_audit_index(data) VALUES(?)", (json.dumps(metadata),))
+            self.db.execute(
+                "DELETE FROM decision_audit_index WHERE seq NOT IN "
+                "(SELECT seq FROM decision_audit_index ORDER BY seq DESC LIMIT ?)",
+                (self.settings.retention,),
+            )
+
+    def _archive(self, arguments):
+        from .audit import page
+
+        return page(self.directory, **arguments)
+
+    def _audit_status(self):
+        from collections import Counter
+
+        stages, reasons, latency = Counter(), Counter(), []
+        for (raw,) in self.db.execute("SELECT data FROM decision_audit_index"):
+            entry = json.loads(raw)
+            stages[
+                (entry.get("kind") or "unknown") + ":" + entry["stage"] + ":" + entry.get("status", "")
+            ] += 1
+            if entry.get("reason"):
+                reasons[entry["reason"]] += 1
+            if entry.get("stage") == "result" and "total_ms" in entry:
+                latency.append(entry["total_ms"])
+        latency.sort()
+        return {
+            "scope": "retained_audit_index",
+            "stages": dict(stages),
+            "reasons": dict(reasons),
+            "total_ms_p50": latency[(len(latency) - 1) // 2] if latency else None,
+            "total_ms_p95": latency[math.ceil(len(latency) * 0.95) - 1] if latency else None,
         }

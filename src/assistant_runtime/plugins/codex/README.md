@@ -87,9 +87,13 @@ Standalone `退下` forms and existing explicit endings go through local sleep. 
 quoted and explanatory uses do not. Sleep clears local audio and invalidates the old
 voice generation without canceling authorized background work. Main I/O bindings and
 quiet hours remain unchanged. `closing` is distinct from standby: repeated exits coalesce,
-and a new wake waits until the prior transport cleanup has completed. Verified scoped `我自己来` takeover, semantic correction
-versions and directed-speech admission are subsequent phases; do not equate takeover
-with merely ending voice or claim an unconfirmed device action has stopped.
+and a new wake waits until the prior transport cleanup has completed. The shared voice-control owner can associate task creation results with their recorded
+voice turn and confirm correction/supplement through decisions MCP. It never resubmits
+a native transcript. Foreground checkpoints read turn/tool/terminal state; background
+handoffs use run-scoped pause/continue/cancel, not plan termination. Unconfirmed effects
+remain unknown. This does not intercept native automatic handoffs or prove suppression
+of an independently-issued tool call; real interruption and physical playback need
+separate acceptance. Directed-speech admission remains a subsequent phase.
 
 ## Verification
 
