@@ -1,0 +1,3 @@
+# Optional MCP01 wake button. Read-only access for this installation's service group.
+# Change group/identity for other hosts; never grant access to unrelated HID devices.
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="a03b", ATTRS{serial}=="ACTIONS-DEV-SN1", GROUP="macaulish", MODE="0640"

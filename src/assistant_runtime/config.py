@@ -94,6 +94,7 @@ class Config:
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     search: dict = field(default_factory=dict)
+    hid_buttons: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     work_files: dict = field(default_factory=dict)
@@ -163,6 +164,9 @@ class Config:
         search = SearchSettings.parse(self.search)
         if "search" in self.plugins and not search.providers:
             raise ValueError("Search plugin requires a configured provider")
+        from assistant_runtime.plugins.hid_buttons.settings import parse as parse_hid_buttons
+
+        parse_hid_buttons(self.hid_buttons)
         EventSettings.parse(self.events)
         NotificationSettings.parse(self.notifications)
         TaskSettings.parse(self.tasks)

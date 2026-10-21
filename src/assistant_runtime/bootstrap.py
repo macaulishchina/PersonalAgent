@@ -35,6 +35,7 @@ def compose(service):
     from .plugins.keyword.plugin import KeywordPlugin
     from .plugins.codex.plugin import CodexPlugin
     from .plugins.gesture import GesturePlugin
+    from .plugins.hid_buttons.plugin import HidButtonsPlugin
     from .memory.service import MemoryPlugin
     from .memory.mem0 import Mem0Memory
 
@@ -175,6 +176,7 @@ def compose(service):
             service.mcp_registry if "integrations" in config.plugins else None,
         ),
         "gesture": GesturePlugin,
+        "hid_buttons": lambda: HidButtonsPlugin(config),
         "memory": lambda: MemoryPlugin(
             config,
             store,

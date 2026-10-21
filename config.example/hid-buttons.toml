@@ -1,0 +1,11 @@
+# 可选 USB HID 功能键：在入口 plugins 添加 "hid_buttons" 后启用。
+# 完整报文包括 report ID；由独立硬件测试确认，不能猜测键值。
+# 当前只支持 wake，遵守原有夜间静默；不切换音频设备，不写灯光或静音。
+# 每个 HID 身份只配置一个唤醒键。USB 厂商/产品为四位十六进制字符串。
+# [hid_buttons.conference_wake]
+# vendor_id = "17ef"
+# product_id = "a03b"
+# serial = "ACTIONS-DEV-SN1"
+# report = "01fe"
+# action = "wake"
+# debounce_ms = 500

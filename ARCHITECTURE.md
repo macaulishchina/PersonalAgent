@@ -33,6 +33,7 @@ flowchart LR
 | `plugins/go2rtc/` | Configured gateway stream identity, bounded snapshots/clips and directional pan/tilt, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
 | `plugins/apple_home/` | Authenticated Apple Home readings, paired HAP refresh bridge, normalization and source freshness | AirPlay playback, model tasks, memory, HomePod account access |
 | `plugins/search/` | Configured public web search/fetch adapters, bounded IO/cache and metadata receipts | Execution model policy, agent loops, media acquisition, subscription Search Service |
+| `plugins/hid_buttons/` | Optional configured USB HID reports → existing wake trigger; identity, permissions and reconnect health | Audio routing, arbitrary commands, hardware mute or LED inference |
 | `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
 | `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
 | `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
@@ -109,6 +110,16 @@ pollers or task actions. Raw specifications, webpage bodies, credentials and URL
 query strings are excluded; absent/legacy summaries keep the original tool row.
 Restoration preserves saved summaries without backfilling old history. A successful
 tool call is distinct from a successful task outcome.
+
+Task run details expose a lazy, expandable activity timeline through authenticated
+`GET /api/tasks/{run_id}/trace`. Web delegates to the existing tasks trace capability and
+projects only bounded activity metadata. Start/end events merge by provider call identity;
+missing completion or unknown outcomes remain explicit, including after a run ends.
+Only one expanded execution polls incrementally while its panel/page is visible; closing,
+changing tasks or hiding the page cancels requests. Recorded pages are retained in order
+(up to the existing 500-event cap), with truncation shown. The UI adds no execution loop,
+model calls or raw command/argument/result retention. Existing execution summaries,
+artifacts and controls remain independent of trace loading/errors.
 
 Conversation headers distinguish text, voice-channel replies, task reports and
 other notifications using recorded source/kind, never prose inference. These

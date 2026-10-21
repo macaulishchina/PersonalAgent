@@ -4,6 +4,7 @@ root = ".."
 include = [
   "voice.toml",
   "devices.toml",
+  "hid-buttons.toml",
   "models.toml",
   "decisions.toml",
   "tasks.toml",
