@@ -61,6 +61,7 @@ class CodexBackend:
         self.voice_active = lambda: False
         self.jobs = None
         self.thread_id = None
+        self.session_id = None
         self.resumed_turns = []
         self.resolved_model = None
         self.resolved_reasoning_effort = None

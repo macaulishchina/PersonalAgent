@@ -7,6 +7,9 @@ import os
 
 log = logging.getLogger(__name__)
 
+# Resume replies contain complete history, including registered image payloads.
+MAX_FRAME_BYTES = 64 * 1024 * 1024
+
 
 class RpcError(RuntimeError):
     pass
@@ -41,7 +44,7 @@ class CodexClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            limit=16 * 1024 * 1024,
+            limit=MAX_FRAME_BYTES,
         )
         self.readers = [asyncio.create_task(self._read()), asyncio.create_task(self._stderr())]
         await self.request(
@@ -74,6 +77,7 @@ class CodexClient:
         await self.send({"id": ident, "result": result})
 
     async def _read(self):
+        failure = "Codex connection closed; request outcome may be unknown"
         try:
             while line := await self.process.stdout.readline():
                 msg = json.loads(line)
@@ -86,12 +90,20 @@ class CodexClient:
                             f.set_result(msg.get("result", {}))
                 else:
                     await self.events.put(msg)
-        except (ValueError, OSError) as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            failure = "Codex returned an invalid JSON frame; request outcome may be unknown"
+            log.warning("%s", failure)
+        except ValueError:
+            failure = (
+                f"Codex response exceeded {MAX_FRAME_BYTES} byte frame limit; request outcome may be unknown"
+            )
+            log.warning("%s", failure)
+        except OSError as exc:
             log.warning("Codex event stream failed: %s", type(exc).__name__)
         finally:
             for future in list(self.pending.values()):
                 if not future.done():
-                    future.set_exception(RpcError("Codex connection closed; request outcome may be unknown"))
+                    future.set_exception(RpcError(failure))
             await self.events.put({"method": "local/disconnected", "params": {}})
 
     async def _stderr(self):

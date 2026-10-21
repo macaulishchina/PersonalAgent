@@ -130,6 +130,10 @@ class Conversation:
     def media_event(self, data, epoch):
         kind = data.get("kind")
         if kind == "closed":
+            # Startup can fail before the provider establishes a logical session.
+            # Cleanup must not emit a session event or mask the original failure.
+            if self.session is None:
+                return
             self.feedback.close(self.session, epoch)
             self.voice_revision += 1
             for (mid,) in self.store.db.execute(

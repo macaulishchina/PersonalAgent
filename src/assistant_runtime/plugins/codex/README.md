@@ -137,3 +137,11 @@ Background threads explicitly enable the native `default_mode_request_user_input
 feature. A question suspends execution through the existing native RPC and task
 `waiting_user`/`supplement` contract; it does not change the task to Plan mode or
 treat a prose question as a successful completed task.
+
+## Startup transport limits
+
+Stdio JSON frames are bounded at 64 MiB. Resume replies include conversation history
+and may exceed 16 MiB even when individual turns are small. Oversized or malformed
+frames fail pending requests explicitly, without logging payloads or replaying work.
+A failed startup before logical-session creation can be cleaned up safely; cleanup
+must not emit conversation events or mask the original transport error.
