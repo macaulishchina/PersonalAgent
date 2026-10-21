@@ -18,7 +18,7 @@ from assistant_runtime.plugins.media.settings import MediaSettings
 from assistant_runtime.plugins.media.library import Library
 from assistant_runtime.plugins.media.local_library import LocalLibrary, local_call
 
-ROOT = {"drive_id": "drive", "folder_id": "root-folder", "openlist_path": "/cloud"}
+ROOT = {"account": "aliyun", "drive_id": "drive", "folder_id": "root-folder", "openlist_path": "/cloud"}
 VIDEO = {
     "file_id": "video",
     "parent_file_id": "root-folder",
@@ -32,6 +32,9 @@ VIDEO = {
 
 
 class Provider:
+    def require(self, account, action):
+        pass
+
     def __init__(self):
         self.objects = {
             "video": dict(VIDEO),
@@ -178,6 +181,47 @@ class LibraryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["state"], "cancelled")
         self.assertEqual(saved["data"]["steps"][0]["state"], "completed")
         self.assertEqual(self.provider.calls.count("rename"), 1)
+
+    async def test_recycle_identity_is_bound_and_lost_restore_reply_only_observed(self):
+        original = self.provider.call
+        records = []
+
+        async def call(action, args):
+            if action == "trash_list":
+                result = await original(action, args)
+                return {**result, "items": [{**f, "recycle_id": "entry-1"} for f in result["items"]]}
+            if action == "restore":
+                records.append(args)
+            return await original(action, args)
+
+        self.provider.call = call
+        item = await self.plan({"action": "trash", "file_id": "video"})
+        await self.library.process(self.repo.get(item["operation_id"]))
+        item = await self.plan({"action": "restore", "file_id": "video"})
+        self.provider.lost = "restore"
+        with self.assertRaises(MediaError):
+            await self.library.process(self.repo.get(item["operation_id"]))
+        self.repo.recover()
+        await self.library.process(self.repo.get(item["operation_id"]))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["recycle_id"], "entry-1")
+        self.assertEqual(records[0]["expected_file"]["parent_file_id"], "root-folder")
+        self.assertEqual(self.repo.get(item["operation_id"])["state"], "completed")
+
+    async def test_restore_rechecks_parent_and_conflict_after_preview(self):
+        item = await self.plan({"action": "move", "file_id": "video", "folder_id": "season"})
+        await self.library.process(self.repo.get(item["operation_id"]))
+        item = await self.plan({"action": "trash", "file_id": "video"})
+        await self.library.process(self.repo.get(item["operation_id"]))
+        item = await self.plan({"action": "restore", "file_id": "video"})
+        self.provider.objects["collision"] = {**VIDEO, "file_id": "collision", "parent_file_id": "season"}
+        with self.assertRaisesRegex(MediaError, "conflict"):
+            await self.library.process(self.repo.get(item["operation_id"]))
+        del self.provider.objects["collision"]
+        del self.provider.objects["season"]
+        with self.assertRaisesRegex(MediaError, "file_not_found"):
+            await self.library.process(self.repo.get(item["operation_id"]))
+        self.assertNotIn("restore", self.provider.calls)
 
     async def test_download_reservation_prevents_mutation(self):
         self.repo.create(

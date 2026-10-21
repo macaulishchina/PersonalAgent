@@ -5,12 +5,12 @@ import time
 
 from ...kernel.contracts import MediaRequest, TaskRequest
 from ...kernel.runtime import Manifest
-from .aliyun import Aliyun
+from .providers import Providers, CAPABILITIES
 from .errors import MediaError
 from .downloads import Downloads
 from .openlist import OpenList
 from .repository import MediaRepository, TERMINAL
-from .search import PanSou, share_id, extraction_code
+from .search import PanSou, share_id, share_provider, extraction_code
 from .search_history import SearchHistory
 from .search_candidates import DISCOVERY_PLATFORMS
 from .settings import MediaSettings, identifier
@@ -21,7 +21,7 @@ from .batches import Batches
 class MediaPlugin:
     manifest = Manifest("media", ("notifications",))
 
-    def __init__(self, host, provider=None):
+    def __init__(self, host, providers=None):
         self.host = host
         self.settings = MediaSettings.parse(host.config.media)
         self.repo = MediaRepository(host.store.db, self.settings)
@@ -29,7 +29,7 @@ class MediaPlugin:
         self.library = Library(self)
         self.batches = Batches(self)
         self.root = host.config.state_dir / "media"
-        self.provider = provider or Aliyun(self.root, self.repo.account_state)
+        self.provider = Providers(self.root, self.settings, self.repo, providers)
         self.wakeup = asyncio.Event()
         self.accepting = False
 
@@ -51,7 +51,9 @@ class MediaPlugin:
             trust_env=False,
         )
         context.own(self.download_session.close)
-        self.search = PanSou(self.session, self.settings.search_url, self.search_history)
+        self.search = PanSou(
+            self.session, self.settings.search_url, self.search_history, self.settings.accounts
+        )
         self.openlist = OpenList(
             self.session, self.settings.openlist_url, self.root / "credentials" / "openlist.json"
         )
@@ -98,7 +100,7 @@ class MediaPlugin:
             "search": {"query", "before", "limit", "search_id", "refresh", "aliases", "platforms"},
             "search_history": {"before", "limit"},
             "search_sources": set(),
-            "inspect": {"share_url", "password", "parent_file_id", "marker", "refresh"},
+            "inspect": {"share_url", "password", "parent_file_id", "marker", "refresh", "account"},
             "files": {"target", "marker", "folder_id"},
             "capabilities": set(),
             "library": {"target", "marker", "folder_id", "location", "path"},
@@ -121,6 +123,7 @@ class MediaPlugin:
                 "folder_id",
                 "name",
                 "version",
+                "parent_file_id",
             },
             "download": {"request_id", "target", "file_id"},
             "get": {"operation_id"},
@@ -128,8 +131,8 @@ class MediaPlugin:
             "cancel": {"operation_id"},
             "resume": {"operation_id"},
             "verify": {"operation_id", "probe"},
-            "login": set(),
-            "login_status": {"login_id"},
+            "login": {"account"},
+            "login_status": {"login_id", "account"},
         }
         if action not in allowed or not isinstance(args, dict) or set(args) - allowed[action]:
             raise ValueError("Unknown media action or arguments")
@@ -147,7 +150,10 @@ class MediaPlugin:
             return result
         if action == "capabilities":
             return {
-                "provider": "aliyun",
+                "accounts": {
+                    name: {**definition, "actions": sorted(CAPABILITIES[definition["provider"]])}
+                    for name, definition in self.settings.accounts.items()
+                },
                 "discovery": {
                     "platforms": list(DISCOVERY_PLATFORMS),
                     "aliases_per_search": 3,
@@ -156,9 +162,9 @@ class MediaPlugin:
                     "coverage": "partial",
                     "identity_verification_required": True,
                 },
-                "acquisition_providers": ["aliyun"],
+                "acquisition_providers": sorted({a["provider"] for a in self.settings.accounts.values()}),
                 "targets": list(self.settings.targets),
-                "cloud": ["list", "mkdir", "rename", "move", "trash", "restore", "transfer", "download"],
+                "cloud": "See each account actions; unsupported actions fail before submission",
                 "limits": {"change_items": 100, "directory_depth": 16, "conflict_scan": 1000},
                 "local": ["list", "mkdir", "rename", "move", "trash", "restore"],
                 "restore_scope": "recorded_own_trash",
@@ -209,18 +215,18 @@ class MediaPlugin:
                 platforms=args.get("platforms"),
             )
         if action == "status":
-            try:
-                await self.provider.call("status")
-            except MediaError as exc:
-                if exc.code != "auth_required":
-                    return {
-                        "account": self.repo.account(),
-                        "error": exc.code,
-                        "targets": self.settings.targets,
-                        "local_targets": self.settings.local_targets,
-                    }
+
+            async def status(account):
+                try:
+                    await self.provider.call("status", {"account": account})
+                    error = None
+                except MediaError as exc:
+                    error = exc.code
+                return {**self.settings.accounts[account], **self.repo.account(account), "error": error}
+
+            values = await asyncio.gather(*(status(account) for account in self.settings.accounts))
             return {
-                "account": self.repo.account(),
+                "accounts": dict(zip(self.settings.accounts, values)),
                 "targets": self.settings.targets,
                 "local_targets": self.settings.local_targets,
                 "openlist_configured": bool(
@@ -228,7 +234,14 @@ class MediaPlugin:
                 ),
             }
         if action == "inspect":
-            values = {"share_id": share_id(args.get("share_url")), "password": self.password(args)}
+            account = self.provider.resolve(
+                args.get("account"), provider=share_provider(args.get("share_url"))
+            )
+            values = {
+                "account": account,
+                "share_id": share_id(args.get("share_url")),
+                "password": self.password(args),
+            }
             for field, default in (("parent_file_id", "root"), ("marker", "")):
                 value = args.get(field, default)
                 if not isinstance(value, str) or len(value) > 2000:
@@ -243,10 +256,14 @@ class MediaPlugin:
             return await self.provider.call("list", {**target, "marker": marker})
         if action in {"login", "login_status"} and request.caller_run:
             raise ValueError("Interactive account login is available only in the main conversation")
+        if action in {"login", "login_status"}:
+            account = self.provider.resolve(args.get("account"))
+            self.provider.require(account, "login")
+            adapter = self.provider.adapters[account]
         if action == "login":
-            return dict(self.provider.begin_login(self.context, self.login_completed))
+            return dict(adapter.begin_login(self.context, lambda: self.login_completed(account)))
         if action == "login_status":
-            login = self.provider.login
+            login = adapter.login
             if not login or login["login_id"] != args.get("login_id"):
                 raise ValueError("Media login not found; begin a new login")
             return dict(login)
@@ -254,6 +271,10 @@ class MediaPlugin:
             target_id = args.get("target")
             await self.authorize(request.caller_run, target_id)
             target = dict(self.target(target_id))
+            self.provider.resolve(target["account"], provider=share_provider(args.get("share_url")))
+            self.provider.require(target["account"], "copy")
+            if args.get("name") is not None:
+                self.provider.require(target["account"], "rename")
             intent = {
                 "share_id": share_id(args.get("share_url")),
                 "password": self.password(args),
@@ -261,6 +282,8 @@ class MediaPlugin:
                 "target": target_id,
                 "destination": target,
             }
+            if args.get("parent_file_id") is not None:
+                intent["parent_file_id"] = identifier(args["parent_file_id"])
             if args.get("folder_id"):
                 intent["root_destination"] = target
                 intent["destination"], _ = await self.library.destination(target_id, args["folder_id"])
@@ -288,6 +311,7 @@ class MediaPlugin:
             target_id = args.get("target")
             target = dict(self.target(target_id))
             await self.authorize(request.caller_run, target_id)
+            self.provider.require(target["account"], "download_url")
             if target_id not in self.settings.local_targets:
                 raise ValueError("No local download destination configured for this target")
             intent = {
@@ -371,18 +395,17 @@ class MediaPlugin:
             raise ValueError("Unknown configured media target")
         return self.settings.targets[name]
 
-    def login_completed(self):
-        self.repo.resume_auth()
+    def login_completed(self, account="aliyun"):
+        self.repo.resume_auth(account)
         self.wakeup.set()
 
     async def restore_authorization(self):
-        # Login may have atomically saved new credentials just before a crash,
-        # without getting to commit pending-operation resumption.
-        try:
-            await self.provider.call("status")
-        except MediaError:
-            return
-        self.login_completed()
+        for account in self.settings.accounts:
+            try:
+                await self.provider.call("status", {"account": account})
+            except MediaError:
+                continue
+            self.login_completed(account)
 
     async def matches(self, intent, file, *, expected_file_id=None, after_submit=False):
         marker = ""
@@ -424,7 +447,7 @@ class MediaPlugin:
             folder = await self.provider.call("folder", intent["destination"])
             if folder.get("type") != "folder":
                 raise MediaError("destination_not_a_folder")
-            file = await self.provider.call("source", intent)
+            file = await self.provider.call("source", {**intent, "account": intent["destination"]["account"]})
             if (
                 file.get("type") != "file"
                 or file.get("category") != "video"
@@ -450,7 +473,7 @@ class MediaPlugin:
             if present:
                 await self.complete(ident, present)
                 return
-            capacity = await self.provider.call("capacity")
+            capacity = await self.provider.call("capacity", {"account": intent["destination"]["account"]})
             if type(capacity.get("total")) is not int or type(capacity.get("used")) is not int:
                 raise MediaError("capacity_unconfirmed")
             if capacity["total"] - capacity["used"] < file["size"]:
@@ -477,6 +500,14 @@ class MediaPlugin:
                 },
             )
             return
+        receipt = item["data"].get("copy_receipt", {})
+        if receipt.get("task_id") and not receipt.get("file_id"):
+            observed = await self.provider.call(
+                "copy_status", {**intent["destination"], "task_id": receipt["task_id"]}
+            )
+            if observed.get("file_id"):
+                receipt = {**receipt, **observed}
+                item = self.repo.change(ident, "verifying", copy_receipt=receipt)
         present = await self.matches(
             intent,
             item["data"]["file"],
@@ -571,7 +602,9 @@ class MediaPlugin:
                 except MediaError as exc:
                     current = self.repo.get(item["id"])
                     if exc.code == "auth_required":
-                        self.repo.account_state("auth_required")
+                        self.repo.account_state(
+                            "auth_required", account=current["data"]["intent"]["destination"]["account"]
+                        )
                         state = "waiting_auth"
                     elif current["data"].get("submitted"):
                         state = "verifying"

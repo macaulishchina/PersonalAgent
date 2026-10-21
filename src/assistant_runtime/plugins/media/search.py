@@ -16,20 +16,25 @@ ALIYUN_HOSTS = {"www.alipan.com", "alipan.com", "www.aliyundrive.com", "aliyundr
 
 def share_id(url):
     if not isinstance(url, str) or len(url) > 1000:
-        raise ValueError("Invalid Aliyun share URL")
+        raise ValueError("Invalid media share URL")
     parsed = urlsplit(url)
     match = re.fullmatch(r"/s/([A-Za-z0-9]{5,64})/?", parsed.path)
     if (
         parsed.scheme != "https"
-        or parsed.hostname not in ALIYUN_HOSTS
+        or parsed.hostname not in ALIYUN_HOSTS | {"pan.quark.cn"}
         or parsed.port not in (None, 443)
         or parsed.username
         or parsed.password
         or parsed.fragment
         or not match
     ):
-        raise ValueError("Expected an official Aliyun HTTPS share URL")
+        raise ValueError("Expected an official supported HTTPS share URL")
     return match[1]
+
+
+def share_provider(url):
+    share_id(url)
+    return "quark" if urlsplit(url).hostname == "pan.quark.cn" else "aliyun"
 
 
 def extraction_code(url, explicit=""):
@@ -61,8 +66,9 @@ async def json_response(response, *, limit=2 * 1024 * 1024):
 
 
 class PanSou:
-    def __init__(self, session, url, history=None):
+    def __init__(self, session, url, history=None, accounts=None):
         self.session, self.url, self.history = session, url, history
+        self.accounts = accounts or {"aliyun": {"provider": "aliyun"}}
         self.slots = asyncio.Semaphore(3)
         self.locks = weakref.WeakValueDictionary()
         self.snapshots = {}
@@ -141,7 +147,7 @@ class PanSou:
                                 merge_candidate(found, item)
                         items = sorted(
                             found.values(),
-                            key=lambda item: (not item["title_match"], item["platform"] != "aliyun"),
+                            key=lambda item: (not item["title_match"], not item["acquisition"]["transfer"]),
                         )
                         limited = len(items) > 500 or any(result.get("truncated") for result in results)
                         items = items[:500]
@@ -149,7 +155,10 @@ class PanSou:
                         matching = [item for item in items if item["title_match"]]
                         outcome = (
                             "acquirable_candidates"
-                            if any(i["platform"] == "aliyun" for i in matching)
+                            if any(
+                                i["platform"] in {a["provider"] for a in self.accounts.values()}
+                                for i in matching
+                            )
                             else "discovery_only_candidates"
                             if matching
                             else "ambiguous_candidates"
@@ -159,9 +168,12 @@ class PanSou:
                         # These are read evidence, not judgments that a movie/file is correct.
                         if self.history:
                             for item in items:
-                                if item["platform"] == "aliyun":
+                                accounts = [
+                                    k for k, a in self.accounts.items() if a["provider"] == item["platform"]
+                                ]
+                                if len(accounts) == 1:
                                     item["last_inspection"] = self.history.observation(
-                                        share_id(item["share_url"]), item["password"]
+                                        share_id(item["share_url"]), item["password"], account=accounts[0]
                                     )
                         snapshot = {
                             "id": uuid.uuid4().hex,
@@ -306,7 +318,9 @@ class PanSou:
                     "published_at": str(link.get("datetime") or row.get("datetime") or "")[:80],
                     "title_match": title_match(query, title),
                     "verified": False,
-                    "acquisition": acquisition(platform),
+                    "acquisition": acquisition(
+                        platform, connected=any(a["provider"] == platform for a in self.accounts.values())
+                    ),
                     "password_conflict": False,
                 }
                 merge_candidate(found, item)

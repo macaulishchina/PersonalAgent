@@ -172,9 +172,10 @@ class Downloads:
             self.repo.change(ident, "cancelled")
             return
         self.repo.change(ident, "checking")
-        metadata = await self.plugin.provider.call(
-            "file", {**intent["destination"], "file_id": intent["file_id"]}
+        download = await self.plugin.provider.call(
+            "download_url", {**intent["destination"], "file_id": intent["file_id"]}
         )
+        metadata = download["file"]
         if (
             metadata.get("type") != "file"
             or metadata.get("category") != "video"
@@ -184,9 +185,8 @@ class Downloads:
             raise MediaError("source_must_be_a_verifiable_video_file")
         algorithm = (metadata.get("content_hash_name") or "").lower()
         expected = (metadata.get("content_hash") or "").lower()
-        if algorithm not in {"sha1", "sha256"} or not re.fullmatch(
-            "[0-9a-f]{%d}" % (40 if algorithm == "sha1" else 64), expected
-        ):
+        widths = {"md5": 32, "sha1": 40, "sha256": 64}
+        if algorithm not in widths or not re.fullmatch("[0-9a-f]{%d}" % widths[algorithm], expected):
             raise MediaError("download_checksum_unavailable")
         previous = item["data"].get("file")
         if previous and metadata != previous:
@@ -216,7 +216,7 @@ class Downloads:
             await disk(files.space, metadata["size"] - offset)
             await disk(os.lseek, files.fd, offset, os.SEEK_SET)
             if offset < metadata["size"]:
-                await self.receive(ident, intent, metadata, files, offset)
+                await self.receive(ident, download, metadata, files, offset)
             self.repo.change(ident, "verifying")
             if await self.digest(files.fd, algorithm, ident) != expected:
                 # Never resume corrupted bytes or expose them in the library.
@@ -263,18 +263,29 @@ class Downloads:
             data={"operation_id": ident, "target": item["data"]["intent"]["target"]},
         )
 
-    async def receive(self, ident, intent, metadata, files, offset):
-        result = await self.plugin.provider.call(
-            "download_url", {**intent["destination"], "file_id": intent["file_id"]}
-        )
-        if result["file"] != metadata:
-            raise MediaError("download_source_changed")
+    async def receive(self, ident, result, metadata, files, offset):
         url = result.get("url", "")
         parsed = urlsplit(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise MediaError("invalid_original_download_url")
+        provider_headers = result.get("headers", {})
+        if (
+            not isinstance(provider_headers, dict)
+            or set(provider_headers) - {"Referer", "User-Agent", "Cookie"}
+            or any(
+                not isinstance(value, str)
+                or len(value) > (32768 if key == "Cookie" else 2000)
+                or "\r" in value
+                or "\n" in value
+                for key, value in provider_headers.items()
+            )
+            or (
+                "Cookie" in provider_headers and result.get("credential_origin") != f"https://{parsed.netloc}"
+            )
+        ):
+            raise MediaError("invalid_download_headers")
         headers = {
-            "Referer": "https://www.aliyundrive.com/",
+            **provider_headers,
             "Accept-Encoding": "identity",
             "Range": f"bytes={offset}-",
         }
@@ -282,8 +293,8 @@ class Downloads:
         self.progress(ident, offset, metadata["size"], 0)
         started, initial, checkpoint = time.monotonic(), offset, time.monotonic()
         try:
-            # No provider Authorization headers, cookies, redirects or compressed
-            # bodies on this signed data-plane request. URLs are never persisted.
+            # Only adapter-origin-bound cookies; no redirects, Authorization or
+            # compressed bodies. URLs/headers are never persisted.
             async with self.plugin.download_session.get(
                 url, headers=headers, timeout=timeout, allow_redirects=False, auto_decompress=False
             ) as response:
@@ -371,7 +382,9 @@ class Downloads:
                     state = "cancelled"
                 elif code == "auth_required":
                     state = "waiting_auth"
-                    self.repo.account_state("auth_required")
+                    self.repo.account_state(
+                        "auth_required", account=item["data"]["intent"]["destination"]["account"]
+                    )
                 elif code in transient and attempts < 8:
                     state = "queued"
                 self.repo.change(

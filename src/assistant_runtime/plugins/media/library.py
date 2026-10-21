@@ -55,8 +55,8 @@ class Library:
         """)
 
     def asset_id(self, target, file_id):
-        drive = self.p.target(target)["drive_id"]
-        return hashlib.sha256(canonical([target, drive, file_id]).encode()).hexdigest()[:32]
+        binding = self.p.target(target)
+        return hashlib.sha256(canonical([target, binding, file_id]).encode()).hexdigest()[:32]
 
     def remember(self, target, file, **extra):
         ident = self.asset_id(
@@ -73,15 +73,16 @@ class Library:
             ).fetchone()
             if prior:
                 intent = json.loads(prior[0])["intent"]
-                data.update(
-                    {k: intent[k] for k in ("collection", "season", "episode", "version") if k in intent}
-                )
+                if intent.get("root_destination", intent["destination"]) == self.p.target(target):
+                    data.update(
+                        {k: intent[k] for k in ("collection", "season", "episode", "version") if k in intent}
+                    )
             if (
                 self.db.execute("SELECT count(*) FROM media_assets").fetchone()[0]
                 >= self.p.settings.max_operations
             ):
                 raise ValueError("Library catalog capacity reached")
-        data.update(file=file, **extra)
+        data.update(file=file, binding=dict(self.p.target(target)), **extra)
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO media_assets VALUES(?,?,?,?,?)",
@@ -181,6 +182,7 @@ class Library:
             }
             if not isinstance(action, str) or action not in fields or set(change) != fields[action]:
                 raise ValueError("Unknown library change or fields")
+            self.p.provider.require(root["account"], action)
             step = dict(change)
             if action == "mkdir":
                 identifier(step["folder_id"])
@@ -204,6 +206,7 @@ class Library:
                             "Restore requires our recorded trash operation and original location"
                         )
                     before = saved["file"]
+                    step["recycle_id"] = saved.get("recycle_id")
                 else:
                     loc = await self.locate(target, fid)
                     before = loc["file"]
@@ -317,6 +320,8 @@ class Library:
                 }
                 if action == "move":
                     arguments["to_folder_id"] = step["folder_id"]
+                if action == "restore":
+                    arguments.update(recycle_id=step.get("recycle_id"), expected_file=before)
                 try:
                     reply = await self.p.provider.call(action, arguments)
                 except MediaError as exc:
@@ -329,18 +334,29 @@ class Library:
             # Verify every submitted write, including one interrupted by shutdown.
             if action == "trash":
                 marker = ""
-                found = False
+                found = None
                 for _ in range(10):
                     page = await self.p.provider.call(
                         "trash_list", {**intent["destination"], "marker": marker}
                     )
-                    found = any(f["file_id"] == fid for f in page["items"])
+                    matches = [f for f in page["items"] if f["file_id"] == fid]
+                    if len(matches) > 1:
+                        raise MediaError("library_write_unconfirmed", uncertain=True)
+                    found = matches[0] if matches else None
                     marker = page.get("marker")
                     if found or not marker:
                         break
                 if not found:
                     raise MediaError("library_write_unconfirmed", uncertain=True)
-                self.remember(target, before, trashed=True, trash_operation=ident)
+                if any(found.get(k) != before.get(k) for k in ("name", "size", "parent_file_id")):
+                    raise MediaError("library_content_changed", uncertain=True)
+                self.remember(
+                    target,
+                    before,
+                    trashed=True,
+                    trash_operation=ident,
+                    recycle_id=found.get("recycle_id"),
+                )
             else:
                 saved_id = fid or step.get("receipt", {}).get("file_id")
                 if not saved_id:
@@ -463,11 +479,22 @@ class Library:
                     (name, revision, canonical(value)),
                 )
             row = (revision, canonical(value))
-        assets = self.db.execute(
-            "SELECT id,data FROM media_assets WHERE json_extract(data,'$.collection')=? ORDER BY id LIMIT 10001",
-            (name,),
-        ).fetchall()
         definition = json.loads(row[1]) if row else None
+        target = definition["target"] if definition else args.get("target")
+        if args.get("target") and args["target"] != target:
+            raise ValueError("Collection belongs to another target")
+        if target:
+            self.p.target(target)
+        rows = self.db.execute(
+            "SELECT id,target,data FROM media_assets WHERE json_extract(data,'$.collection')=? "
+            "AND (? IS NULL OR target=?) ORDER BY id LIMIT 10001",
+            (name, target, target),
+        ).fetchall()
+        assets = [
+            (ident, data)
+            for ident, scope, data in rows
+            if scope in self.p.settings.targets and json.loads(data).get("binding") == self.p.target(scope)
+        ]
         episodes = set()
         for _, data in assets:
             data = json.loads(data)
@@ -481,8 +508,9 @@ class Library:
         pending = self.db.execute(
             """SELECT count(*) FROM media_operations
             WHERE state NOT IN ('completed','failed','cancelled')
-            AND json_extract(data,'$.intent.collection')=?""",
-            (name,),
+            AND json_extract(data,'$.intent.collection')=?
+            AND (? IS NULL OR json_extract(data,'$.intent.target')=?)""",
+            (name, target, target),
         ).fetchone()[0]
         limit = args.get("limit", 20)
         if type(limit) is not int or not 1 <= limit <= 50:
@@ -495,8 +523,8 @@ class Library:
             try:
                 if not isinstance(before, str) or len(before) > 2048:
                     raise ValueError()
-                scope, last = json.loads(base64.urlsafe_b64decode(before))
-                if scope != name:
+                scope, scope_target, last = json.loads(base64.urlsafe_b64decode(before))
+                if scope != name or scope_target != target:
                     raise ValueError()
                 identifier(last)
             except Exception:
@@ -504,16 +532,17 @@ class Library:
         page = [ident for ident, _ in assets if ident > last][: limit + 1]
         return {
             "collection": name,
+            "target": target,
             "revision": row[0] if row else 0,
             "definition": definition,
             "observed_episodes": sorted(e for e in episodes if type(e) is int),
             "missing": missing,
-            "coverage_complete": len(assets) <= 10000,
+            "coverage_complete": len(rows) <= 10000,
             "pending_operations": pending,
-            "completion_candidate": bool(total and not missing and len(assets) <= 10000 and not pending),
+            "completion_candidate": bool(total and not missing and len(rows) <= 10000 and not pending),
             "evidence_scope": "recorded_observations_reverify_before_finishing",
             "items": [self.asset(ident) for ident in page[:limit]],
-            "before": base64.urlsafe_b64encode(canonical([name, page[limit - 1]]).encode()).decode()
+            "before": base64.urlsafe_b64encode(canonical([name, target, page[limit - 1]]).encode()).decode()
             if len(page) > limit
             else None,
         }

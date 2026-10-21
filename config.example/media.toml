@@ -1,1 +1,32 @@
-# 影视搜索、转存和下载。
+# 影视搜索、转存和下载。账号别名绑定私有凭据目录，不在配置中填写 Cookie/token。
+# 按需取消注释并填入通过实际目录查询获得的 ID。
+# [media]
+# search_url = "http://127.0.0.1:8888"
+# openlist_url = "http://127.0.0.1:5244"
+#
+# [media.accounts.aliyun]
+# provider = "aliyun"
+# [media.accounts.quark]
+# provider = "quark"
+#
+# [media.targets.aliyun_movies]
+# account = "aliyun"
+# drive_id = "RESOURCE_DRIVE_ID"
+# folder_id = "MOVIES_FOLDER_ID"
+# openlist_path = "/阿里云盘/影视/电影"
+#
+# [media.targets.quark_series]
+# account = "quark"
+# folder_id = "SERIES_FOLDER_ID"
+# openlist_path = "/夸克网盘/影视/电视剧"
+#
+# 夸克支持浏览、建目录、转存、重命名、移动、原文件下载及回收站删除/恢复（仅自己记录的删除）。
+# 两种网盘均可配置同名目标的本地下载目录，使用云端校验值检查完整文件。
+# [media.local_targets.aliyun_movies]
+# path = "/mnt/Q/openlist/media/电影"
+# staging_path = "/mnt/Q/openlist/temp/media-downloads"
+# mount_path = "/mnt/Q"
+# [media.local_targets.quark_series]
+# path = "/mnt/Q/openlist/media/电视剧"
+# staging_path = "/mnt/Q/openlist/temp/media-downloads"
+# mount_path = "/mnt/Q"

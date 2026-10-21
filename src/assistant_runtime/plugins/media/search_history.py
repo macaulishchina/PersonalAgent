@@ -82,8 +82,14 @@ class SearchHistory:
             self.save_check(identity, values["share_id"], observed, data)
             return {**result, "inspection": {"observed_at": observed, "cached": False}}
 
-    def observation(self, share, password):
-        values = {"share_id": share, "password": password, "parent_file_id": "root", "marker": ""}
+    def observation(self, share, password, *, account="aliyun"):
+        values = {
+            "account": account,
+            "share_id": share,
+            "password": password,
+            "parent_file_id": "root",
+            "marker": "",
+        }
         identity = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
         row = self.db.execute(
             "SELECT observed,data FROM media_share_checks WHERE identity=?", (identity,)

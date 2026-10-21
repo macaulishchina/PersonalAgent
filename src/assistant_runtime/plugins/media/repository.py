@@ -41,24 +41,26 @@ class MediaRepository:
             CREATE TABLE IF NOT EXISTS media_outbox(key TEXT PRIMARY KEY,payload TEXT NOT NULL);
         """)
 
-    def account(self):
-        row = self.db.execute("SELECT state,generation FROM media_account WHERE id='aliyun'").fetchone()
+    def account(self, account="aliyun"):
+        row = self.db.execute("SELECT state,generation FROM media_account WHERE id=?", (account,)).fetchone()
         return {"state": row[0], "generation": row[1]} if row else {"state": "unknown", "generation": 0}
 
-    def account_state(self, state):
-        previous = self.account()
+    def account_state(self, state, *, account="aliyun"):
+        previous = self.account(account)
         if state == previous["state"]:
             return previous
         generation = previous["generation"] + 1
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO media_account VALUES('aliyun',?,?)", (state, generation))
+            self.db.execute(
+                "INSERT OR REPLACE INTO media_account VALUES(?,?,?)", (account, state, generation)
+            )
             if state == "auth_required":
                 self.enqueue(
-                    "media-auth:aliyun:" + str(generation),
-                    "阿里云盘需要重新登录",
-                    "媒体获取已等待授权。请在主对话请求阿里云盘扫码登录；已有转存结果和下载进度会保留。",
+                    "media-auth:" + account + ":" + str(generation),
+                    account + " 需要重新登录",
+                    "该网盘的媒体操作已等待授权，请按账号登录方式更新私有凭据。已有结果和进度保留。",
                 )
-        return self.account()
+        return self.account(account)
 
     def enqueue(self, key, title, body):
         self.db.execute(
@@ -199,9 +201,10 @@ class MediaRepository:
         ).fetchone()
         return self.get(row[0]) if row else None
 
-    def resume_auth(self):
+    def resume_auth(self, account="aliyun"):
         for (ident,) in self.db.execute(
-            "SELECT id FROM media_operations WHERE state='waiting_auth'"
+            "SELECT id FROM media_operations WHERE state='waiting_auth' AND json_extract(data,'$.intent.destination.account')=?",
+            (account,),
         ).fetchall():
             item = self.get(ident)
             self.change(ident, "verifying" if item["data"].get("submitted") else "queued")
@@ -250,6 +253,7 @@ class MediaRepository:
             "created_at": item["created_at"],
             "updated_at": item["updated_at"],
             "target": data["intent"]["target"],
+            "account": data["intent"]["destination"]["account"],
             "kind": data["intent"].get("kind", "transfer"),
             "origin": {"owner": data["owner"], "run_id": data.get("caller_run")},
             "collection": data["intent"].get("collection"),

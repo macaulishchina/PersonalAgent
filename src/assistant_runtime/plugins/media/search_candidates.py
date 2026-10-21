@@ -75,12 +75,14 @@ def candidate_id(platform, ident):
     return hashlib.sha256((platform + ":" + ident).encode()).hexdigest()[:32]
 
 
-def acquisition(platform):
-    supported = platform == "aliyun"
+def acquisition(platform, *, connected=True):
+    supported = platform in {"aliyun", "quark"}
     return {
-        "inspect": supported,
-        "transfer": supported,
-        "download": "after_cloud_transfer" if supported else "unsupported",
-        "blocker": None if supported else "provider_not_connected",
+        "inspect": supported and connected,
+        "transfer": supported and connected,
+        "download": "after_cloud_transfer" if platform == "aliyun" else "unsupported",
+        "blocker": (None if connected else "account_not_configured")
+        if supported
+        else "provider_not_connected",
         "availability": "unverified",
     }

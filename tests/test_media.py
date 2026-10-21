@@ -29,7 +29,7 @@ from assistant_runtime.plugins.media.repository import MediaRepository
 from assistant_runtime.plugins.media.settings import MediaSettings
 from assistant_runtime.store import Store
 
-TARGET = {"drive_id": "drive", "folder_id": "folder", "openlist_path": "/test/movies"}
+TARGET = {"account": "aliyun", "drive_id": "drive", "folder_id": "folder", "openlist_path": "/test/movies"}
 VIDEO = {
     "file_id": "video",
     "name": "movie.mkv",
@@ -216,7 +216,7 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
             store=self.store,
             runtime=self.runtime,
         )
-        self.plugin = MediaPlugin(self.host, self.provider)
+        self.plugin = MediaPlugin(self.host, {"aliyun": self.provider})
         self.runtime.add(self.plugin)
         await self.runtime.start()
 

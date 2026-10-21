@@ -39,7 +39,12 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             "staging_path": str(self.stage),
             "mount_path": str(self.mount),
         }
-        self.cloud = {"drive_id": "drive", "folder_id": "folder", "openlist_path": "/cloud"}
+        self.cloud = {
+            "account": "aliyun",
+            "drive_id": "drive",
+            "folder_id": "folder",
+            "openlist_path": "/cloud",
+        }
         self.settings = MediaSettings.parse(
             {
                 "targets": {"movies": self.cloud},
@@ -61,6 +66,8 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             "content_hash": hashlib.sha1(self.content).hexdigest(),
         }
         self.ranges, self.mode, self.calls = [], "normal", []
+        self.download_options = {}
+        self.received_cookie = None
         self.receiving = asyncio.Event()
         self.release = asyncio.Event()
         app = web.Application()
@@ -98,12 +105,19 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
         if action == "file":
             return dict(self.file)
         if action == "download_url":
-            return {"file": dict(self.file), "url": "https://original.invalid/file?signed=private"}
+            return {
+                "file": dict(self.file),
+                "url": "https://original.invalid/file?signed=private",
+                **self.download_options,
+            }
         raise AssertionError(action)
 
     async def respond(self, request):
         self.assertNotIn("Authorization", request.headers)
+        self.received_cookie = request.headers.get("Cookie")
         self.ranges.append(request.headers["Range"])
+        if self.mode == "redirect":
+            return web.Response(status=302, headers={"Location": self.url + "?redirected"})
         if self.mode == "expired":
             self.mode = "normal"
             return web.Response(status=403)
@@ -228,6 +242,59 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.library.iterdir()), [])
         self.assertEqual(list(self.stage.iterdir()), [])
 
+    async def test_md5_cookie_download_resumes_and_keeps_secrets_out_of_receipts(self):
+        self.file.update(content_hash_name="md5", content_hash=hashlib.md5(self.content).hexdigest())
+        self.download_options = {
+            "headers": {"Cookie": "private-auth"},
+            "credential_origin": "https://original.invalid",
+        }
+        item = self.create()
+        self.mode = "disconnect"
+        with self.assertRaisesRegex(MediaError, "download_network_error"):
+            await self.downloads.process(item)
+        self.repo.recover()
+        self.mode = "normal"
+        await self.downloads.process(self.repo.get(item["id"]))
+        self.assertEqual(self.received_cookie, "private-auth")
+        self.assertEqual((self.library / "movie.mkv").read_bytes(), self.content)
+        self.assertEqual(self.repo.get(item["id"])["state"], "completed")
+        for row in self.db.execute("SELECT data FROM media_operations"):
+            self.assertNotIn("private-auth", row[0])
+            self.assertNotIn("signed=", row[0])
+
+    async def test_cookie_scope_and_redirects_never_forward_credentials(self):
+        item = self.create()
+        for opts in [
+            {"headers": {"Cookie": "private-auth"}},
+            {"headers": {"Cookie": "private-auth"}, "credential_origin": "https://other.invalid"},
+            {"headers": {"Authorization": "Bearer private-auth"}},
+            {"headers": {"Cookie": "x\r\nInjected: true"}, "credential_origin": "https://original.invalid"},
+        ]:
+            self.download_options = opts
+            with self.subTest(opts=opts), self.assertRaisesRegex(MediaError, "invalid_download_headers"):
+                await self.downloads.process(self.repo.get(item["id"]))
+        self.assertEqual(self.ranges, [])
+        self.download_options = {
+            "headers": {"Cookie": "private-auth"},
+            "credential_origin": "https://original.invalid",
+        }
+        self.mode = "redirect"
+        with self.assertRaisesRegex(MediaError, "download_range_unsupported"):
+            await self.downloads.process(self.repo.get(item["id"]))
+        self.assertEqual(len(self.ranges), 1)
+
+    async def test_md5_corruption_and_changed_source_never_publish(self):
+        self.file.update(content_hash_name="md5", content_hash=hashlib.md5(self.content).hexdigest())
+        item = self.create()
+        self.mode = "corrupt"
+        with self.assertRaisesRegex(MediaError, "download_checksum_mismatch"):
+            await self.downloads.process(item)
+        self.assertEqual(list(self.library.iterdir()), [])
+        self.assertEqual(list(self.stage.iterdir()), [])
+        self.file["content_hash"] = "0" * 32
+        with self.assertRaisesRegex(MediaError, "download_source_changed"):
+            await self.downloads.process(self.repo.get(item["id"]))
+
     async def test_disk_unmounted_space_exhausted_and_unsafe_names_fail_before_http(self):
         item = self.create()
         with patch.object(Path, "is_mount", return_value=False):
@@ -349,7 +416,7 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
 
 class LocalSettingsTest(unittest.TestCase):
     def test_reject_library_staging_overlap_and_system_root(self):
-        cloud = {"drive_id": "d", "folder_id": "f", "openlist_path": "/cloud"}
+        cloud = {"account": "aliyun", "drive_id": "d", "folder_id": "f", "openlist_path": "/cloud"}
         for local in (
             {"path": "/mnt/disk/media", "staging_path": "/mnt/disk/media/tmp", "mount_path": "/mnt/disk"},
             {"path": "/tmp/media", "staging_path": "/tmp/parts", "mount_path": "/"},

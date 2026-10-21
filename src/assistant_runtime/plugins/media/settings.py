@@ -27,6 +27,7 @@ def identifier(value):
 
 @dataclass
 class MediaSettings:
+    accounts: dict = field(default_factory=lambda: {"aliyun": {"provider": "aliyun"}})
     search_url: str = "http://127.0.0.1:8888"
     openlist_url: str = ""
     timeout_seconds: int = 15
@@ -54,13 +55,34 @@ class MediaSettings:
         ):
             if type(getattr(result, name)) is not int or not lo <= getattr(result, name) <= hi:
                 raise ValueError("Invalid media " + name)
+        if not isinstance(result.accounts, dict) or not 1 <= len(result.accounts) <= 8:
+            raise ValueError("Media accounts require 1..8 explicit provider bindings")
+        for name, account in result.accounts.items():
+            identifier(name)
+            if (
+                not isinstance(account, dict)
+                or set(account) != {"provider"}
+                or not isinstance(account["provider"], str)
+                or account["provider"] not in {"aliyun", "quark"}
+            ):
+                raise ValueError("Media account requires a supported provider")
         if not isinstance(result.targets, dict) or len(result.targets) > 32:
             raise ValueError("Media targets must be a table with at most 32 entries")
         for name, target in result.targets.items():
             identifier(name)
-            if not isinstance(target, dict) or set(target) != {"drive_id", "folder_id", "openlist_path"}:
-                raise ValueError("Media targets require drive_id, folder_id and openlist_path")
-            identifier(target["drive_id"])
+            if (
+                not isinstance(target, dict)
+                or not isinstance(target.get("account"), str)
+                or target["account"] not in result.accounts
+            ):
+                raise ValueError("Media targets require a configured account")
+            fields = {"account", "folder_id", "openlist_path"}
+            if result.accounts[target["account"]]["provider"] == "aliyun":
+                fields.add("drive_id")
+            if set(target) != fields:
+                raise ValueError("Invalid media target fields for provider")
+            if "drive_id" in target:
+                identifier(target["drive_id"])
             identifier(target["folder_id"])
             path = target["openlist_path"]
             if (

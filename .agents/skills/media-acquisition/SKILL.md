@@ -1,6 +1,6 @@
 ---
 name: media-acquisition
-description: Discover user-requested movies or series across public sources, save verified Aliyun videos to configured targets, diagnose acquisition/auth state, and track new episodes using the existing media and tasks MCPs.
+description: Discover user-requested movies or series across public sources, save verified Aliyun/Quark videos to configured targets, diagnose acquisition/auth state, and track new episodes using the existing media and tasks MCPs.
 ---
 
 # Media acquisition and tracking
@@ -44,7 +44,8 @@ Report unavailable sources, invalid shares and missing matching files distinctly
 Distinguish no observed matches, ambiguous titles, failed queries, expired shares and
 matches on platforms whose acquisition is not connected. Include concrete next steps
 from `next_actions`; report relevant platform/title/link when only discovery succeeds.
-Do not promise Quark/Baidu/BT transfer or silently treat them as Aliyun. Respect the
+Check configured accounts and per-account actions in `media_capabilities`. Quark shares
+require a Quark target; Baidu/BT acquisition is not connected. Respect the
 user's account/platform requirements. Never claim no resource exists everywhere.
 Reuse `last_inspection` as timestamped historical evidence; `inspect_media_share` caches
 identical reads for two minutes and supports `refresh=true`. Do not repeatedly inspect
@@ -52,6 +53,10 @@ a known cancelled share during that interval. Changed passwords/folder/pages hav
 independent checks. Resolve `password_conflict`; actual files must establish identity.
 An ordinary one-shot acquisition does not need a native Goal; finish after the
 bounded search/acquisition attempt and truthfully report missing episodes.
+
+When multiple accounts use one provider, pass the account alias to inspection/login.
+For Quark nested files, carry inspected `parent_file_id` into transfer; destination
+`folder_id` is separate. Check supported actions before planning organization/download.
 
 Submit individual selected video files with `transfer_media` and a stable UUID
 `request_id`; retain the returned `operation_id`. Reuse the UUID after a lost response.
@@ -64,7 +69,17 @@ only after whole-file checksum validation. Infuse uses the local library; do not
 cloud mount or equate cloud transfer with local readiness. OpenList probes and actual
 television playback remain separate evidence.
 
-Auth refresh is owned by the plugin. For `auth_required`, explain the need for a user
+Quark uses a local private Cookie file, with automatic Cookie rotation when supplied by
+the provider. Full expiry requires local replacement, status verification, and resumption
+of the same operations. Never ask for Cookie contents in chat. Quark supports creating
+folders, rename/move and original-file downloads with provider MD5 verification.
+Configure a matching local target before downloading. Quark trash/restore use the same
+preview/apply tools: restore only our recorded deletion to its existing original parent,
+with no name conflict. Expired or changed recycle records require attention, not a new
+copy or blind retry. Permanent deletion and restoring unrelated recycle entries are not exposed.
+Missing cloud checksums stop downloads; byte progress alone is not integrity evidence.
+
+For Aliyun, auth refresh is owned by the plugin. For `auth_required`, explain the need for a user
 scan and use `begin_media_login` in the main conversation, then `get_media_login` to
 display the native QR and status. On expiry, begin a new login when the user is ready.
 Never ask for a token/cookie/password in chat. Wrong-account login requires deliberate

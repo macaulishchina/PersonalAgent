@@ -18,9 +18,9 @@ WRITES = {"copy", "mkdir", "rename", "move", "trash", "restore"}
 
 
 class Aliyun:
-    def __init__(self, root, account_changed):
+    def __init__(self, root, account_changed, *, account="aliyun"):
         self.root, self.account_changed = Path(root).resolve(), account_changed
-        self.credentials = self.root / "credentials" / "aliyun"
+        self.credentials = self.root / "credentials" / account
         self.credentials.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lease = None
         self.lock = asyncio.Lock()

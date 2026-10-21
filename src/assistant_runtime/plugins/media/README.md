@@ -1,7 +1,7 @@
 # Media acquisition
 
 Optional `media` plugin + independent `media` MCP/CLI. Requires `notifications`.
-PanSou searches public candidates; the Aliyun adapter owns share/auth protocol;
+PanSou searches public candidates; account-scoped Aliyun/Quark adapters own share/auth protocol;
 OpenList supplies read verification. Plans and AI decisions remain in tasks.
 There is no media scheduler, arbitrary-URL downloader, TV controller or new model endpoint.
 
@@ -12,8 +12,70 @@ PanSou service with `docker compose -p personal-agent-media-search -f deploy/med
 Its port is loopback-only, resources/logs are bounded and its disposable cache is tmpfs.
 The image digest is the tested upstream artifact; upgrade deliberately and reverify.
 Search coverage is partial, source labels are untrusted and no result means only
-that these sources found nothing. Discovery spans supported public platforms; only
-Aliyun acquisition is connected. Refresh does not add providers, accounts or sources.
+that these sources found nothing. Discovery spans supported public platforms; Aliyun and Quark acquisition are implemented; configured accounts determine availability. Refresh does not add providers, accounts or sources.
+
+## Accounts and provider capabilities
+
+`media.accounts.<alias>.provider` selects `aliyun` or `quark`. Each target requires
+an explicit `account` alias, `folder_id` and `openlist_path`; Aliyun additionally
+requires `drive_id`. An alias owns `state/media/credentials/<alias>/` and one credential
+lease. Aliyun is the default account definition when the accounts table is omitted;
+targets still must explicitly bind it. Multiple accounts of one provider are supported.
+Share URLs identify the provider; inspection takes an optional account (required when
+ambiguous). Transfers use the destination's account and reject cross-provider shares.
+Account names are non-secret; tool callers cannot provide endpoints or credentials.
+
+`media_status` returns `accounts`, not one global account. Authentication notices and
+resumption only affect the matching account's operations. Inspection cache keys include
+account, share, password, parent and page; asset IDs include the full target binding.
+Changing a target blocks old in-flight intents instead of redirecting their writes.
+Use new aliases for deliberate account replacements; authenticated identity bindings
+must never be silently replaced. No automatic provider fallback or cross-cloud copy.
+
+Quark currently supports status/capacity, bounded share inspection, cloud browsing,
+configured-root ancestry checks, folder creation, single-file transfer and asynchronous copy observation.
+Provide the source `parent_file_id` from inspection when submitting a nested share file;
+`folder_id` refers to the destination. A copy task ID is persisted before polling; its
+returned destination file ID plus exact name/size establishes completion. Lost receipts
+without hashes stay uncertain; same name/size alone never proves ownership. The existing
+operation queue owns deadlines, retries, cancellation, restart recovery and notices.
+
+Quark credentials are a private 0600 JSON file at
+`state/media/credentials/<alias>/account.json` with a `cookie` string. Set this file
+locally, never through chat/MCP/config. Cookie rotations are serialized and atomically
+saved. The authenticated cookie UID is privately fingerprinted; changed identity blocks
+operations. Full expiry requires the user to update the private Cookie, check status,
+and resume the existing operation IDs (restart also checks waiting accounts). No
+interactive Quark QR flow is advertised. OpenList owns its separate Cookie; this
+adapter neither reads its database nor modifies its mounted-drive authentication.
+
+Per-account actions in `media_capabilities` are authoritative. Quark supports rename,
+move (including rename-on-transfer), and original-file download through the shared
+library/download workers. Trash/restore use the same change plans and recovery worker:
+`/file/delete` submits one file to the recycle bin, `/file/recycle/list` verifies it,
+and `/file/recycle/recover` restores the exact saved recycle-record ID. Both mutations
+return asynchronous task receipts; completion requires observing the file state.
+The account-wide recycle list stays internal and bounded. Restore accepts only our
+recorded deletion, checks the record ID/name/size/original parent, and rejects stale,
+expired, changed or incompletely listed records. No permanent-delete endpoint is registered.
+The ordinary file-info/list endpoints omit hashes; `/file/download` returns the full
+file MD5 alongside the original URL. The adapter checks its identity/name/size/parent
+against fresh file-info before exposing normalized metadata to the download worker.
+Missing or malformed MD5 stops the download; multipart ETags are not checksums.
+MD5 here detects transfer corruption, not adversarial substitution or authenticity.
+Quark download Cookies are allowed only on HTTPS `dl-*.drive.quark.cn` hosts, bound
+to the exact returned origin. No redirects, credential persistence in operation
+receipts, or forwarding to arbitrary URLs. Aliyun remains signed-URL based.
+OpenList account permissions and actual playback remain separate evidence.
+
+This configuration format requires explicit conversion before upgrading an existing
+instance. Stop media work after reconciling active operations; back up the instance DB
+and config. Add `account` to targets and saved destination/root-destination/batch/plan
+bindings, recompute operation fingerprints/dedup keys and asset IDs with those bindings,
+and update saved references consistently in one transaction. Discard the disposable
+inspection cache. Preserve task/operation receipts and evidence; do not reset submitted
+operations or recreate cloud writes. Verify against a restored backup before applying.
+There is one runtime format, no dual-read legacy path or startup data migration.
 
 ## Search and late results
 
@@ -55,8 +117,8 @@ public host/path validation determines platform regardless of backend labels. Di
 supports Aliyun, Quark, Baidu, 115, 123, UC, Tianyi, Xunlei, PikPak and BTIH magnets.
 Other links are rejected, never fetched as arbitrary URLs. Magnets are normalized by
 infohash, without tracker URLs. These are format capabilities, not a guarantee each
-source covers every platform. Only Aliyun shares can be inspected/transferred; local
-downloads still require a selected file already saved in a configured Aliyun target.
+source covers every platform. Aliyun and Quark shares can be inspected/transferred through configured accounts.
+Local downloads currently require a selected file in an Aliyun target.
 
 Candidates deduplicate by platform/share identity, keeping bounded source provenance,
 matched aliases and public extraction codes. Conflicting extraction codes are explicitly
@@ -129,7 +191,11 @@ timeout_seconds = 15
 queue_capacity = 128
 max_operations = 10000
 
+[media.accounts.aliyun]
+provider = "aliyun"
+
 [media.targets.movies]
+account = "aliyun"
 drive_id = "RESOURCE_DRIVE_ID"
 folder_id = "MOVIES_FOLDER_ID"
 openlist_path = "/阿里云盘/影视/电影"
@@ -183,7 +249,7 @@ Download receipts have `kind=download`, a separate UUID/operation ID and
 `queued → checking → downloading → verifying → completed` phases. Progress reports real
 downloaded/total bytes, percentage and transfer rate, normally checkpointed every two
 seconds. `verifying` means all bytes arrived and the whole-file checksum is being checked;
-100% of bytes alone is not completion. Only SHA-1/SHA-256 originals with known size/hash
+100% of bytes alone is not completion. Only MD5/SHA-1/SHA-256 originals with known size/hash
 are eligible. No hash means explicit refusal rather than a false integrity claim.
 
 Network failures retry with bounded backoff (at most eight consecutive attempts per
@@ -191,7 +257,9 @@ explicit run); each attempt obtains a fresh signed URL for the same file identit
 Resume validates exact HTTP Range/total size and metadata. An ignored/incorrect Range
 is rejected without appending its response. Provider auth recovery reuses the single
 account owner; failed login waits in `waiting_auth`, retaining partial bytes. URLs and
-provider auth headers never enter receipts, logs, notifications or the download server.
+provider auth headers never enter receipts, logs, notifications or MCP results.
+An adapter may provide origin-bound download Cookies to the internal HTTP worker;
+the shared session has no Cookie jar and never follows redirects.
 Slow disk reads/writes/hashing run off the main loop; shutdown drains in-flight IO
 before descriptor cleanup and preserves partials for restart. Capacity/path/identity
 failures require explicit `resume_media_operation` after correction.
@@ -336,7 +404,7 @@ destinations are under `/mnt/P/openlist/media`; staging is outside that library.
 
 `Library` owns stable cloud object identities, last-observed locations, collection facts
 and exact change plans. `LocalLibrary` owns filesystem changes. Provider protocol stays
-in Aliyun; scheduling and model decisions stay in tasks. No global library scan starts
+in the selected account adapter; scheduling and model decisions stay in tasks. No global library scan starts
 on a timer. `browse_media_library` reads one bounded folder page on demand, returning
 coverage, observation time and whether the page finishes that folder. This is never a
 claim that the whole library or every public source was scanned. `get_media_asset`
@@ -371,7 +439,12 @@ preconditions; crash recovery recognizes the two-name intermediate state. Local 
 is `staging_path/library-trash`, outside the published library, with no automatic purge.
 Restore requires our recorded original location and refuses collisions. Cloud restore
 also requires our own recorded trash receipt, and remains subject to upstream expiry.
-Permanent deletion is not exposed. Trash takes disk space; it is not space reclamation.
+For providers with separate recycle-record identities, capture that identity on trash
+verification and bind it into the restore plan. External restore/re-delete cannot silently
+redirect an old plan to a newer deletion. The original directory must still exist inside
+the configured target; missing parents and name conflicts stop restoration. Provider
+fallback folders or automatic renames are not accepted as the requested outcome.
+Permanent deletion is not exposed. Local trash takes disk space; it is not space reclamation.
 
 `transfer_media` accepts optional validated `folder_id` and desired `name`. The adapter
 performs copy then verified rename; cloud acquisition is complete only after organization
@@ -417,3 +490,58 @@ execution ends. Without a parent task, operation/batch IDs provide source-scoped
 keys. The media adapter owns these links; generic notifications owns grouping, paging
 and read state. Legacy foreground-attributed notices are linked using durable receipts
 through the internal notification capability, without republishing or altering content.
+
+Quark acceptance on 2026-10-21: an isolated protocol probe copied one selected episode
+(809,628,675 bytes) in 1.65 seconds, verified the returned task and destination file ID,
+and preserved the receipt. The production adapter subsequently read the real account,
+capacity, all 20 first-season share entries, exact file metadata and configured-root
+ancestry. An isolated host/operation DB recovered that saved task to `completed` using
+only `copy_status` and `list` (copy was prohibited), with destination ID/name/size verified.
+The correct single-file endpoint is `/file/info?fid=...`; `/file?fids=...` returned an
+unrelated list in real testing and must not be used. Protocol fixtures cover account
+mismatch, Cookie rotation, incomplete lists, lost copy replies and cancellation.
+The later installed-service acceptance discovered all 24 MCP tools with both accounts
+ready, inspected all 20 episode entries, created the show/season folders through the
+standard preview/apply tools, and transferred the same selected episode into the Quark
+series target in 12.24 seconds. Exact destination ID/name/size matched. Existing media
+configuration and 40 operation/38 asset records were converted once from a tested private
+backup, retaining operation IDs and states. Full gate: 790 tests, zero skips, plus static
+checks and frontend build. After restart all plugins were ready and voice was standby /
+audio-ready. OpenList verification correctly reported `openlist_target_outside_account_root`
+because the configured service account is restricted to the local library; no permission
+was broadened. Whole-file Quark download and physical playback remain unaccepted.
+
+Quark download/management extension acceptance (2026-10-21): the original download
+endpoint returned a valid MD5 for the 809,628,675-byte sample, and Range reads returned
+HTTP 206 with the exact total size. The same URL without Cookie returned 412. Through
+the shared downloader, an interrupted real read resumed at byte 10,476,563 and read
+another 457,741 bytes. Cancellation removed its partial and published no library file.
+Observed throughput was approximately 0.1 MB/s; the full cloud file was not downloaded,
+so end-to-end cloud checksum completion and playback remain unaccepted. Real-HTTP local
+fixtures cover full MD5 equality/corruption, resume, changed source, origin-bound Cookie
+handling and rejected redirects; they do not replace that remaining cloud acceptance.
+The shared library preview/apply/readback path renamed and moved the dedicated test
+copy, restored its original name/parent and refused a destination-name conflict before
+writing. No existing user file was deleted; the private acceptance directories remain.
+Full gate: 796 tests, zero skips, plus static checks and frontend build. After backing
+up config/DB, the idle installed service restarted with Quark local targets on `/mnt/Q`;
+all plugins and both accounts were ready. Installed MCP downloaded 211,987 observed
+bytes with MD5 metadata and cancelled the same operation successfully. Initial installed
+acceptance found a missing configured staging directory; after creating it, explicit
+resume reused the same operation ID. No cloud transfer was repeated.
+
+Quark recycle acceptance (2026-10-21): a dedicated test copy was submitted with
+`action_type=2` to `/file/delete`. The account recycle list returned the original
+file ID and a distinct `record_id`; `/file/recycle/recover` accepted
+`select_mode=2, record_list=[record_id]` and returned an asynchronous task. Immediate
+file-info returned 404 while recovery was pending, then the original ID, name, parent,
+size and provider MD5 were unchanged. The shared library path separately completed
+trash/restore, blocked an introduced name conflict before submission, and recovered
+from a simulated lost restore acknowledgment by observation with exactly one restore
+request. Test copies were restored; no permanent-delete request was made. Deep/expired
+file recovery, unrelated recycle entries and automatic fallback directories are not
+part of this capability. Fixtures cover stale record identity, missing/expired entries,
+incomplete listings, missing parents, conflicts introduced after preview and lost replies.
+Full gate: 800 tests, zero skips, plus static checks and frontend build. The idle
+installed service was backed up and restarted; capability discovery exposes Quark
+trash/restore through the existing tools, with permanent deletion still disabled.

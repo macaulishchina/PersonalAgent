@@ -480,8 +480,11 @@ registered-run routes. Media still uses the existing bounded attachment owner.
 
 The optional `plugins/media/` owns public-share acquisition and independent media MCP/CLI.
 It reuses tasks for tracking plans, notifications for delivery and the standard event
-reporter for observations. PanSou, Aliyun and OpenList remain separate adapters; the
-kernel only adds `MediaRequest`. Provider auth runs in bounded owned SDK subprocesses;
+reporter for observations. PanSou, account-scoped Aliyun/Quark and OpenList remain separate adapters; the
+kernel only adds `MediaRequest`. Explicit account aliases bind targets and credentials;
+capability discovery reports per-account actions and rejects unsupported operations.
+Aliyun auth uses bounded owned SDK subprocesses; Quark uses bounded HTTP with private
+Cookie rotation. Async provider copy receipts are durably stored before observation;
 one credential lease/lock owns refresh and atomic replacement. Credentials stay private,
 never in MCP, event records, config examples or shared Codex settings. Host SQLite owns
 operation IDs, intent snapshots, hash/size verification and the durable notice outbox.
@@ -491,6 +494,9 @@ library and atomic no-clobber publication prevent accidental SSD writes or incom
 playable entries. Complete checksum validation precedes local completion; signed URLs
 are short-lived internal capabilities and never enter receipts/MCP. Copy and download
 have separate operation identities, recovery and completion evidence.
+Adapters may supply origin-bound download credentials; the HTTP worker forbids redirects
+and cookie persistence. Provider hashes (MD5/SHA-1/SHA-256) verify complete bytes before
+publication; multipart ETags or locally generated hashes alone are not upstream evidence.
 Submitted/unknown writes reconcile on restart instead of replay. Background writes
 require an active task and its explicit `media:TARGET` resource; interactive login stays
 in the main conversation. Cloud completion, OpenList availability and physical playback

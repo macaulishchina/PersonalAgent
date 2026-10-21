@@ -76,7 +76,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertCountEqual(aliyun["sources"], ["中文名", "Original Name"])
         self.assertCountEqual(aliyun["matched_queries"], ["中文名", "Original Name"])
         self.assertFalse(quark["acquisition"]["transfer"])
-        self.assertEqual(quark["acquisition"]["blocker"], "provider_not_connected")
+        self.assertEqual(quark["acquisition"]["blocker"], "account_not_configured")
         self.assertFalse(result["complete"])
         self.assertEqual(result["diagnostics"][2]["state"], "failed")
         self.assertTrue(all(q["source_completion"] == "unknown" for q in result["diagnostics"]))
@@ -183,7 +183,13 @@ class SearchHistoryTest(unittest.IsolatedAsyncioTestCase):
         self.provider = SimpleNamespace(
             call=AsyncMock(return_value={"items": [{"file_id": "one"}], "marker": None})
         )
-        self.values = {"share_id": "shared123", "password": "", "parent_file_id": "root", "marker": ""}
+        self.values = {
+            "account": "aliyun",
+            "share_id": "shared123",
+            "password": "",
+            "parent_file_id": "root",
+            "marker": "",
+        }
 
     async def test_inspection_cache_scope_expiry_refresh_and_concurrent_reuse(self):
         results = await asyncio.gather(*(self.history.inspect(self.provider, self.values) for _ in range(3)))

@@ -35,7 +35,7 @@ def create_server(client, caller_run=None):
             "Use download_media for a chosen file in a configured cloud target. Download completion means "
             "the original file passed its whole-file checksum and was published to the configured local library. "
             "Infuse should use that local library; a cloud transfer alone is not a local download. "
-            "Auth refresh is automatic; auth_required needs user QR confirmation in the main conversation. "
+            "Check per-account capabilities. Aliyun supports QR login; Quark uses a private Cookie file. "
             "Never request tokens/cookies in chat or read provider databases. For tracking series, use tasks MCP, "
             "resources=[media:TARGET], notify_completion=false and a stable collection/season/episode identity. "
             "The media plugin sends deduplicated completion/auth notices; unchanged tracking stays silent. "
@@ -108,7 +108,7 @@ def create_server(client, caller_run=None):
         Definitions require target authorization. Observations are not a fresh provider scan;
         reverify required copies and pending operations before completing a watch plan.
         """
-        values = {"collection": collection, "before": before, "limit": limit}
+        values = {"collection": collection, "before": before, "limit": limit, "target": target}
         if definition is not None:
             values.update(target=target, definition=definition, revision=revision)
         return await call("collection", **values)
@@ -194,8 +194,9 @@ def create_server(client, caller_run=None):
         parent_file_id: str = "root",
         marker: str = "",
         refresh: bool = False,
+        account: str | None = None,
     ) -> dict:
-        """Read Aliyun files; same share/password/folder/page caches for 120s. Refresh bypasses cache.
+        """Read supported cloud files; same share/password/folder/page caches for 120s. Refresh bypasses cache.
 
         Browse folders/pages and verify identity. Cached reads are timestamped observations;
         authorization/network failures are never cached. Transfer checks source files again.
@@ -207,6 +208,7 @@ def create_server(client, caller_run=None):
             parent_file_id=parent_file_id,
             marker=marker,
             refresh=refresh,
+            account=account,
         )
 
     @server.tool(annotations=READ)
@@ -227,12 +229,14 @@ def create_server(client, caller_run=None):
         folder_id: str | None = None,
         name: str | None = None,
         version: str | None = None,
+        parent_file_id: str | None = None,
     ) -> dict:
         """Persist ONE authorized video acquisition; returns an operation_id immediately. No overwrite.
 
         Reuse request_id after a lost reply. For tracking use a stable collection plus season and episode;
         an existing acquisition for that episode/target is reused. Background writes require media:TARGET.
-        folder_id must be below the configured target. Optional name preserves the extension.
+        For Quark pass the source parent_file_id returned by inspection.
+        folder_id is the destination and must be below the configured target. Optional name preserves the extension.
         Leave version unset to keep existing episodes. Use a distinct stable version only
         when the user explicitly requests an additional/upgraded version; old copies stay.
         """
@@ -249,6 +253,7 @@ def create_server(client, caller_run=None):
             folder_id=folder_id,
             name=name,
             version=version,
+            parent_file_id=parent_file_id,
         )
 
     @server.tool(annotations=READ)
@@ -293,17 +298,17 @@ def create_server(client, caller_run=None):
         return await call("verify", operation_id=operation_id, probe=probe)
 
     @server.tool(annotations=WRITE)
-    async def begin_media_login() -> ToolResult:
+    async def begin_media_login(account: str | None = None) -> ToolResult:
         """Only when the user wants to authorize Aliyun: begin/reuse local QR login. Main conversation only.
 
         Returns login_id; call get_media_login to obtain the QR image/status. Tokens never enter MCP.
         Existing account identity is preserved; scanning a different account is rejected.
         """
-        return login_result(await call("login"))
+        return login_result(await call("login", account=account))
 
     @server.tool(annotations=READ)
-    async def get_media_login(login_id: ID) -> ToolResult:
+    async def get_media_login(login_id: ID, account: str | None = None) -> ToolResult:
         """Get current QR image or completion/expiry; request a new login only after expiry/failure."""
-        return login_result(await call("login_status", login_id=login_id))
+        return login_result(await call("login_status", login_id=login_id, account=account))
 
     return server

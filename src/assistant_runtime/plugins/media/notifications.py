@@ -14,8 +14,8 @@ def context(plugin, key):
     elif parts[0] == "media-batch" and len(parts) == 3:
         row = plugin.repo.db.execute("SELECT data FROM media_batches WHERE id=?", (parts[1],)).fetchone()
         group = "media:batch:" + parts[1]
-    elif parts[0] == "media-auth":
-        return None, "media:account:aliyun"
+    elif parts[0] == "media-auth" and len(parts) == 3:
+        return None, "media:account:" + parts[1]
     else:
         return None, None
     caller = json.loads(row[0]).get("caller_run") if row else None

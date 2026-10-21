@@ -36,7 +36,7 @@ async def verify(args):
             json.dumps(
                 {
                     "tools_verified": len(tools),
-                    "account": status["account"],
+                    "accounts": status["accounts"],
                     "target_names": list(status["targets"]),
                 },
                 ensure_ascii=False,
@@ -67,7 +67,10 @@ async def verify(args):
             )
         if args.share_url:
             inspected = await call(
-                "inspect_media_share", share_url=args.share_url, parent_file_id=args.parent_file_id
+                "inspect_media_share",
+                share_url=args.share_url,
+                parent_file_id=args.parent_file_id,
+                account=args.account,
             )
             print(
                 json.dumps(
@@ -95,6 +98,7 @@ async def verify(args):
                 "transfer_media",
                 request_id=request_id,
                 share_url=args.share_url,
+                parent_file_id=args.parent_file_id,
                 file_id=args.file_id,
                 target=args.target,
             )
@@ -124,6 +128,9 @@ def main():
     )
     parser.add_argument("--history", action="store_true", help="Verify bounded persisted search history")
     parser.add_argument("--share-url")
+    parser.add_argument(
+        "--account", help="Account alias for share inspection when multiple accounts use one provider"
+    )
     parser.add_argument("--parent-file-id", default="root")
     parser.add_argument("--file-id")
     parser.add_argument(

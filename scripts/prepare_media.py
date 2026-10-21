@@ -90,6 +90,7 @@ async def prepare(args):
         for ident, name in (("movies", "电影"), ("series", "电视剧")):
             ident_folder = await folder(provider, drive, parent, name)
             targets[ident] = {
+                "account": "aliyun",
                 "drive_id": drive,
                 "folder_id": ident_folder,
                 "openlist_path": args.mount_path.rstrip("/") + "/影视/" + name,

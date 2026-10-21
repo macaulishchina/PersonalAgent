@@ -317,7 +317,7 @@ def execute(auth, action, args):
             raise MediaError("original_download_unavailable")
         # Short-lived capability URL stays inside the adapter/download worker.
         # Never request video preview/transcode URLs or expose this URL through MCP.
-        return {"file": file, "url": result["url"]}
+        return {"file": file, "url": result["url"], "headers": {"Referer": "https://www.aliyundrive.com/"}}
     if action == "drives":
         result = request(auth, "/v2/drive/list_my_drives", {})
         return {

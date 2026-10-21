@@ -29,7 +29,7 @@ class Batches:
         action = args.get("action")
         entries = args.get("items")
         target = args.get("target")
-        self.p.target(target)
+        binding = self.p.target(target)
         if (
             not isinstance(action, str)
             or action not in {"transfer", "download"}
@@ -37,6 +37,7 @@ class Batches:
             or not 1 <= len(entries) <= 100
         ):
             raise ValueError("Batch requires transfer/download and 1..100 explicit items")
+        self.p.provider.require(binding["account"], "copy" if action == "transfer" else "download_url")
         fields = (
             {"file_id"}
             if action == "download"
@@ -50,11 +51,18 @@ class Batches:
                 "season",
                 "episode",
                 "version",
+                "parent_file_id",
             }
         )
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) - fields or "file_id" not in entry:
                 raise ValueError("Invalid batch item fields")
+            if action == "transfer":
+                from .search import share_provider
+
+                self.p.provider.resolve(binding["account"], provider=share_provider(entry.get("share_url")))
+                if entry.get("name") is not None:
+                    self.p.provider.require(binding["account"], "rename")
         fingerprint = hashlib.sha256(canonical([owner, args]).encode()).hexdigest()
         row = self.db.execute("SELECT fingerprint FROM media_batches WHERE id=?", (ident,)).fetchone()
         if row:
@@ -150,7 +158,9 @@ class Batches:
     async def tick(self, ident, owner, data):
         for index, entry in enumerate(data["items"]):
             if entry["state"] == "waiting_auth" and not entry.get("operation_id"):
-                if self.p.repo.account()["state"] == "ready" or data.get("cancel_requested"):
+                if self.p.repo.account(data["binding"]["account"])["state"] == "ready" or data.get(
+                    "cancel_requested"
+                ):
                     entry["state"] = "pending"
             if entry["state"] == "pending":
                 if (
