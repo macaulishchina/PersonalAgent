@@ -378,6 +378,63 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"event: reset", await r.content.read())
         r.close()
 
+    async def test_task_trace_is_authenticated_bounded_read_only_projection(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from assistant_runtime.plugins.tasks.repository import TaskRepository
+        from assistant_runtime.plugins.tasks.trace import TaskTrace
+        import json
+        import uuid
+
+        repo = TaskRepository(self.host.store.db)
+        ident = uuid.uuid4().hex
+        spec = {"title": "trace", "prompt": "private task prompt", "trigger": {"kind": "immediate"}}
+        self.host.store.db.execute(
+            "INSERT INTO job_definitions(id,request_id,fingerprint,state,spec,created,updated) VALUES(?,?,?,'enabled',?,?,?)",
+            (ident, str(uuid.uuid4()), "test", json.dumps(spec), 1, 1),
+        )
+        run = repo.enqueue(repo.definition(ident), "one", "running", {"thread_id": "private-thread"})
+        other = repo.enqueue(repo.definition(ident), "two", "running")
+        trace = TaskTrace(repo)
+        for n in range(3):
+            trace.append(
+                run["id"],
+                {
+                    "call_id": str(n),
+                    "kind": "mcpToolCall",
+                    "phase": "started",
+                    "tool": "search",
+                    "status": "running",
+                },
+            )
+        trace.append(other["id"], {"call_id": "unrelated", "phase": "started"})
+        self.host.runtime.plugins = {"tasks": SimpleNamespace()}
+        self.host.runtime.invoke = AsyncMock(side_effect=lambda request: trace.read(request.arguments))
+        path = self.base + f"/api/tasks/{run['id']}/trace"
+        response = await self.client.get(path)
+        self.assertEqual(response.status, 401)
+        self.host.runtime.invoke.assert_not_awaited()
+        await self.login()
+        response = await self.client.get(path + "?limit=2")
+        self.assertEqual(response.status, 200)
+        page = await response.json()
+        self.assertEqual(len(page["items"]), 2)
+        self.assertNotIn("private", str(page))
+        self.assertEqual(
+            set(page), {"run_id", "task_id", "state", "items", "next", "truncated", "outcome_scope"}
+        )
+        self.assertEqual(self.host.runtime.invoke.call_args.args[0].action, "trace")
+        response = await self.client.get(path + f"?after={page['next']}&limit=2")
+        last = await response.json()
+        self.assertEqual([x["call_id"] for x in last["items"]], ["2"])
+        self.assertIsNone(last["next"])
+        for query in ("?limit=101", "?after=-1", "?limit=oops", "?action=cancel_run"):
+            response = await self.client.get(path + query)
+            self.assertEqual(response.status, 400)
+        response = await self.client.get(self.base + "/api/tasks/missing/trace")
+        self.assertEqual(response.status, 400)
+        self.assertEqual(repo.run(run["id"])["state"], "running")
+
 
 class WebSettingsTest(unittest.TestCase):
     def test_invalid_listener_and_port_rejected(self):

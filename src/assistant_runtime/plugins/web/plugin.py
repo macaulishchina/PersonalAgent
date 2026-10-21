@@ -56,6 +56,7 @@ class WebPlugin:
                 web.post("/api/notifications", self.notification_action),
                 web.get("/api/tasks", self.task_list),
                 web.post("/api/tasks", self.task_action),
+                web.get("/api/tasks/{run_id}/trace", self.task_trace),
                 web.get("/api/tasks/{run_id}/artifacts/{name}", self.task_artifact),
                 web.post("/api/uploads", self.upload),
                 web.get("/api/uploads/{id}", self.attachment),
@@ -212,6 +213,29 @@ class WebPlugin:
             args["limit"] = int(request.query["limit"])
         action = "get" if "task_id" in args else "list"
         return web.json_response(await self.host.runtime.invoke(TaskRequest(action, args)))
+
+    async def task_trace(self, request):
+        from ...kernel.contracts import TaskRequest
+
+        if set(request.query) - {"after", "limit"}:
+            raise ValueError("Unknown execution trace query")
+        result = await self.host.runtime.invoke(
+            TaskRequest(
+                "trace",
+                {
+                    "run_id": request.match_info["run_id"],
+                    "after": int(request.query.get("after", "0")),
+                    "limit": int(request.query.get("limit", "100")),
+                },
+            )
+        )
+        # The timeline needs activity metadata only, not execution internals or prompts.
+        return web.json_response(
+            {
+                key: result[key]
+                for key in ("run_id", "task_id", "state", "items", "next", "truncated", "outcome_scope")
+            }
+        )
 
     async def task_action(self, request):
         from ...kernel.contracts import TaskRequest

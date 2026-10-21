@@ -443,16 +443,20 @@ export function NotificationPanel({
             {error}
           </p>
         )}
-        {data.items.map((group) => (
-          <NotificationGroup
-            key={group.id}
-            group={group}
-            api={api}
-            busy={busy}
-            onRead={() => void readGroup(group)}
-            renderNotice={renderNotice}
-          />
-        ))}
+        {data.items.map((group) =>
+          group.total === 1 ? (
+            renderNotice(group.latest)
+          ) : (
+            <NotificationGroup
+              key={group.id}
+              group={group}
+              api={api}
+              busy={busy}
+              onRead={() => void readGroup(group)}
+              renderNotice={renderNotice}
+            />
+          ),
+        )}
         {!data.items.length && !error && (
           <div className="task-empty">
             <Bell size={28} strokeWidth={1.4} />

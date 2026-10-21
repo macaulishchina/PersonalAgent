@@ -711,3 +711,19 @@ The decisions service owns the global threshold (0.6); model-review override is 
 in the example/instance configuration. Raw provider confidence is not measured task
 success. Selection receipts preserve the per-call decision ID for later execution
 comparison; event-inbox stale decisions are rejected explicitly before dispatch.
+
+### Web execution timeline
+
+Each run has a collapsed **执行过程** disclosure. It reads the existing trace through
+`GET /api/tasks/{run_id}/trace?after=0&limit=100` (same Web authentication). Only activity
+metadata, ownership IDs, pagination and coverage flags cross this route; prompts, model
+selection evidence, provider thread IDs and tool bodies are not included. Call start/end
+records are merged by `call_id`, retaining parallel calls and turn-specific identities.
+The displayed duration is the interval between received records, not external-device
+verification. A completed run never converts a missing tool-end record into success.
+
+One selected trace loads lazily, drains ordered bounded pages, then checks for new records
+every three seconds while unfinished and visible. Collapsing/closing or switching tasks
+aborts in-flight requests; history stays inspectable without background polling. Empty
+and truncated histories are explicit. No older progress text or hidden reasoning is
+reconstructed. Existing tasks trace storage and its 500-event limit are unchanged.

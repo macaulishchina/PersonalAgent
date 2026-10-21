@@ -5,6 +5,7 @@ import { formatDuration } from "./duration";
 import { PanelHeader } from "./panel-header";
 import { useTaskFeed } from "./task-feed";
 import { MessageMedia } from "./message-media";
+import { TaskTrace } from "./task-trace";
 
 function EndTaskButton({
   active,
@@ -104,6 +105,7 @@ export function TaskPanel({
   const [includeArchived, setIncludeArchived] = useState(false);
   const [includeArchivedPlans, setIncludeArchivedPlans] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [traceRunId, setTraceRunId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -133,6 +135,7 @@ export function TaskPanel({
   const [replyText, setReplyText] = useState("");
   useEffect(() => {
     setHistoryOpen(false);
+    setTraceRunId(null);
     setReply(null);
     setReplyText("");
     setActionError("");
@@ -182,6 +185,10 @@ export function TaskPanel({
     <details
       key={r.id}
       className="task-run"
+      onToggle={(event) => {
+        if (event.target === event.currentTarget && !event.currentTarget.open)
+          setTraceRunId((current) => (current === r.id ? null : current));
+      }}
       open={["running", "waiting_user", "unknown"].includes(r.state)}
     >
       <summary>
@@ -210,20 +217,37 @@ export function TaskPanel({
         </p>
       )}
       <p>{runSummary(r)}</p>
+      <TaskTrace
+        runId={r.id}
+        runState={r.state}
+        open={traceRunId === r.id}
+        active={open && (activeStates.includes(r.state) || historyOpen)}
+        api={api}
+        onOpen={(expanded) =>
+          setTraceRunId((current) =>
+            expanded ? r.id : current === r.id ? null : current,
+          )
+        }
+      />
       <MessageMedia
         attachments={r.data.attachments || []}
         onOpen={onOpenMedia}
       />
-      {r.data.artifacts?.map((f: any) => (
-        <p key={f.name}>
-          <a
-            href={`/api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`}
-          >
-            {f.name}
-          </a>{" "}
-          · {f.bytes} B
-        </p>
-      ))}
+      {!!r.data.artifacts?.length && (
+        <details className="task-artifacts">
+          <summary>附件（{r.data.artifacts.length}）</summary>
+          {r.data.artifacts.map((f: any) => (
+            <p key={f.name}>
+              <a
+                href={`/api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`}
+              >
+                {f.name}
+              </a>{" "}
+              · {f.bytes} B
+            </p>
+          ))}
+        </details>
+      )}
       {r.data.questions?.map((q: any) => (
         <p key={q.id}>{q.question}</p>
       ))}
