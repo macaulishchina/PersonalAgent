@@ -13,7 +13,7 @@ const node=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefi
 function signedOut(){
   $("login").hidden=false;$("editor").hidden=true;$("password-open").hidden=true;$("password-change").hidden=true;$("repair").hidden=true;
   document.querySelectorAll('input[type="password"]').forEach(input=>{input.value="";});
-  clearTimeout(applicationTimer);clearTimeout(accountTimer);
+  clearInterval(applicationTimer);applicationTimer=undefined;clearTimeout(accountTimer);accountTimer=undefined;
 }
 async function api(path, body) {
   const response=await fetch(path,body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -161,6 +161,7 @@ action(load);
 let applicationTimer;
 async function applicationStatus(){
   const status=await api("/api/status"),application=status.application||{phase:"idle"};
+  if($("editor").hidden)return;
   const labels={idle:"尚未发起应用",preparing:"校验配置中",waiting:"正在等待工作结束",cancelling:"正在取消在途工作",restarting:"正在重启业务服务",applied:"已应用指定配置版本",partially_applied:"已应用，但部分功能或外部部署步骤尚未就绪",failed:"应用失败，请查看业务诊断",withdrawn:"已撤销等待，继续接收新工作"};
   $("application-state").textContent=labels[application.phase]||application.phase;
   if(application.phase==="applied"&&snapshot&&status.loaded_version===snapshot.version)$("state").textContent="文件与已加载版本一致（重新加载可更新字段详情）";

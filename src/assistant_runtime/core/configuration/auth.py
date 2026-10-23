@@ -13,7 +13,7 @@ class PasswordPolicyError(ValueError):
 
 
 class AdminAccess:
-    MIN_PASSWORD_LENGTH = 12
+    MIN_PASSWORD_LENGTH = 7
     MAX_PASSWORD_LENGTH = 256
 
     @classmethod
