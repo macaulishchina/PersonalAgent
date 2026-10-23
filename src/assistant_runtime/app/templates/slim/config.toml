@@ -1,0 +1,8 @@
+# Generic local execution plus independent configuration console. No assistant conversation.
+root = ".."
+pi_binary = "pi"
+main_model = "unconfigured"
+main_reasoning_effort = "medium"
+instance_skills = []
+plugins = ["ai_usage", "models", "workfiles", "pi", "execution", "integrations"]
+include = ["models.toml", "ai-usage.toml"]

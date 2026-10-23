@@ -9,6 +9,7 @@ config.toml
 /config/
 /management.toml
 !/config.example/config.toml
+!/src/assistant_runtime/app/templates/*/config.toml
 .ruff_cache/
 .mypy_cache/
 .env.*
