@@ -2,6 +2,8 @@
 
 Personal Agent is a modular asyncio host. Pi is the sole execution harness. The unified model registry routes API endpoints through a local LiteLLM gateway or configured native accounts through Pi's provider library. Web text and registered images are the current main entrance. Voice input/dialogue/playback and OS-level execution sandboxing are explicit TODOs. No placeholder audio, fake account or simulated readiness is allowed.
 
+CLI `run` always starts the same application host and its configured plugins. The headless profile does not substitute a minimal test host or omit Web, models, tasks, events or metering. Audio availability belongs to the selected speech plugin and fixed device bindings.
+
 ## Ownership and boundaries
 
 ```mermaid

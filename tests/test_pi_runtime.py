@@ -1,7 +1,10 @@
 """Production host + main Pi + delegated Pi + real task MCP; synthetic model transport."""
 
 import asyncio
+import json
 from pathlib import Path
+import socket
+import sys
 import tempfile
 import threading
 import unittest
@@ -15,6 +18,95 @@ from assistant_runtime.assistant.service import AssistantService
 
 
 class HostTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_headless_starts_real_web_models_and_metering(self):
+        from aiohttp import ClientSession, CookieJar
+        from assistant_runtime.cli import request
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            gateway = FakeResponsesGateway(lambda step, body: sse_text_reply("cli", "CLI_OK"))
+            path = root / "config.toml"
+            path.write_text(
+                f"root={json.dumps(folder)}\nworkspace={json.dumps(folder)}\n"
+                'profile="headless"\nbackend="pi"\nmain_model="model-a"\n'
+                'main_reasoning_effort="low"\nmemory_enabled=false\n'
+                'plugins=["models","pi","voice_disabled","pipewire","web"]\n'
+                f'[web]\nenable=true\nhost="127.0.0.1"\nport={port}\n'
+                "[model_api]\nenabled=true\n"
+                f'gateway_url="{gateway.base_url}"\n'
+                '[model_api.providers.local]\nprotocol="openai_responses"\n'
+                f'base_url="{gateway.base_url}"\nkey_env="TEST_KEY"\nenabled=true\n'
+                '[model_api.entries.model-a]\nprovider="local"\nmodel="model-a"\n'
+                'execution_validated=true\nreasoning_efforts=["low"]\n'
+            )
+            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            config = Config.load(path)
+            with (root / "service.log").open("wb") as log:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "assistant_runtime.cli",
+                    "--config",
+                    str(path),
+                    "run",
+                    stdout=log,
+                    stderr=log,
+                )
+                try:
+                    async with asyncio.timeout(20):
+                        while True:
+                            self.assertIsNone(process.returncode, (root / "service.log").read_text())
+                            try:
+                                status = await request(config, {"command": "status"})
+                                if status.get("plugins", {}).get("web", {}).get("state") == "ready":
+                                    break
+                            except (OSError, RuntimeError):
+                                pass
+                            await asyncio.sleep(0.05)
+                    self.assertEqual(status["plugins"]["pi"]["state"], "ready")
+                    self.assertEqual(status["plugins"]["ai_usage"]["state"], "ready")
+                    origin = f"http://127.0.0.1:{port}"
+                    async with ClientSession(cookie_jar=CookieJar(unsafe=True)) as web:
+                        async with web.get(origin + "/api/session") as reply:
+                            self.assertEqual(reply.status, 401)
+                        async with web.post(
+                            origin + "/api/login",
+                            json={"token": (root / "state/web-access-token").read_text().strip()},
+                            headers={"Origin": origin},
+                        ) as reply:
+                            self.assertEqual(reply.status, 200)
+                        async with web.post(
+                            origin + "/api/messages",
+                            json={"request_id": str(uuid.uuid4()), "text": "Reply CLI_OK"},
+                            headers={"Origin": origin},
+                        ) as reply:
+                            self.assertEqual(reply.status, 202)
+                        async with asyncio.timeout(20):
+                            while True:
+                                async with web.get(origin + "/api/messages") as reply:
+                                    body = await reply.json()
+                                if not body["state"]["task_running"] and any(
+                                    m["role"] == "assistant" and m["text"] == "CLI_OK"
+                                    for m in body["messages"]
+                                ):
+                                    break
+                                await asyncio.sleep(0.05)
+                        self.assertEqual(body["state"]["ai_usage"]["requests"], 1)
+                        self.assertEqual(body["state"]["voice"], "disabled")
+                        self.assertEqual(len(gateway.requests), 1)
+                finally:
+                    if process.returncode is None:
+                        process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), 15)
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+                    await gateway.aclose()
+
     async def test_real_task_fallback_preserves_shared_budget_and_executes_once(self):
         from assistant_runtime.kernel.contracts import TaskRequest
 

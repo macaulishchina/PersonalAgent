@@ -245,14 +245,9 @@ def main():
             return
         config = Config.load(args.config)
         if args.command == "run":
-            if config.profile == "headless":
-                from .headless import HeadlessHost
+            from .assistant.service import AssistantService
 
-                asyncio.run(HeadlessHost(config).run())
-            else:
-                from .assistant.service import AssistantService
-
-                asyncio.run(AssistantService(config, args.no_mic).run())
+            asyncio.run(AssistantService(config, args.no_mic).run())
         elif args.command in {"start", "restart", "halt"}:
             systemctl("stop" if args.command == "halt" else args.command, config.unit_name)
         elif args.command == "logs":
