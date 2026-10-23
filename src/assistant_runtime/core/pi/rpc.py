@@ -355,9 +355,15 @@ class PiSessionWorker:
             tool_name = msg.get("toolName") or ""
             args = msg.get("args") or {}
             item = self._to_tool_item(call_id, tool_name, args, status="running")
+            # Execution ownership must not depend on whether the UI renders this tool.
+            self.meta.setdefault("pending_operations", {})[call_id] = item or {
+                "id": call_id,
+                "type": "tool",
+                "tool": tool_name,
+                "status": "running",
+            }
+            self.parent._save_meta(self.execution_session_id)
             if item:
-                self.meta.setdefault("pending_operations", {})[call_id] = item
-                self.parent._save_meta(self.execution_session_id)
                 self.pending_tools[call_id] = item
                 if item["type"] == "command":
                     self.active_bash[call_id] = {"activity_id": call_id, "process_id": f"bash-{call_id}"}
@@ -404,6 +410,8 @@ class PiSessionWorker:
                         },
                     }
                 )
+            else:
+                self.parent._save_meta(self.execution_session_id)
         elif mtype == "turn_end":
             message = msg.get("message") or {}
             tool_results = msg.get("toolResults") or []
@@ -532,12 +540,16 @@ class PiSessionWorker:
             except UsageError:
                 budget = {**self.parent.usage.snapshots.get(self.meta["budget_id"], {}), "unavailable": True}
             turn_record["ai_usage"] = budget
-            if status != "completed" and budget.get("unknown_execution_requests"):
-                turn_record["status"] = "unknown"
-            if getattr(self, "usage_error", None):
+            # A lost model response retains unknown usage and its reservation. It
+            # does not undo Pi's authoritative terminal event. New user requests
+            # may proceed; the existing work's transport guard still prevents
+            # replay/continuation under an unresolved model request.
+            if getattr(self, "usage_error", None) and status != "unknown":
                 turn_record["status"] = "failed"
                 turn_record["error"] = {"code": "ai_usage_blocked", "message": self.usage_error}
                 self.usage_error = None
+        if self.meta.get("pending_operations"):
+            turn_record["status"] = "unknown"
         self.meta["active_run"] = None
         turns = self.meta.setdefault("runs", [])
         existing = next((t for t in turns if t["id"] == turn_id), None)

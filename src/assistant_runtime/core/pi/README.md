@@ -68,9 +68,16 @@ action. There is no automatic paid retry loop or provider fallback. Explicit con
 can retry native compaction/use the retained context; normal shared request, compaction,
 time and cost budgets still apply. Unknown summary requests remain in the usage ledger
 and retain conservative reservations, but do not poison future execution admission.
-Unknown ordinary execution requests still block until reconciled; restart never clears
-that protection or replays tool operations. A disconnect/cancellation cannot be relabeled
-as a known compaction failure. Logging records compaction outcome without summary content.
+Unknown ordinary model requests retain their ledger entries and reservations, and block
+continuation within the same work allowance until reconciled. This accounting uncertainty
+does not make a settled agent run an unknown operation: if Pi reports `agent_settled` and
+all tools have ended, a generation failure is `failed`, allowing a new explicit user
+request in the same conversation without retrying the failed request. Process loss,
+unconfirmed submission and outstanding tools still produce `unknown` and block session
+reuse. Every started tool is tracked durably, including tools omitted from the UI.
+Restart never clears the shared-work guard or replays tool operations. A disconnect or
+cancellation cannot be relabeled as a known compaction failure. Logging records compaction
+outcome without summary content.
 
 ## Native tool discovery and bounded declarations
 

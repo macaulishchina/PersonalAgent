@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import AsyncMock
 
@@ -219,23 +220,75 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.gateway.requests), 1)
         self.assertFalse(run["ai_usage"]["inflight"])
 
-    async def test_truncated_stream_is_unknown_and_cannot_restart_dispatch(self):
+    async def test_truncated_stream_settles_execution_but_retains_shared_work_guard(self):
         self.gateway.script_fn = lambda step, body: sse_text_reply("truncated", "partial")[:-1]
         ident = await self.session(budget_id="truncated-run")
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic"}]}
         )
-        self.assertEqual((await self.completed())["status"], "unknown")
+        run = await self.completed()
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"]["code"], "generation_failed")
+        self.assertEqual(run["ai_usage"]["unknown_execution_requests"], 1)
         await self.client.close()
         await self.client.start()
-        with self.assertRaises(RpcError):
-            await self.client.request("session.resume", {"session_id": ident})
-        other = await self.session(budget_id="truncated-run")
+        await self.client.request("session.resume", {"session_id": ident})
         await self.client.request(
-            "run.start", {"session_id": other, "input": [{"type": "text", "text": "continue"}]}
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "continue"}]}
         )
-        self.assertEqual((await self.completed())["status"], "failed")
+        self.assertEqual((await self.completed())["error"]["code"], "ai_usage_blocked")
         self.assertEqual(len(self.gateway.requests), 1)
+
+    async def test_model_stream_failure_allows_new_user_request_without_replaying_tool(self):
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call("write-once", "bash", {"command": "echo once >> evidence.txt"})
+            if step == 2:
+                return sse_text_reply("truncated", "partial")[:-1]
+            return sse_text_reply("new-request", "new answer")
+
+        self.gateway.script_fn = script
+        ident = await self.session()
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "first request"}]}
+        )
+        failed = await self.completed()
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["ai_usage"]["unknown_execution_requests"], 1)
+        self.assertEqual(len(self.gateway.requests), 2)  # No automatic retry.
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "new question"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        await self.client.close()
+        await self.client.start()
+        await self.client.request("session.resume", {"session_id": ident})
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "after restart"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        self.assertEqual(len(self.gateway.requests), 4)
+        self.assertEqual((self.root / "evidence.txt").read_text(), "once\n")
+        prior = await self.usage.snapshot(failed["id"])
+        self.assertEqual(prior["requests"], 2)
+        self.assertEqual(prior["unknown_execution_requests"], 1)
+
+    async def test_unrendered_tool_remains_unknown_until_confirmed_end(self):
+        ident = await self.session()
+        worker = self.client.workers[ident]
+        worker.active_turn = "hidden-tool"
+        await worker._handle_message(
+            {"type": "tool_execution_start", "toolCallId": "control", "toolName": "audio_control"}
+        )
+        saved = json.loads((self.root / "executions" / ident / "metadata.json").read_text())
+        self.assertIn("control", saved["pending_operations"])
+        await worker._handle_message({"type": "agent_settled"})
+        self.assertEqual((await self.completed())["status"], "unknown")
+        with self.assertRaises(RpcError):
+            await self.client.request(
+                "run.start", {"session_id": ident, "input": [{"type": "text", "text": "new question"}]}
+            )
+        self.assertFalse(self.gateway.requests)
 
     async def test_missing_usage_is_known_completion_with_unknown_usage(self):
         def script(step, body):
@@ -548,6 +601,27 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RpcError):
             await self.client.request("session.resume", {"session_id": ident})
         self.assertEqual(len(self.gateway.requests), 1)
+
+    async def test_process_death_without_tools_is_not_a_confirmed_model_failure(self):
+        gate = threading.Event()
+        self.gateway.script_fn = lambda step, body: (gate.wait(10), sse_text_reply("late", "late"))[1]
+        try:
+            ident = await self.session()
+            await self.client.request(
+                "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic"}]}
+            )
+            async with asyncio.timeout(10):
+                while not self.gateway.requests:
+                    await asyncio.sleep(0.01)
+            self.client.workers[ident].process.kill()
+            self.assertEqual((await self.completed())["status"], "unknown")
+            with self.assertRaises(RpcError):
+                await self.client.request(
+                    "run.start", {"session_id": ident, "input": [{"type": "text", "text": "new"}]}
+                )
+            self.assertEqual(len(self.gateway.requests), 1)
+        finally:
+            gate.set()
 
     async def test_mcp_schema_and_real_call(self):
         script = self.root / "sample_server.py"

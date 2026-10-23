@@ -287,6 +287,49 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             await client.close()
             await usage.close()
 
+    async def test_native_stream_failure_does_not_lock_new_foreground_requests(self):
+        self.gateway.script_fn = lambda step, body: (
+            sse_text_reply("truncated", "partial")[:-1]
+            if step == 1
+            else sse_text_reply("new-request", "new answer")
+        )
+        usage = UsageService(self.root / "stream-usage")
+        await usage.start()
+        client = PiClient(
+            cwd=str(self.root),
+            settings=self.settings,
+            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            runtime_dir=self.root / "executions",
+            usage=usage,
+            accounts=self.accounts,
+        )
+        try:
+            await client.start()
+            ident = (
+                await client.request(
+                    "session.create",
+                    {"model": "subscription", "config": {"model_reasoning_effort": "medium"}},
+                )
+            )["session"]["id"]
+            runs = []
+            for prompt in ("synthetic failed request", "new explicit question"):
+                await client.request(
+                    "run.start", {"session_id": ident, "input": [{"type": "text", "text": prompt}]}
+                )
+                async with asyncio.timeout(20):
+                    while True:
+                        event = await client.events.get()
+                        if event["kind"] == "run.completed":
+                            runs.append(event["data"]["run"])
+                            break
+            self.assertEqual([run["status"] for run in runs], ["failed", "completed"])
+            self.assertEqual(runs[0]["error"]["code"], "generation_failed")
+            self.assertEqual(len(self.gateway.requests), 2)
+            self.assertEqual((await usage.snapshot(runs[0]["id"]))["unknown_execution_requests"], 1)
+        finally:
+            await client.close()
+            await usage.close()
+
     async def test_native_compaction_timeout_keeps_context_and_can_resume(self):
         from assistant_runtime.core.pi.rpc import RpcError
 
