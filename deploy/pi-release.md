@@ -120,6 +120,13 @@ generic OAuth entrance is therefore not a release gate for this instance.
    leave the old assistant or gateway running alongside the new one. Generate the
    gateway inputs from that configuration, recreate the existing gateway explicitly and check
    local authenticated health. Run preflight against the installed configuration.
+
+   Pin the service's PATH to the installed Node/npm runtime and the existing Python
+   environment. A Pi launcher may fix PATH only for its own child; that does not fix
+   the native account helper's `npm root -g` lookup in the parent service. Run both
+   preflight and `model-accounts status --account NAME` under the actual service
+   environment before startup. Do not inherit temporary Coding AI paths from an
+   interactive shell or infer native-provider readiness from `pi --version` alone.
 4. Start once. Check service readiness, Web login/text/images, a bounded one-shot
    task, auxiliary memory, configured MCPs, event collection, media/library readback
    and usage receipts. No device actions, bulk downloads or new recurring plans are
