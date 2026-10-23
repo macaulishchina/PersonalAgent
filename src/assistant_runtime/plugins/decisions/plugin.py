@@ -158,7 +158,7 @@ class DecisionsPlugin:
                 self.events.task_done()
 
     async def worker(self, interactive_only=False):
-        while self.context.state not in {"stopping", "stopped"}:
+        while not self.context.cancelled.is_set():
             job = await self.queue.get(interactive_only)
             self.working += 1
             claimed = False

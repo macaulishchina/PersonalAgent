@@ -1,6 +1,6 @@
 """Real shadow worker/storage with isolated HTTP, lifecycle and ingress tests."""
 
-from assistant_runtime.app.bundled import context_for
+from assistant_runtime.app.bundled import context_for, create
 
 from usage_fixture import decision_host
 from assistant_runtime.api.ai_usage import UsageRequest
@@ -130,10 +130,13 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.config = Config(root=self.root, decisions={"mode": "shadow", "external_data_consent": True})
         self.runtime = Runtime(self.store)
         self.provider = FakeProvider()
-        self.plugin = DecisionsPlugin(
-            context_for(decision_host(self.config, self.runtime), "decisions"), self.provider
+        adapter = create(
+            decision_host(self.config, self.runtime),
+            "decisions",
+            factory=lambda api: DecisionsPlugin(api, self.provider),
         )
-        self.runtime.add(self.plugin)
+        self.plugin = adapter.instance
+        self.runtime.add(adapter)
         await self.runtime.start()
 
     async def asyncTearDown(self):
