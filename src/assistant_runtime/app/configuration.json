@@ -126,9 +126,11 @@
       },
       "hid_buttons": {
         "type": "object",
-        "title": "hid_buttons",
+        "title": "硬件按键",
         "default": {},
-        "additionalProperties": {}
+        "additionalProperties": {},
+        "x-group": "resources",
+        "x-advanced": true
       },
       "work_files": {
         "type": "object",
@@ -206,7 +208,8 @@
           "pattern": "^[a-z][a-z0-9_]{0,63}$"
         },
         "maxItems": 64,
-        "uniqueItems": true
+        "uniqueItems": true,
+        "x-group": "plugins"
       },
       "bindings": {
         "type": "object",

@@ -40,6 +40,4 @@
   the application host. Do not add another arbitrary module-factory loader.
 - Kernel dependency failures must block dependent startup and remove partial
   registrations. Test owner shutdown, cancellation and stale results.
-- This consolidation is being developed in an isolated worktree because production
-  uses an editable source checkout. Do not edit the running production checkout or perform cutover without explicit
-  authorization; complete the full gate and isolated package acceptance first.
+- Work directly in the current project checkout by default. Do not create source copies or worktrees unless a major change requires isolation. Production deployment is separate from source editing; preserve the running instance during development and complete the full gate and package acceptance before an authorized cutover.

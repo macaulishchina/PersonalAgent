@@ -37,6 +37,14 @@ The module's packaged JSON Schema drives defaults, constraints and visibility; t
 has no second model registry or plugin-specific scripts. Disabled-owner settings are still
 validated. Missing validation dependencies block a save instead of skipping checks.
 
+The desktop console uses fixed category navigation, aligned label/control rows and a
+persistent save bar. Plugin activation has its own category. Named model/provider entries
+create their nested forms only when expanded; switches, enum choices, ordered reference
+lists and structured JSON keep their original value types. Technical field/file/default
+information is available on demand. Apply/restart, history, repair and password changes
+open separate dialogs instead of occupying the main form. Pending edits survive category
+changes, malformed drafts block saving, and saved files remain separate from loaded values.
+
 **Edit → validate/save → confirm apply → restart → verify.** Save preserves comments,
 explicit includes and unrelated fields; defaults are displayed, not materialized by an
 unrelated edit. Reset removes an override. The page distinguishes file and loaded values.
@@ -128,6 +136,22 @@ and management availability with broken business config. Browser and installed-w
 acceptance use private temporary instances, local synthetic endpoints and unused ports.
 These checks do not assert new provider compatibility, complete a real user's OAuth login,
 perform external media/device actions or authorize production cutover.
+
+For isolated desktop browser acceptance, use an environment containing the application,
+Playwright with Chromium, and the independently installed `examples/sample-plugin` package:
+
+```sh
+python scripts/verify_configuration_console.py
+# To check a non-editable release environment instead of repository source:
+python scripts/verify_configuration_console.py --installed --python /absolute/release/venv/bin/python
+```
+
+`--browser` selects an existing Chromium executable; `--artifacts /private/directory` saves
+synthetic screenshots. The check creates a temporary standard instance, keeps model routes
+disabled, and verifies 1280/1440/1920 desktop widths, external-plugin forms, typed values,
+new references, removal, save/apply, repair and custom passwords. It does not load the
+production instance, credentials or task plans. Install validation dependencies separately
+from a running service. Mobile layout optimization is outside this desktop pass.
 
 Acceptance on 2026-10-23: the final full gate passed **1,022 tests, zero skips**, including
 format, lint, types and the chat frontend build. Independent environments verified both

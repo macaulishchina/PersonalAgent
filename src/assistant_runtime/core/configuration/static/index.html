@@ -1,7 +1,213 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统配置</title><link rel="stylesheet" href="/console.css"></head>
-<body><main><header><div><small>PERSONAL AGENT</small><h1>系统配置</h1></div><div class="header-actions"><button id="password-open" class="subtle" hidden>修改密码</button><button id="refresh">重新加载</button></div></header><p id="notice" role="status" aria-live="polite"></p>
-<form id="login"><h2>管理员登录</h2><label>管理员口令<input id="token" type="password" autocomplete="current-password" required></label><button>登录</button></form>
-<form id="password-change" hidden><h2>修改管理员密码</h2><p class="hint">立即生效，所有设备需要重新登录，无需重启业务服务。</p><p id="password-policy" class="hint"></p><label>当前密码<input id="current-password" type="password" autocomplete="current-password" required></label><label>新密码<input id="new-password" type="password" autocomplete="new-password" required></label><label>再次输入新密码<input id="confirm-password" type="password" autocomplete="new-password" required></label><button id="password-save">保存新密码</button><button id="password-cancel" class="subtle" type="button">取消</button></form>
-<section id="editor" hidden><div class="summary"><strong id="state"></strong><span>保存后需要重启业务服务才会生效。</span></div><p id="health"></p><div id="diagnostics" role="status"></div><section class="application"><h2>应用已保存的配置</h2><p>等待模式暂停接收新工作；已接受的工作仍可补充、回答或取消。终止模式会取消当前工作，无法确认的结果保留为未知。</p><button id="apply-wait">等待完成后重启</button> <button id="apply-force" class="subtle">终止并重启</button> <button id="abort-apply" class="subtle">撤销等待</button><p id="application-state" aria-live="polite"></p><ul id="blockers"></ul></section><div class="workspace"><nav id="navigation" aria-label="配置分类"></nav><div id="documents"></div></div><footer><span id="count"></span><button id="save">校验并保存</button><button id="history">变更记录</button></footer><div id="versions"></div></section><button id="repair-open" class="subtle">配置损坏？进入修复</button><section id="repair" hidden></section>
-</main><script src="/console.js" defer></script></body></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>系统配置 · Personal Agent</title>
+    <link rel="stylesheet" href="/console.css" />
+  </head>
+  <body>
+    <section id="login-screen" class="login-screen">
+      <div class="login-brand">
+        <span class="brand-mark">P</span><span>Personal Agent</span>
+      </div>
+      <form id="login" class="login-card">
+        <span class="eyebrow">实例管理</span>
+        <h1>登录系统配置</h1>
+        <p class="hint">管理当前实例的配置、模型接入与插件。</p>
+        <label for="token">管理员密码</label>
+        <input
+          id="token"
+          type="password"
+          autocomplete="current-password"
+          placeholder="输入管理员密码"
+          required
+        />
+        <button class="primary">登录</button>
+        <p class="hint login-help">
+          忘记密码？可在服务器终端使用 configuration reset-token 重置。
+        </p>
+      </form>
+    </section>
+
+    <section id="editor" class="app-shell" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="/" aria-label="Personal Agent 系统配置"
+          ><span class="brand-mark">P</span
+          ><span>Personal Agent<small>系统配置</small></span></a
+        >
+        <p class="nav-label">工作区设置</p>
+        <nav id="navigation" aria-label="配置分类"></nav>
+        <div class="sidebar-bottom">
+          <button id="repair-open" class="sidebar-link">配置修复</button
+          ><span>配置保存在当前实例</span>
+        </div>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="breadcrumbs">
+            <span>系统配置</span><span class="breadcrumb-divider">/</span
+            ><strong id="breadcrumb-current">基础与访问</strong>
+          </div>
+          <div class="header-actions">
+            <span id="health" class="health-badge">连接中</span
+            ><span class="toolbar-divider"></span
+            ><button id="refresh" class="subtle">重新加载</button
+            ><button id="password-open" class="subtle" hidden>修改密码</button>
+          </div>
+        </header>
+        <main class="page">
+          <div class="page-heading">
+            <div>
+              <h1 id="page-title">基础与访问</h1>
+              <p id="page-description">管理实例的基础设置与访问入口。</p>
+            </div>
+            <button id="apply-open" class="secondary">应用配置</button>
+          </div>
+          <div class="configuration-state">
+            <span class="state-dot"></span><strong id="state">读取配置中</strong
+            ><code id="state-version"></code>
+          </div>
+          <div id="diagnostics" role="status"></div>
+          <div id="documents"></div>
+        </main>
+        <footer class="savebar">
+          <div class="save-status">
+            <strong id="count">没有未保存的修改</strong
+            ><span>校验并保存至文件，重启业务后生效。</span>
+          </div>
+          <div class="footer-actions">
+            <button id="history" class="subtle">变更记录</button
+            ><button id="discard" class="secondary" disabled>放弃修改</button
+            ><button id="save" class="primary" disabled>校验并保存</button>
+          </div>
+        </footer>
+      </div>
+    </section>
+
+    <p id="notice" role="status" aria-live="polite"></p>
+
+    <dialog id="password-dialog" class="compact-dialog">
+      <div class="dialog-heading">
+        <div>
+          <h2>修改管理员密码</h2>
+          <p>立即生效，无需重启业务服务。</p>
+        </div>
+        <button
+          class="icon-button"
+          data-close="password-dialog"
+          aria-label="关闭修改密码"
+        >
+          ×
+        </button>
+      </div>
+      <form id="password-change" hidden>
+        <p id="password-policy" class="hint"></p>
+        <label for="current-password">当前密码</label
+        ><input
+          id="current-password"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <label for="new-password">新密码</label
+        ><input
+          id="new-password"
+          type="password"
+          autocomplete="new-password"
+          required
+        />
+        <label for="confirm-password">再次输入新密码</label
+        ><input
+          id="confirm-password"
+          type="password"
+          autocomplete="new-password"
+          required
+        />
+        <p class="hint">修改后，所有设备需要使用新密码重新登录。</p>
+        <div class="dialog-actions">
+          <button id="password-cancel" class="secondary" type="button">
+            取消</button
+          ><button id="password-save" class="primary">保存新密码</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="apply-dialog">
+      <div class="dialog-heading">
+        <div>
+          <h2>应用已保存的配置</h2>
+          <p>重启业务服务并核对实际加载的配置版本。</p>
+        </div>
+        <button
+          class="icon-button"
+          data-close="apply-dialog"
+          aria-label="关闭应用配置"
+        >
+          ×
+        </button>
+      </div>
+      <div class="application">
+        <div class="application-status">
+          <span class="state-dot"></span
+          ><strong id="application-state" aria-live="polite"></strong>
+        </div>
+        <ul id="blockers"></ul>
+        <section class="restart-option">
+          <div>
+            <h3>等待完成后重启</h3>
+            <p>
+              暂停接收新工作，等待已接受的工作完成。期间可以回答、取消工作或撤销等待。
+            </p>
+          </div>
+          <button id="apply-wait" class="primary">等待完成后重启</button>
+        </section>
+        <section class="restart-option">
+          <div>
+            <h3>终止并重启</h3>
+            <p>
+              取消当前工作后重启。无法确认的外部操作结果保留为未知，不会自动重做。
+            </p>
+          </div>
+          <button id="apply-force" class="danger">终止并重启</button>
+        </section>
+        <div class="dialog-actions">
+          <button id="abort-apply" class="secondary">撤销等待</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="history-dialog" class="wide-dialog">
+      <div class="dialog-heading">
+        <div>
+          <h2>变更记录</h2>
+          <p>恢复配置不会回滚业务数据，仍需应用后生效。</p>
+        </div>
+        <button
+          class="icon-button"
+          data-close="history-dialog"
+          aria-label="关闭变更记录"
+        >
+          ×
+        </button>
+      </div>
+      <div id="versions"></div>
+    </dialog>
+    <dialog id="repair-dialog" class="wide-dialog">
+      <div class="dialog-heading">
+        <div>
+          <h2>修复配置</h2>
+          <p>仅支持已登记的配置文件。</p>
+        </div>
+        <button
+          class="icon-button"
+          data-close="repair-dialog"
+          aria-label="关闭配置修复"
+        >
+          ×
+        </button>
+      </div>
+      <section id="repair" hidden></section>
+    </dialog>
+    <script src="/console.js" defer></script>
+  </body>
+</html>
