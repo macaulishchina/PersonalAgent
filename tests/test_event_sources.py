@@ -84,7 +84,11 @@ class SourceTest(unittest.TestCase):
 
     def test_registry_only_trusted_config_revision_and_restart(self):
         with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder) / ".agents/observations/sources.json"
+            project.parent.mkdir(parents=True)
+            project.write_text("Coding AI configuration must never be read")
             registry = Registry(Path(folder), {"reyee": ReyeeEvents(Path(folder))})
+            self.assertEqual(registry.path, Path(folder) / "config/observations/sources.json")
             registry.load()
             registry.update(
                 "configure",

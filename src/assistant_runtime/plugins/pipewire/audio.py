@@ -48,14 +48,14 @@ class AudioRoute:
     def __init__(self, config, store, outputs=None, voice_io=None, inputs=None):
         self.config, self.store = config, store
         self._voice_io = voice_io or VoiceBinding(config.input_device, config.default_output)
-        self._input_spec = copy.deepcopy(config.devices[self.input_device])
-        self._output_spec = copy.deepcopy(config.devices[self.output_device])
+        self._input_spec = copy.deepcopy(config.devices.get(self.input_device, {}))
+        self._output_spec = copy.deepcopy(config.devices.get(self.output_device, {}))
         for spec in config.devices.values():
             if spec["adapter"] == "pipewire" and spec.get("enabled", True):
                 validate_device(spec)
-        if self.output_device not in config.output_devices:
+        if self.output_device and self.output_device not in config.output_devices:
             raise ValueError("Configured voice output is unavailable or disabled")
-        if self._input_spec["adapter"] != "pipewire":
+        if self.input_device and self._input_spec.get("adapter") != "pipewire":
             raise ValueError("Selected microphone requires its configured adapter")
         self.outputs, self.inputs = outputs, inputs
         self.external_output = None
@@ -84,7 +84,7 @@ class AudioRoute:
     @property
     def hardware_volume_configured(self):
         return (
-            self._output_spec["adapter"] == "pipewire"
+            self._output_spec.get("adapter") == "pipewire"
             and "hardware_volume" in self._output_spec["connection"]
         )
 
@@ -94,6 +94,8 @@ class AudioRoute:
         return sources, sinks
 
     async def ensure(self, force=False, check_volume=False):
+        if not self.input_device or not self.output_device:
+            raise RuntimeError("Main audio bindings are not configured")
         async with self.lock:
             sources, sinks = await self.devices()
             spec = self._output_spec

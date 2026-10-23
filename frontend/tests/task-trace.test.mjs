@@ -13,7 +13,7 @@ const event = (seq, call_id, phase, rest = {}) => ({
   call_id,
   phase,
   at: seq,
-  kind: "mcpToolCall",
+  kind: "mcp",
   server: "media",
   tool: "lookup",
   status: phase === "started" ? "running" : "completed",
@@ -60,7 +60,7 @@ test("labels preserve unknown tools and bounded data", () => {
   assert.equal(stepTitle(traceSteps([event(1, "a", "started")])[0]), "lookup");
   assert.equal(
     stepTitle(
-      traceSteps([event(1, "a", "started", { kind: "commandExecution" })])[0],
+      traceSteps([event(1, "a", "started", { kind: "command" })])[0],
     ),
     "执行命令",
   );

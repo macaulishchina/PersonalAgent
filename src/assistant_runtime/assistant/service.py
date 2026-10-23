@@ -1,6 +1,7 @@
-"""Local devices and wake lifecycle around a single native Codex voice session."""
+"""Application host, device resources and management IPC. Voice is pending acceptance."""
 
 import asyncio
+import uuid
 from collections import deque
 import fcntl
 import json
@@ -32,7 +33,7 @@ log = logging.getLogger(__name__)
 
 class AssistantService:
     def __init__(self, config, no_mic=False):
-        self.config, self.no_mic = config, no_mic
+        self.config, self.no_mic = config, True  # TODO: independent voice acceptance
         self.quiet_hours = QuietHours.from_settings(config.quiet_hours)
         config.state_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(config.state_dir, 0o700)
@@ -164,6 +165,9 @@ class AssistantService:
             )
 
     async def wake(self, preroll=(), *, source="other", keyword=None):
+        if getattr(self.voice, "available", True) is False:
+            self.last_error = "Voice is not enabled; use the web conversation"
+            return False
         if self.active or self.quiet_active():
             return
         if self.mode == "closing":
@@ -611,7 +615,7 @@ class AssistantService:
                 "ready": bool(getattr(self, "interaction", None) and self.interaction.ready),
                 "error": self.interaction.error if getattr(self, "interaction", None) else None,
                 "input_gaps": self.input_buffer.gaps,
-                "path": self.interaction.path if getattr(self, "interaction", None) else "native",
+                "path": self.interaction.path if getattr(self, "interaction", None) else "disabled",
                 "trace": list(self.interaction.state.trace)[-16:]
                 if getattr(self, "interaction", None)
                 else [],
@@ -627,10 +631,7 @@ class AssistantService:
             "devices": self.devices.list(),
             "memory": {
                 "ready": bool(self.memory and self.memory.ready),
-                "requested_model": self.config.memory_model,
-                "requested_reasoning_effort": self.config.memory_reasoning_effort,
-                "model": self.backend.resolved_memory_model,
-                "reasoning_effort": self.backend.resolved_memory_reasoning_effort,
+                "requested_model": self.config.model_api.get("memory"),
                 "pending_jobs": self.store.db.execute(
                     "SELECT count(*) FROM memory_jobs WHERE status IN ('pending','running')"
                 ).fetchone()[0],
@@ -685,7 +686,8 @@ class AssistantService:
             ):
                 await self.sleep()
             try:
-                await self.route.ensure()
+                if self.config.input_device and self.config.default_output:
+                    await self.route.ensure()
             except (RuntimeError, TimeoutError, OSError) as exc:
                 self.route.last_error = type(exc).__name__
 
@@ -712,9 +714,44 @@ class AssistantService:
             await asyncio.gather(work, disconnected, return_exceptions=True)
 
     async def _connection(self, reader, writer):
+        from ..kernel.ai_usage import current_usage
+
+        token = current_usage.set(None)
+        try:
+            await AssistantService._connection_body(self, reader, writer)
+        finally:
+            current_usage.reset(token)
+
+    async def _connection_body(self, reader, writer):
         try:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
             action = d["command"]
+            if d.get("execution_session"):
+                from ..kernel.ai_usage import UsageScope, UsageError, current_usage
+
+                worker = self.backend.client.workers.get(d["execution_session"])
+                if not worker or not worker.active_turn or not worker.meta.get("budget_id"):
+                    raise UsageError("usage_inactive_execution")
+                scope = await self.ai_usage.service.binding(
+                    worker.meta.get("budget_scope") or worker.meta["budget_id"]
+                )
+                if scope is None:
+                    raise UsageError("usage_unknown_execution")
+                if (
+                    worker.meta.get("budget_scope")
+                    and d.get("caller_run") is not None
+                    and d["caller_run"] != worker.meta["budget_scope"]
+                ):
+                    raise UsageError("usage_caller_mismatch")
+                current_usage.set(
+                    UsageScope(
+                        scope.work_id,
+                        scope.caller,
+                        scope.task_id,
+                        parent_call=getattr(worker, "last_usage_call", ""),
+                        execution_version=worker.active_turn,
+                    )
+                )
             if action == "wake":
                 await self.wake(source="cli")
             elif action in {"sleep", "stop", "cancel", "volume", "progress"}:
@@ -790,6 +827,17 @@ class AssistantService:
 
                 result = await self.runtime.invoke(
                     MediaRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                )
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                return
+            elif action == "ai-usage":
+                from ..kernel.ai_usage import UsageRequest
+
+                result = await self.runtime.invoke(
+                    UsageRequest(d["action"], d.get("arguments", {}), d.get("caller_run"))
                 )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
@@ -892,7 +940,12 @@ class AssistantService:
                 writer.close()
                 await writer.wait_closed()
                 return
-            elif action in {"say", "text", "inject-wav"}:
+            elif action == "text":
+                result = await self.conversation.submit(
+                    d.get("request_id") or str(uuid.uuid4()), d["text"], []
+                )
+                response = {"ok": True, "result": result}
+            elif action in {"say", "inject-wav"}:
                 await self.wake(source="cli:" + action)
                 if self.connect_task:
                     await asyncio.shield(self.connect_task)
@@ -958,7 +1011,7 @@ class AssistantService:
                 asyncio.create_task(self.stop_event.wait()),
                 asyncio.create_task(self.runtime.fatal.wait()),
             ]
-            log.info("service_ready backend=native microphone=%s standby", not self.no_mic)
+            log.info("service_ready backend=pi microphone=%s standby", not self.no_mic)
             await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
             if self.runtime.fatal.is_set():
                 raise RuntimeError("Critical plugin failed; supervisor will restart without replay")

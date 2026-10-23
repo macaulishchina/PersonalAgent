@@ -14,7 +14,6 @@ from assistant_runtime.assistant.service import AssistantService
 from assistant_runtime.devices.directory import DeviceDirectory
 from assistant_runtime.kernel.contracts import Control, DeviceQuery, VoiceBinding, AudioVolume
 from assistant_runtime.mcp.device import create_server
-from assistant_runtime.plugins.codex.backend import TOOL
 from assistant_runtime.plugins.pipewire.audio import AudioRoute
 from assistant_runtime.plugins.pipewire.devices import PipeWireDevices
 from test_behavior import device_config
@@ -121,8 +120,6 @@ class FixedVoiceTest(unittest.IsolatedAsyncioTestCase):
             handler.invoke.assert_not_awaited()
             await client.call_tool("set_audio_volume", {"device_id": "study", "percent": 40})
             handler.invoke.assert_awaited_once_with(AudioVolume("study", 40))
-        self.assertNotIn("room", TOOL["inputSchema"]["properties"])
-        self.assertNotIn("room", TOOL["inputSchema"]["properties"]["action"]["enum"])
 
     def test_voice_phrase_never_changes_route_but_session_controls_remain(self):
         for text in ("切换到客厅音箱", "切换到书房", "使用HomePod播放", "在客厅回答"):

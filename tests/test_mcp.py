@@ -29,7 +29,7 @@ from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.device import create_server as device_server
 from assistant_runtime.mcp.memory import create_server as memory_server
 from assistant_runtime.mcp.media import create_server as media_server
-from assistant_runtime.plugins.codex.mcp import server_config
+from assistant_runtime.plugins.pi.mcp import server_config
 
 
 class McpTest(unittest.IsolatedAsyncioTestCase):
@@ -240,7 +240,7 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
 
     def test_codex_registers_two_scoped_services_and_maintenance_disables_them(self):
         cfg = server_config(Path("/tmp/private.sock"))
-        self.assertEqual(set(cfg), {"memory", "device"})
+        self.assertEqual(set(cfg), {"memory", "device", "ai_usage"})
         self.assertEqual(set(cfg["memory"]["enabled_tools"]), set(MEMORY_TOOLS))
         self.assertEqual(set(cfg["device"]["enabled_tools"]), set(DEVICE_TOOLS))
         self.assertTrue(all(x["enabled"] for x in cfg.values()))

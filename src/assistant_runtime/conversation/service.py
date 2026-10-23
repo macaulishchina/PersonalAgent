@@ -80,35 +80,26 @@ class Conversation:
             self.provider_event(event, restored=True)
             if self.image_queue.full():
                 await self.image_queue.join()
-        key = "chat.legacy_imported"
-        if not self.host.store.get(key):
-            for ident, timestamp, role, text in self.host.store.db.execute(
-                "SELECT id,time,role,text FROM transcripts WHERE role IN ('user','assistant') ORDER BY id"
-            ).fetchall():
-                self.store.put(
-                    f"legacy:{ident}",
-                    self.session,
-                    role=role,
-                    source="legacy",
-                    text=text,
-                    status="complete",
-                    kind="legacy",
-                )
-            self.host.store.set(key, True)
         context.spawn(self.watch_state(), "state")
-        context.spawn(self.sync_loop(), "voice-context")
-        self.voice_pending.set()
+        if getattr(self.host.voice, "available", True):
+            context.spawn(self.sync_loop(), "voice-context")
+            self.voice_pending.set()
 
     def state(self):
         h = self.host
         return {
+            "ai_usage": getattr(getattr(h.backend, "client", None), "usage", None).snapshots.get(
+                getattr(h.backend.client, "last_work_id", "")
+            )
+            if getattr(getattr(h.backend, "client", None), "usage", None)
+            else None,
             "session_id": self.session,
             "name": h.config.assistant_name,
-            "voice": h.mode,
+            "voice": h.mode if getattr(h.voice, "available", True) else "disabled",
             "speaking": h.player.playing,
             "task_running": h.backend.busy,
             "quiet": h.quiet_active(),
-            "backend_ready": h.backend.client.process is not None,
+            "backend_ready": h.backend.client.started,
             "web_dispatching": self.web_dispatching,
             "sync_error": self.sync_error,
             "notifications_unread": self.host.notifications.repo.unread_count()
@@ -208,6 +199,8 @@ class Conversation:
                 self.voice_pending.set()
 
     async def sync_voice_to_task(self):
+        if not getattr(self.host.voice, "available", True):
+            return
         async with self.voice_context_lock:
             while True:
                 ids = self.store.db.execute(
@@ -233,7 +226,11 @@ class Conversation:
                 self.session,
                 getattr(self.host.voice, "epoch", 0),
                 self.voice_revision,
-                "web" if self.web_dispatching or turn in self.web_turns else "voice",
+                "web"
+                if not getattr(self.host.voice, "available", True)
+                or self.web_dispatching
+                or turn in self.web_turns
+                else "voice",
             )
         if kind == "turn_started" and self.web_dispatching:
             self.web_turns.add(turn)
@@ -257,7 +254,11 @@ class Conversation:
                 self.session,
                 getattr(self.host.voice, "epoch", 0),
                 self.voice_revision,
-                "web" if self.web_dispatching or getattr(self.host.voice, "web_silent", False) else "voice",
+                "web"
+                if not getattr(self.host.voice, "available", True)
+                or self.web_dispatching
+                or getattr(self.host.voice, "web_silent", False)
+                else "voice",
             )
             if renewed:
                 self.host.voice.execution_started(turn)
@@ -321,13 +322,23 @@ class Conversation:
                     self.image_failed(mid)
         elif kind == "turn_completed":
             status = event["status"]
-            if status in ("interrupted", "failed") and turn in self.web_turns:
+            if status in ("interrupted", "failed", "unknown") and turn in self.web_turns:
                 self.store.put(
                     f"outcome:{self.session}:{turn}",
                     self.session,
                     text="任务已取消。"
                     if status == "interrupted"
-                    else "任务未完成。请查看执行详情，系统不会自动重试。",
+                    else (
+                        "本轮执行已达到调用预算并停止，请查看任务进展。"
+                        if event.get("error_code") == "ai_usage_blocked" and status != "unknown"
+                        else "执行结果无法确认，未自动重做。"
+                        if status == "unknown"
+                        else {
+                            402: "模型账户余额不足，本次请求未完成。",
+                            429: "模型服务限流或额度不足，本次请求未完成。",
+                            401: "模型鉴权失败，本次请求未完成。",
+                        }.get(event.get("error_status"), "任务未完成。请查看执行详情，系统不会自动重试。")
+                    ),
                     status="complete",
                     turn_id=turn,
                 )
@@ -509,6 +520,9 @@ class Conversation:
 
     async def task_done(self, turn_id, text, status):
         self.task_replies.close(turn_id)
+        if not getattr(self.host.voice, "available", True):
+            self.feedback.finish(turn_id, "context")
+            return
         try:
             await self.deliver_result(turn_id, text, status)
         except Exception:

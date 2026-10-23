@@ -1,5 +1,7 @@
 """Real HTTP transport tests; no external endpoints or paid requests."""
 
+from usage_fixture import attach_usage
+
 import asyncio
 import json
 from pathlib import Path
@@ -149,6 +151,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             client = GatewayClient(
                 ModelSettings(gateway_url=self.client.settings.gateway_url, concurrency=2), "private-key"
             )
+            attach_usage(host, runtime)
             plugin = ModelsPlugin(host, client)
             runtime.add(plugin)
             await runtime.start()

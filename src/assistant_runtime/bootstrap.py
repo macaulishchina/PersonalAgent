@@ -4,6 +4,27 @@ from .kernel.runtime import Runtime
 from .kernel.contracts import Control, Trigger, VoiceBinding
 
 
+def assistant_skill_paths(config):
+    """The composition root selects bundled resources from enabled owners only."""
+    from pathlib import Path
+    from .assistant.skills import instance_skill_paths
+
+    plugins = Path(__file__).parent / "plugins"
+    bundled = (
+        ("media", "media-acquisition"),
+        ("tasks", "event-driven-tasks"),
+        ("events", "event-management"),
+    )
+    paths = tuple(plugins / owner / "skills" / name for owner, name in bundled if owner in config.plugins)
+    for path in paths:
+        if not (path / "SKILL.md").is_file():
+            raise ValueError(f"Bundled assistant skill is missing: {path.name}")
+    private = instance_skill_paths(config.root, config.instance_skills)
+    if {path.name for path in paths} & {path.name for path in private}:
+        raise ValueError("Instance skills must not shadow bundled assistant skills")
+    return paths + private
+
+
 async def memory_complete(service, messages, schema):
     from .plugins.models.settings import ModelSettings
     from .kernel.models import ModelRequest
@@ -12,19 +33,25 @@ async def memory_complete(service, messages, schema):
 
     binding = ModelSettings.parse(service.config.model_api).memory
     if not binding:
-        return await service.backend.memory_complete(messages, schema)
-    result = await service.runtime.invoke(
-        ModelRequest(
-            "infer",
-            {
-                "request_id": str(uuid.uuid4()),
-                "model": binding,
-                "text": json.dumps(messages, ensure_ascii=False),
-                "schema": schema,
-            },
-        ),
-        timeout=90,
-    )
+        raise RuntimeError("Memory requires an explicit model_api.memory binding")
+    from .kernel.ai_usage import current_usage
+
+    token = current_usage.set(current_usage.get() or await service.ai_usage.scope(independent="memory"))
+    try:
+        result = await service.runtime.invoke(
+            ModelRequest(
+                "infer",
+                {
+                    "request_id": str(uuid.uuid4()),
+                    "model": binding,
+                    "text": json.dumps(messages, ensure_ascii=False),
+                    "schema": schema,
+                },
+            ),
+            timeout=90,
+        )
+    finally:
+        current_usage.reset(token)
     if result.get("state") != "completed":
         raise RuntimeError("Memory model result unconfirmed")
     return result["data"]
@@ -32,8 +59,8 @@ async def memory_complete(service, messages, schema):
 
 def compose(service):
     from .plugins.pipewire.plugin import PipeWirePlugin
-    from .plugins.keyword.plugin import KeywordPlugin
-    from .plugins.codex.plugin import CodexPlugin
+    from .plugins.speech.placeholder import VoicePlaceholder
+    from .plugins.pi.plugin import PiPlugin
     from .plugins.gesture import GesturePlugin
     from .plugins.hid_buttons.plugin import HidButtonsPlugin
     from .memory.service import MemoryPlugin
@@ -148,11 +175,18 @@ def compose(service):
 
     runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in config.plugins})
     runtime.add(WorkFilesMaintenance(service.workfiles))
+    from .plugins.ai_usage.plugin import AIUsagePlugin
+
+    usage_plugin = AIUsagePlugin(service)
+    service.ai_usage = usage_plugin
+    # Metering is mandatory for built-in paid routes, even in a minimal plugin list.
+    if "ai_usage" not in config.plugins:
+        runtime.add(usage_plugin)
     factories = {
         "pipewire": lambda: PipeWirePlugin(
             config, store, service.devices, service.audio_outputs, service.voice_io, service.audio_inputs
         ),
-        "keyword": lambda: KeywordPlugin(config),
+        "voice_disabled": VoicePlaceholder,
         "airplay": airplay,
         "go2rtc": go2rtc,
         "web": web,
@@ -161,12 +195,13 @@ def compose(service):
         "search": search,
         "decisions": decisions,
         "models": models,
+        "ai_usage": lambda: usage_plugin,
         "notifications": notifications,
         "events": events,
         "observations": observations,
         "integrations": integrations,
         "apple_home": apple_home,
-        "codex": lambda: CodexPlugin(
+        "pi": lambda: PiPlugin(
             config,
             store,
             service.audio_received,
@@ -174,6 +209,8 @@ def compose(service):
             service.speak,
             service.tool_control,
             service.mcp_registry if "integrations" in config.plugins else None,
+            usage_plugin.service,
+            skill_paths=assistant_skill_paths(config),
         ),
         "gesture": GesturePlugin,
         "hid_buttons": lambda: HidButtonsPlugin(config),
@@ -224,44 +261,23 @@ def compose(service):
     service.route, service.player = runtime.resolve("audio").route, runtime.resolve("audio").player
     service.recognizer = runtime.resolve("trigger").recognizer
     service.backend, service.voice = runtime.resolve("brain").backend, runtime.resolve("brain").voice
-    from .plugins.codex.jobs import CodexJobs
+    from .plugins.pi.executor import TaskExecutor
 
-    if config.model_api.get("enabled", False):
-        from .plugins.codex.api_jobs import RoutedJobs
-
-        service.task_executor = lambda notify: RoutedJobs(service, notify)
-    else:
-        service.task_executor = lambda notify: CodexJobs(service.backend, notify)
+    service.task_executor = lambda notify: TaskExecutor(service.backend, notify)
     service.memory = runtime.plugins.get(config.bindings.get("memory"))
     service.backend.on_task_done = service.memory.enqueue if service.memory else None
     from .conversation.service import Conversation
 
     service.conversation = Conversation(service)
     runtime.add(service.conversation)
-    from .interaction.settings import InteractionSettings
-
-    settings = InteractionSettings.parse(config.interaction)
-    service.interaction = None
-    if settings.enabled:
-        from .interaction.service import Interaction
-        from .interaction.output import OutputScheduler
-        from .plugins.speech.recognition import LocalRecognition
-        from .plugins.speech.rendering import LocalSpeech
-
-        output = OutputScheduler(
-            service.player,
-            LocalSpeech(settings.tts_model_dir, settings.tts_voice),
-            store.db,
-            lambda: not service.quiet_active() and not service.player.manual_muted,
-        )
-        service.interaction = Interaction(service, settings, LocalRecognition(settings.asr_model_dir), output)
+    service.interaction = None  # TODO: independent speech acceptance.
     return runtime
 
 
 class AssistantPlugin:
     from .kernel.runtime import Manifest
 
-    manifest = Manifest("assistant", ("pipewire", "keyword", "codex"), critical=True)
+    manifest = Manifest("assistant", ("pipewire", "voice_disabled", "pi"), critical=True)
 
     def __init__(self, service, dependencies):
         self.manifest = self.Manifest("assistant", dependencies, critical=True)
@@ -285,6 +301,3 @@ class AssistantPlugin:
         if self.service.interaction:
             context.own(self.service.interaction.close)
             context.spawn(self.service.interaction.prepare(), "speech-prepare")
-        if not self.service.no_mic:
-            context.spawn(self.service._capture(), "capture")
-            context.spawn(self.service._process_capture(), "recognition-input")

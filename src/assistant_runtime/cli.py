@@ -199,12 +199,50 @@ def main():
     decisions.add_argument(
         "arguments", nargs="?", default="{}", help="JSON decision arguments; no credentials"
     )
+    usage = sub.add_parser("ai-usage", help="AI service usage, budgets and explicit allowance extensions")
+    usage.add_argument("action", choices=["check", "status", "summary", "calls", "stats", "extend"])
+    usage.add_argument("arguments", nargs="?", default="{}")
     models = sub.add_parser("models", help="Model API configuration and bounded inference")
     models.add_argument("action", choices=["check", "gateway-config", "list", "status", "health", "infer"])
     models.add_argument("arguments", nargs="?", default="{}")
+    accounts = sub.add_parser(
+        "model-accounts", help="Pi-native model provider accounts; explicit operator login"
+    )
+    accounts.add_argument("action", choices=["providers", "status", "catalog", "login", "logout"])
+    accounts.add_argument("--account")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
+        if args.command == "model-accounts":
+            from .config import read_config, default_root
+            from .plugins.models.settings import ModelSettings
+            from .plugins.pi.accounts import manage
+
+            # Authentication must remain operable while a disabled model binding is being repaired.
+            source = (
+                Path(
+                    args.config
+                    or os.environ.get("PERSONAL_AGENT_CONFIG")
+                    or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+                    / "personal-agent/config.toml"
+                )
+                .expanduser()
+                .resolve()
+            )
+            data = read_config(source) if args.config or source.exists() else {}
+            settings = ModelSettings.parse({"accounts": data.get("model_api", {}).get("accounts", {})})
+            if args.action != "providers" and args.account not in settings.accounts:
+                raise ValueError("Select a configured model account with --account")
+            root = Path(data.get("root", source.parent if source.exists() else default_root())).expanduser()
+            root = (root if root.is_absolute() else source.parent / root).resolve()
+            print(
+                json.dumps(
+                    asyncio.run(manage(root, settings, args.action, args.account)),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
         config = Config.load(args.config)
         if args.command == "run":
             if config.profile == "headless":
@@ -220,6 +258,20 @@ def main():
         elif args.command == "logs":
             subprocess.run(
                 ["journalctl", "--user", "-u", config.unit_name, "-n", "60", "--no-pager"], check=True
+            )
+        elif args.command == "ai-usage" and args.action == "check":
+            from .plugins.ai_usage.settings import UsageSettings
+
+            policy = UsageSettings.parse(config.ai_usage)
+            print(
+                json.dumps(
+                    {
+                        "valid": True,
+                        "configuration_revision": policy.revision(),
+                        "max_requests": policy.max_requests,
+                        "body_enabled": policy.body_enabled,
+                    }
+                )
             )
         elif args.command == "models" and args.action in {"check", "gateway-config"}:
             from .plugins.models.settings import ModelSettings
@@ -247,9 +299,7 @@ def main():
                         "state": str(config.state_dir),
                         "plugins": config.plugins,
                         "models_present": config.models.exists(),
-                        "executables": {
-                            n: shutil.which(n) for n in ["codex", "pactl", "pacat", "bluetoothctl"]
-                        },
+                        "executables": {n: shutil.which(n) for n in ["pi", "pactl", "pacat", "bluetoothctl"]},
                         "config_source": args.config or os.environ.get("PERSONAL_AGENT_CONFIG", "XDG"),
                     },
                     indent=2,

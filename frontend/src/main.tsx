@@ -64,10 +64,11 @@ type State = {
   web_dispatching: boolean;
   notifications_unread?: number;
   sync_error?: string;
+  ai_usage?: { requests: number; limit: number; warning?: boolean; blocked?: string | null } | null;
 };
 const initial: State = {
   name: "个人助理",
-  voice: "standby",
+  voice: "disabled",
   speaking: false,
   task_running: false,
   quiet: false,
@@ -848,7 +849,9 @@ function App() {
         ? "正在说话"
         : state.voice === "active"
           ? "语音已连接"
-          : state.quiet
+          : state.voice === "disabled"
+            ? "已连接"
+            : state.quiet
             ? "语音静音中"
             : "已连接";
   return (
@@ -949,7 +952,7 @@ function App() {
               <div className="welcome empty">
                 <Mark />
                 <h1>从这里，继续对话。</h1>
-                <p>语音和文字，共享同一段对话。</p>
+                <p>文字、图片和后台任务，共享同一段对话。</p>
               </div>
             )}
             {groupMessages(messages).map((group) => (
@@ -1008,6 +1011,12 @@ function App() {
                 </button>
               )}
             </div>
+            {state.ai_usage && (
+              <p className="task-hint" role={state.ai_usage.blocked ? "status" : undefined}>
+                AI 调用 {state.ai_usage.requests}/{state.ai_usage.limit}
+                {state.ai_usage.blocked ? " · 已暂停，需明确调整额度" : state.ai_usage.warning ? " · 已达到预警用量" : ""}
+              </p>
+            )}
             {state.sync_error && (
               <div className="notice" role="status">
                 {state.sync_error}
@@ -1180,7 +1189,7 @@ function App() {
               <div className="composer-caption-info">
                 {state.task_running
                   ? "可以继续补充要求，任务会继续进行。"
-                  : "与语音入口实时同步"}
+                  : (state.voice === "disabled" ? "支持文字、图片和任务委派" : "与语音入口实时同步")}
                 <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
             </div>

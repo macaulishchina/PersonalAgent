@@ -52,13 +52,13 @@ const names: Record<string, string> = {
 };
 export function stepTitle(step: TraceStep) {
   const item = step.info;
-  if (item.kind === "mcpToolCall")
+  if (item.kind === "mcp")
     return names[item.tool || ""] || item.tool || "调用工具";
   return (
     {
-      commandExecution: "执行命令",
-      fileChange: "修改文件",
-      webSearch: "搜索网页",
+      command: "执行命令",
+      file: "修改文件",
+      search: "搜索网页",
     }[item.kind] || "工具活动"
   );
 }

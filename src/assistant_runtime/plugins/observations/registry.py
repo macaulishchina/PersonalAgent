@@ -8,17 +8,12 @@ from ...kernel.event_reporting import identifier
 
 class Registry:
     def __init__(self, root, providers):
-        self.path = root / ".agents/observations/sources.json"
+        self.path = root / "config/observations/sources.json"
         self.providers = providers
         self.revision = 0
         self.sources = {}
 
     def load(self):
-        legacy = self.path.parents[1] / "events" / "sources.json"
-        if legacy.exists():
-            raise ValueError(
-                "Migrate .agents/events/sources.json to .agents/observations/sources.json while stopped"
-            )
         if self.path.exists():
             raw = json.loads(self.path.read_text())
             if raw.get("version") != 1 or type(raw.get("revision")) is not int or len(raw["sources"]) > 64:

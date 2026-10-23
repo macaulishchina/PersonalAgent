@@ -1,12 +1,12 @@
 # Third-party MCP integrations
 
 The optional `integrations` plugin owns this assistant instance's third-party MCP
-registry and management capability. Codex owns native MCP transport, authentication
+registry and management capability. Pi owns native MCP transport, authentication
 and tool dispatch. There is no second tool proxy, package installer, model session,
-device inventory or global Codex configuration writer.
+device inventory or global Pi configuration writer.
 
 Install the `integrations` extra in the same `.venv` and add `integrations` to an
-explicit `plugins` list. It is included in the default voice plugin set.
+explicit `plugins` list. It is included in the default plugin set.
 
 ```toml
 [external_mcp]
@@ -15,34 +15,29 @@ inherit_user_servers = false
 # registry_path = "/absolute/private/path/servers.json"
 ```
 
-The default registry is `<instance root>/.agents/mcp/servers.json`. Its non-secret
-definitions belong in Git, including MCPs installed by the assistant. Management
+The default registry is private `<instance root>/config/mcp/servers.json`, including
+MCPs installed by the assistant. Only the empty reusable template in
+`config.example/mcp/servers.json` belongs in Git. Management
 writes an atomic, mode-0600 JSON file with a global optimistic revision. A failed
 write leaves the last good file and in-memory state intact. Credential values never
 belong in this file: use environment references or the native provider credential
 store. Literal environment/header values are for non-secret settings only. Server
 work directories, verification receipts and raw acceptance artifacts stay private
-in ignored `state/`; committing a registry does not package its dependencies.
+in ignored `state/`; a registry does not package its dependencies.
 Manual edits require increasing the registry revision, followed by `reload`.
-An existing `state/mcp/servers.json` is never silently copied into Git. Migrate its
-non-secret definitions explicitly, or set `registry_path` to retain that private file.
+Project-local Coding AI files are not discovered. A custom private path can be
+selected explicitly with `registry_path`; no legacy registry is imported automatically.
 Server removal drops private values but retains a disabled identity, preventing an
 old resumed context from resurrecting that registration. Removal does not uninstall
 packages or delete user data.
 
-`inherit_user_servers=false` disables user/project MCP definitions found in each
-context's effective Codex configuration. The optional true setting explicitly keeps
-existing user/project MCPs under their existing policy in foreground/background;
-they are reported as inherited, not managed registrations. Verification and memory
-maintenance disable inherited servers regardless. Managed servers always retain
-this registry's explicit scopes and policies. Global Codex settings and plugins
-remain owned by Codex; this plugin is not an operating-system security sandbox.
+Pi runs with isolated settings and an explicit MCP snapshot; it does not import global user registrations. `inherit_user_servers` controls only executor-reported inherited definitions when that capability exists; Pi reports none. All managed servers use this registry's explicit scopes and policies. This is not an OS sandbox.
 
 ## Definition and use
 
 Use the `integrations` MCP or `personal-agent mcp` CLI. Both dispatch the typed
 `IntegrationRequest` to the same plugin. The manager exposes list, inspect,
-configure, enable/disable, remove, verify, apply, reload and OAuth login tools.
+configure, enable/disable, remove, verify, apply and reload. Interactive OAuth is unsupported in the Pi adapter; login requests return an error without a fabricated URL.
 Read the current global `revision` before editing. Identical configure retries are
 idempotent; stale changes fail rather than overwrite someone else's configuration.
 
@@ -63,9 +58,7 @@ personal-agent mcp apply
   task cwd changes never relocate the server's files.
 - `http`: Streamable HTTP `url`, optional private `headers`, `env_headers`
   (header name to host environment variable) and `bearer_token_env`. URL credentials
-  and fragments are rejected. Native Codex OAuth is available through
-  `begin_mcp_login`; the user follows its authorization URL and verifies again.
-  Tokens remain in the native provider's credential store, never tool responses.
+  and fragments are rejected. Supply credentials through private environment/header references. Interactive MCP OAuth is not implemented by this adapter.
 
 Top-level definition fields:
 
@@ -101,7 +94,7 @@ tool within the user's authorization. Configuring a command does not install it.
 Use the server's persistent work directory for dependencies; use the task's own
 scratch for temporary downloads/scripts. Record the installed package version and
 startup definition in the versioned registry and its adjacent installation notes.
-Do not modify shared Codex configuration. An existing installation outside `state/`
+Do not modify another agent installation’s global configuration. An existing installation outside `state/`
 can be referenced by its actual executable path without copying package binaries.
 
 A background installation task declares `resources=["mcp_management"]`. This reuses
@@ -137,7 +130,7 @@ a disabled registration before enabling it. Excluded scopes fail. Verification
 receipts bind to the server revision and configuration content, and become stale
 if configuration changes during the probe. At most four verifications can be
 pending, with two running concurrently; cancellation and shutdown retain cleanup
-ownership. Native OAuth waits are separately bounded and owned.
+ownership. Interactive OAuth is pending independent implementation and acceptance.
 After applying, use the exposed `external_<name>` tools to test the intended action;
 discovery alone does not prove a phone/camera/device action succeeded.
 
@@ -154,11 +147,11 @@ contracts are needed; do not wrap every external MCP as a duplicate device plugi
 ```
 
 The isolated acceptance uses synthetic stdio and localhost Streamable HTTP MCPs
-and the installed Codex App Server. It discovers both configured scopes, dispatches
+and actual stdio/HTTP MCP transports without inference. It discovers both configured scopes, dispatches
 real synthetic tools without model inference, rejects excluded scope, refreshes
 the same foreground thread, reports a missing executable, disables maintenance
 tools and cleans up processes/threads. It touches no production registry, physical
 device, user conversation or model API. Unit tests cover optimistic concurrency,
 redaction, atomic-write failure, stale probes, bounded cancellation, scoped task
-management, OAuth lifecycle and configuration rollback. Real vendor pairing,
+management, unsupported OAuth reporting and configuration rollback. Real vendor pairing,
 OAuth authorization and device actions require that integration's own acceptance.

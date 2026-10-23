@@ -15,7 +15,7 @@ from assistant_runtime.assistant.service import AssistantService
 from assistant_runtime.mcp.catalog import EVENT_TOOLS
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.events import create_server
-from assistant_runtime.plugins.codex.mcp import server_config
+from assistant_runtime.plugins.pi.mcp import server_config
 from assistant_runtime.plugins.events.plugin import EventsPlugin
 from assistant_runtime.plugins.events.settings import EventSettings
 from assistant_runtime.plugins.events.storage import Storage

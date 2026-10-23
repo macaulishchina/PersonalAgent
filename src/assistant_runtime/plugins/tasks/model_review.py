@@ -125,6 +125,17 @@ class ModelReview:
             self.queue.put_nowait(run["id"])
 
     async def evaluate(self, ident):
+        from ...kernel.ai_usage import current_usage
+
+        usage = getattr(self.plugin.host, "ai_usage", None)
+        token = current_usage.set(await usage.scope(ident)) if usage else None
+        try:
+            return await self._evaluate(ident)
+        finally:
+            if token is not None:
+                current_usage.reset(token)
+
+    async def _evaluate(self, ident):
         p = self.plugin
         run = p.repo.run(ident)
         record = run["data"]["model_review"]

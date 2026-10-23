@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 class ModelsPlugin:
-    manifest = Manifest("models")
+    manifest = Manifest("models", ("ai_usage",))
 
     def __init__(self, host, client=None):
         self.host = host
@@ -45,8 +45,17 @@ class ModelsPlugin:
             return
         try:
             if self.client is None:
+                from ..pi.accounts import NativeAccounts
+
                 self.client = GatewayClient(
-                    self.settings, gateway_credential(self.host.config.root, self.settings)
+                    self.settings,
+                    gateway_credential(self.host.config.root, self.settings),
+                    accounts=NativeAccounts(
+                        self.host.config.root,
+                        self.settings,
+                        state_dir=getattr(self.host.config, "state_dir", self.host.config.root / "state")
+                        / "model-accounts",
+                    ),
                 )
             context.own(self.client.close)
             await self.client.start()
@@ -281,16 +290,31 @@ class ModelsPlugin:
                                     ),
                                 )
                             try:
-                                result = await self.client.complete(
-                                    {
-                                        **payload,
-                                        "model": candidate,
-                                        "reasoning": {"effort": effort},
-                                        "max_output_tokens": selected.get(
-                                            "max_output_tokens", self.settings.max_output_tokens
-                                        ),
+                                from ..ai_usage.service import metered
+
+                                scope = await self.host.ai_usage.scope(request.caller_run)
+                                selected_payload = {
+                                    **payload,
+                                    "model": candidate,
+                                    "reasoning": {"effort": effort},
+                                    "max_output_tokens": selected.get(
+                                        "max_output_tokens", self.settings.max_output_tokens
+                                    ),
+                                }
+                                result = await metered(
+                                    self.host.ai_usage.service,
+                                    scope,
+                                    "memory" if scope.work_id.startswith("memory:") else "inference",
+                                    selected["provider"],
+                                    selected["model"],
+                                    lambda: self.client.complete(selected_payload, session_id=session_id),
+                                    bounds={
+                                        "input_tokens": selected.get("context_window", 128000),
+                                        "output_tokens": await self.client.output_bound(selected_payload)
+                                        if hasattr(self.client, "output_bound")
+                                        else selected_payload["max_output_tokens"],
                                     },
-                                    session_id=session_id,
+                                    body=selected_payload,
                                 )
                                 attempted["state"] = "completed"
                                 result.update(
@@ -327,9 +351,11 @@ class ModelsPlugin:
                             )
                         return result
                     except BaseException as exc:
-                        failed = isinstance(exc, ModelCallError)
+                        from ...kernel.ai_usage import UsageError
+
+                        failed = isinstance(exc, (ModelCallError, UsageError))
                         if attempts and attempts[-1]["state"] == "submitted":
-                            attempts[-1]["state"] = "unknown"
+                            attempts[-1]["state"] = "blocked" if isinstance(exc, UsageError) else "unknown"
                         state = "failed" if failed else "unknown"
                         log.error(
                             "Model request ended request=%s state=%s error=%s",

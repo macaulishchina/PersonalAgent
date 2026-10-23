@@ -114,10 +114,10 @@ class ConfigFilesTest(unittest.TestCase):
 
     def test_candidate_validation_reads_includes_without_writing_entry(self):
         self.write("config.toml", 'profile="headless"\ninclude=["models.toml"]')
-        self.write("models.toml", 'codex_model="selected"')
+        self.write("models.toml", 'main_model="selected"')
         before = self.entry.read_text()
         merged = read_config(self.entry, text=before + "\n[media]\nenabled=false\n")
-        self.assertEqual(merged["codex_model"], "selected")
+        self.assertEqual(merged["main_model"], "selected")
         self.assertFalse(merged["media"]["enabled"])
         self.assertEqual(self.entry.read_text(), before)
 

@@ -1,7 +1,7 @@
 # 网页搜索
 
 可选 `search` 插件提供公开网页搜索与正文读取，不调用大模型。
-与订阅 OpenAI Search Service 并列供助手选择；搜索供应商与任务执行模型相互独立。
+Pi 通过统一 MCP 使用已配置的搜索供应商；搜索供应商与任务执行模型相互独立。
 网盘检索、转存和下载仍使用 media，浏览器操作不属于本插件。
 
 ## 配置与入口
@@ -10,7 +10,7 @@
 参考 `config.example/search.toml`，密钥放实例根目录私有 `.env`。
 官方 DeepSeek 使用 `DEEPSEEK_API_KEY`，无需配置 URL；兼容服务使用独立实例名、
 显式 `base_url` 和环境变量引用，必须实现同一 Search/Fetch 协议。
-配置和凭据在服务启动时读取，修改后重启。删除插件即可关闭，订阅搜索继续独立工作。
+配置和凭据在服务启动时读取，修改后重启。删除插件即可关闭；当前 Pi 执行器不提供旧订阅 Search Service。
 本插件由现有助手服务承载，不额外启动搜索守护进程。
 
 调用入口共用 `SearchRequest(action, arguments, caller_run)`：
@@ -18,7 +18,7 @@
 - 内部模块：`await runtime.invoke(SearchRequest("search", {"query": "..."}), timeout=65)`。
   65 秒覆盖配置允许的最大 60 秒总截止时间；默认业务截止时间为 20 秒。
 - MCP：`search_capabilities`、`search_web`、`fetch_webpage`，均为读取工具。
-  统一服务目录将其暴露给主会话和订阅/API 后台执行器。
+  统一服务目录将其暴露给主会话和 Pi 后台执行器。
 - CLI：`personal-agent --config config/config.toml search capabilities`；
   `search search '{"query":"Python TaskGroup","allowed_domains":["docs.python.org"],"count":5}'`；
   `search fetch '{"url":"https://example.com","max_chars":20000}'`；
@@ -60,12 +60,12 @@ DeepSeek 内部的重定向和再次 DNS 解析由其安全边界负责；它未
 缓存/合并命中保留原上游关联 ID，不能将每个调用的 attempts 相加作为计费次数。
 错误使用稳定 code，例如 authentication_failed、insufficient_balance、
 rate_limited、search_timeout、non_public_page_address。调用方检查 state/error，
-由助手决定是否换关键词、请求用户处理账号或另用订阅搜索。
+由助手决定是否换关键词、请求用户处理账号或另用明确可用的搜索来源。
 原有工具对话存储策略仍适用；本插件不另建长期网页内容库。
 
 ## 验证与扩展
 
-离线测试：`.venv/bin/python scripts/check.py --group search --group codex`。
+离线测试：`.venv/bin/python scripts/check.py --group search --group execution`。
 真实接口验收显式运行：
 
 ```sh

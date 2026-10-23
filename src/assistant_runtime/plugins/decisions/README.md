@@ -154,7 +154,7 @@ status exposes effective scene policies, index statistics, queue pressure and fa
 
 ## Verification and rollout
 
-Run `scripts/check.py --group decisions --group tasks --group speech --group codex`
+Run `scripts/check.py --group decisions --group tasks --group speech --group execution`
 during development and the full gate after final edits. Tests cover policy inheritance,
 concurrency/reserved capacity, deduplication with separate caller outcomes, cancellation,
 late results, daily archives, write failure, shutdown, voice confirmation and unknown

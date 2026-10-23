@@ -6,6 +6,7 @@ import uuid
 
 from ..kernel.contracts import MemoryRequest
 from ..kernel.runtime import Manifest
+from ..kernel.ai_usage import UsageScope, current_usage
 
 
 class MemoryPlugin:
@@ -153,6 +154,16 @@ class MemoryPlugin:
         return "\n".join(f"[{r['scope']}:{r['id']}] {r['text']}" for r in records)[:3500]
 
     async def process_job(self, job):
+        ident, start, end, epoch = job
+        # One durable capture batch owns user/project extraction, retries and restart.
+        # Foreground preemption must not replenish its model allowance.
+        token = current_usage.set(UsageScope(f"memory:{epoch}:{start}:{end}", f"memory:{ident}"))
+        try:
+            await self._process_job(job)
+        finally:
+            current_usage.reset(token)
+
+    async def _process_job(self, job):
         ident, start, end, epoch = job
         status = self.store.db.execute("SELECT status FROM memory_jobs WHERE id=?", (ident,)).fetchone()
         if status and status[0] == "done":

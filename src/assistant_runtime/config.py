@@ -70,17 +70,14 @@ def read_config(path, *, text=None):
 @dataclass
 class Config:
     root: Path = field(default_factory=default_root)
-    profile: str = "voice"
-    backend: str = "native"
+    profile: str = "headless"
+    backend: str = "pi"
     realtime_voice: str = "juniper"
     workspace: str = field(default_factory=lambda: str(Path.cwd()))
-    codex_binary: str = "codex"
-    codex_model: str = "gpt-6.1-sol"
-    codex_reasoning_effort: str = "high"
-    memory_model: str = "gpt-6-luna"
-    memory_reasoning_effort: str = "low"
-    codex_sandbox: str = "workspace-write"
-    approval_policy: str = "never"
+    pi_binary: str = "pi"
+    instance_skills: list[str] = field(default_factory=list)
+    main_model: str = "go-gpt"
+    main_reasoning_effort: str = "medium"
     assistant_name: str = "个人助理"
     wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
     idle_seconds: int = 60
@@ -91,6 +88,7 @@ class Config:
     events: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
     interaction: dict = field(default_factory=dict)
+    ai_usage: dict = field(default_factory=dict)
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     search: dict = field(default_factory=dict)
@@ -107,10 +105,12 @@ class Config:
     unit_name: str = "personal-agent.service"
     plugins: list[str] = field(
         default_factory=lambda: [
+            "ai_usage",
+            "models",
             "decisions",
             "pipewire",
-            "keyword",
-            "codex",
+            "voice_disabled",
+            "pi",
             "memory",
             "gesture",
             "notifications",
@@ -121,8 +121,8 @@ class Config:
     bindings: dict[str, str] = field(
         default_factory=lambda: {
             "audio": "pipewire",
-            "trigger": "keyword",
-            "brain": "codex",
+            "trigger": "voice_disabled",
+            "brain": "pi",
             "memory": "memory",
         }
     )
@@ -132,6 +132,9 @@ class Config:
     memory_auto_capture: bool = True
 
     def __post_init__(self):
+        from assistant_runtime.assistant.skills import validate_names
+
+        validate_names(self.instance_skills)
         from assistant_runtime.interaction.settings import InteractionSettings
 
         from assistant_runtime.plugins.models.settings import ModelSettings
@@ -140,8 +143,10 @@ class Config:
         if model_settings.enabled and "models" not in self.plugins:
             raise ValueError("Enabled model API requires the models plugin")
         interaction = InteractionSettings.parse(self.interaction)
-        if interaction.enabled and "tasks" not in self.plugins:
-            raise ValueError("Dual-path interaction requires the tasks capability")
+        if interaction.enabled:
+            raise ValueError(
+                "Voice interaction is pending independent acceptance; disable interaction.enabled"
+            )
         from assistant_runtime.plugins.integrations.settings import IntegrationSettings
 
         IntegrationSettings.parse(self.external_mcp)
@@ -174,10 +179,8 @@ class Config:
         AppleHomeSettings.parse(self.apple_home)
         QuietHours.from_settings(self.quiet_hours)
         for name in (
-            "codex_model",
-            "codex_reasoning_effort",
-            "memory_model",
-            "memory_reasoning_effort",
+            "main_model",
+            "main_reasoning_effort",
             "realtime_voice",
         ):
             value = getattr(self, name)
@@ -267,7 +270,7 @@ class Config:
         root = Path(data.pop("root", p.parent if p.exists() else default_root())).expanduser()
         root = (root if root.is_absolute() else p.parent / root).resolve()
         c = cls(root=root, **data)
-        if c.profile not in {"voice", "headless"} or c.backend != "native":
+        if c.profile not in {"voice", "headless"} or c.backend != "pi":
             raise ValueError("Unsupported profile or backend")
         if not 0 <= c.minimum_volume <= 100 or c.idle_seconds < 1:
             raise ValueError("Invalid volume, wake word or idle timeout")

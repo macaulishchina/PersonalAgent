@@ -1,307 +1,294 @@
-"""Explicit paid synthetic model acceptance; never changes a running assistant.
+"""Explicit Pi/API acceptance with synthetic data, a request cap and token limits.
 
-Requires an already prepared local gateway and prior user budget/data authorization.
-Three bounded auxiliary calls; optional isolated Codex file/tool probe. Real provider
-feature equivalence still requires separate search/MCP/Goal/compression/voice acceptance.
+Never restarts the installed assistant or reads its conversations/media. A successful
+local/synthetic test is separate from real-provider acceptance. Credentials stay private.
 """
 
 import argparse
 import asyncio
-import io
+import base64
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
 import time
-from types import SimpleNamespace
-import uuid
-
+from aiohttp import web, ClientSession, ClientTimeout
 from assistant_runtime.config import Config
-from assistant_runtime.kernel.models import ModelRequest
-from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.store import Store
-from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.conversation.media import MediaAttachments
-from assistant_runtime.plugins.models.plugin import ModelsPlugin
-from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort as resolve_effort
+from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
 from assistant_runtime.plugins.models.gateway import gateway_credential
-from assistant_runtime.plugins.codex.rpc import CodexClient
-from assistant_runtime.plugins.codex.api_catalog import write_catalog
+from assistant_runtime.plugins.models.client import GatewayClient
+from assistant_runtime.plugins.pi.rpc import PiClient
+from assistant_runtime.plugins.pi.accounts import NativeAccounts
 
 
-async def codex_probe(config, model, settings, *, effort=None):
-    """A new temporary workspace, no household MCP/skills/history, maximum 90 seconds."""
-    effort = resolve_effort(settings.entry(model), effort)
-    with tempfile.TemporaryDirectory(prefix="assistant-api-probe-") as area:
-        provider = {
-            "name": "Synthetic API acceptance",
-            "base_url": settings.gateway_url,
-            "wire_api": "responses",
-            "env_key": "ASSISTANT_CODEX_GATEWAY_KEY",
-            "requires_openai_auth": False,
-            "request_max_retries": 0,
-            "stream_max_retries": 0,
-            "stream_idle_timeout_ms": 30000,
-        }
-        client = CodexClient(
-            config.codex_binary,
-            area,
-            overrides={
-                "model_provider": "assistant_api",
-                "model_catalog_json": write_catalog(Path(area), settings),
-                "model_providers.assistant_api": provider,
-                "features.remote_control": False,
-                "features.multi_agent": False,
-                "features.apps": False,
-                "project_doc_max_bytes": 0,
-                "model_reasoning_effort": effort,
-            },
-            environment={"ASSISTANT_CODEX_GATEWAY_KEY": gateway_credential(config.root, settings)},
-        )
-        thread, turn = None, None
-        events, final, tools = [], [], 0
-        usage = None
-        started = time.monotonic()
-        try:
-            async with asyncio.timeout(90):
-                await client.start()
-                inherited = (await client.request("config/read", {"includeLayers": False, "cwd": area}))[
-                    "config"
-                ].get("mcp_servers", {})
-                result = await client.request(
-                    "thread/start",
-                    {
-                        "cwd": area,
-                        "model": model,
-                        "modelProvider": "assistant_api",
-                        "allowProviderModelFallback": False,
-                        "sandbox": config.codex_sandbox,
-                        "approvalPolicy": config.approval_policy,
-                        "baseInstructions": "You are performing a synthetic protocol test. Use only tools necessary for this temporary directory. Do not access network, credentials, other paths or personal data. Never spawn agents. Maximum four tool calls.",
-                        "developerInstructions": "Write and edit only probe.txt in the working directory, then read it back. Do not inspect any other files. Stop on failure.",
-                        "config": {
-                            "mcp_servers": {k: {"enabled": False} for k in inherited},
-                            "skills": {"config": []},
-                            "web_search": "disabled",
-                        },
-                    },
-                )
-                thread = result["thread"]["id"]
-                if result.get("modelProvider") != "assistant_api" or result.get("model") != model:
-                    raise RuntimeError("Unexpected provider/model resolution")
-                response = await client.request(
-                    "turn/start",
-                    {
-                        "threadId": thread,
-                        "effort": effort,
-                        "input": [
-                            {
-                                "type": "text",
-                                "text": "Create probe.txt containing alpha, use the file edit tool to replace alpha with beta, then read it back with a shell command. Report the exact final file text. Do nothing else.",
-                            }
-                        ],
-                    },
-                )
-                turn = response["turn"]["id"]
-                while True:
-                    event = await client.events.get()
-                    method, params = event.get("method", ""), event.get("params", {})
-                    if "id" in event:
-                        await client.send(
-                            {
-                                "id": event["id"],
-                                "error": {
-                                    "code": -32601,
-                                    "message": "Synthetic probe rejects additional permissions/input",
-                                },
-                            }
-                        )
-                    if method == "thread/tokenUsage/updated":
-                        usage = params.get("tokenUsage")
-                    if method == "error":
-                        raise RuntimeError(
-                            "Provider turn reported an error; inspect private acceptance trace"
-                        )
-                    if method in {"item/completed", "turn/completed"}:
-                        events.append(event)
-                    if method == "item/completed":
-                        item = params.get("item", {})
-                        if item.get("type") == "agentMessage":
-                            final.append(item.get("text", ""))
-                        elif item.get("type") in {"commandExecution", "fileChange", "mcpToolCall"}:
-                            tools += 1
-                            if tools > 4:
-                                raise RuntimeError("Synthetic tool-call budget exhausted")
-                    if method == "turn/completed" and params.get("turn", {}).get("id") == turn:
-                        if params["turn"].get("status") != "completed":
-                            raise RuntimeError("Codex test turn did not complete")
-                        break
-                actual = (Path(area) / "probe.txt").read_text().strip()
-                patched = any(e.get("params", {}).get("item", {}).get("type") == "fileChange" for e in events)
-                if actual != "beta" or not tools or not patched:
-                    raise RuntimeError("Tool/file acceptance failed")
-                return {
-                    "passed": True,
-                    "elapsed_ms": round((time.monotonic() - started) * 1000),
-                    "tool_items": tools,
-                    "usage": usage,
-                    "file_text": actual,
-                    "final": final,
-                    "events": events,
-                }
-        except Exception as exc:
-            return {
-                "passed": False,
-                "error_type": type(exc).__name__,
-                "tool_items": tools,
-                "final": final,
-                "events": events,
-            }
-        finally:
-            if thread and turn:
-                try:
-                    await client.request("turn/interrupt", {"threadId": thread, "turnId": turn}, timeout=5)
-                except Exception:
-                    pass
-            if thread:
-                try:
-                    await client.request("thread/archive", {"threadId": thread}, timeout=5)
-                except Exception:
-                    pass
-            await client.close()
-
-
-async def verify(config, model, execution, cases=None, *, effort=None):
-    explicit_cases = bool(cases)
-    cases = cases or {"text", "structured", "image"}
+async def verify(config, model, *, case="text", effort=None, max_requests=4, max_tokens=1024):
     settings = ModelSettings.parse(config.model_api)
     entry = settings.entry(model)
-    effort = resolve_effort(entry, effort)
-    for capability, flag in (("image", "images"), ("structured", "structured")):
-        if explicit_cases and capability in cases and not entry.get(flag):
-            raise ValueError("Requested acceptance capability is not enabled in test config: " + capability)
-    if "execution-only" in cases and not execution:
-        raise ValueError("execution-only requires --execution")
-    output = config.state_dir / "acceptance/models" / str(uuid.uuid4())
-    output.mkdir(parents=True, mode=0o700)
-    store = Store(output / "receipts.sqlite3")
-    ConversationStore(store)
-    runtime = Runtime(store)
-    host = SimpleNamespace(
-        config=config,
-        store=store,
-        runtime=runtime,
-        conversation=SimpleNamespace(media=MediaAttachments(output, store.db)),
-    )
-    plugin = ModelsPlugin(host)
-    runtime.add(plugin)
-    results = {
-        "model": model,
-        "configuration_revision": settings.fingerprint(),
-        "synthetic_only": True,
-        "cases": [],
-    }
+    native = settings.providers[entry["provider"]]["protocol"] == "pi"
+    selected_effort = reasoning_effort(entry, effort)
+    key = gateway_credential(config.root, settings)
+    submitted = 0
+    http_statuses = []
+    started = time.monotonic()
+    async with ClientSession(timeout=ClientTimeout(total=60), trust_env=False) as transport:
 
-    async def call(case, text, **extra):
-        result = await runtime.invoke(
-            ModelRequest(
-                "infer",
-                {
-                    "request_id": str(uuid.uuid4()),
-                    "model": model,
-                    "text": text,
-                    "reasoning_effort": effort,
-                    **extra,
-                },
-            ),
-            timeout=settings.timeout_seconds + 2,
+        async def proxy(request):
+            nonlocal submitted
+            if submitted >= max_requests:
+                return web.json_response(
+                    {"error": {"message": "Synthetic acceptance request budget exhausted"}}, status=429
+                )
+            submitted += 1
+            payload = await request.json()
+            payload["max_output_tokens"] = max_tokens
+            headers = {"Authorization": "Bearer " + key}
+            if request.headers.get("x-assistant-session"):
+                headers["x-assistant-session"] = request.headers["x-assistant-session"]
+            async with transport.post(
+                settings.gateway_url + "/responses", json=payload, headers=headers, allow_redirects=False
+            ) as upstream:
+                http_statuses.append(upstream.status)
+                response = web.StreamResponse(
+                    status=upstream.status,
+                    headers={"Content-Type": upstream.headers.get("Content-Type", "application/json")},
+                )
+                await response.prepare(request)
+                async for chunk in upstream.content.iter_chunked(8192):
+                    await response.write(chunk)
+                await response.write_eof()
+                return response
+
+        app = web.Application(client_max_size=1024 * 1024)
+        app.router.add_post("/v1/responses", proxy)
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        bounded = replace(
+            settings, gateway_url=f"http://127.0.0.1:{port}/v1", execution_max_output_tokens=max_tokens
         )
-        results["cases"].append({"case": case, **result})
-        print(case, result["state"], result.get("elapsed_ms"), result.get("usage"), flush=True)
-        return result
+        for item in bounded.entries.values():
+            item["execution_max_output_tokens"] = max_tokens
+        evidence = {
+            "model": model,
+            "reasoning_effort": selected_effort,
+            "case": case,
+            "state": "unknown",
+            "scope": "synthetic_only",
+            "max_requests": max_requests,
+            "max_output_tokens": max_tokens,
+        }
+        try:
+            if case == "memory":
+                if not entry.get("structured"):
+                    raise ValueError("Memory acceptance requires an explicit structured-output candidate")
+                from assistant_runtime.plugins.ai_usage.service import UsageService, metered
+                from assistant_runtime.plugins.ai_usage.settings import UsageSettings
+                from assistant_runtime.kernel.ai_usage import UsageScope
 
-    try:
-        await runtime.start()
-        if "text" in cases:
-            answer = await call(
-                "text",
-                "Synthetic coding acceptance: evaluate the Python expression 17 + 25. Reply with only the integer.",
-            )
-            if answer["text"].strip() != "42":
-                raise RuntimeError("Incorrect synthetic arithmetic result")
-        if "structured" in cases and entry.get("structured"):
-            schema = {
-                "type": "object",
-                "properties": {"value": {"type": "integer"}},
-                "required": ["value"],
-                "additionalProperties": False,
-            }
-            answer = await call("structured", "Return JSON with integer value equal to 42.", schema=schema)
-            if answer["data"] != {"value": 42}:
-                raise RuntimeError("Incorrect structured result")
-        if "image" in cases and entry.get("images"):
-            from PIL import Image
+                area = tempfile.TemporaryDirectory(prefix="memory-acceptance-")
+                usage = UsageService(Path(area.name) / "ai-usage", UsageSettings(max_requests=max_requests))
+                await usage.start()
+                client = GatewayClient(bounded, key)
+                client.accounts = NativeAccounts(config.root, bounded)
+                try:
+                    await client.start()
+                    payload = {
+                        "model": model,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": "Synthetic memory extraction: return JSON {fact: likes tea, source_id: 1, evidence: likes tea}. Source #1 user text: likes tea.",
+                                    }
+                                ],
+                            }
+                        ],
+                        "reasoning": {"effort": selected_effort},
+                        "max_output_tokens": max_tokens,
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "memory_fact",
+                                "strict": True,
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "fact": {"type": "string"},
+                                        "source_id": {"type": "integer"},
+                                        "evidence": {"type": "string"},
+                                    },
+                                    "required": ["fact", "source_id", "evidence"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                    }
+                    result = await metered(
+                        usage,
+                        UsageScope("memory:synthetic", "acceptance"),
+                        "memory",
+                        entry["provider"],
+                        entry["model"],
+                        lambda: client.complete(payload, session_id="synthetic-memory"),
+                        bounds={
+                            "input_tokens": entry.get("context_window", 32768),
+                            "output_tokens": await client.output_bound(payload),
+                        },
+                    )
+                    data = json.loads(result["text"])
+                    if data != {"fact": "likes tea", "source_id": 1, "evidence": "likes tea"}:
+                        raise ValueError("Synthetic provenance result mismatch")
+                    evidence.update(
+                        state="completed",
+                        usage=result.get("usage"),
+                        ai_usage=await usage.snapshot("memory:synthetic"),
+                    )
+                finally:
+                    await client.close()
+                    await usage.close()
+                    area.cleanup()
+            else:
+                with tempfile.TemporaryDirectory(prefix="pi-acceptance-") as folder:
+                    root = Path(folder)
+                    from assistant_runtime.plugins.ai_usage.service import UsageService
+                    from assistant_runtime.plugins.ai_usage.settings import UsageSettings
 
-            buffer = io.BytesIO()
-            Image.new("RGB", (128, 128), (255, 0, 0)).save(buffer, format="PNG")
-            ref = await host.conversation.media.add_image(buffer.getvalue(), "synthetic-red.png")
-            answer = await call(
-                "image",
-                "Name the solid color in the image. Answer with a single English color word.",
-                images=[ref["id"]],
+                    usage = UsageService(root / "ai-usage", UsageSettings(max_requests=max_requests))
+                    await usage.start()
+                    client = PiClient(
+                        config.pi_binary,
+                        folder,
+                        settings=bounded,
+                        environment={"ASSISTANT_MODEL_GATEWAY_KEY": key},
+                        runtime_dir=root / "runtime",
+                        usage=usage,
+                        accounts=NativeAccounts(config.root, bounded),
+                    )
+                    try:
+                        await client.start()
+                        reply = await client.request(
+                            "session.create",
+                            {
+                                "model": model,
+                                "config": {"model_reasoning_effort": selected_effort},
+                                "instructions": "Synthetic integration test. Use only this temporary workspace and the supplied content. No external tools, network, personal files or extra tasks. Return a concise factual result.",
+                            },
+                        )
+                        ident = reply["session"]["id"]
+                        inputs = [{"type": "text", "text": "Reply exactly SYNTHETIC_OK."}]
+                        if case == "tools":
+                            inputs = [
+                                {
+                                    "type": "text",
+                                    "text": "Use bash exactly once to write result.txt in the current directory with exactly SYNTHETIC_OK and read it back in that same command. Then report completion briefly. No network or other files.",
+                                }
+                            ]
+                        if case == "image":
+                            if not entry.get("images"):
+                                raise ValueError("Model has no image capability")
+                            path = root / "synthetic.png"
+                            path.write_bytes(
+                                base64.b64decode(
+                                    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z0AaYCJR/aiGUQ1DSAMAQC4BH2bjRnMAAAAASUVORK5CYII="
+                                )
+                            )
+                            inputs = [
+                                {
+                                    "type": "text",
+                                    "text": "Identify the solid background color in the supplied image. Reply with exactly one word: RED, GREEN, BLUE or UNKNOWN. Do not use tools or read files.",
+                                },
+                                {"type": "localImage", "path": str(path)},
+                            ]
+                        await client.request("run.start", {"session_id": ident, "input": inputs})
+                        async with asyncio.timeout(90):
+                            while True:
+                                event = await client.events.get()
+                                if event["kind"] == "usage.updated":
+                                    evidence["usage"] = event["data"]["usage"]
+                                if event["kind"] == "run.completed":
+                                    result = event["data"]["run"]
+                                    evidence["state"] = result["status"]
+                                    evidence["ai_usage"] = result.get("ai_usage")
+                                    if result.get("error"):
+                                        evidence["provider_error"] = {
+                                            k: str(v).replace(key, "<redacted>")[:300]
+                                            for k, v in result["error"].items()
+                                        }
+                                    evidence["tool_activity"] = sum(
+                                        i["type"] in {"file", "command", "mcp"} for i in result["items"]
+                                    )
+                                    break
+                        if evidence["state"] != "completed":
+                            raise RuntimeError("Execution did not complete")
+                        if case == "tools" and (root / "result.txt").read_text().strip() != "SYNTHETIC_OK":
+                            raise ValueError("File readback mismatch")
+                        if case in {"text", "image"}:
+                            answer = "".join(
+                                item.get("text", "")
+                                for item in result["items"]
+                                if item["type"] == "message" and item.get("phase") == "final"
+                            ).strip()
+                            if answer != ("RED" if case == "image" else "SYNTHETIC_OK"):
+                                raise ValueError("Synthetic answer mismatch")
+                            if case == "image" and evidence["tool_activity"]:
+                                raise ValueError("Image acceptance must use model vision, not file tools")
+                    finally:
+                        await client.close()
+                        await usage.close()
+        except Exception as exc:
+            evidence.update(state="failed", error=type(exc).__name__)
+        finally:
+            evidence.update(
+                upstream_statuses=http_statuses,
+                requests=submitted,
+                transport="pi_native" if native else "litellm",
+                output_limit="model"
+                if native
+                and settings.accounts[settings.providers[entry["provider"]]["account"]].get("output_limit")
+                == "model"
+                else "request",
+                elapsed_seconds=round(time.monotonic() - started, 3),
             )
-            if answer["text"].strip().lower().strip(".") != "red":
-                raise RuntimeError("Incorrect synthetic image result")
-        if execution:
-            results["codex"] = await codex_probe(config, model, settings, effort=effort)
-            if not results["codex"]["passed"]:
-                raise RuntimeError("Codex file/tool acceptance failed")
-            print("codex file/tools passed", flush=True)
-    except Exception as exc:
-        results["error_type"] = type(exc).__name__
-        # Provider bodies/exception strings can contain credentials: keep console/report generic.
-        print("Acceptance stopped:", type(exc).__name__, flush=True)
-    finally:
-        await runtime.close()
-        store.db.close()
-        (output / "result.json").write_text(json.dumps(results, ensure_ascii=False, indent=2))
-        (output / "result.json").chmod(0o600)
-        print(output / "result.json")
-    return 1 if "error_type" in results else 0
+            if native:
+                evidence["requests"] = (evidence.get("ai_usage") or {}).get("requests", 0)
+            await runner.cleanup()
+    return evidence
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument(
-        "--reasoning-effort", help="An exact supported level; defaults to the model's configured default"
-    )
-    parser.add_argument(
-        "--confirm-paid", action="store_true", help="User has authorized synthetic data and test budget"
-    )
-    parser.add_argument(
-        "--execution", action="store_true", help="Also test isolated Codex file/tool execution"
-    )
-    parser.add_argument(
-        "--case",
-        choices=["text", "structured", "image", "execution-only"],
-        action="append",
-        help="Run only selected auxiliary cases; repeat to combine",
-    )
-    args = parser.parse_args()
-    if not args.confirm_paid:
-        parser.error("Paid testing requires explicit data/budget authorization and --confirm-paid")
-    raise SystemExit(
-        asyncio.run(
-            verify(
-                Config.load(args.config),
-                args.model,
-                args.execution,
-                set(args.case or []),
-                effort=args.reasoning_effort,
-            )
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--config", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--case", choices=["text", "tools", "image", "memory"], default="text")
+    p.add_argument("--reasoning-effort")
+    p.add_argument("--max-requests", type=int, default=4)
+    p.add_argument("--max-output-tokens", type=int, default=1024)
+    p.add_argument("--confirm-paid", action="store_true")
+    p.add_argument("--output", type=Path, required=True)
+    a = p.parse_args()
+    if not a.confirm_paid:
+        p.error("Prior data/budget authorization and --confirm-paid are required")
+    if not 1 <= a.max_requests <= 8 or not 256 <= a.max_output_tokens <= 4096:
+        p.error("Acceptance budget outside bounds")
+    result = asyncio.run(
+        verify(
+            Config.load(a.config),
+            a.model,
+            case=a.case,
+            effort=a.reasoning_effort,
+            max_requests=a.max_requests,
+            max_tokens=a.max_output_tokens,
         )
     )
+    a.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    a.output.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+    a.output.chmod(0o600)
+    print(json.dumps(result, ensure_ascii=False))
+    raise SystemExit(0 if result["state"] == "completed" else 1)
 
 
 if __name__ == "__main__":

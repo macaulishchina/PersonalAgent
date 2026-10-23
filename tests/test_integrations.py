@@ -17,10 +17,10 @@ from assistant_runtime.kernel.contracts import IntegrationRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Runtime, Manifest
 from assistant_runtime.mcp.catalog import INTEGRATION_TOOLS
 from assistant_runtime.mcp.integrations import create_server
-from assistant_runtime.plugins.codex.backend import CodexBackend
-from assistant_runtime.plugins.codex.integrations import CodexIntegrations
-from assistant_runtime.plugins.codex.mcp import server_config
-from assistant_runtime.plugins.codex.native import NativeVoice
+from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.plugins.pi.integrations import PiIntegrations
+from assistant_runtime.plugins.pi.mcp import server_config
+from assistant_runtime.plugins.pi.voice import DisabledVoice
 from assistant_runtime.plugins.integrations.registry import McpRegistry
 from assistant_runtime.plugins.integrations.settings import IntegrationSettings, definition
 from assistant_runtime.plugins.integrations.plugin import IntegrationsPlugin
@@ -41,7 +41,7 @@ class RegistryTest(unittest.TestCase):
 
     def test_private_atomic_roundtrip_revision_and_idempotent_retry(self):
         r = self.registry
-        self.assertEqual(r.path, self.root / ".agents/mcp/servers.json")
+        self.assertEqual(r.path, self.root / "config/mcp/servers.json")
         self.assertEqual(r.work, self.root / "state/mcp/servers")
         r.configure("mobile", STDIO, 0)
         self.assertEqual(r.revision, 1)
@@ -76,16 +76,17 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(self.registry.snapshot()["removed"], [])
         self.assertNotIn("private=value", json.dumps(self.registry.public("mobile")))
 
-    def test_legacy_private_registry_requires_explicit_migration_before_versioning(self):
-        legacy = self.root / "state/mcp/servers.json"
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text("private configuration must not be copied automatically")
-        with self.assertRaisesRegex(ValueError, "migrate non-secret definitions"):
-            McpRegistry(self.root, {})
+    def test_project_registries_are_not_discovered_and_custom_private_path_is_explicit(self):
+        project = self.root / ".agents/mcp/servers.json"
+        project.parent.mkdir(parents=True)
+        project.write_text("Coding AI configuration must never be read")
+        self.assertEqual(McpRegistry(self.root, {}).revision, 0)
         self.assertFalse(self.registry.path.exists())
-        legacy.write_text('{"revision":0,"servers":{},"removed":[]}')
-        registry = McpRegistry(self.root, {"registry_path": str(legacy)})
-        self.assertEqual(registry.path, legacy)
+        private = self.root / "custom/servers.json"
+        private.parent.mkdir(parents=True)
+        private.write_text('{"revision":0,"servers":{},"removed":[]}')
+        registry = McpRegistry(self.root, {"registry_path": str(private)})
+        self.assertEqual(registry.path, private)
         self.assertEqual(registry.revision, 0)
 
     def test_validation_never_replaces_good_registry_and_manual_edits_require_revision(self):
@@ -142,9 +143,9 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
             busy=False,
             active_turn=None,
             voice_active=lambda: False,
-            thread_id="foreground",
+            execution_session_id="foreground",
         )
-        self.adapter = CodexIntegrations(self.backend, self.registry)
+        self.adapter = PiIntegrations(self.backend, self.registry)
         self.catalog = {"echo": {"description": "synthetic", "inputSchema": {"type": "object"}}}
         self.status = "connected"
         self.adapter.inherited = {"unmanaged": {"command": "unknown", "env": {"TOKEN": "private"}}}
@@ -154,13 +155,13 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def rpc(self, method, params, **kwargs):
-        if method == "config/read":
+        if method == "configuration.read":
             return {"config": {"mcp_servers": self.adapter.inherited}}
-        if method == "thread/read":
-            return {"thread": {"status": {"type": "idle"}}}
-        if method == "thread/start":
-            return {"thread": {"id": "probe"}}
-        if method == "mcpServerStatus/list":
+        if method == "session.read":
+            return {"session": {"status": {"type": "idle"}}}
+        if method == "session.create":
+            return {"session": {"id": "probe"}}
+        if method == "mcp.inspect":
             return {
                 "data": [
                     {
@@ -203,9 +204,9 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         result = await self.adapter.apply()
         self.assertEqual(result["state"], "applied")
         methods = [call.args[0] for call in self.client.request.await_args_list]
-        self.assertEqual(methods, ["config/read", "thread/read", "thread/unsubscribe", "thread/resume"])
-        self.assertEqual(self.client.request.await_args.args[1]["threadId"], "foreground")
-        self.assertNotIn("turn/start", methods)
+        self.assertEqual(methods, ["configuration.read", "session.read", "session.close", "session.resume"])
+        self.assertEqual(self.client.request.await_args.args[1]["session_id"], "foreground")
+        self.assertNotIn("run.start", methods)
         self.client.request.reset_mock()
         await self.adapter.apply()
         self.client.request.assert_not_awaited()
@@ -218,12 +219,10 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["tools"][0]["input_schema"], {"type": "object"})
         self.assertFalse(self.adapter.probes)
         methods = [c.args[0] for c in self.client.request.await_args_list]
-        self.assertEqual(
-            methods, ["config/read", "thread/start", "mcpServerStatus/list", "thread/unsubscribe"]
-        )
+        self.assertEqual(methods, ["configuration.read", "session.create", "mcp.inspect", "session.close"])
         self.assertNotIn("mcpServer/tool/call", methods)
-        self.assertNotIn("turn/start", methods)
-        self.assertEqual(self.client.request.await_args.args[1]["threadId"], "probe")
+        self.assertNotIn("run.start", methods)
+        self.assertEqual(self.client.request.await_args.args[1]["session_id"], "probe")
 
     async def test_bad_refresh_restores_known_configuration_without_repeated_automatic_attempts(self):
         await self.adapter.apply()
@@ -233,7 +232,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
 
         async def rpc(method, params, **kwargs):
             calls.append(method)
-            if method == "thread/resume" and params["config"]["mcp_servers"] != old:
+            if method == "session.resume" and params["config"]["mcp_servers"] != old:
                 raise RuntimeError("configuration failure with private details")
             return await self.rpc(method, params, **kwargs)
 
@@ -246,14 +245,14 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         count = len(calls)
         await self.adapter.apply()
         self.assertEqual(len(calls), count)
-        self.assertNotIn("turn/start", calls)
+        self.assertNotIn("run.start", calls)
         self.assertNotIn("private details", json.dumps(result))
 
     async def test_disconnected_apply_keeps_lock_until_foreground_is_restored(self):
         started, release = asyncio.Event(), asyncio.Event()
 
         async def rpc(method, params, **kwargs):
-            if method == "thread/resume":
+            if method == "session.resume":
                 started.set()
                 await release.wait()
             return await self.rpc(method, params, **kwargs)
@@ -273,15 +272,15 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter.status()["foreground_pending"])
 
     async def test_unconfirmed_rollback_blocks_text_and_voice_even_when_refresh_is_deferred(self):
-        backend = CodexBackend(self.config, None, AsyncMock(), AsyncMock(), self.registry)
+        backend = PiBackend(self.config, None, AsyncMock(), AsyncMock(), self.registry)
         adapter = backend.integrations
-        backend.thread_id = "foreground"
+        backend.execution_session_id = "foreground"
         backend.client = self.client
         await adapter.apply()
         self.registry.configure("mobile", {"enabled": False}, self.registry.revision)
 
         async def rpc(method, params, **kwargs):
-            if method == "thread/resume":
+            if method == "session.resume":
                 raise RuntimeError("cannot resume")
             return await self.rpc(method, params, **kwargs)
 
@@ -295,13 +294,10 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.client.request.reset_mock()
         with self.assertRaisesRegex(RuntimeError, "context is unconfirmed"):
             await backend.submit("must not be sent")
-        engine = SimpleNamespace(start=AsyncMock(return_value="offer"), close=AsyncMock())
-        voice = NativeVoice(self.config, backend, None, AsyncMock())
-        with patch("assistant_runtime.plugins.codex.native.BrowserAudio", return_value=engine):
-            with self.assertRaisesRegex(RuntimeError, "context is unconfirmed"):
-                await voice.open()
+        voice = DisabledVoice()
+        with self.assertRaisesRegex(RuntimeError, "Voice is not enabled"):
+            await voice.open()
         self.assertFalse(voice.opened)
-        engine.close.assert_awaited_once()
         self.client.request.assert_not_awaited()
 
     async def test_oauth_uses_owned_temporary_context_and_cleanup(self):
@@ -316,7 +312,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.adapter.context = SimpleNamespace(spawn=spawn)
 
         async def rpc(method, params, **kwargs):
-            if method == "mcpServer/oauth/login":
+            if method == "mcp.login":
                 return {"authorizationUrl": "https://example.test/authorize"}
             return await self.rpc(method, params, **kwargs)
 
@@ -326,8 +322,8 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter.probes, {"probe"})
         await self.adapter.event(
             {
-                "method": "mcpServer/oauthLogin/completed",
-                "params": {"name": "external_mobile", "success": True},
+                "kind": "mcp.login_completed",
+                "data": {"name": "external_mobile", "success": True},
             }
         )
         await asyncio.gather(*tasks)
@@ -375,7 +371,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
 
         async def rpc(method, params, **kwargs):
-            if method == "mcpServerStatus/list":
+            if method == "mcp.inspect":
                 started.set()
                 await asyncio.Event().wait()
             return await self.rpc(method, params, **kwargs)
@@ -387,7 +383,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await pending
         self.assertFalse(self.adapter.probes)
-        self.assertEqual(self.client.request.await_args.args[0], "thread/unsubscribe")
+        self.assertEqual(self.client.request.await_args.args[0], "session.close")
 
     async def test_preflight_reports_missing_dependencies_without_exposing_values(self):
         self.registry.configure(
@@ -434,7 +430,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         started, release = asyncio.Event(), asyncio.Event()
 
         async def rpc(method, params, **kwargs):
-            if method == "thread/start":
+            if method == "session.create":
                 started.set()
                 await release.wait()
             return await self.rpc(method, params, **kwargs)
@@ -447,7 +443,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         release.set()
         with self.assertRaises(asyncio.CancelledError):
             await pending
-        self.assertEqual(self.client.request.await_args.args[0], "thread/unsubscribe")
+        self.assertEqual(self.client.request.await_args.args[0], "session.close")
 
     def test_background_management_catalog_is_explicit(self):
         for manage in (False, True):
@@ -475,7 +471,7 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
         outer = self
 
         class Brain:
-            manifest = Manifest("codex")
+            manifest = Manifest("pi")
 
             async def start(self, context):
                 async def scope(request):

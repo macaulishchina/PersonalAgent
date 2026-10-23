@@ -162,8 +162,12 @@ class EventInbox:
                         (page["next"], task, revision),
                     )
                     self.dispatch(self.repo.definition(task))
+                from ...kernel.ai_usage import UsageScope
+                import uuid
+
+                usage_scope = UsageScope("event-check:" + uuid.uuid4().hex, "event-check", task)
                 for sample in samples:
-                    self.plugin.context.publish("decision.observed", sample=sample)
+                    self.plugin.context.publish("decision.observed", sample=sample, usage_scope=usage_scope)
                 more |= page["has_more"]
             except asyncio.CancelledError:
                 raise

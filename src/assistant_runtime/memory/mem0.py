@@ -1,4 +1,4 @@
-"""Async Mem0 provider. The worker owns indexes; model tasks go to official Codex."""
+"""Async Mem0 provider. The worker owns indexes; inference uses the models capability."""
 
 import asyncio
 import json
@@ -64,7 +64,7 @@ class Mem0Memory:
                         reply = json.loads(line)
                         if "model_request" in reply:
                             if self.complete is None:
-                                raise RuntimeError("ChatGPT subscription model callback not configured")
+                                raise RuntimeError("Memory model callback not configured")
                             request = reply["model_request"]
                             response = await self.complete(request["messages"], request["schema"])
                             await self.send({"model_result": response})

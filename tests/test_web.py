@@ -82,6 +82,7 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             repo.enqueue(repo.definition(f"{44:032x}"), str(number), "missed")
         self.host.store.db.commit()
         owner = object.__new__(TasksPlugin)
+        owner.host = self.host
         owner.repo = repo
         from assistant_runtime.plugins.tasks.feedback import TaskFeedback
 
@@ -393,7 +394,9 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             "INSERT INTO job_definitions(id,request_id,fingerprint,state,spec,created,updated) VALUES(?,?,?,'enabled',?,?,?)",
             (ident, str(uuid.uuid4()), "test", json.dumps(spec), 1, 1),
         )
-        run = repo.enqueue(repo.definition(ident), "one", "running", {"thread_id": "private-thread"})
+        run = repo.enqueue(
+            repo.definition(ident), "one", "running", {"execution_session_id": "private-thread"}
+        )
         other = repo.enqueue(repo.definition(ident), "two", "running")
         trace = TaskTrace(repo)
         for n in range(3):

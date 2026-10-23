@@ -1,307 +1,80 @@
 # Personal Agent architecture
 
-Personal Agent is a modular Python application for a reactive personal assistant. A single asyncio host coordinates trusted local plugins. Codex supplies the current reasoning, task and native voice implementation. Devices and local long-term memory remain replaceable. “嘟嘟” is a wake-word setting; neither it nor DELL is the application identity.
+Personal Agent is a modular asyncio host. Pi is the sole execution harness. The unified model registry routes API endpoints through a local LiteLLM gateway or configured native accounts through Pi's provider library. Web text and registered images are the current main entrance. Voice input/dialogue/playback and OS-level execution sandboxing are explicit TODOs. No placeholder audio, fake account or simulated readiness is allowed.
 
-## Boundaries
+## Ownership and boundaries
 
 ```mermaid
-flowchart LR
-  Trigger[Keyword or explicit gesture] --> Assistant[Assistant session behavior]
-  Audio[PipeWire input / playback] <--> Assistant
-  Assistant <--> Brain[Codex plugin: native voice + tasks]
-  Assistant <--> Kernel[Plugin lifecycle / capabilities / health]
-  Brain --> MemoryMCP[Memory MCP]
-  Brain --> DeviceMCP[Device MCP]
-  MemoryMCP --> Kernel
-  DeviceMCP --> Kernel
-  Kernel --> Memory[Memory policy / durable capture jobs]
-  Memory --> BM[Mem0 worker: local vectors and history]
-  BM --> Curator[Configured inference callback: subscription or accepted API]
+flowchart TD
+    Web[Web conversation and attachments] --> Conversation
+    Conversation --> Pi[Pi execution plugin]
+    Tasks[Durable tasks and Jev selection] --> Pi
+    Pi --> Usage[AI usage admission]
+    Usage --> Gateway[Local authenticated LiteLLM]
+    Usage --> Accounts[Pi native model providers / private accounts]
+    Pi --> Tools[MCP / Skill / files / commands]
+    Models[No-tool inference] --> Usage
+    Memory[Mem0 and local source validation] --> Models
+    Tools --> Capabilities[Kernel capabilities and owning plugins]
 ```
 
-| Location | Owns | Must not own |
-| --- | --- | --- |
-| `kernel/` | API v1 contracts, dependency order, handler dispatch, task/resource tracking, event fan-out, generations | Devices, Codex protocols, assistant policy |
-| `conversation/` | Durable shared timeline, submission receipts, entrance/output intent | HTTP, device drivers, separate task execution |
-| `plugins/web/` | Authenticated chat HTTP/SSE and bundled frontend | Independent AI sessions, physical audio, arbitrary file serving |
-| `assistant/` | Wake/continuous dialogue/idle, interruption policy, explicit controls | Provider RPCs, vector search, Bluetooth discovery |
-| `mcp/` | Independent memory/device/tasks MCP schemas, typed capability mapping and bounded local IPC | Codex session policy, Mem0/storage, device drivers or a second inventory |
-| `plugins/codex/` | Foreground voice/thread, isolated background threads/Goals and maintenance context; provider event routing | Device drivers, long-term memory storage |
-| `devices/` | Shared inventory, adapter-owned registration, timestamped state, query/media/control routing, resource leases and operation receipts | Hardware protocol code, conversation activation |
-| `plugins/pipewire/` | Stable input/output selection, device observations, optional AEC, bounded playback and cleanup | Conversation or task policy |
-| `plugins/airplay/` | Optional RAOP discovery/identity, bounded PCM encoding, receiver session and cleanup | Conversation policy, microphone drivers |
-| `plugins/go2rtc/` | Configured gateway stream identity, bounded snapshots/clips and directional pan/tilt, availability and cleanup | USB/network camera protocols, conversation policy, gesture inference or automatic recording |
-| `plugins/apple_home/` | Authenticated Apple Home readings, paired HAP refresh bridge, normalization and source freshness | AirPlay playback, model tasks, memory, HomePod account access |
-| `plugins/search/` | Configured public web search/fetch adapters, bounded IO/cache and metadata receipts | Execution model policy, agent loops, media acquisition, subscription Search Service |
-| `plugins/hid_buttons/` | Optional configured USB HID reports → existing wake trigger; identity, permissions and reconnect health | Audio routing, arbitrary commands, hardware mute or LED inference |
-| `plugins/keyword/` | Local KWS and VAD models | Remote transcription or task dispatch |
-| `memory/` | Source/version policy, durable pending jobs, replaceable provider contract | User task execution, custom embeddings or ranking |
-| `bootstrap.py` | Explicit selection and capability bindings | Protocol implementation |
-| `headless.py` | Hardware-free management/trigger host | Pretending unavailable voice/brain is operational |
+| Owner | Responsibility |
+| --- | --- |
+| kernel | Standard-library contracts, bounded event fanout, plugin lifecycle and request dispatch |
+| bootstrap | Select concrete plugins, wire capabilities and dependencies |
+| conversation | One durable main conversation, registered media, idempotent requests, tool/result presentation |
+| tasks | Definitions, schedules, inbox, run identity, model choice, checkpoints, goals, feedback ownership and durable trace |
+| plugins/pi | Native Pi RPC, isolated execution sessions, model/effort confirmation, normalized execution events, MCP/Skill configuration |
+| plugins/ai_usage | Mandatory AI-service admission, durable metering, budgets, statistics and usage attention |
+| plugins/models | Single immutable model registry, bounded no-tool inference and durable receipts |
+| integrations | Revisioned trusted MCP definitions, caller scopes, credentials, discovery and idle refresh |
+| devices and device plugins | Stable identity, capabilities, resource leases, operation receipts and hardware protocols |
+| notifications | Durable inbox, semantic grouping, deduplication and channel delivery |
+| memory | Upstream Mem0, local vectors/history and original evidence validation |
 
-A capability request has exactly one handler and a timeout. It returns a result or an error. `Control`, `Trigger`, `MemoryRequest`, `DeviceQuery`, `VideoCapture`, `VideoRecord`, `CameraMotion`, `AudioVolume`, `DeviceOperationQuery`, and `DeviceOperationCancel` are separate typed requests. CLI, explicit local commands and the independent MCP services use the same handlers. The user explicitly authorized preapproval for this project’s existing memory/device operations; the project thread exposes those operations as precise tools on separate `memory` and `device` servers. No global Codex approval configuration is changed. Fact events have a source, timestamp, correlation ID and plugin generation. Each subscriber has a separate bounded queue; overflow drops its oldest event and increments its counter. Events are observations, never a durable task queue.
+`kernel/execution.py` declares the provider-neutral executor commands/events. Session commands create/resume/read/close an execution context. Run commands submit/steer/cancel an attempt. Activity events contain tool identity, phase and observed result. The adapter translates native Pi messages once; the host does not simulate another provider's protocol. Unknown commands fail explicitly.
 
-Audio uses a separate bounded path. Format/rate/time/connection generation are explicit at the Codex output boundary. Existing Chromium WebRTC jitter handling, PCM silence preservation, playback epoch checks and bounded queues remain in the audio adapters. Stop clears the local queue and terminates playback without waiting for Bluetooth reconnection. The native protocol does not expose a per-answer audio ID: same-connection late audio still uses the existing quiet-boundary suppression heuristic. Connection generations cannot eliminate that protocol limitation.
+Main and background work share the same executor implementation and immutable model registry, with separate Pi processes and session files. Auxiliary inference and memory extraction use models directly, with no tools and no second agent loop. Source code contains no subscription/API executor split, compatibility aliases or test-dependent runtime branches.
 
-Remote quiet boundaries can release interruption suppression independently of local
-VAD activity, which may remain active on TV speech or a release delay. Explicit
-manual mute remains authoritative. Existing status exposes output-gate state and
-written/discarded PCM byte counts; text/RTP reception alone is not audible delivery.
-Empty resampler output is not PCM: it must neither reach the player nor reset
-remote-silence accumulation and playback timestamps.
+## Model configuration and execution evidence
 
-Independent audio acceptance lives entirely in `scripts/audio_check/`. It reuses
-existing PCM device registries/providers after verifying the assistant is stopped,
-with bounded capture and owned prompt playback. It adds no kernel contract,
-management command, audio-loop observer or conversation state. Production wake and
-DSP behavior stay unchanged; offline wake detection is not live voice acceptance.
+`main_model` and `main_reasoning_effort` reference a configured model alias. `model_api` owns providers, entries, memory binding, gateway limits and declared capabilities. Task profiles reference those same aliases. A model's provider, upstream name, images, context window, output budget and supported reasoning levels are explicit. Unregistered/unvalidated models and unsupported inputs fail before submission.
 
-## State and ownership
+`model_api.accounts` names provider-owned authentication methods. A native provider references exactly one account; endpoint providers keep their explicit protocol and key reference. `plugins/pi/accounts.*` adapts the pinned upstream provider library and its locked credential store, not another agent. Execution forwards Pi's normalized transcript/events; auxiliary inference supplies no tools. Credentials stay under private `state/model-accounts/<account>/`, separate from Coding AI/Codex/global Pi state. Login is operator-only, never an MCP tool. Native inference passes the same durable usage admission before sending and settles before tool execution; cancellation aborts the native request without replay. Native provider/effort/capability checks occur before dispatch. ChatGPT OAuth requires explicit `output_limit="model"`: its route rejects per-request output caps, so reservation uses the native model's advertised maximum, never the smaller gateway cap. This is a catalog bound, not proof of supplier enforcement. Other unsupported limits fail before dispatch.
 
-- `wake_words` selects equivalent phrases supported by the installed FSMN V2 bundle, handled by one KWS stream and one activation path. The keyword plugin owns 80ms batching, bounded native features/CTC history, one ONNX inference thread and checksum validation. Inference runs off the event loop; generation changes invalidate results across sleep/session resets. The inference-only upstream FunASR decoder is vendored with its MIT license, without a Torch/FunASR runtime dependency. Local commands strip any configured leading phrase before parsing.
-- Assistant owns standby → connecting → active → reconnecting → standby. Only explicit wake/trigger activates it. Background work never activates voice.
-- Optional daily quiet hours belong to assistant policy. Local-time boundaries suppress activation and all voice feedback; maintenance closes voice and clears queued output without canceling background work. Device volume and keyword sensitivity are unchanged, and morning availability does not activate voice.
-- `VoiceSession.speech_completed` reports a completed spoken turn, separately from transport readiness and audio drain. Output-only notification success requires both completion and drained non-silent audio; it is still not proof a person heard the output. Native protocol fields remain in the Codex adapter.
-- Codex owns foreground task state. SQLite logical task IDs and a logical session → provider-thread mapping keep application records independent of opaque provider IDs. Native voice delegation and explicit Web submissions enter the same provider thread; transcripts are synchronized as context, never dispatched a second time.
-- The composition root freezes one `VoiceBinding` from `input_device` / `default_output` at startup. The audio adapter snapshots those device connections and reconnects only those endpoints; saved room state is ignored. Binding changes require configuration plus restart. MCP, dynamic tools, CLI and voice commands cannot select another main input/output.
-- PipeWire owns optional `connection.hardware_volume` initialization for ALSA-backed input/output devices. It resolves the physical card from that endpoint, validates and verifies the named mixer control, and applies it before PCM delivery or a new primary speech segment. An omitted setting performs no hardware mixer writes. AEC's virtual sink does not replace the physical target; no kernel, assistant or MCP hardware branch is needed.
-- The player owns queue/epoch/mute state. Stop, cancel-task and end-session are distinct operations.
-- Memory is not provider chat history and cannot prove an action completed. It is sourced, revisable context.
+Pi's models/settings/MCP files are derived private files, never another editable registry. Each execution receives a stable `x-assistant-session` identity, an explicit project Skill inventory and a captured MCP revision. Pi and gateway automatic retries are disabled; only the existing framework's explicitly configured fallback can start another attempt after proof that no work occurred. Jev may advise on candidates but cannot expand authorization or establish operation success.
 
-Disconnect recovery runs as a tracked task, leaving the event consumer available. Unknown task outcomes remain unknown and are reconciled from provider state after restart; no input replay. The critical Codex provider failure restarts the service through systemd. Optional memory failures degrade that capability and retry without stopping capture/playback. Contexts own spawned tasks and async cleanup, and generations reject stale request results/events. Plugins in one process are trusted code, not security sandboxes; native-library crashes remain process-wide failures.
+The adapter checks Pi's actual selected model/effort before a prompt. Configuration errors are not swallowed. Model upgrades require the task owner's checkpoint and no active/unknown operations, archive the old context, and start a fresh context. User-explicit choices remain protected.
 
-## Shared conversation and Web entrance
+AI-service admission belongs to `plugins/ai_usage`, with plugin-owned configuration and a private SQLite ledger on a dedicated bounded worker. Pi retains protocol transport only; models, memory, Jev and paid search share the gate. Host-bound work identity survives children, continuation, fallback, model changes and restart. Defaults are 100 upstream attempts per work, warning at 50; all other consumption hard limits are opt-in. Reservation precedes sending, settlement precedes observed completion; missing usage is unknown telemetry, not a failed business operation. Metering failure blocks new AI dispatch while devices/events/web continue. Task plans pause on durable consumption limits; attention follows existing result-delivery ownership. See the [plugin guide](src/assistant_runtime/plugins/ai_usage/README.md).
 
-Optional `plugins/decisions/` owns closed semantic judgments, not execution. Owners
-use `DecisionQuery` directly or the owned `submit_decision` helper; agents use MCP.
-`DecisionOutcome` records owner adoption separately from provider success. Trusted
-scenes choose shadow, parallel or direct use; only the owner commits actions after
-checking authorization, input version and operation identity. Native automatic
-handoff is not an approval boundary. Voice corrections are suggestions until the
-foreground executor confirms through `VoiceDecisionRequest`; no second user turn is
-submitted. Unknown stops prohibit replacement; cancelling a run never archives a plan.
+## Lifecycle, cancellation and restart
 
-The global threshold defaults to 0.6; scene overrides are explicit (instance model
-review: 0.2). Policies are restart-only, hashed and recorded per invocation. Four
-bounded workers include one reserved for voice control; ordinary traffic also leaves
-one queue slot free. Equivalent calls share provider work, not adoption identities.
-Total active deadlines include admission and IO. Failure, cancellation and stale
-answers cannot replay actions; absent/disabled Jev preserves original workflows.
+Admission, event queues, input size, normalized hot history and process counts are bounded. Metadata is privately and atomically committed before dispatch and before reporting observed tool activity. A lost response or unexpected process exit yields unknown, never success or automatic replay. The hot execution projection retains 100 runs; durable chat/task evidence remains in business storage and Pi retains its native compactable session.
 
-Private date-based JSONL archives retain bounded owner summaries, policy, probabilities,
-latencies and adoption/outcome links without automatic expiry. Full input, credentials
-and raw media are excluded. A bounded SQLite receipt/audit index serves recent queries;
-index pruning never deletes archives. An independent bounded writer keeps logging off
-the control path; drops/write failures remain visible, shutdown drains queued entries.
-Synthetic acceptance and unlabelled usage are separate cohorts. Provider outage/recovery
-uses deduplicated notifications; quota exhaustion and all other faults preserve business
-fallback. There is no local daily call cap, automatic paid retry or periodic keepwarm.
-The shared HTTP pool and one asynchronous metadata warmup remain adapter-owned.
-See `plugins/decisions/README.md` for contracts, configuration and acceptance limits.
+Cancel first clears queued input, aborts native work and waits for run termination plus tool settlement. Cancel failure propagates. A metadata record left active/unknown across restart blocks fresh execution until explicitly reconciled; it is not proof that external operations stopped. Plugin contexts own subprocess cleanup and event consumers. Shutting down the host does not repeat work.
 
-`conversation/` owns the durable shared timeline, stable message identity, source, ordering, submission receipts and public interaction state. The optional `plugins/web/` is only an authenticated HTTP/SSE adapter and built frontend. It cannot access arbitrary files, launch its own model session, or directly manipulate audio devices. Stop/cancel use the existing control capability. Foreground Codex handles conversational delegation; the optional tasks plugin owns durable background work through an injected executor adapter.
+Long-term objectives, authorization and final completion belong to tasks. The Pi goal tool reports progress to that owner; a model's report does not change the task's authorized objective or schedule. Runtime execution metadata is an adapter receipt, not a second task database.
 
-Completed built-in task creation/query and webpage fetch tools may carry a bounded,
-display-only `tool_summary`. The Codex adapter extracts allowlisted fields from MCP
-results; conversation persists them with the existing message/SSE lifecycle. Web
-renders task links into the existing detail drawer, creation-time model/effort,
-query-time state/progress, and page provenance/truncation. It adds no model calls,
-pollers or task actions. Raw specifications, webpage bodies, credentials and URL
-query strings are excluded; absent/legacy summaries keep the original tool row.
-Restoration preserves saved summaries without backfilling old history. A successful
-tool call is distinct from a successful task outcome.
+## Conversation, results and notifications
 
-Task run details expose a lazy, expandable activity timeline through authenticated
-`GET /api/tasks/{run_id}/trace`. Web delegates to the existing tasks trace capability and
-projects only bounded activity metadata. Start/end events merge by provider call identity;
-missing completion or unknown outcomes remain explicit, including after a run ends.
-Only one expanded execution polls incrementally while its panel/page is visible; closing,
-changing tasks or hiding the page cancels requests. Recorded pages are retained in order
-(up to the existing 500-event cap), with truncation shown. The UI adds no execution loop,
-model calls or raw command/argument/result retention. Existing execution summaries,
-artifacts and controls remain independent of trace loading/errors.
+Web and CLI text share durable request identities and the same conversation service. Inputs are registered before dispatch; subsequent input supplements the active run. Tool output, webpage text, images, memories and task reports are data. User clarification is correlated with the waiting execution. Images are size bounded and use registered references at public MCP boundaries.
 
-Conversation headers distinguish text, voice-channel replies, task reports and
-other notifications using recorded source/kind, never prose inference. These
-categories do not merge into one reply group. Reports collapse to one title line;
-full Markdown and attachments remain inside the expandable detail. Task/notification
-producers persist an optional task reference with each report. Legacy notification
-links resolve once on expansion through the existing authenticated notification
-query; association must match its producer source. A voice-channel label is not
-a physical playout receipt. Presentation does not alter delivery, read state,
-speech policy or task scheduling.
+Tasks own result-delivery rights. A delegated task actively claimed by the main conversation returns there; detached work uses notifications. Ownership transfer is versioned and receipt based, not a wall-clock timeout. Task/execution/event identity drives grouping independent of message ordering. A single-item group renders as one notification; task reports and attachments default collapsed and link to the task. Trace exposes tool phases and status, not hidden reasoning or raw credentials. Tool completion does not establish business success.
 
-Notification purpose is producer-declared (`progress`, `result`, `attention`) and
-independent of source/group identity. Progress is persisted for inspection without
-unread reminders or chat/context/voice deliveries. Results and attention use the
-existing durable channel outbox. Producers may mark normal results `report_with_task`:
-the owner defers them to a pending execution report, preserving standalone, event-only
-and late result reminders. Retry keeps the first publication's resolved purpose. Task lifecycle state remains in tasks; definitions
-and ordinary progress no longer write parallel chat messages. Tasks owns a durable,
-execution/completion-round-scoped result delivery record. Its explicit owner is background
-(default delegation) or a server-bound conversation turn/input revision. Creation may retain
-conversation ownership; `transfer_task_feedback` changes it with a round/version check.
-Reading progress never transfers ownership or proves delivery. Completion commits one
-immutable output decision before transport; already committed/delivered output cannot be
-recalled. A confirmed transfer affects only that execution round, not future occurrences.
+## Voice and execution permissions
 
-Conversation ownership uses the internal `ConversationFeedbackRequest` capability to submit
-a registered result card immediately, with existing speech output for a live voice turn.
-It does not wait for model paraphrasing or infer acknowledgements from prose. Ended,
-interrupted, superseded or recovered turns explicitly release undelivered results to the
-notification outbox. A lost capability reply retries the same delivery ID; a timeout does
-not transfer ownership. Unknown speech becomes a silent notification, reusing its visible
-result card rather than replaying audio. Waiting-for-user/unknown execution alerts remain
-independent important notices. No execution is replayed by delivery recovery.
+Voice is unavailable and never starts a microphone stream. Fixed USB input/output bindings and independent acoustic acceptance scripts remain. Device audio/video tools remain separate capabilities and cannot replace the fixed bindings. Placeholder wake/playback success is forbidden. A future voice adapter must pass independent input, interruption and output acceptance before enabling capture or playback.
 
-Task delivery workers are bounded by configured task concurrency and cannot block scheduling
-or unrelated result delivery. Conversation receipts and task ownership are private SQLite
-state; successful submission is not proof of human reading/hearing. Conversation and inbox
-projections share execution grouping, task links and registered attachments. Historical
-messages remain intact, without replay or text-based regrouping. No business timeout or
-wait-for-model timer decides delivery ownership.
+Pi file and command execution currently runs with full local permissions (`-na`); no OS sandbox is claimed. MCP allow/deny/approval scopes and server-bound task identity remain business constraints. Unimplemented MCP OAuth fails explicitly; configure credentials and verify the server. Neither prompt instructions nor extensions are presented as an OS sandbox.
 
-The notification owner enriches each bounded Web history/SSE page with existing
-source-scoped group identity; no message migration or extra browser polling is needed.
-Reports with the same group and execution share a collapsed card across intervening
-messages. Purpose stays on each member; attention remains visible in the summary.
-Collections follow their latest member update, while ordinary dialogue keeps its recorded
-relative order. Different executions remain separate. Counts describe only loaded reports,
-never completed files. Original reports, attachments, task links and copy content remain available.
-Missing associations leave reports separate instead of guessing from titles or time.
+## Configuration, state and deployment
 
-Messages and events are committed together in SQLite. Streaming deltas and final transcription corrections update one message ID without reordering it. Voice message IDs combine the logical session, transport generation and provider turn ID; task IDs use the provider item ID. Event retention is bounded; an expired cursor requests a fresh history snapshot. Slow/disconnected browsers cannot block model or audio processing. Requests carry a UUID and content fingerprint; an uncertain submission remains unknown after restart, never automatically retried. Provider resume reconciles known task items. Old local transcripts are imported as explicitly labeled legacy records, without external re-extraction.
+Private `config/` explicitly includes fragments; `config.example/` is the reusable template. `.env`, state, credentials and models remain under the instance root. New installs use a pinned Pi CLI and ship the TypeScript extension in the wheel; `scripts/setup_pi.sh` performs the explicit external installation. `scripts/check.py --group execution` runs executor checks; the full check additionally covers all domains and frontend build.
 
-Live native voice and task inference have distinct context windows even on one provider thread. The conversation owner explicitly transfers confirmed voice messages through the provider's context-only import method, and Web messages/results through its live context adapter. A local playback gate enforces silent Web replies because the experimental native interface may generate audio even for assistant-role context updates. Physical voice user turns restore playback. Background task delivery is client-managed so Web tasks do not acquire automatic spoken results. Temporary sync failures are visible; context sync never invokes another task.
+The cutover has no legacy dialogue/task migration. `scripts/reset_execution_state.py --root ROOT` previews counts. Apply only with the assistant stopped and external actions checked; it backs up the database and configuration, retires old task-linked notices, clears execution/dialogue/plan tables, and is idempotent. It preserves memory source transcripts, media, events, credentials and actual files. New tasks are created explicitly. Changing code/config does not itself authorize killing in-flight operations.
 
-Foreground results are turn-owned receipts, never shared mutable progress. Empty or
-commentary-only completion cannot reuse a previous answer. Conversation durably binds
-output to an execution, voice epoch and input revision; old/superseded/quiet/interrupted
-results stay in history. Eligible final prose enters the provider's speech append once,
-without another prompt to infer a result. Output acceptance is not proof of playout;
-lost acknowledgements remain unknown. Native delegation filler and speculative output
-while awaiting execution are suppressed. Native client-managed handoff controls result
-forwarding, not pre-execution approval; WebRTC audio has no reliable per-answer identity.
-
-Execution acceptance and completion have separate spoken receipts. Normalized provider
-`execution_input` acceptance schedules a short delayed acknowledgement; web commentary
-never triggers speech. A fast result consumes the pending acknowledgement. Accepted
-follow-ups renew output ownership with durable input deduplication; stale speech and
-unknown submissions are not replayed. Native rendering still has no per-answer playout
-receipt and can paraphrase appended speech.
-
-The optional voice-first command entrance lives in `interaction/`; provider-neutral
-contracts live in `kernel/speech.py`, and local inference adapters in `plugins/speech/`.
-Capture and inference have separate bounded work paths. The coordinator owns request
-versions, recent operation context and feedback; commands reuse isolated durable task
-execution and its existing MCP/model policy. Dialogue gets the original utterance once.
-The local output scheduler shares the fixed player and arbitrates literal speech with
-native output, expiry, interruption and durable delivery states. Command follow-up is
-3 seconds; existing native attention remains independently configured. Defaults remain
-native until acoustic and latency acceptance passes. See
-[voice-first design and measured gates](src/assistant_runtime/interaction/README.md).
-
-Assistant attention defaults to a short request with an 8-second follow-up window after
-the reply. Explicit chat selects continuous mode for one activation. Accepted user input,
-reply completion and actual output drive deadlines; raw VAD cannot hold the session open.
-Local explicit exits invalidate output and close the connection without canceling durable
-background tasks. Directed-speech admission and verified device takeover remain separate
-boundaries, not implied by a voice transcript. See `plugins/codex/README.md` for protocol
-limits and explicit subscription/device acceptance.
-
-Requested capture replies register complete pixels with the conversation media owner before crossing the provider boundary; the device MCP passes generic attachment references alongside native image content. This avoids relying on the provider's truncated display/history bytes. Reply image content and references are translated inside the Codex adapter, including JSON-wrapped MCP results in resumed history. The conversation owner uses an owned bounded queue and off-loop image decoding to register private attachments in the same media store as uploads; original image bytes never enter SSE or transcript text. Stable per-message/content identities prevent duplicate assets on replay. Restoration using registered references or retained complete bytes can fill an existing message's missing attachment without a new capture/task or changing its position/time. The UI displays media outside collapsed tool details. Only explicit image content is accepted: model text cannot turn arbitrary filesystem paths or external URLs into served files. With Web disabled, this path does not begin storing camera images.
-
-The Web listener defaults to loopback and requires a randomly generated local credential. HttpOnly same-site sessions are stored hashed, with expiration and credential-rotation invalidation. Mutations require same-origin requests; numeric hosts/localhost prevent arbitrary-domain DNS rebinding. Images are decoded, bounded, metadata-stripped and stored privately; authenticated routes serve only known image IDs. There is no public model endpoint, static workspace access, browser microphone, or external asset dependency. HTTP deployments are for trusted LAN/VPN/tunnels; the separate report server must deny private state and configuration paths.
-
-Background captures retain up to four deduplicated registered media references per
-run, pinned independently of notification settings. Task queries project the selected
-page's newest run attachments at the top level for conversation delivery and keep
-each run's own references for task details. Historical task replies can restore those
-references without recapturing; an empty newer run never borrows older media. Both
-views use the same authenticated media component and a native modal image preview
-above mobile drawers. Text and arbitrary paths never become media capabilities.
-
-Task and notification views share one persistent native dialog. On desktop it is a
-nonmodal side panel; the original composer shortcuts remain clickable and switch the
-view directly. The panel ends above those shortcuts; outside pointer interaction closes
-it without consuming the click. On small screens it is modal, with background scroll
-locked until close completes. Headers show the active title and its actions, not a second
-navigation. Filters/detail/scroll survive switching. One owner animates the surface and
-scrim through the browser Web Animations API; interrupted transitions resume from the
-current frame and reduced-motion bypasses animation. Views poll only while active.
-
-## MCP service boundary
-
-Explicit video recording uses `VideoRecord` → the registered video provider → a
-completed private `VideoClip`. Gateway encoding is on demand and reuses configured
-sources; host FFmpeg is limited to finalizing and validating the completed local
-file. Duration, size, generation and resource cleanup are bounded. The conversation
-media owner adopts only validated files from its recording staging directory and
-returns registered attachment references. Raw clip bytes and arbitrary file paths
-do not enter MCP, SSE or model context. `record_video` is a mutating device tool,
-and Web serves known video IDs through its existing authenticated attachment route,
-including seek ranges. Video-only output is shown live and survives history reload.
-Image uploads remain image-only; no continuous recorder or video-analysis API is added.
-
-`mcp/memory.py` exposes `search_memory`, `read_memory`, `remember_memory`, `update_memory`, and `forget_memory`. `mcp/device.py` exposes device discovery/inspection, explicit image/video capture, camera motion, device-targeted volume, operation queries/cancellation and the existing interaction controls. Individual operations have typed arguments and read/write annotations; there is no overloaded arbitrary `action` tool. Remember creates a new fact; update requires the existing ID, current revision and original scope. Forget retains its established tombstone semantics.
-
-Each server is an independent stdio entry point (`python -m assistant_runtime.mcp memory|device --socket PATH`). Both use the same Python environment and host capability socket. They are provider-neutral and can be connected by an MCP client independently of Codex. The former combined Codex `tools.py` facade is removed. `plugins/codex/mcp.py` only supplies project-thread server registration/tool allowlists; maintenance threads disable both servers. Existing local-operation preapproval is retained within this project and does not authorize additional/global tools.
-
-The MCP layer translates between tool schemas/results and the corresponding typed kernel capability requests. The bounded shared transport has a timeout, propagates failures and does not retry uncertain actions. Memory policy and Mem0 remain under `memory/`. Hardware state and capabilities come from `devices/`; protocol drivers remain in device plugins. MCP never opens hardware, reads memory databases, pairs Bluetooth, or maintains a duplicate registry. Task management is exposed by independent tasks MCP and TaskRequest capabilities; it does not activate microphone capture. Interaction-control tools delegate to the assistant owner and do not execute tasks themselves.
-
-`list_devices` reads the live registered directory on every call; `inspect_device` uses that directory's probe routing. A device added through the established onboarding workflow therefore appears with its capabilities and fresh readings without a new MCP schema or hardware-specific branch. A new action such as a thermostat setpoint still requires its own typed capability, narrow tool and approval decision; a new device declaration cannot grant an arbitrary command executor. Unit and isolated real-MCP acceptance both test a sensor registered after the MCP connection was established.
-
-## Third-party MCP management
-
-`plugins/integrations/` owns the atomic revisioned `.agents/mcp/servers.json` registry,
-policy validation, management capability and verification receipts. Non-secret definitions
-are versioned in Git; package files, receipts and runtime directories stay in ignored
-`state/`. Credentials use host environment references or the native credential store,
-never literal secrets in the registry. `IntegrationProvider` is the reasoning
-adapter seam; Codex MCP field mapping, native discovery, authentication and thread refresh
-remain in `plugins/codex/integrations.py`. The independent `integrations` MCP and CLI
-share `IntegrationRequest`; they do not implement a second external-tool proxy.
-
-Definitions have explicit foreground/background scopes, tool filtering and approval,
-bounded startup/call timeouts, stable per-server cwd and private credential references.
-User/project MCP inheritance is explicit; each context reads its effective config so
-unknown user/project servers can be disabled, including after a cwd change. Memory
-maintenance and validation contexts always disable inherited and internal tools.
-Background executions retain their dispatch snapshot and `mcp_revision`; the shared
-registry cannot mutate tools during a run. Authorized installation runs use the existing
-`mcp_management` resource, checked against an active execution and inherited by children
-only within their parent's resource scope. Other jobs get only management queries/probes.
-
-The foreground waits for idle model and native voice, releases its subscription and
-resumes the same persisted thread with the new MCP configuration. It never restarts the
-assistant or replays a turn. Native voice start shares its dispatch lock; closing voice
-stays active through teardown. Failed refresh restores the previous confirmed config
-and requires a correction or explicit retry of the failed revision. Discovery uses owned
-ephemeral contexts, checks real tools/auth, bounds concurrency and cleans up even after
-cancellation or a late startup acknowledgement. It is distinct from applying configuration
-or testing a real tool action. External descriptions and metadata remain data, not
-instructions. These endpoints do not replace main voice or implicitly acquire framework
-device leases. See the [integration guide](src/assistant_runtime/plugins/integrations/README.md).
-
-## Long-term memory
-
-The default backend is Mem0 1.0.11, using its original ADD/UPDATE/DELETE/NONE workflow. Version 2.2.1 uses additive automatic ingestion and was not selected for this application’s correction/merge contract. A trusted worker in the **same `.venv`** owns one embedded local Qdrant store and Mem0’s SQLite history. Telemetry and remote provider defaults are disabled. A thin FastEmbed provider uses the existing multilingual MiniLM model, 384 dimensions, two threads and an explicit local-only cache under `models/memory-embedding/`.
-
-The worker's registered LLM provider sends a bounded internal callback to the host. By default the host submits a silent, tool-free, ephemeral JSON task to the official Codex App Server over stdio and checks the ChatGPT login. With an explicitly accepted `model_api.memory` binding it invokes the models capability instead; source validation and Mem0 ownership are unchanged. This is application-internal IPC, not an OpenAI-compatible HTTP server, credential exporter or public model service. Memory inference uses independent project `memory_model` / `memory_reasoning_effort` settings, separate from foreground task settings; neither path automatically falls back to the other. Calls are serialized. Failed automatic jobs have bounded retries with exponential backoff and foreground wake preempts work.
-
-Mem0 owns fact extraction, related-memory retrieval, deduplication and change decisions. Application policy supplies scope/persistence instructions and validates that each proposed fact has an exact quote from an actual user transcript. Assistant responses and provider-reported task completion are excluded from automatic evidence. Explicit remember/correct/forget remains an authorized capability; a current revision is required when correcting a record, and scope cannot silently change. These provenance checks do not prove semantic truth.
-
-The application keeps logical IDs, revisions and tombstones in host SQLite and portable metadata in Mem0. Native write results are checked by readback. Bounded receipts make completed automatic source batches idempotent across worker restart; uncertain partial writes remain visible for reconciliation rather than being claimed as a completed batch. Canceling an operation closes the owned worker before its lock is released, preventing late canceled writes from racing an explicit correction/forget. A committed native fact whose application metadata attachment was interrupted is recovered from its bounded original source batch.
-
-Forget writes a tombstone before physical deletion; reads, recall and export exclude it even if deletion fails. Old jobs/imports cannot revive its logical ID, and cleanup retries deletions. Foreground wake context still uses at most eight cached facts, without waiting for embedding/model startup. User and per-workspace project namespaces are isolated by upstream entity filters. The provider contract retains search/read/upsert/delete/export/import and adds automatic capture. Export moves facts/provenance, not embeddings; another backend must rebuild its index.
-
-One-off migration is performed from a private backup: explicit records are retained; automatic records are copied locally only when their original user evidence is verified. Historical content is not sent to the model for re-extraction. Legacy model reports are kept in the backup, not promoted to verified facts. Old code and its dependency are removed after verification; no parallel Basic Memory index or compatibility layer is used at runtime.
-
-## Extension and deployment
-
-Bundled adapters are explicit entries in the composition root; configured capability bindings choose their owners. Trusted local factories may be registered with `local_plugins.name="package.module:factory"`, enabled in `plugins`, and selected in `bindings`; the factory receives the composition context (service). New trusted plugins use a manifest/API version, lifecycle context, handlers and/or fact events. The simulated `wave` gesture exercises the same `Trigger` request as future camera perception; gesture inference is not installed; explicit camera capture is provided by the optional go2rtc adapter.
-
-The default execution model remains one Python environment, one asyncio host and managed child processes. No container, plugin marketplace, hot reload, message broker, or management website is required. The installer only renders/enables a user unit. Host Bluetooth codec settings are optional deployment-profile material, never applied by generic installation. Root/workspace/model paths and stable device identities live in instance TOML; headless management and kernel tests need no audio hardware or models.
+Acceptance distinguishes local synthetic transport, real-provider behavior and deployed readiness. API credentials/data/budget require explicit scope. A past Codex acceptance receipt does not validate Pi. Gateway failures must not block event ingestion, device observations or notification persistence.
 
 ## Hardware onboarding standard
 
@@ -379,7 +152,7 @@ reusing an ID requires querying its receipt, never executing it again.
 the binding. A response with `applied=false, scope=next_stream` is only a saved preference.
 `stop_playback` and `end_voice_conversation` remain explicit controls of the main session.
 
-A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. The go2rtc adapter requests uncached snapshots only on explicit input; its metadata observer never opens a video consumer. The separately managed gateway owns USB V4L2, RTSP and other camera protocols, formats and optional transcoding. The assistant neither opens video nodes nor launches camera FFmpeg processes. Gateway reachability and stream registration are distinct from successful acquisition; `capture_verified` describes a successful frame in the current observed source generation. Source changes or observed outages invalidate that generation, and failed requests never return earlier pixels. CLI can explicitly save a JPEG; Codex receives native MCP image content through device MCP capture_image. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
+A video input implements VideoInputProvider and registers through host.video_inputs. One shared devices owner routes VideoCapture by logical ID and returns a bounded, generation-aware VideoFrame. The go2rtc adapter requests uncached snapshots only on explicit input; its metadata observer never opens a video consumer. The separately managed gateway owns USB V4L2, RTSP and other camera protocols, formats and optional transcoding. The assistant neither opens video nodes nor launches camera FFmpeg processes. Gateway reachability and stream registration are distinct from successful acquisition; `capture_verified` describes a successful frame in the current observed source generation. Source changes or observed outages invalidate that generation, and failed requests never return earlier pixels. CLI can explicitly save a JPEG; execution adapter receives native MCP image content through device MCP capture_image. Only capture metadata enters events, never pixels or automatic memory. Future video streaming/gesture detection requires an explicit media consumer and trigger policy.
 
 ### Capability ownership and AI access
 
@@ -397,9 +170,9 @@ Define a concrete request contract in `kernel/contracts.py` only when the first 
 
 The shared directory contains enabled logical IDs, labels/locations, declared capabilities and freshness-aware availability. Every adapter registers devices during start and updates observations in owned background work. One directory plugin owns the query request type and validates that all enabled configuration entries were registered. A future state sensor can reuse list/inspect without changing the directory or adding another handler.
 
-Expose narrowly defined tools through the local capability facade; CLI and Codex use the same handlers and result semantics. The service request dispatcher must route those new requests to the capability owner. Current `device` list/inspect tools automatically expose registered descriptors and non-media state. Device volume uses `AudioVolume`; main-session interruption stays on its explicit control route. Add only additional tool schemas required by a new action; read and mutating actions have distinct descriptions/approval semantics, and existing tool authorization is not implicitly widened.
+Expose narrowly defined tools through the local capability facade; CLI and execution adapter use the same handlers and result semantics. The service request dispatcher must route those new requests to the capability owner. Current `device` list/inspect tools automatically expose registered descriptors and non-media state. Device volume uses `AudioVolume`; main-session interruption stays on its explicit control route. Add only additional tool schemas required by a new action; read and mutating actions have distinct descriptions/approval semantics, and existing tool authorization is not implicitly widened.
 
-Provide enabled-device descriptions at voice-session startup so the voice layer can delegate appropriate queries/actions to Codex. The model reads actual state through tools rather than guessing from a description. Measurements and external-device labels are data, not instructions. Do not copy arbitrary BLE payloads into system/developer prompts.
+Provide enabled-device descriptions at voice-session startup so the voice layer can delegate appropriate queries/actions to execution adapter. The model reads actual state through tools rather than guessing from a description. Measurements and external-device labels are data, not instructions. Do not copy arbitrary BLE payloads into system/developer prompts.
 
 Events update local state by default. Only an explicitly configured trigger calls `Trigger`; passive temperature updates do not wake the assistant. A future alert rule separately defines conditions, freshness, debounce/cooldown, action and whether standby may be interrupted. Do not forward every high-frequency sample to the model.
 
@@ -423,108 +196,6 @@ An integration is complete only when its README includes results for:
 
 For a BLE temperature sensor the first implementation includes protocol identification, one sensor adapter, connection validation, freshness-aware observations and real-device acceptance. It reuses the installed directory/read capability and read-only tool. For a second sensor using that same protocol, reuse all of those pieces and add its instance configuration. Commit source/config examples/tests; retain readings, recordings, logs and pairing data in ignored instance storage.
 
-## Evolution rules
-
-Add concrete capabilities when an extension needs them; do not expand a universal event object into a second RPC system. Keep media work bounded and expensive memory work out of the audio process. Preserve task and memory state during code rollback. Tests belong beside the behavior they protect, and one check command runs formatting, static checks and unit contracts. No compatibility package or old CLI is shipped during development.
-
-## Durable background work
-
-`plugins/tasks/` owns definitions, trigger evaluation, run snapshots, resource slots and
-stable result cards. The composition root injects the Codex executor; no Codex RPC fields
-belong in kernel contracts or task MCP. The provider routes background events before
-foreground/voice handling, so steering and questions cannot contaminate the main turn.
-APScheduler supplies calendars; SQLite owns persisted occurrence IDs and schedule cursors.
-Immediate non-Goal one-shot delegations are temporary; scheduled/event/Goal work is
-planned. One-shots automatically archive after any terminal outcome by default, while
-retaining results/outbox delivery. This organizational transition never cancels work;
-parents wait for unfinished descendants. Startup applies the same policy to existing
-ended tasks. Archived records remain queryable but cannot resume execution.
-Each model execution starts with its registered run `scratch/` as provider cwd;
-the authorized target project remains explicit task context, and results go to its
-own `artifacts/`. Existing sandbox/approval settings remain instance-owned.
-Provider thread cleanup is separate from task-definition archival. A durable per-run,
-per-continuation receipt queues confirmed terminal executions for the executor's
-finalize method, including existing ended runs on startup. The lifecycle-owned cleanup
-worker checks provider status, latest-turn summary and live commands before archiving,
-unsubscribes and releases handles. Failures back off without rerunning work, blocking
-notifications, changing results/timing or consuming notification revisions. Active,
-waiting, paused and uncertain runs are retained. Explicit continuation serializes with
-cleanup and restores an archived provider thread before resume. Foreground threads
-are excluded; provider RPCs and archive-path semantics stay in the Codex adapter.
-Task browsing uses SQLite keyset pages ordered by creation time and stable ID, with
-server-side category/search filters and indexed per-task run history. Web has temporary
-work first (unfinished non-archived by default, optional include-archived) and plans
-(non-archived by default, optional include-archived). The MCP active-only filter selects enabled definitions with future
-triggers, event listening or unfinished runs; paused/archived/terminated definitions
-and ended one-shots are inactive. Filter values are part of each cursor's scope. Web and MCP share
-the same bounded page contract (20 by default, at most 50). List rows contain bounded
-latest/unfinished summaries; full results are fetched only for the selected task.
-Web loads older tasks and expanded run history on scroll, polls only one bounded head
-page plus bounded known unfinished tasks/runs, and aborts obsolete queries on navigation. Cached
-older pages do not multiply polling requests. Closed/hidden views do not poll.
-No uncertain action is automatically replayed. A Goal's completion differs from an
-ordinary turn completing; external processes require their own checkpoints and identity.
-An actual native Goal created during a one-shot also retains that run's existing
-authority across intermediate turns. It does not expand scope or create a new task.
-Completion waits for the Goal and final turn; cancellation pauses the actual Goal,
-late continuation cannot reactivate ended work, and restart never replays it.
-
-`tasks` MCP is independent of memory/device. CLI and authenticated Web share TaskRequest;
-existing foreground cancellation controls remain distinct. Task models resolve from the
-account catalog at creation according to fixed configuration or initiating-agent choice.
-Tasks owns one versioned model policy with configurable fast/balanced/deep/ultra profiles.
-`ultra` is reserved for exceptional reasoning/original research with justification that
-`deep` is insufficient; routine research search/summaries do not qualify. Instance
-defaults remain fast with one controlled upgrade, and profile mappings remain configurable.
-`ultra` defaults to Astra/high. Tasks forms bounded account-supported profile/effort
-combinations for a single optional Jev judgment, filling only unresolved fields; fixed
-values and explicit fields filter the supported candidates. That one HTTP request
-batches separate small tier/effort questions; each field requires its own confidence
-threshold, and the final combination still passes executor validation. No joint
-probability is fabricated from independent answers. Fixed
-instance values and explicit agent fields win independently. Canonical combination IDs
-select trusted candidates rather than generated model arguments. Single-option cases
-stay local, and failed advice returns to the original profile defaults. Reasoning effort
-can vary without losing tier identity; selection receipts record origins of both fields.
-Missing/auto choices resolve through that policy instead of inheriting main/parent models;
-explicit agent choices require reasoning grounded in uncertainty and acceptance checks.
-The executor validates concrete account support and reports provider-confirmed selections.
-Per-run segment receipts retain selection provenance and bounded upgrade history.
-An owned handoff worker accepts scoped, budgeted upgrade requests with checkpoints,
-waits for clean turn completion and executor proof of idle thread/no live commands, then
-continues the same independent thread without replaying effects or publishing an interim
-completion. Ambiguous dispatch stays unknown. Native Goals and custom/fixed selections
-remain under explicit task management. No extra routing model or automation plugin is used.
-User-authorized goals may derive scoped children, not new unapproved goals. Memory is
-shared through the existing provider and scope/source policy, never used as execution proof.
-
-`tasks/self_schedule.py` owns explicitly granted self scheduling. Foreground management
-records a condition and exact allowed timed triggers; an active background caller can
-change only its own future schedule through a dedicated capability. The run snapshot,
-current grant, revision and database compare-and-swap must agree. User edits/pause/end
-invalidate older execution authority. Definition and UUID receipt commit atomically;
-lost replies never cause a second change or restart the current work. Trace exposes
-bounded receipts; condition evidence remains executor-reported, not proof of completion.
-General task mutation, scope expansion and granting capabilities to children stay denied.
-Explicit `self_completion` uses the same identity/version/audit boundary to archive future
-scheduling while preserving the current run for final reporting. Domain completion
-evidence remains executor-reported; no implicit permission follows from finishing a turn.
-
-Durable record subscriptions are another tasks trigger, not a separate automation
-engine. `tasks/event_inbox.py` consumes EventRequest changes and commits cursor, bounded
-pending references, decisions and automatic run creation in one host SQLite transaction.
-New subscriptions/edits/resumes start at the current tail. Baselines/manual revisions do
-not trigger work; pending/queued facts are invalidated or expired before dispatch. Merge,
-cooldown and single active execution bound AI work; overflow and uncertainty are visible.
-Existing device-threshold and task-completion triggers remain separate supported modes.
-Task trace associates event references, immutable run snapshots and provider tool metadata;
-it does not copy raw event/tool payloads or assert exactly-once physical effects.
-Provider-specific tool parsing stays in Codex; tasks MCP/CLI own inbox/trace queries.
-
-`workfiles.py` is application-wide directory ownership and retention. It registers private
-scratch/artifact areas for main conversations and each task run. Only ended scratch areas
-expire; no repository traversal cleanup. Artifacts are downloadable via authenticated
-registered-run routes. Media still uses the existing bounded attachment owner.
 
 ## Media acquisition
 
@@ -547,7 +218,7 @@ mapping. Move refreshes both parents; partial batches retain their completed-ste
 Aliyun auth uses bounded owned SDK subprocesses; Quark uses bounded HTTP with private
 Cookie rotation. Async provider copy receipts are durably stored before observation;
 one credential lease/lock owns refresh and atomic replacement. Credentials stay private,
-never in MCP, event records, config examples or shared Codex settings. Host SQLite owns
+never in MCP, event records, config examples or shared execution adapter settings. Host SQLite owns
 operation IDs, intent snapshots, hash/size verification and the durable notice outbox.
 Original-file downloads use a separate owned worker with bounded HTTP streaming and
 off-loop disk IO. A required mounted filesystem, private staging outside the published
@@ -600,7 +271,7 @@ outbox before acknowledgement; task completion marks delivery queued only after 
 The kernel's bounded lossy event bus is not a notification store.
 
 Adapters own transport work, retry safety and delivery receipts. Chat uses stable IDs;
-Codex context and audio expose uncertain outcomes rather than replaying non-idempotent
+execution adapter context and audio expose uncertain outcomes rather than replaying non-idempotent
 side effects. Policies apply at delivery, including idle/quiet periods and expiry. No
 worker blocks the main conversation; no notification enables remote microphone input.
 Read acknowledgements are user actions and independent of channel success. The inbox
@@ -633,8 +304,8 @@ the target instance, preserving identity/history and observation gaps.
 
 The independent events MCP/CLI is a facade: `EventRequest` owns record CRUD/query, source
 management forwards to `ObservationRequest`. Main and background use the shared MCP
-catalogue and authorization rules. Source definitions live in tracked
-`.agents/observations/sources.json`; credentials in private `state/observations/`;
+catalogue and authorization rules. Source definitions live in private
+`config/observations/sources.json`; credentials in private `state/observations/`;
 records remain in `state/events/`. Recording itself starts no model, notification or
 memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
 and [source onboarding](src/assistant_runtime/plugins/observations/README.md).
@@ -658,49 +329,31 @@ main and background/API executors use the same service catalogue. Configuration 
 to `config/search.toml`, with credential environment references, effective after restart.
 Configured does not mean remotely verified; capability inspection makes no paid request.
 
-Subscription Search Service remains a parallel independent tool. Neither tool changes
-the execution model or silently falls back to the other. Media acquisition remains in
+Pi uses the explicitly configured search plugin; the former subscription Search Service
+is not exposed by this executor. Search does not change the execution model or silently
+fall back to an unavailable subscription tool. Media acquisition remains in
 media; no search agent loop, browser or local crawler is introduced. Third-party page
 content is untrusted evidence, never authority. DeepSeek does not expose its final
 redirect URL; adapter output explicitly leaves it unknown rather than asserting that
 upstream redirects have been locally verified. See [search](src/assistant_runtime/plugins/search/README.md)
 for caller contracts, limits, failure semantics and explicit real-provider acceptance.
 
-## Optional API models
 
-Instance TOML is composed once by `Config.load()`: one entry explicitly includes up
-to 32 relative files inside its directory. Fragments cannot include other files;
-disjoint table keys merge, duplicate leaves or table/value conflicts fail with source
-paths. Plugins receive the same normalized `Config`, never read fragments themselves.
-Missing explicit files fail; only absent implicit XDG configuration permits the existing
-headless default. Relative instance `root` resolves against the entry directory, so
-moving configuration must explicitly preserve data, credentials and audio bindings.
+## Assistant resources and Coding AI tooling
 
-`plugins/models` owns bounded no-tool inference through `kernel/models.ModelRequest`,
-private durable UUID receipts and an independent MCP. Official endpoint presets and
-explicit custom endpoints normalize from `model_api`; generated gateway files are
-private derivatives. LiteLLM runs in a pinned independent container and owns protocol
-conversion only. It has no MCP, task or device authority.
+`.agents/` and `.agent/` are ignored local development directories, never runtime
+configuration or application assets. Root `AGENTS.md` remains the tracked engineering
+guide; Pi disables automatic project context, prompt, extension and skill discovery.
+The composition root explicitly selects packaged skills from enabled media, tasks
+and events plugins; Pi receives only those paths and explicitly selected private
+instance skills. Foreground and background share this one inventory. No global
+skill registry or independent knowledge engine is introduced.
 
-API reasoning levels and defaults belong to each model entry. The same declaration
-feeds auxiliary MCP, native execution metadata, task advice and gateway validation.
-Explicit effort is preserved across inference fallbacks; incompatible candidates are
-skipped rather than downgraded. Auxiliary and execution output budgets are independent
-and include reasoning tokens. Protocol mapping stays in the gateway adapter.
-
-The composition root injects `RoutedJobs` when API support is enabled. It reuses
-`CodexJobs`, with separate subscription and API app-server processes. Subscription
-voice/main execution remain on their original process. Tasks owns model selection,
-permissions and checkpoints; changing provider creates a fresh execution thread after
-confirmed safe handoff. Explicit ordered fallbacks are owned by models (no-tool calls) and tasks (execution), never by the gateway. Native rejection plus a complete readback proving no actions permits a fresh first-turn execution; uncertain operations, prior turns and Goals are never replayed. Attempts, errors and the selected model are durable and logged.
-Mem0 extraction can bind to the no-tool API capability, retaining its source policy
-and local embeddings. See [model access](src/assistant_runtime/plugins/models/README.md)
-for configuration, limits, deployment and acceptance boundaries.
-
-Task model selection owns evidence and policy. Configured `model_review` supports off,
-shadow observation and active pre-execution correction of assistant recommendations.
-It compares complete legal model/native-effort pairs. User-declared, fixed and unknown
-explicit choices are conservatively constrained; declarations cannot grant authority.
-Caller assessments remain unverified; prior run evidence is read by tasks within scope.
-Timeout/failure keeps the original valid selection. Runtime actions, provider state,
-fallbacks and checkpoint-based upgrades stay with their existing owners.
+Private device procedures and evidence live in `config/skills/<name>/`, selected
+by `instance_skills`. Missing entries and shadowing of bundled skills fail startup.
+User facts still use the existing memory capability. MCP definitions and observation
+source configuration live in `config/mcp/servers.json` and
+`config/observations/sources.json`, retaining their plugin-owned validation,
+CAS revisions and atomic writes. `config.example/` carries empty reusable templates,
+not household identities, runtime receipts or credentials. Configuration takes effect
+on explicit restart; there is no discovery or automatic migration from Coding AI files.

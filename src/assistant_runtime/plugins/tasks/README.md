@@ -1,7 +1,6 @@
 # Tasks plugin
 
-Trusted local plugin for independent background work through the configured Codex executor
-(subscription or an explicitly accepted API model).
+Trusted local plugin for independent background work through the configured Pi executor and explicitly accepted API models.
 Enable `notifications` and `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
 Requires the conversation and configured brain capabilities. Does not activate the microphone.
 
@@ -32,24 +31,24 @@ reasoning_effort = "auto"
 default_profile = "fast"
 max_upgrades = 1
 [tasks.model_policy.profiles.fast]
-model = "gpt-6-luna"
+model = "go-gpt"
 reasoning_effort = "low"
 [tasks.model_policy.profiles.balanced]
-model = "gpt-6.1-sol"
+model = "go-gpt"
 reasoning_effort = "low"
 [tasks.model_policy.profiles.deep]
-model = "gpt-6.1-sol"
+model = "go-gpt"
 reasoning_effort = "medium"
 [tasks.model_policy.profiles.ultra]
-model = "gpt-6-astra"
-reasoning_effort = "high"
+model = "go-gpt"
+reasoning_effort = "max"
 
 [work_files]
 retention_days = 7
 # root = "/absolute/private/instance/work"
 ```
 
-`auto` is an application policy, never sent as a model name to Codex. The initiating
+`auto` is an application policy, never sent as a model name to Pi. The initiating
 model reads `list_task_models` for current models, supported efforts, profile availability
 and shared guidance. Choose the lightest suitable profile using uncertainty, existing
 procedures and acceptance checks; step count or wall time alone does not imply difficult
@@ -87,12 +86,11 @@ Concrete model/effort choices remain supported with a nonempty reason (max 400 c
 Missing/auto values use the configured profile, never the foreground or parent model.
 Fixed instance settings override requests. The resolved model/effort is stored with the definition and each run.
 Unsupported models/efforts fail explicitly. Repeated executions reuse saved choices while settings remain auto; fixed instance settings are applied again before every execution and saved in its run snapshot.
-Foreground retains its subscription binding. Mem0 has its independent subscription settings
-or the explicit `model_api.memory` binding; task profiles do not change either.
+Foreground uses `main_model`; Mem0 requires explicit `model_api.memory`. Task profiles change neither binding.
 
 Profiles are instance-owned opaque model IDs; partial overrides merge into the four
 defaults above. Unavailable choices fail unless an explicitly configured fallback applies at the safe first-turn boundary below; there is no implicit replacement.
-Codex owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
+Pi owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
 Existing saved concrete selections are not silently changed by a new default policy.
 Unrelated definition edits preserve selection provenance. Selection metadata supplied
 by clients is discarded/recomputed; the host records version, profile, origin of each
@@ -114,11 +112,11 @@ upgrades and from no-tool inference fallback lists:
 
 ```toml
 [tasks.model_policy.fallbacks]
-gpt-6-luna = [{ model = "deepseek-assist", reasoning_effort = "none" }]
+go-gpt = [{ model = "deepseek-assist", reasoning_effort = "none" }]
 # Example with verified API entries:
 go-claude = [
   { model = "go-gpt", reasoning_effort = "none" },
-  { model = "gpt-6.1-sol", reasoning_effort = "medium" },
+  { model = "go-gpt", reasoning_effort = "medium" },
 ]
 ```
 
@@ -129,7 +127,7 @@ a different provider must have a distinct API entry alias. Existing saved task
 choices remain primary; the instance mapping also applies to those choices.
 
 Only a structured provider rejection on a fresh first execution is eligible.
-The Codex adapter must read back one failed turn, complete items, no tool/assistant
+The Pi adapter must read back one failed turn, complete items, no tool/assistant
 activity, no active terminals and no Goal. Then tasks records a new model selection,
 revokes the old binding and starts a fresh thread for the same run and grants.
 Already-executed work, resumed turns, long-term Goals, user cancellation, policy
@@ -145,26 +143,18 @@ the new run. Primary failure alone is never evidence that no operation happened.
 
 ## Controlled model upgrades
 
-Provider turn completion is not native Goal completion. Even if an ordinary run
-creates a Goal during execution, intermediate turns keep that SAME run and its
-existing resource grants active; no definition, scope or grant is expanded. Only
-Goal completion plus an ended turn permits completion/delivery/archival. Goal
-blocked/paused/usage/budget limits await user input. Ordinary one-shots should not
-create native Goals; configured long-term work uses them explicitly. Pause/cancel
-also pauses any actual native Goal before interrupting the turn. Late continuation
-cannot revive terminal/paused runs and is stopped by the provider adapter. Recovery
-reads current Goal status and pauses unfinished Goals without replaying work.
-Native Goals also prevent automatic model handoff, including Goals created after
-a handoff was requested.
+Pi agent completion ends one execution turn. An explicitly authorized `long_term=true` goal can queue another turn under the same run, grants and execution budget. Tasks owns this continuation; it is bounded by `tasks.max_goal_rounds` (default 8, configurable 1..64). Incomplete goals at that boundary wait for user action and never report completion. Blocked/paused goals and user clarification also wait. Ordinary periodic work finishes one check/batch; the scheduler owns the next trigger. A model cannot turn a periodic plan into a long-lived loop by reporting a goal.
+
+AI-service consumption belongs to [ai_usage](../ai_usage/README.md): 100 requests per work by default, including descendant tasks, fallback, auxiliary judgments and paid search. Tasks owns immutable work association, plan pause/recovery and result-delivery rights. A budget denial stops new AI requests; it does not replay tools or overturn verified actions. Details expose `ai_usage` and its known/unknown telemetry. A triggered plan stays paused until explicit recovery. Native retries and paid cache warming remain disabled.
 
 `request_task_model_upgrade` / CLI `tasks upgrade_model` applies to an active non-Goal
-Codex execution. It changes only that run, not future recurring runs or the definition.
+Pi execution. It changes only that run, not future recurring runs or the definition.
 Background callers can target only their own run. Fixed model/effort settings prohibit
 automatic upgrades. `max_upgrades` defaults to one, permits 0..3; accepted requests consume
 the budget even if a handoff is subsequently blocked. Custom choices outside the configured
 profiles and native long-term Goals require explicit task management instead. Goal's
 autonomous continuation lifecycle is not silently interrupted or raced by a model handoff.
-The Codex adapter also rejects a configured higher profile that would reduce or retain
+The Pi adapter also rejects a configured higher profile that would reduce or retain
 the reasoning effort of the same model.
 The order is `fast → balanced → deep → ultra`; the default one-upgrade budget remains
 unchanged, and a justified request may move directly to a higher profile. `ultra`
@@ -185,8 +175,8 @@ never put passwords/tokens in the checkpoint. The agent finishes its current tur
 the request. Request acceptance is not an immediate model switch or task completion.
 The host persists `requested → ready → dispatching → applied` receipts, waits for a clean
 completed turn, verifies an idle independent provider thread, its matching latest completed
-turn and no live background terminals, then resumes that SAME thread using history and
-the checkpoint. The run retains workspace/resources, completion round and operation IDs;
+turn and no live background terminals, then archives the old context and starts a fresh execution context from
+the verified checkpoint, retaining the same task run and budget. The run retains workspace/resources, completion round and operation IDs;
 no new task definition, foreground turn, speech or intermediate completion notice is created.
 Old completion events cannot end the new segment.
 
@@ -205,7 +195,7 @@ and optional resource lock names. Runs snapshot the definition revision and have
 IDs, progress, questions, provider thread/turn IDs, results and artifacts. A reminder
 uses `execution.kind=reminder` and does not invoke a model. A deterministic sensor check
 uses `execution.kind=device_query` with a configured `device_id` and the existing typed
-read capability. Other tasks use `kind=codex`.
+read capability. Other tasks use `kind=agent`.
 
 Triggers:
 - `{"kind":"immediate"}`
@@ -221,7 +211,7 @@ task completion receipts avoid relying on the lossy generic event bus. Instantan
 device transitions while the service is stopped cannot be recovered. New event sources
 belong in adapters; this version does not expose unauthenticated webhooks.
 
-`long_term=true` uses a persistent Codex Goal with a concrete completion condition in
+`long_term=true` uses a persistent Pi Goal with a concrete completion condition in
 the prompt. Intermediate turn completion is not goal completion. Arbitrary processes
 cannot be transparently checkpointed: save progress/artifacts and external job identity,
 and inspect before continuing. Task state is not proof of external-world success.
@@ -229,7 +219,7 @@ and inspect before continuing. Task state is not proof of external-world success
 Automatic subtasks must stay inside the parent's workspace and declared resources;
 children cannot create recurring triggers, change other tasks or enable voice delivery.
 Depth is limited to three and each definition has at most sixteen direct children.
-These are trusted local agents with the configured Codex sandbox, not security sandboxes.
+These are trusted local agents with full local permissions. OS sandboxing is a TODO.
 Semantic authorization remains part of the instructions and tool approval policy.
 
 Resource identifiers are internal delegation details, not a second user consent step.
@@ -351,13 +341,13 @@ rejects symlink traversal and does not scan user projects, secrets or model dire
 
 Run `python scripts/check.py` for scheduling, idempotency, cancellation, event freshness,
 model choice, concurrent resources, recovery, file boundaries and the existing suites.
-`--group tasks --group codex` includes profile defaults, no parent inheritance, fixed
+`--group tasks --group execution` includes profile defaults, no parent inheritance, fixed
 overrides/provenance, UUID idempotency, upgrade boundaries, live terminals, cancellation,
 lost acknowledgments, restart recovery and late prior-turn events. Provider fixtures do
-not establish real subscription model-switch success; perform explicit scratch-only live
+not establish real API model-switch success; perform explicit scratch-only live
 acceptance before claiming deployment verification. No TV/camera interaction is needed.
 Run `python scripts/verify_tasks.py --config config/config.toml` against the installed service
-for a silent reminder, real Codex artifact, long-term Goal and cancellation. It writes
+for a silent reminder, real Pi artifact, long-term Goal and cancellation. It writes
 only to managed task areas and saves private evidence under `state/acceptance/tasks/`.
 Do not count fake tests as provider/hardware acceptance. No camera or microphone capture
 is needed to validate this plugin.
@@ -405,7 +395,7 @@ user heard/read anything. Delivery is bounded/concurrent and does not stall task
 
 Implementation: tasks owns `job_result_claims` / `job_result_feedback`; conversation owns
 `chat_result_receipts` / turn lifecycle. `ConversationFeedbackRequest` is internal, absent
-from IPC/MCP. The Codex adapter has no new protocol/prose acknowledgement heuristics.
+from IPC/MCP. The Pi adapter has no new protocol/prose acknowledgement heuristics.
 `tests/test_task_feedback.py` covers handoffs, conflicts, query independence, terminal races,
 turn exit, restart, lost replies, speech uncertainty and attachment projection without
 hardware/model calls. Real voice timing is left to everyday evaluation.
@@ -479,7 +469,7 @@ No records are deleted by paging.
 Each model run uses its registered `scratch/` as actual working directory and temp
 directory; `artifacts/` retains deliverables. The target `workspace` is still included
 explicitly for authorized project operations, with existing configured permissions.
-Codex execution conversations are archived after each confirmed terminal execution,
+Pi execution conversations are archived after each confirmed terminal execution,
 independently of whether the recurring plan remains enabled or a definition is archived.
 `job_finalizations` stores a per-run/continuation receipt; its owned worker restores
 unfinished cleanup after restart and retries archive failures with backoff. It verifies
@@ -559,7 +549,7 @@ chosen otherwise; meaningful alerts use the existing notifications capability.
 
 An event execution snapshots `trigger_context`: subscription, referenced event IDs and
 change cursors, observation times, batch count and previous run identity when present.
-Dispatch adds `valid_events` and an invalidated count. The Codex adapter supplies this
+Dispatch adds `valid_events` and an invalidated count. The Pi adapter supplies this
 as data beside the original objective, with task/run IDs. AI can use existing events,
 memory, devices and tasks MCPs to fetch facts, examine previous outcomes and decide
 what to do. New events do not expand authorization, change model selection, switch
@@ -581,12 +571,12 @@ phase/status and reported device/operation IDs, never complete arguments, shell 
 or tool output. A completed tool call is provider evidence, not proof that hardware
 changed. Native operation IDs can be checked through devices MCP; external tools may
 lack this guarantee. Unknown executions are reconciled or explicitly continued, never
-silently recreated. Raw provider-specific parsing stays inside `plugins/codex`.
+silently recreated. Raw provider-specific parsing stays inside `plugins/pi`.
 
 The existing task panel displays the merged trigger count and current pending count;
 it keeps its existing paging and controls. Complete trace inspection is MCP/CLI-first.
 
-Tests: `scripts/check.py --group tasks --group events --group codex`. Coverage includes
+Tests: `scripts/check.py --group tasks --group events --group execution`. Coverage includes
 transaction rollback, duplicate reports, real runtime/SQLite restart, pagination,
 coalescing, overflow, expiration, mutation invalidation, paused subscriptions, stale
 in-flight reads, unknown executions, and trace redaction/limits. Simulated sensor events

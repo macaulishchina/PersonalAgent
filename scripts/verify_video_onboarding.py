@@ -1,9 +1,8 @@
-"""Explicit installed camera/socket/Codex acceptance; no audio or default recording."""
+"""Explicit installed camera/socket/Pi acceptance; no audio or default recording."""
 
 import argparse
 import asyncio
 import base64
-import dataclasses
 import hashlib
 import io
 import json
@@ -15,7 +14,9 @@ from PIL import Image, ImageStat
 
 from assistant_runtime.cli import request, systemctl
 from assistant_runtime.config import Config
-from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.plugins.ai_usage.service import UsageService
+from assistant_runtime.plugins.ai_usage.settings import UsageSettings
 from assistant_runtime.store import Store
 
 
@@ -102,7 +103,7 @@ async def verify_gateway_recovery(config, ident):
     }
 
 
-async def verify(config, ident, save_frame, restart, codex, gateway_restart=False):
+async def verify(config, ident, save_frame, restart, execution, gateway_restart=False):
     folder = config.state_dir / "acceptance" / "video"
     folder.mkdir(parents=True, exist_ok=True)
     report = {
@@ -110,10 +111,11 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
         "device_id": ident,
         "captures": [],
         "raw_video_saved": False,
-        "scope": "local_and_codex" if codex else "local_only",
-        "codex_validated": False,
+        "scope": "local_and_execution" if execution else "local_only",
+        "execution_validated": False,
     }
     backend = None
+    usage = None
     store = None
     try:
         initial = await request(config, {"command": "status"})
@@ -149,7 +151,7 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
             raise AssertionError("Unknown camera should fail")
         detail = await request(config, {"command": "devices", "action": "inspect", "device_id": ident})
         before_ai_count = detail["device"]["data"]["capture_count"]
-        if codex:
+        if execution:
             with tempfile.TemporaryDirectory(prefix="camera-ai-", dir=config.state_dir) as temp:
                 store = Store(Path(temp) / "acceptance.sqlite3")
 
@@ -159,16 +161,19 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
                 async def no_control(*args):
                     raise RuntimeError("Acceptance does not allow audio control")
 
-                # Keep the installed capability socket; isolate the provider thread/task records.
-                readonly = dataclasses.replace(config, codex_sandbox="read-only", approval_policy="never")
-                backend = CodexBackend(readonly, store, no_speech, no_control)
+                # Keep the capability socket; execution records and allowance are private.
+                usage = UsageService(Path(temp) / "ai-usage", UsageSettings(max_requests=12))
+                await usage.start()
+                backend = PiBackend(
+                    config, store, no_speech, no_control, usage=usage, runtime_dir=Path(temp) / "executions"
+                )
                 calls = []
                 original_get = backend.client.events.get
 
                 async def trace():
                     event = await original_get()
-                    item = event.get("params", {}).get("item", {})
-                    if event.get("method") == "item/completed" and item.get("type") == "mcpToolCall":
+                    item = event.get("data", {}).get("item", {})
+                    if event.get("kind") == "activity.completed" and item.get("type") == "mcp":
                         content = (item.get("result") or {}).get("content", [])
                         calls.append(
                             {
@@ -195,26 +200,30 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
                     async with asyncio.timeout(150):
                         while backend.busy:
                             await asyncio.sleep(0.25)
-                    report["codex_tools"] = calls
-                    report["codex_result"] = store.recent(1)
+                    report["execution_tools"] = calls
+                    report["execution_result"] = store.recent(1)
                     assert not backend.last_error, backend.last_error
                     assert any(
                         call["server"] == "device"
                         and call["tool"] == "capture_image"
                         and "image" in call["content_types"]
                         for call in calls
-                    ), "Actual Codex MCP result did not contain an image block"
+                    ), "Actual Pi MCP result did not contain an image block"
                     result = store.recent(1)
                     assert result and result[0]["status"] == "completed", result
                 finally:
-                    await backend.close()
+                    try:
+                        await backend.close()
+                    finally:
+                        await usage.close()
+                        usage = None
                     backend = None
                     store.db.close()
                     store = None
         detail = await request(config, {"command": "devices", "action": "inspect", "device_id": ident})
-        if codex:
+        if execution:
             assert detail["device"]["data"]["capture_count"] > before_ai_count
-            report["codex_validated"] = True
+            report["execution_validated"] = True
         report["after_camera"] = detail
         after = await request(config, {"command": "status"})
         assert after["voice_io"] == initial["voice_io"]
@@ -235,7 +244,10 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
                         recovered = await request(
                             config, {"command": "devices", "action": "inspect", "device_id": ident}
                         )
-                        if healthy["capture_recent"] and recovered["device"]["state"] == "available":
+                        if (
+                            healthy["capture_recent"] == initial["capture_recent"]
+                            and recovered["device"]["state"] == "available"
+                        ):
                             break
                     except (OSError, RuntimeError):
                         pass
@@ -255,8 +267,12 @@ async def verify(config, ident, save_frame, restart, codex, gateway_restart=Fals
         report["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        if backend:
-            await backend.close()
+        try:
+            if backend:
+                await backend.close()
+        finally:
+            if usage:
+                await usage.close()
         if store:
             store.db.close()
         report["finished_at"] = time.time()
@@ -282,9 +298,9 @@ def main():
         help="Verify a real go2rtc outage, stale-frame rejection and recovery",
     )
     parser.add_argument(
-        "--codex",
+        "--execution",
         action="store_true",
-        help="Explicitly send a test image to Codex/OpenAI for visual acceptance",
+        help="Explicitly send a test image to the configured API provider for visual acceptance",
     )
     args = parser.parse_args()
     asyncio.run(
@@ -293,7 +309,7 @@ def main():
             args.device,
             args.save_frame,
             args.restart,
-            args.codex,
+            args.execution,
             args.restart_gateway,
         )
     )

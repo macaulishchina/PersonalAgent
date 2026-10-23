@@ -9,7 +9,7 @@ from assistant_runtime.plugins.pipewire.audio import AudioRoute
 from assistant_runtime.config import Config
 from assistant_runtime.assistant.commands import parse_command
 from assistant_runtime.store import Store
-from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.pi.backend import PiBackend
 
 
 class CommandsTest(unittest.TestCase):
@@ -56,37 +56,37 @@ class PersistenceTest(unittest.TestCase):
 
 class TaskTest(unittest.IsolatedAsyncioTestCase):
     async def test_scoped_cancel_does_not_interrupt_a_new_turn_or_follow_a_changed_thread(self):
-        b = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
-        b.thread_id, b.active_turn, b.last_turn = "original", "current", "current"
+        b = PiBackend(Config(), None, AsyncMock(), AsyncMock())
+        b.execution_session_id, b.active_turn, b.last_turn = "original", "current", "current"
         b.command_items = {"current": {"owned"}}
         b.client.request = AsyncMock()
         self.assertFalse(await b.cancel(expected_turn="previous"))
         b.client.request.assert_not_awaited()
 
         async def response(method, params):
-            if method == "turn/interrupt":
-                b.thread_id, b.active_turn = "new-thread", "new-turn"
+            if method == "run.cancel":
+                b.execution_session_id, b.active_turn = "new-thread", "new-turn"
                 b.command_items = {}
-            if method == "thread/backgroundTerminals/list":
-                return {"data": [{"itemId": "owned", "processId": "owned-process"}]}
+            if method == "operations.list":
+                return {"data": [{"activity_id": "owned", "process_id": "owned-process"}]}
             return {}
 
         b.client.request.side_effect = response
         self.assertTrue(await b.cancel(expected_turn="current"))
         self.assertEqual(b.active_turn, "new-turn")
-        self.assertTrue(all(c.args[1]["threadId"] == "original" for c in b.client.request.await_args_list))
+        self.assertTrue(all(c.args[1]["session_id"] == "original" for c in b.client.request.await_args_list))
 
     async def test_cancel_terminates_only_the_current_tasks_shells(self):
-        b = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
-        b.thread_id, b.active_turn, b.last_turn = "thread", "current", "current"
+        b = PiBackend(Config(), None, AsyncMock(), AsyncMock())
+        b.execution_session_id, b.active_turn, b.last_turn = "session", "current", "current"
         b.command_items = {"current": {"current-shell"}, "older": {"older-server"}}
         b.client.request = AsyncMock(
             side_effect=[
                 {},
                 {
                     "data": [
-                        {"itemId": "current-shell", "processId": "one"},
-                        {"itemId": "older-server", "processId": "two"},
+                        {"activity_id": "current-shell", "process_id": "one"},
+                        {"activity_id": "older-server", "process_id": "two"},
                     ]
                 },
                 {},
@@ -95,12 +95,12 @@ class TaskTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await b.cancel())
         self.assertEqual(
             [x.args[0] for x in b.client.request.await_args_list],
-            ["turn/interrupt", "thread/backgroundTerminals/list", "thread/backgroundTerminals/terminate"],
+            ["run.cancel", "operations.list", "operations.stop"],
         )
-        self.assertEqual(b.client.request.await_args_list[-1].args[1]["processId"], "one")
+        self.assertEqual(b.client.request.await_args_list[-1].args[1]["process_id"], "one")
 
     async def test_stopping_voice_does_not_interrupt_codex(self):
-        b = CodexBackend.__new__(CodexBackend)
+        b = PiBackend.__new__(PiBackend)
         b.active_turn = "t1"
         b.muted_turns = set()
         b.mute_current()

@@ -131,7 +131,7 @@ Reproduce offline (no device use, service changes, cloud calls, or new audio sav
   --tts-model models/test-tts/kokoro-int8-multi-lang-v1_1 \
   --recordings state/acceptance/audio-input/offline-usb-rooms-20261018T094805 \
   --output state/acceptance/speech-pipeline-local.json
-.venv/bin/python scripts/check.py --group speech --group core --group codex
+.venv/bin/python scripts/check.py --group speech --group core --group execution
 ```
 
 The benchmark retains text/timing in private state only when `--output` is given.

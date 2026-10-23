@@ -50,9 +50,7 @@ class Engine:
 
         self.root, self.channel = root, channel
         mem0_models.CHANNEL = channel
-        LlmFactory.register_provider(
-            "codex_subscription", "assistant_runtime.memory.mem0_models.CodexSubscriptionLLM"
-        )
+        LlmFactory.register_provider("assistant_models", "assistant_runtime.memory.mem0_models.FrameworkLLM")
         EmbedderFactory.provider_to_class["local_fastembed"] = (
             "assistant_runtime.memory.mem0_models.LocalFastEmbed"
         )
@@ -77,8 +75,8 @@ class Engine:
         )
         # Registered provider names are not included in 1.x's static config whitelist.
         # Assign trusted registered providers through the public config/factory APIs.
-        config.llm.provider = "codex_subscription"
-        config.llm.config = {"model": "project_codex"}
+        config.llm.provider = "assistant_models"
+        config.llm.config = {"model": "memory_binding"}
         config.embedder.provider = "local_fastembed"
         self.memory = Memory(config)
         self.receipt_path = root / "receipts.json"

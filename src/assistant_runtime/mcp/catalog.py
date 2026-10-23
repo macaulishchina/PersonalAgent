@@ -110,6 +110,7 @@ DECISION_TOOLS = ("decision_support_status", "judge_options", "get_voice_decisio
 
 SERVICES = {
     "search": {"tools": ("search_capabilities", "search_web", "fetch_webpage"), "task_context": True},
+    "ai_usage": {"tools": ("ai_usage_status", "ai_usage_calls", "ai_usage_summary"), "task_context": True},
     "models": {"tools": ("list_models", "infer_with_model"), "task_context": True},
     "memory": {"tools": MEMORY_TOOLS, "task_context": False},
     "device": {"tools": DEVICE_TOOLS, "task_context": False},

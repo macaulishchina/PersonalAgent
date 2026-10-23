@@ -11,8 +11,6 @@ from unittest.mock import AsyncMock
 
 from assistant_runtime.memory.mem0 import Mem0Memory
 from assistant_runtime.memory.policy import validate_facts
-from assistant_runtime.plugins.codex.backend import CodexBackend
-from assistant_runtime.config import Config
 
 
 class ProvenanceTest(unittest.TestCase):
@@ -40,24 +38,6 @@ class ProvenanceTest(unittest.TestCase):
             validate_facts({"facts": ["北京居民"], "provenance": []}, source)
         with self.assertRaises(ValueError):
             validate_facts({"facts": ["x"] * 13, "provenance": []}, source)
-
-
-class SubscriptionAuthTest(unittest.IsolatedAsyncioTestCase):
-    async def test_api_key_account_is_not_used_for_memory(self):
-        backend = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
-        backend.account = AsyncMock(return_value={"type": "apiKey"})
-        backend.client.request = AsyncMock()
-        with self.assertRaisesRegex(RuntimeError, "ChatGPT subscription"):
-            await backend.memory_complete([], {"type": "object"})
-        backend.client.request.assert_not_called()
-
-    async def test_subscription_limit_does_not_fall_back_to_credits_or_api(self):
-        backend = CodexBackend(Config(), None, AsyncMock(), AsyncMock())
-        backend.account = AsyncMock(return_value={"type": "chatgpt"})
-        backend.client.request = AsyncMock(return_value={"ordinaryUsageAllowed": False})
-        with self.assertRaisesRegex(RuntimeError, "quota unavailable"):
-            await backend.memory_complete([], {"type": "object"})
-        self.assertEqual(backend.client.request.await_count, 1)
 
 
 class LocalMem0Test(unittest.IsolatedAsyncioTestCase):

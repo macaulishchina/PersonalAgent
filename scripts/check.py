@@ -16,11 +16,18 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
-    "models": {"models", "models_transport", "model_fallbacks", "api_jobs"},
+    "models": {"ai_usage", "models", "models_transport", "model_fallbacks", "model_accounts"},
     "speech": {"interaction"},
     "search": {"search"},
     "core": {"behavior", "conversation", "quiet", "runtime", "voice_binding", "wake_words"},
-    "codex": {"codex_config", "integrations", "job_lifecycle", "mcp", "native", "voice_lifecycle"},
+    "execution": {
+        "integrations",
+        "job_lifecycle",
+        "mcp",
+        "pi_skeleton",
+        "pi_runtime",
+        "execution_reset",
+    },
     "devices": {
         "audio_input_quality",
         "audio_input_guide",

@@ -294,7 +294,9 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
         self.executor.models.return_value.append(
             {
                 "model": "deepseek",
-                "supportedReasoningEfforts": [{"reasoningEffort": e} for e in ("none", "low", "high", "max")],
+                "supported_reasoning_efforts": [
+                    {"reasoning_effort": e} for e in ("none", "low", "high", "max")
+                ],
             }
         )
 

@@ -35,7 +35,7 @@ def credential(root, name):
 
 
 class SearchPlugin:
-    manifest = Manifest("search")
+    manifest = Manifest("search", ("ai_usage",))
 
     def __init__(self, host):
         self.host = host
@@ -68,7 +68,11 @@ class SearchPlugin:
             identity = (spec["base_url"], key)
             if identity not in clients:
                 clients[identity] = DeepSeek(
-                    self.session, spec["base_url"], key, self.settings.requests_per_second
+                    self.session,
+                    spec["base_url"],
+                    key,
+                    self.settings.requests_per_second,
+                    usage=self.host.ai_usage.service,
                 )
             self.providers[name] = clients[identity]
         self.accepting = True
@@ -152,13 +156,15 @@ class SearchPlugin:
         if item:
             self.cache_bytes -= item[2]
 
-    async def work(self, provider, action, payload, maximum, deadline, metrics):
+    async def work(self, provider, action, payload, maximum, deadline, metrics, scope):
         try:
             async with asyncio.timeout_at(deadline):
                 async with self.slots:
                     if action == "fetch":
                         await validate_fetch_url(payload["url"])
-                    body = await self.providers[provider].call(action, payload, metrics, deadline)
+                    body = await self.providers[provider].call(
+                        action, payload, metrics, deadline, scope=scope, provider=provider
+                    )
                     result = (
                         search_result(body, payload["count"])
                         if action == "search"
@@ -173,7 +179,7 @@ class SearchPlugin:
         self.last_error[provider] = code
         return {"state": "failed", "error": {"code": code}, **metrics}
 
-    async def lookup(self, provider, action, payload, maximum, refresh, deadline, trace):
+    async def lookup(self, provider, action, payload, maximum, refresh, deadline, trace, scope):
         key = hashlib.sha256(
             json.dumps([provider, action, payload, maximum], sort_keys=True).encode()
         ).hexdigest()
@@ -193,7 +199,7 @@ class SearchPlugin:
             flight = {
                 "metrics": metrics,
                 "task": self.context.spawn(
-                    self.work(provider, action, payload, maximum, deadline, metrics), "lookup"
+                    self.work(provider, action, payload, maximum, deadline, metrics, scope), "lookup"
                 ),
                 "waiters": 0,
             }
@@ -287,7 +293,10 @@ class SearchPlugin:
                     if type(maximum) is not int or not 1 <= maximum <= 60000:
                         raise SearchError("invalid_page_content_limit")
                     payload = {"url": public_url(args.get("url"))}
-                result = await self.lookup(provider, action, payload, maximum, refresh, deadline, trace)
+                scope = await self.host.ai_usage.scope(request.caller_run)
+                result = await self.lookup(
+                    provider, action, payload, maximum, refresh, deadline, trace, scope
+                )
                 # A stopped execution may not receive newly fetched/cached information.
                 await self.authorize(request.caller_run)
         except TimeoutError:

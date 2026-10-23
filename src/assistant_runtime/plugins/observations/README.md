@@ -8,7 +8,7 @@ management plugin.
 
 ## Ownership and configuration
 
-`.agents/observations/sources.json` is the version 1 revisioned registry of producer
+`config/observations/sources.json` is the version 1 revisioned registry of producer
 instances `{adapter, config, enabled}`. It belongs to source management, not the event
 store. Addresses, polling intervals and credential references are producer configuration.
 Credentials live under private `state/observations/credentials/` with mode 0600.
@@ -52,13 +52,11 @@ normal physical transitions establish semantics separately.
    storage/backpressure failure, reconfiguration and cleanup. Use isolated protocol
    fixtures first, then separately record physical connectivity/semantic acceptance.
 
-## Upgrade from recorder-owned collectors
+## Instance files
 
-Stop the service before moving configuration. Move `.agents/events/sources.json` to
-`.agents/observations/sources.json` and `state/events/credentials/` to
-`state/observations/credentials/` without changing IDs, revisions or credential names.
-Do not overwrite an existing destination. Add `observations` alongside `events` in
-instance plugins. Install the `reyee` extra if using that provider. Restart and check
-both capabilities, source health, new baselines and recovery gaps. The event database
-stays at its existing path and needs no data migration. A leftover old registry is
-rejected explicitly rather than silently starting with no sources.
+The registry belongs to private instance `config/`, not Coding AI `.agents/`.
+`config.example/observations/sources.json` is an empty reusable template.
+Never overwrite an existing registry when copying examples; IDs, revisions and
+credential references are meaningful configuration. There is no implicit discovery
+or import from development tooling. Records and credentials keep their existing
+plugin-owned storage, independent of configuration location.

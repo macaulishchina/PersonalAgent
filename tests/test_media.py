@@ -22,7 +22,7 @@ from assistant_runtime.kernel.contracts import (
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from assistant_runtime.mcp.catalog import MEDIA_TOOLS
 from assistant_runtime.mcp.media import create_server
-from assistant_runtime.plugins.codex.mcp import server_config
+from assistant_runtime.plugins.pi.mcp import server_config
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.plugin import MediaPlugin
 from assistant_runtime.plugins.media.repository import MediaRepository

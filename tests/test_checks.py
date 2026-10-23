@@ -21,7 +21,7 @@ class SelectionTest(unittest.TestCase):
             (root / "tests/new_domain/test_new.py").touch()
             self.assertEqual(set(select(root)), {"test_integrations", "new_domain.test_new"})
             self.assertIn("new_domain.test_new", groups(root)["core"])
-            selected = select(root, ["codex"], ["test_integrations.Example.test_one"])
+            selected = select(root, ["execution"], ["test_integrations.Example.test_one"])
             self.assertEqual(selected, {"test_integrations": ["test_integrations"]})
             self.assertEqual(
                 select(root, targets=["new_domain.test_new.Example"]),

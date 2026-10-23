@@ -1,0 +1,34 @@
+# Metering is separate from execution authorization. Configuration applies on restart.
+[ai_usage]
+max_requests = 100
+warning_fraction = 0.5
+retention_days = 90
+aggregate_days = 365
+body_enabled = false
+body_days = 7
+body_max_bytes = 32768
+queue_size = 256
+
+# Optional limits are disabled when absent; no default daily quota or run duration.
+# [ai_usage.work_limits]
+# max_input_tokens = 50000000
+# max_output_tokens = 1000000
+# max_compactions = 128
+# max_seconds = 7200
+# max_cost_cny = 20.0
+
+# Rules all apply together. plan/global scopes require an explicit rolling window.
+# [[ai_usage.rules]]
+# id = "provider-capacity"
+# scope = "global"
+# window_seconds = 60
+# match = { provider = "deepseek" }
+# limits = { concurrency = 4, requests_per_second = 5 }
+
+# Pricing is opt-in and must reflect the actual billing route, including subscriptions.
+# Unknown pricing is never reported as zero cost. Amounts are CNY, uncached upper bounds.
+# [ai_usage.prices.deepseek]
+# provider = "deepseek"
+# model = "your-upstream-model"
+# input_cny_per_million = 0.0
+# output_cny_per_million = 0.0

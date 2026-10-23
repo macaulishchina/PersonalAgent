@@ -1,4 +1,4 @@
-"""Isolated real Codex MCP transport/scope/refresh acceptance; no model turns or physical actions."""
+"""Isolated real Pi MCP transport/scope/refresh acceptance; no model turns or physical actions."""
 
 import argparse
 import asyncio
@@ -12,8 +12,8 @@ import json
 import aiohttp
 
 from assistant_runtime.config import Config
-from assistant_runtime.plugins.codex.integrations import CodexIntegrations
-from assistant_runtime.plugins.codex.rpc import CodexClient
+from assistant_runtime.plugins.pi.integrations import PiIntegrations
+from assistant_runtime.plugins.pi.rpc import PiClient
 from assistant_runtime.plugins.integrations.registry import McpRegistry
 
 FIXTURE = """from fastmcp import FastMCP
@@ -45,9 +45,43 @@ async def verify(binary):
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        client = CodexClient(binary, str(root))
+        from assistant_runtime.plugins.models.settings import ModelSettings
+
+        probe_models = {
+            "enabled": True,
+            "providers": {
+                "local": {
+                    "protocol": "openai_responses",
+                    "base_url": "http://127.0.0.1:1/v1",
+                    "key_env": "SYNTHETIC_KEY",
+                    "enabled": True,
+                }
+            },
+            "entries": {
+                "go-gpt": {
+                    "provider": "local",
+                    "model": "synthetic",
+                    "reasoning_efforts": ["low"],
+                    "default_reasoning_effort": "low",
+                    "execution_validated": True,
+                }
+            },
+        }
+        from assistant_runtime.plugins.ai_usage.service import UsageService
+
+        usage = UsageService(root / "ai-usage")
+        await usage.start()
+        client = PiClient(
+            binary,
+            str(root),
+            settings=ModelSettings.parse(probe_models),
+            runtime_dir=root / "executions",
+            usage=usage,
+        )
         registry = McpRegistry(root, {})
-        cfg = Config(root=root, workspace=str(root), plugins=["codex", "integrations"])
+        cfg = Config(
+            root=root, workspace=str(root), plugins=["pi", "integrations"], main_reasoning_effort="low"
+        )
         backend = SimpleNamespace(
             config=cfg,
             client=client,
@@ -55,9 +89,9 @@ async def verify(binary):
             busy=False,
             active_turn=None,
             voice_active=lambda: False,
-            thread_id=None,
+            execution_session_id=None,
         )
-        adapter = CodexIntegrations(backend, registry)
+        adapter = PiIntegrations(backend, registry)
         foreground = None
         try:
             async with aiohttp.ClientSession() as session:
@@ -113,30 +147,38 @@ async def verify(binary):
                 thread = await adapter.open_probe(name, context)
                 try:
                     await client.request(
-                        "mcpServerStatus/list",
-                        {"threadId": thread, "serverName": "external_" + name, "detail": "toolsAndAuthOnly"},
-                    )
-                    result = await client.request(
-                        "mcpServer/tool/call",
+                        "mcp.inspect",
                         {
-                            "threadId": thread,
-                            "server": "external_" + name,
-                            "tool": "echo",
-                            "arguments": {"value": "acceptance"},
+                            "session_id": thread,
+                            "serverName": "external_" + name,
+                            "detail": "toolsAndAuthOnly",
                         },
                     )
-                    assert not result.get("isError") and "acceptance" in json.dumps(result), result
+                    from fastmcp import Client
+                    from assistant_runtime.plugins.pi.mcp import to_pi_mcp_json
+
+                    configuration = to_pi_mcp_json(client.workers[thread].meta["mcp_servers"])
+                    entry = configuration["mcpServers"]["external_" + name]
+                    transport = {
+                        k: v
+                        for k, v in entry.items()
+                        if k in {"command", "args", "cwd", "env", "url", "headers"}
+                    }
+                    async with Client({"mcpServers": {name: transport}}, timeout=10) as probe:
+                        result = await probe.call_tool("echo", {"value": "acceptance"})
+                    assert not result.is_error and "acceptance" in str(result)
+
                 finally:
                     await adapter.close_probe(thread)
             start = await client.request(
-                "thread/start",
+                "session.create",
                 {"cwd": str(root), "config": {"mcp_servers": adapter.configuration("foreground")}},
             )
-            foreground = backend.thread_id = start["thread"]["id"]
+            foreground = backend.execution_session_id = start["session"]["id"]
             await client.request(
-                "thread/inject_items",
+                "session.context",
                 {
-                    "threadId": foreground,
+                    "session_id": foreground,
                     "items": [
                         {
                             "type": "message",
@@ -155,18 +197,18 @@ async def verify(binary):
             registry.configure("stdio", {"enabled": False}, registry.revision)
             assert (await adapter.apply())["state"] == "applied"
             disabled = await client.request(
-                "mcpServerStatus/list",
-                {"threadId": foreground, "serverName": "external_stdio", "detail": "toolsAndAuthOnly"},
+                "mcp.inspect",
+                {"session_id": foreground, "serverName": "external_stdio", "detail": "toolsAndAuthOnly"},
             )
             assert disabled["data"][0]["runtimeStatus"] == "disabled", disabled
             registry.configure("stdio", {"enabled": True}, registry.revision)
             assert (await adapter.apply())["state"] == "applied"
             enabled = await client.request(
-                "mcpServerStatus/list",
-                {"threadId": foreground, "serverName": "external_stdio", "detail": "toolsAndAuthOnly"},
+                "mcp.inspect",
+                {"session_id": foreground, "serverName": "external_stdio", "detail": "toolsAndAuthOnly"},
             )
             assert enabled["data"][0]["runtimeStatus"] == "connected", enabled
-            assert backend.thread_id == foreground
+            assert backend.execution_session_id == foreground
             registry.configure(
                 "missing",
                 {
@@ -192,11 +234,12 @@ async def verify(binary):
         finally:
             if foreground:
                 try:
-                    await client.request("thread/archive", {"threadId": foreground})
-                    await client.request("thread/unsubscribe", {"threadId": foreground})
+                    await client.request("session.archive", {"session_id": foreground})
+                    await client.request("session.close", {"session_id": foreground})
                 except Exception:
                     pass
             await client.close()
+            await usage.close()
             if process.returncode is None:
                 process.terminate()
                 try:
@@ -208,9 +251,9 @@ async def verify(binary):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--codex", default="codex")
+    parser.add_argument("--execution", default="pi")
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(verify(args.codex)), ensure_ascii=False))
+    print(json.dumps(asyncio.run(verify(args.execution)), ensure_ascii=False))
 
 
 if __name__ == "__main__":

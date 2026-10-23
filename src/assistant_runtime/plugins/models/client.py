@@ -16,8 +16,9 @@ def timing_header(headers, name):
 
 
 class GatewayClient:
-    def __init__(self, settings, key):
+    def __init__(self, settings, key, *, accounts=None):
         self.settings, self.key, self.session = settings, key, None
+        self.accounts = accounts
 
     async def start(self):
         import aiohttp
@@ -29,6 +30,8 @@ class GatewayClient:
         )
 
     async def close(self):
+        if self.accounts:
+            await self.accounts.close()
         if self.session:
             await self.session.close()
 
@@ -45,6 +48,11 @@ class GatewayClient:
         return headers
 
     async def complete(self, payload, *, session_id=None):
+        entry = self.settings.entries.get(payload.get("model"))
+        if entry and self.settings.providers[entry["provider"]]["protocol"] == "pi":
+            from ..pi.inference import complete
+
+            return await complete(self.accounts, payload, session_id)
         started, first = time.monotonic(), None
         async with self.session.post(
             self.settings.gateway_url + "/responses",
@@ -104,3 +112,11 @@ class GatewayClient:
                 "gateway_overhead_ms": timing_header(r.headers, "x-litellm-overhead-duration-ms"),
                 "gateway_response_ms": timing_header(r.headers, "x-litellm-response-duration-ms"),
             }
+
+    async def output_bound(self, payload):
+        entry = self.settings.entries.get(payload["model"])
+        if entry and self.settings.providers[entry["provider"]]["protocol"] == "pi":
+            from ..pi.inference import output_bound
+
+            return await output_bound(self.accounts, payload)
+        return payload["max_output_tokens"]

@@ -285,7 +285,7 @@ class TaskRepository:
               INSERT INTO job_finalizations(run_id,completion_round,state,updated)
               SELECT id,coalesce(json_extract(data,'$.completion_round'),0),'pending',?
               FROM job_runs WHERE state IN ('completed','failed','canceled','missed')
-              AND json_extract(data,'$.thread_id') IS NOT NULL
+              AND json_extract(data,'$.execution_session_id') IS NOT NULL
               ON CONFLICT(run_id) DO UPDATE SET completion_round=excluded.completion_round,
                 state='pending',attempts=0,next_at=0,error=NULL,updated=excluded.updated
               WHERE job_finalizations.completion_round!=excluded.completion_round
@@ -373,7 +373,7 @@ class TaskRepository:
         if (
             target == "dispatching"
             and r["state"] != "dispatching"
-            and data["spec"]["execution"].get("kind") == "codex"
+            and data["spec"]["execution"].get("kind") == "agent"
         ):
             execution = data["spec"]["execution"]
             history = data.get("model_selections", [])
@@ -418,7 +418,7 @@ class TaskRepository:
                 "UPDATE job_runs SET state=?,data=?,updated=?,revision=revision+1 WHERE id=?",
                 (state or r["state"], json.dumps(data, ensure_ascii=False), time.time(), ident),
             )
-            if target in TERMINAL and data.get("thread_id"):
+            if target in TERMINAL and data.get("execution_session_id"):
                 self.db.execute(
                     """
                   INSERT INTO job_finalizations(run_id,completion_round,state,updated) VALUES(?,?,'pending',?)

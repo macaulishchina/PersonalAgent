@@ -1,4 +1,4 @@
-"""Explicit live acceptance: silent jobs, real Codex files/Goal, shared foreground and cancellation."""
+"""Explicit live acceptance: silent jobs, native Pi files/goals, foreground and cancellation."""
 
 import argparse
 import asyncio
@@ -44,8 +44,8 @@ async def verify(config):
             raise RuntimeError("Live acceptance requires idle foreground")
         before_session = status["session_id"]
         catalog = (await call("models"))["models"]
-        selected = next((m for m in catalog if m["model"] == config.memory_model), catalog[0])
-        efforts = [e["reasoningEffort"] for e in selected["supportedReasoningEfforts"]]
+        selected = next((m for m in catalog if m["model"] == config.main_model), catalog[0])
+        efforts = [e["reasoning_effort"] for e in selected["supported_reasoning_efforts"]]
         execution = {
             "model": selected["model"],
             "reasoning_effort": "low" if "low" in efforts else efforts[0],
@@ -61,7 +61,7 @@ async def verify(config):
             d = await create(
                 "Goal 文件" if goal else "独立文件",
                 f"这是一次本地接入验收。只在开发者指令给定的本任务 artifacts 目录创建 result.txt，内容为 {marker}，读回确认后简短报告结果。不要操作其他文件、设备或创建子任务。"
-                + (" 完成后用 goal 工具标记目标完成。" if goal else ""),
+                + (" 完成后用 update_task_goal 工具标记目标完成。" if goal else ""),
                 execution=execution,
                 long_term=goal,
             )
@@ -70,10 +70,10 @@ async def verify(config):
             root = Path(config.work_files.get("root", config.state_dir / "work"))
             artifact = root / "tasks" / d["id"] / r["id"] / "artifacts/result.txt"
             assert artifact.read_text().strip() == marker
-            assert r["data"]["thread_id"] != status.get("thread_id")
+            assert r["data"]["execution_session_id"] != status.get("execution_session_id")
             evidence["checks"]["goal_file" if goal else "independent_file"] = {
                 "run": r["id"],
-                "thread": r["data"]["thread_id"],
+                "session": r["data"]["execution_session_id"],
                 "duration": r["updated"] - r["created"],
             }
         d = await create(

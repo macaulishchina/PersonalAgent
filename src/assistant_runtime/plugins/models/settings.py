@@ -7,7 +7,7 @@ import re
 from copy import deepcopy
 from urllib.parse import urlsplit
 
-PROTOCOLS = {"openai_responses", "openai_chat", "anthropic", "gemini"}
+PROTOCOLS = {"openai_responses", "openai_chat", "anthropic", "gemini", "pi"}
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
@@ -94,6 +94,7 @@ class ModelSettings:
     max_output_tokens: int = 8192
     execution_max_output_tokens: int = 16384
     providers: dict = field(default_factory=dict)
+    accounts: dict = field(default_factory=dict)
     entries: dict = field(default_factory=dict)
     memory: str = ""
 
@@ -110,6 +111,9 @@ class ModelSettings:
             if not isinstance(provider, dict):
                 raise ValueError("Provider must be a table")
             preset = provider.get("preset")
+            if "account" in provider:
+                keys(provider, {"account", "enabled"})
+                provider["protocol"] = "pi"
             if preset is not None:
                 if preset not in PRESETS:
                     raise ValueError("Unknown provider preset")
@@ -135,8 +139,34 @@ class ModelSettings:
             raise ValueError("Model providers and entries must be tables")
         if len(obj.providers) > 16 or len(obj.entries) > 64:
             raise ValueError("Model registry exceeds configured bounds")
+        if not isinstance(obj.accounts, dict) or len(obj.accounts) > 16:
+            raise ValueError("Invalid native model accounts")
+        for ident, account in obj.accounts.items():
+            name(ident)
+            keys(account, {"provider", "auth", "key_env", "output_limit"})
+            name(account.get("provider"))
+            if account.get("auth") not in {"oauth", "api_key"}:
+                raise ValueError("Native account requires explicit oauth or api_key authentication")
+            if "key_env" in account and (
+                account["auth"] != "api_key"
+                or not isinstance(account["key_env"], str)
+                or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", account["key_env"])
+            ):
+                raise ValueError("Invalid native account credential reference")
+            if account.get("output_limit", "request") not in {"request", "model"}:
+                raise ValueError("Invalid native output limit mode")
+            if account["provider"] == "openai" and account["auth"] == "oauth":
+                if account.get("output_limit") != "model":
+                    raise ValueError(
+                        "ChatGPT subscription requires explicit output_limit='model'; request caps unsupported"
+                    )
         for ident, p in obj.providers.items():
             name(ident)
+            if p.get("protocol") == "pi":
+                keys(p, {"protocol", "account", "enabled"})
+                if p.get("account") not in obj.accounts or type(p.get("enabled", False)) is not bool:
+                    raise ValueError("Invalid native account binding")
+                continue
             keys(
                 p,
                 {"protocol", "base_url", "key_env", "enabled", "auth_scheme", "session_header"},
@@ -240,8 +270,8 @@ class ModelSettings:
                 "structured": m.get("structured", False),
                 "execution_validated": m.get("execution_validated", False),
                 "fallbacks": m.get("fallbacks", []),
-                "defaultReasoningEffort": reasoning_effort(m),
-                "supportedReasoningEfforts": [{"reasoningEffort": e} for e in m["reasoning_efforts"]],
+                "default_reasoning_effort": reasoning_effort(m),
+                "supported_reasoning_efforts": [{"reasoning_effort": e} for e in m["reasoning_efforts"]],
             }
             for k, m in self.entries.items()
         ]

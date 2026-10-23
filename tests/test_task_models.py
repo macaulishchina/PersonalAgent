@@ -24,7 +24,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
     def test_api_no_reasoning_model_remains_an_automatic_selection_candidate(self):
         policy = ModelPolicy.parse({"profiles": {"fast": {"model": "api-model", "reasoning_effort": "none"}}})
         candidates = policy.options(
-            [{"model": "api-model", "supportedReasoningEfforts": [{"reasoningEffort": "none"}]}],
+            [{"model": "api-model", "supported_reasoning_efforts": [{"reasoning_effort": "none"}]}],
             {},
             {"model": "auto", "reasoning_effort": "auto"},
         )
@@ -38,7 +38,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         run = self.plugin.repo.runs(definition["id"])[0]
         await self.plugin.launch(run)
         self.plugin.provider_update(
-            run["id"], "running", thread_id="provider-thread", turn_id="old-turn", turn_active=True
+            run["id"], "running", execution_session_id="provider-thread", turn_id="old-turn", turn_active=True
         )
         self.executor.upgrade_ready = AsyncMock()
         return self.plugin.repo.run(run["id"])
@@ -156,7 +156,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         selected = dispatched["data"]["spec"]["execution"]
         self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("ultra", "high"))
         self.assertEqual(dispatched["id"], run["id"])
-        self.assertEqual(dispatched["data"]["thread_id"], "provider-thread")
+        self.assertEqual(dispatched["data"]["execution_session_id"], "provider-thread")
         definition = self.plugin.repo.definition(run["task_id"])
         self.assertEqual(definition["spec"]["execution"]["profile"], "deep")
         highest = await self.make_running(execution={"profile": "ultra", "reason": "复杂原创科研证明"})
@@ -180,7 +180,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.provider_update(run["id"], "completed", turn_active=False)  # duplicate event
         await self.plugin.upgrades.apply(run["id"])
         dispatched = self.executor.launch.await_args.args[0]
-        self.assertEqual(dispatched["data"]["thread_id"], "provider-thread")
+        self.assertEqual(dispatched["data"]["execution_session_id"], "provider-thread")
         self.assertIn("stable-id", dispatched["data"]["continuation"])
         self.assertEqual(dispatched["data"]["spec"]["execution"]["profile"], "balanced")
         self.assertEqual(dispatched["task_id"], run["task_id"])
@@ -216,7 +216,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.provider_update(run["id"], None, goal={"status": "active"})
         self.plugin.provider_update(run["id"], "completed", turn_active=False)
         current = self.plugin.repo.run(run["id"])
-        self.assertEqual(current["state"], "running")
+        self.assertEqual(current["state"], "waiting_user")
         self.assertEqual(current["data"]["model_upgrades"][-1]["error"], "native_goal_started")
         await self.plugin.upgrades.apply(run["id"])
         self.assertEqual(self.executor.launch.await_count, 1)
@@ -307,7 +307,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         self.executor.reconcile.return_value = ("completed", "old turn completed")
         self.runtime = Runtime(self.store)
         self.host.runtime = self.runtime
-        self.runtime.add(task_fixtures.Dummy("codex"))
+        self.runtime.add(task_fixtures.Dummy("pi"))
         self.runtime.add(task_fixtures.Dummy("conversation"))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)
@@ -325,15 +325,13 @@ class ProviderHandoffTest(unittest.IsolatedAsyncioTestCase):
     methods = provider_fixtures.JobLifecycleTest.methods
 
     async def test_preflight_checks_latest_completed_turn_and_no_live_commands(self):
-        self.run["data"]["turn_id"] = "turn"
+        self.run["data"]["turn_id"] = "run"
         await self.runner.upgrade_ready(self.run)
-        self.assertEqual(
-            self.methods(), ["thread/read", "thread/turns/list", "thread/backgroundTerminals/list"]
-        )
-        self.terminals = [{"processId": "live"}]
+        self.assertEqual(self.methods(), ["session.read", "session.runs", "operations.list"])
+        self.terminals = [{"process_id": "live"}]
         with self.assertRaisesRegex(RuntimeError, "terminals"):
             await self.runner.upgrade_ready(self.run)
-        self.assertNotIn("thread/backgroundTerminals/terminate", self.methods())
+        self.assertNotIn("operations.stop", self.methods())
         self.terminals = []
         self.turns = [{"id": "different", "status": "completed"}]
         with self.assertRaisesRegex(RuntimeError, "checkpoint"):
@@ -345,8 +343,8 @@ class ProviderHandoffTest(unittest.IsolatedAsyncioTestCase):
         self.runner.notify = Mock()
         await self.runner.event(
             {
-                "method": "turn/completed",
-                "params": {"threadId": "background", "turn": {"id": "old-turn", "status": "completed"}},
+                "kind": "run.completed",
+                "data": {"session_id": "background", "run": {"id": "old-turn", "status": "completed"}},
             }
         )
         self.runner.notify.assert_not_called()
@@ -367,7 +365,11 @@ class ProviderHandoffTest(unittest.IsolatedAsyncioTestCase):
         self.client.request.side_effect = AsyncMock(
             return_value={
                 "data": [
-                    {"id": "new", "model": "new", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+                    {
+                        "id": "new",
+                        "model": "new",
+                        "supported_reasoning_efforts": [{"reasoning_effort": "low"}],
+                    }
                 ]
             }
         )
@@ -379,10 +381,10 @@ class PolicySettingsTest(unittest.TestCase):
     def test_profile_settings_are_strict_and_instance_overrides_are_partial(self):
         p = ModelPolicy.parse({"profiles": {"fast": {"model": "custom-fast"}}})
         self.assertEqual(p.profiles["fast"], {"model": "custom-fast", "reasoning_effort": "low"})
-        self.assertEqual(p.profiles["ultra"], {"model": "gpt-6-astra", "reasoning_effort": "high"})
+        self.assertEqual(p.profiles["ultra"], {"model": "go-gpt", "reasoning_effort": "max"})
         configured = ModelPolicy.parse({"profiles": {"ultra": {"reasoning_effort": "xhigh"}}})
         self.assertEqual(configured.profiles["ultra"]["reasoning_effort"], "xhigh")
-        self.assertEqual(configured.profiles["deep"]["reasoning_effort"], "medium")
+        self.assertEqual(configured.profiles["deep"]["reasoning_effort"], "high")
         for data in (
             {"max_upgrades": True},
             {"max_upgrades": 4},

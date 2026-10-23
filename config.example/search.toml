@@ -1,6 +1,6 @@
 # 独立网页搜索，不绑定执行模型。启用时在入口 plugins 中添加 "search"。
 # 密钥只放实例根目录 .env：DEEPSEEK_API_KEY=...
-# 与订阅 Search Service 并列；助手按需选择，失败不会自动改用另一种服务。
+# 助手按需使用已配置的供应商；失败不自动切换服务或执行模型。
 [search]
 default_provider = "deepseek"
 timeout_seconds = 20

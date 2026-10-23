@@ -12,8 +12,8 @@ import uuid
 from assistant_runtime.config import Config
 from assistant_runtime.conversation.service import Conversation
 from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.plugins.codex.conversation import task_event
-from assistant_runtime.plugins.codex.tool_display import tool_display
+from assistant_runtime.plugins.pi.conversation import task_event
+from assistant_runtime.plugins.pi.tool_display import tool_display
 from assistant_runtime.store import Store
 
 
@@ -48,7 +48,7 @@ class ToolDisplayTest(unittest.TestCase):
             if structured
             else {"content": [{"type": "text", "text": json.dumps(data)}]}
         )
-        return {"type": "mcpToolCall", "id": "tool1", "server": server, "tool": tool, "result": result}
+        return {"type": "mcp", "id": "tool1", "server": server, "tool": tool, "result": result}
 
     def test_created_configuration_is_result_not_requested_recommendation(self):
         item = self.item(
@@ -81,8 +81,8 @@ class ToolDisplayTest(unittest.TestCase):
                 "effort": "low",
             },
         )
-        self.assertNotIn("tool_summary", task_event("item/started", {"item": item}))
-        self.assertEqual(task_event("item/completed", {"item": item})["tool_summary"], summary)
+        self.assertNotIn("tool_summary", task_event("activity.started", {"item": item}))
+        self.assertEqual(task_event("activity.completed", {"item": item})["tool_summary"], summary)
 
     def test_query_prefers_active_snapshot_and_bounds_existing_progress(self):
         data = {
@@ -98,7 +98,7 @@ class ToolDisplayTest(unittest.TestCase):
         self.assertTrue(summary["summary_truncated"])
         data["active_runs"] = []
         data["runs"] = [{"state": "failed", "data": {"progress": "资源不可用"}}]
-        event = task_event("item/completed", {"item": self.item("tasks", "get_task", data)})
+        event = task_event("activity.completed", {"item": self.item("tasks", "get_task", data)})
         self.assertEqual(event["status"], "complete")  # Query succeeded, execution failed.
         self.assertEqual(event["tool_summary"]["state"], "failed")
         data["runs"] = []
@@ -133,7 +133,7 @@ class ToolDisplayTest(unittest.TestCase):
             self.assertNotIn("url", tool_display(item))
             self.assertNotIn("secret", json.dumps(tool_display(item)))
         data.update(state="failed", error={"code": "page_unavailable", "message": "secret"})
-        event = task_event("item/completed", {"item": item})
+        event = task_event("activity.completed", {"item": item})
         self.assertEqual(event["status"], "failed")
         self.assertEqual(event["tool_summary"]["error_code"], "page_unavailable")
         self.assertNotIn("message", event["tool_summary"])
@@ -159,11 +159,11 @@ def fixture(root):
     store = Store(root / "assistant.sqlite3")
     backend = SimpleNamespace(
         session_id="session",
-        thread_id="provider-thread",
+        execution_session_id="provider-thread",
         active_turn=None,
         last_turn=None,
         busy=False,
-        client=SimpleNamespace(process=object(), request=AsyncMock(return_value={})),
+        client=SimpleNamespace(started=True, request=AsyncMock(return_value={})),
         submit=AsyncMock(),
         import_voice_messages=AsyncMock(),
         restored_conversation_events=lambda: [],
@@ -284,7 +284,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         c = self.host.conversation
         item = {
             "id": "created",
-            "type": "mcpToolCall",
+            "type": "mcp",
             "server": "tasks",
             "tool": "create_task",
             "result": {
@@ -297,7 +297,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 }
             },
         }
-        event = task_event("item/completed", {"turnId": "turn", "item": item})
+        event = task_event("activity.completed", {"run_id": "run", "item": item})
         c.provider_event(event)
         row = c.store.get("task:session:created")
         self.assertEqual(row["tool_summary"]["task_id"], "t1")
@@ -344,8 +344,8 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(c.store.get(f"task:session:{turn}")["kind"], "message")
             c.provider_event(
                 task_event(
-                    "item/completed",
-                    {"turnId": turn, "item": {"type": "agentMessage", "id": turn, "text": "检查完成。"}},
+                    "activity.completed",
+                    {"run_id": turn, "item": {"type": "message", "id": turn, "text": "检查完成。"}},
                 )
             )
         rows = c.store.history(c.session)
@@ -356,18 +356,19 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         c = self.host.conversation
         events = [
             task_event(
-                "item/completed",
-                {"turnId": "voice", "item": {"type": "agentMessage", "id": "prose", "text": "我检查一下。"}},
+                "activity.completed",
+                {"run_id": "voice", "item": {"type": "message", "id": "prose", "text": "我检查一下。"}},
             ),
             task_event(
-                "item/completed",
+                "activity.completed",
                 {
-                    "turnId": "voice",
+                    "run_id": "voice",
                     "item": {
-                        "type": "mcpToolCall",
+                        "type": "mcp",
                         "id": "tool",
-                        "tool": "device",
-                        "arguments": {"action": "room", "value": "living"},
+                        "server": "device",
+                        "tool": "inspect_device",
+                        "arguments": {"device_id": "living"},
                     },
                 },
             ),
@@ -391,7 +392,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(before, [(m["id"], m["ordinal"], m["updated"]) for m in rows])
         self.assertEqual(rows[0]["kind"], "message")
         self.assertEqual(rows[1]["kind"], "detail")
-        self.assertEqual(rows[1]["text"], "调用工具\nselect_audio_output")
+        self.assertEqual(rows[1]["text"], "调用工具\ninspect_device")
         self.host.backend.submit.assert_not_awaited()
         cursor = c.store.cursor()
         await self.context.close()
@@ -399,17 +400,17 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         await c.start(self.context)
         self.assertEqual(c.store.cursor(), cursor)
 
-    async def test_old_mcp_metadata_is_only_used_for_display_not_new_capabilities(self):
-        item = {"type": "mcpToolCall", "id": "old", "tool": "memory"}
+    async def test_tool_arguments_cannot_rewrite_explicit_tool_identity(self):
+        item = {"type": "mcp", "id": "tool", "server": "memory", "tool": "read_memory"}
         event = task_event(
-            "item/completed",
+            "activity.completed",
             {"item": item | {"arguments": '{"action":"remember","arguments":{"id":"existing"}}'}},
         )
-        self.assertEqual(event["text"], "调用工具\nupdate_memory")
+        self.assertEqual(event["text"], "调用工具\nread_memory")
         self.assertNotIn("arguments", event)
         for arguments in ("malformed", {"action": []}, []):
-            event = task_event("item/completed", {"item": item | {"arguments": arguments}})
-            self.assertEqual(event["text"], "调用工具\nmemory")
+            event = task_event("activity.completed", {"item": item | {"arguments": arguments}})
+            self.assertEqual(event["text"], "调用工具\nread_memory")
 
     async def test_web_result_is_quiet_context_voice_result_is_spoken(self):
         c = self.host.conversation

@@ -28,9 +28,10 @@ from .scheduling import DecisionQueue
 
 
 class DecisionsPlugin:
-    manifest = Manifest("decisions")
+    manifest = Manifest("decisions", ("ai_usage",))
 
     def __init__(self, host, provider=None):
+        self.host = host
         self.settings = DecisionSettings.parse(host.config.decisions)
         self.root = host.config.root
         self.provider = provider
@@ -117,7 +118,7 @@ class DecisionsPlugin:
                 if self.settings.external_data_consent:
                     self.health_changed(str(exc))
 
-    def enqueue(self, sample, source):
+    def enqueue(self, sample, source, usage_scope=None):
         if not self.settings.enabled:
             return {"accepted": False, "reason": "disabled"}
         if not self.settings.external_data_consent:
@@ -130,6 +131,11 @@ class DecisionsPlugin:
         except (ValueError, TypeError, RecursionError):
             self.counts["invalid"] += 1
             return {"accepted": False, "reason": "invalid_or_oversized_sample"}
+        from ...kernel.ai_usage import current_usage
+
+        scope = usage_scope or current_usage.get()
+        if scope is not None:
+            job["usage_scope"] = asdict(scope)
         self.queue.put_nowait(job)
         self.counts["queued"] += 1
         return {
@@ -150,12 +156,12 @@ class DecisionsPlugin:
                     and event.kind == "decision.observed"
                     and event.source in {"assistant", "tasks"}
                 ):
-                    self.enqueue(event.data.get("sample"), event.source)
+                    self.enqueue(event.data.get("sample"), event.source, event.data.get("usage_scope"))
             finally:
                 self.events.task_done()
 
     async def worker(self, interactive_only=False):
-        while True:
+        while self.context.state not in {"stopping", "stopped"}:
             job = await self.queue.get(interactive_only)
             self.working += 1
             claimed = False
@@ -184,7 +190,26 @@ class DecisionsPlugin:
                     )
                     try:
                         async with asyncio.timeout(max(0.001, remaining)):
-                            result = await self.provider.evaluate(job)
+                            from ...kernel.ai_usage import UsageScope, UsageError
+                            from ..ai_usage.service import metered
+
+                            scope = (
+                                UsageScope(**job["usage_scope"])
+                                if job.get("usage_scope")
+                                else await self.host.ai_usage.scope(independent="decision")
+                            )
+                            try:
+                                result = await metered(
+                                    self.host.ai_usage.service,
+                                    scope,
+                                    "decision",
+                                    "typesafe",
+                                    self.settings.model,
+                                    lambda: self.provider.evaluate(job),
+                                    body=job.get("input"),
+                                )
+                            except UsageError as exc:
+                                raise DecisionError(exc.code) from None
                     except TimeoutError:
                         raise DecisionError("timeout") from None
                 except asyncio.CancelledError:
@@ -478,6 +503,7 @@ class DecisionsPlugin:
                 job = prepare(
                     DecisionSample(request.kind, reference, request.state), source, self.settings.model
                 )
+                job["usage_scope"] = asdict(await self.host.ai_usage.scope(request.caller_run))
                 meta["receipt_id"] = job["id"]
                 await self.audit({**meta, "stage": "linked"})
                 row = await self.receipts.call("find", job["id"])

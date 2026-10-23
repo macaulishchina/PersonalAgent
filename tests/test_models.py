@@ -1,5 +1,7 @@
 """Model configuration, bounded admission and durable invocation receipts."""
 
+from usage_fixture import attach_usage
+
 import asyncio
 import json
 from pathlib import Path
@@ -16,7 +18,7 @@ from assistant_runtime.store import Store
 from assistant_runtime.plugins.models.settings import ModelSettings, PRESETS
 from assistant_runtime.plugins.models.gateway import configuration
 from assistant_runtime.plugins.models.gateway_transport import upstream_headers, prepare_request
-from assistant_runtime.plugins.codex.api_catalog import MODEL_SESSION_HEADER
+from assistant_runtime.plugins.pi.catalog import MODEL_SESSION_HEADER
 from assistant_runtime.plugins.models.plugin import ModelsPlugin
 from assistant_runtime.mcp.models import create_server
 
@@ -40,6 +42,10 @@ def settings(**changes):
 
 
 class SettingsTest(unittest.TestCase):
+    def test_execution_limits_belong_only_to_ai_usage(self):
+        with self.assertRaises(ValueError):
+            ModelSettings.parse(settings(execution_limits={"max_requests": 3}))
+
     def test_missing_effort_declaration_does_not_silently_advertise_none(self):
         config = settings()
         del config["entries"]["test-model"]["reasoning_efforts"]
@@ -52,10 +58,10 @@ class SettingsTest(unittest.TestCase):
             reasoning_efforts=["none", "low", "high"], default_reasoning_effort="low"
         )
         parsed = ModelSettings.parse(raw)
-        self.assertEqual(parsed.catalog()[0]["defaultReasoningEffort"], "low")
-        from assistant_runtime.plugins.codex.api_catalog import catalog
+        self.assertEqual(parsed.catalog()[0]["default_reasoning_effort"], "low")
+        from assistant_runtime.plugins.pi.catalog import pi_models_config
 
-        self.assertEqual(catalog(parsed)["models"][0]["default_reasoning_level"], "low")
+        self.assertTrue(pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]["reasoning"])
         route = configuration(parsed)["model_list"][0]["litellm_params"]
         self.assertEqual(route["max_tokens"], parsed.execution_max_output_tokens)
         for invalid in (
@@ -103,7 +109,7 @@ class SettingsTest(unittest.TestCase):
             prepare_request(route, {"reasoning": "high"}, {}, [])
 
     def test_disabled_provider_cannot_be_called_or_routed(self):
-        from assistant_runtime.plugins.codex.api_catalog import catalog
+        from assistant_runtime.plugins.pi.catalog import pi_models_config
 
         for enabled in (False, True):
             parsed = ModelSettings.parse(
@@ -111,7 +117,7 @@ class SettingsTest(unittest.TestCase):
             )
             self.assertEqual(parsed.catalog()[0]["available"], enabled)
             self.assertEqual(bool(configuration(parsed)["model_list"]), enabled)
-            self.assertEqual(bool(catalog(parsed)["models"]), enabled)
+            self.assertEqual(bool(pi_models_config(parsed)["providers"]["assistant_api"]["models"]), enabled)
             if enabled:
                 self.assertEqual(parsed.entry("test-model")["provider"], "test")
             else:
@@ -278,7 +284,77 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             await memory_complete(self.host, [], schema)
         self.host.backend.memory_complete.assert_not_awaited()
         self.host.config.model_api["memory"] = ""
-        self.assertEqual(await memory_complete(self.host, [], schema), {"native": True})
+        with self.assertRaisesRegex(RuntimeError, "explicit model_api.memory"):
+            await memory_complete(self.host, [], schema)
+
+    async def test_memory_batch_budget_covers_both_scopes_and_survives_retry_and_reopen(self):
+        from dataclasses import replace
+        from assistant_runtime.bootstrap import memory_complete
+        from assistant_runtime.kernel.ai_usage import UsageError, UsageScope, current_usage
+        from assistant_runtime.memory.service import MemoryPlugin
+        from assistant_runtime.plugins.ai_usage.service import UsageService
+
+        self.host.config.model_api["memory"] = "test-model"
+        self.host.config.memory_auto_capture = True
+        usage = self.host.ai_usage.service
+        policy = replace(usage.settings, max_requests=2)
+        usage.settings = usage.ledger.settings = policy
+        schema = {"type": "object", "properties": {"value": {"type": "integer"}}}
+        phases = []
+
+        async def capture(sources, scope, project, job_id):
+            phases.append(scope)
+            for _ in range(2):
+                await memory_complete(self.host, sources, schema)
+            return {"records": [], "deleted": []}
+
+        provider = SimpleNamespace(capture=capture, export=AsyncMock(return_value=[]))
+        memory = MemoryPlugin(self.host.config, self.store, provider, lambda: False)
+        self.store.transcript("user", "Synthetic tea preference")
+        memory.enqueue()
+        job = self.store.db.execute(
+            "SELECT id,start_id,end_id,epoch FROM memory_jobs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        foreground = UsageScope("foreground", "main")
+        token = current_usage.set(foreground)
+        reopened = None
+        try:
+            with self.assertRaisesRegex(UsageError, "max_requests"):
+                await memory.process_job(job)
+            self.assertEqual(phases, ["user", "project"])
+            self.assertEqual(current_usage.get(), foreground)
+            self.assertEqual(self.client.complete.await_count, 2)
+            calls = (await usage.call("query", {}))["items"]
+            works = {row["work_id"] for row in calls}
+            self.assertEqual(len(works), 1)
+            self.assertEqual({row["service"] for row in calls}, {"memory"})
+            work = works.pop()
+
+            await usage.close()
+            reopened = UsageService(self.host.config.state_dir / "ai-usage", policy)
+            await reopened.start()
+            self.host.ai_usage.service = reopened
+            memory = MemoryPlugin(self.host.config, self.store, provider, lambda: False)
+            with self.assertRaisesRegex(UsageError, "max_requests"):
+                await memory.process_job(job)
+            self.assertEqual(self.client.complete.await_count, 2)
+            self.assertEqual((await reopened.snapshot(work))["requests"], 2)
+            self.assertEqual(current_usage.get(), foreground)
+
+            self.store.transcript("user", "A new synthetic preference")
+            memory.enqueue()
+            next_job = self.store.db.execute(
+                "SELECT id,start_id,end_id,epoch FROM memory_jobs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            with self.assertRaisesRegex(UsageError, "max_requests"):
+                await memory.process_job(next_job)
+            self.assertEqual(self.client.complete.await_count, 4)
+            calls = (await reopened.call("query", {}))["items"]
+            self.assertEqual(len({row["work_id"] for row in calls}), 2)
+        finally:
+            current_usage.reset(token)
+            if reopened:
+                await reopened.close()
 
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -293,6 +369,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
         self.host = SimpleNamespace(
             config=SimpleNamespace(root=root, model_api=settings()), store=self.store, runtime=self.runtime
         )
+        attach_usage(self.host, self.runtime)
         self.plugin = ModelsPlugin(self.host, self.client)
         self.runtime.add(self.plugin)
         await self.runtime.start()
@@ -425,7 +502,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             await self.plugin.images(["a" * 32], "run")
 
     async def test_result_from_old_execution_version_is_rejected(self):
-        version = {"thread_id": "one", "turn_id": "one", "model_segments": 0}
+        version = {"execution_session_id": "one", "turn_id": "one", "model_segments": 0}
 
         async def info(_):
             return {"run": {"state": "running", "execution_version": version.copy()}}

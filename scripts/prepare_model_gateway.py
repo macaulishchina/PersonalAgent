@@ -48,7 +48,7 @@ def prepare(config):
         "PYTHONPATH": "/etc/litellm",
     }
     for p in settings.providers.values():
-        if p.get("enabled", False):
+        if p.get("enabled", False) and p["protocol"] != "pi":
             environment[p["key_env"]] = credential(config.root, p["key_env"])
     # JSON Compose keeps literal values, including $, out of shell interpolation.
     # Only referenced credentials enter this private file; never copy the complete .env.
@@ -90,8 +90,9 @@ def prepare(config):
         }
         for ident, entry in settings.entries.items()
         if settings.providers[entry["provider"]].get("enabled", False)
+        and settings.providers[entry["provider"]]["protocol"] != "pi"
     }
-    from assistant_runtime.plugins.codex.api_catalog import MODEL_SESSION_HEADER
+    from assistant_runtime.plugins.pi.catalog import MODEL_SESSION_HEADER
 
     private_write(
         assets / "routes.json",

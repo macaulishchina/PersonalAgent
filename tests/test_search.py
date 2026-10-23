@@ -1,5 +1,7 @@
 """Independent HTTP search, lifecycle, privacy and MCP/IPC contracts; no external IO."""
 
+from usage_fixture import attach_usage
+
 import asyncio
 import json
 import os
@@ -21,7 +23,7 @@ from assistant_runtime.kernel.contracts import SearchRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.search import create_server
-from assistant_runtime.plugins.codex.mcp import server_config
+from assistant_runtime.plugins.pi.mcp import server_config
 from assistant_runtime.plugins.search.deepseek import query_payload, search_result
 from assistant_runtime.plugins.search.plugin import SearchPlugin, credential
 from assistant_runtime.plugins.search.settings import SearchSettings
@@ -106,6 +108,7 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
             store=self.store,
             runtime=self.runtime,
         )
+        attach_usage(self.host, self.runtime)
         self.plugin = SearchPlugin(self.host)
         self.runtime.add(self.plugin)
         with patch.dict(os.environ, {"SEARCH_TEST_KEY": "LOCAL_TEST_SECRET"}):

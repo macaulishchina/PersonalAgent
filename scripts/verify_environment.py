@@ -22,7 +22,9 @@ from assistant_runtime.kernel.contracts import DeviceQuery
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.plugins.apple_home.plugin import AppleHomePlugin
-from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.plugins.ai_usage.service import UsageService
+from assistant_runtime.plugins.ai_usage.settings import UsageSettings
 from assistant_runtime.store import Store
 
 
@@ -71,14 +73,13 @@ async def readonly_socket(config, query):
         config.socket.unlink(missing_ok=True)
 
 
-async def pipeline(config, ident, query, codex, report):
+async def pipeline(config, ident, query, execution, report):
     with tempfile.TemporaryDirectory(prefix="sensor-query-") as folder:
-        isolated = replace(
-            config, root=Path(folder), workspace=folder, codex_sandbox="read-only", memory_auto_capture=False
-        )
+        isolated = replace(config, root=Path(folder), workspace=folder, memory_auto_capture=False)
         isolated.state_dir.mkdir(parents=True, mode=0o700)
         store = Store(isolated.state_dir / "assistant.sqlite3")
         backend = None
+        usage = None
         try:
             async with readonly_socket(isolated, query):
                 async with Client(
@@ -107,27 +108,40 @@ async def pipeline(config, ident, query, codex, report):
                             "device"
                         ]
                     )
-                if codex:
+                if execution:
+                    from assistant_runtime.plugins.models.gateway import gateway_credential
+                    from assistant_runtime.plugins.models.settings import ModelSettings
+
+                    settings = ModelSettings.parse(config.model_api)
+                    private_key = Path(folder) / ".env"
+                    private_key.write_text(
+                        settings.gateway_key_env + "=" + gateway_credential(config.root, settings) + "\n"
+                    )
+                    private_key.chmod(0o600)
 
                     async def quiet(*args):
                         pass
 
-                    backend = CodexBackend(isolated, store, quiet, quiet)
+                    usage = UsageService(Path(folder) / "ai-usage", UsageSettings(max_requests=12))
+                    await usage.start()
+                    backend = PiBackend(
+                        isolated, store, quiet, quiet, usage=usage, runtime_dir=Path(folder) / "executions"
+                    )
                     calls, unexpected = [], []
                     original = backend.client.events.get
 
                     async def trace():
                         event = await original()
-                        item = event.get("params", {}).get("item", {})
-                        if event.get("method") == "item/completed":
-                            if item.get("type") == "mcpToolCall":
+                        item = event.get("data", {}).get("item", {})
+                        if event.get("kind") == "activity.completed":
+                            if item.get("type") == "mcp":
                                 calls.append(
                                     {
                                         k: item.get(k)
                                         for k in ("server", "tool", "arguments", "status", "result", "error")
                                     }
                                 )
-                            elif item.get("type") in {"commandExecution", "dynamicToolCall", "fileChange"}:
+                            elif item.get("type") in {"command", "dynamicToolCall", "file"}:
                                 unexpected.append(item.get("type"))
                         return event
 
@@ -168,14 +182,18 @@ async def pipeline(config, ident, query, codex, report):
                         assert reading["value"] == actual[metric]["value"], (
                             "Model answer did not match its actual measurement"
                         )
-                    report["codex_calls"], report["codex_answer"] = calls, parsed
+                    report["execution_calls"], report["execution_answer"] = calls, parsed
         finally:
-            if backend:
-                await backend.close()
-            store.db.close()
+            try:
+                if backend:
+                    await backend.close()
+            finally:
+                if usage:
+                    await usage.close()
+                store.db.close()
 
 
-async def verify(config, ident, codex, restart, synthetic):
+async def verify(config, ident, execution, restart, synthetic):
     evidence = config.state_dir / "acceptance" / "environment"
     evidence.mkdir(parents=True, exist_ok=True)
     report = {"passed": False, "synthetic": synthetic, "started_at": time.time(), "device_id": ident}
@@ -222,7 +240,7 @@ async def verify(config, ident, codex, restart, synthetic):
                             },
                         ) as response:
                             assert response.status == 200 and (await response.json())["accepted"]
-                    await pipeline(source, ident, directory.handle, codex, report)
+                    await pipeline(source, ident, directory.handle, execution, report)
                     assert store.max_transcript() == 0 and not store.recent()
                     report["sensor_update_created_no_task_or_transcript"] = True
                 finally:
@@ -231,7 +249,7 @@ async def verify(config, ident, codex, restart, synthetic):
         else:
             initial = await request(config, {"command": "status"})
             query = LocalRuntimeClient(config.socket).invoke
-            await pipeline(config, ident, query, codex, report)
+            await pipeline(config, ident, query, execution, report)
             after = await request(config, {"command": "status"})
             assert after["voice_io"] == initial["voice_io"]
             assert after["session_id"] == initial["session_id"]
@@ -289,7 +307,7 @@ def main():
     parser.add_argument("--config", default="config/config.toml")
     parser.add_argument("--device", required=True)
     parser.add_argument(
-        "--codex", action="store_true", help="Verify actual model calls in an isolated read-only thread"
+        "--execution", action="store_true", help="Verify actual model calls in an isolated read-only thread"
     )
     parser.add_argument(
         "--restart", action="store_true", help="Verify installed-service recovery after real readback"
@@ -300,7 +318,7 @@ def main():
     args = parser.parse_args()
     if args.synthetic and args.restart:
         parser.error("Synthetic acceptance never restarts the installed service")
-    asyncio.run(verify(Config.load(args.config), args.device, args.codex, args.restart, args.synthetic))
+    asyncio.run(verify(Config.load(args.config), args.device, args.execution, args.restart, args.synthetic))
 
 
 if __name__ == "__main__":

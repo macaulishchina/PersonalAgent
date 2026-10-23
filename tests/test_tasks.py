@@ -21,7 +21,7 @@ from assistant_runtime.mcp.catalog import TASK_TOOLS
 from assistant_runtime.plugins.tasks.plugin import TasksPlugin
 from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
 from assistant_runtime.plugins.tasks.schedules import next_time
-from assistant_runtime.plugins.codex.jobs import CodexJobs
+from assistant_runtime.plugins.pi.jobs import PiJobs
 from assistant_runtime.workfiles import WorkFiles
 
 
@@ -38,15 +38,25 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.store = Store(self.root / "state.sqlite")
-        self.config = Config(root=self.root, workspace=str(self.root), plugins=["codex", "tasks"])
+        self.config = Config(root=self.root, workspace=str(self.root), plugins=["pi", "tasks"])
+        self.config.tasks = {
+            "model_policy": {
+                "profiles": {
+                    "fast": {"model": "gpt-6-luna", "reasoning_effort": "low"},
+                    "balanced": {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
+                    "deep": {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
+                    "ultra": {"model": "gpt-6-astra", "reasoning_effort": "high"},
+                }
+            }
+        }
         self.chat = ConversationStore(self.store)
         self.executor = SimpleNamespace(
             models=AsyncMock(
                 return_value=[
                     {
                         "model": model,
-                        "supportedReasoningEfforts": [
-                            {"reasoningEffort": effort} for effort in ("low", "medium", "high")
+                        "supported_reasoning_efforts": [
+                            {"reasoning_effort": effort} for effort in ("low", "medium", "high")
                         ],
                     }
                     for model in ("gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra")
@@ -79,7 +89,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         )
         self.plugin = TasksPlugin(self.host)
         self.runtime = Runtime(self.store)
-        for name in ("codex", "conversation"):
+        for name in ("pi", "conversation"):
             self.runtime.add(Dummy(name))
         self.runtime.add(NotificationsPlugin(self.host))
         self.host.runtime = self.runtime
@@ -545,7 +555,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         d = await self.create(execution={"model": "fast", "reasoning_effort": "low"})
         self.assertEqual(d["spec"]["execution"]["model"], "fixed")
         self.assertEqual(d["spec"]["execution"]["reasoning_effort"], "high")
-        self.assertEqual(d["spec"]["execution"]["kind"], "codex")
+        self.assertEqual(d["spec"]["execution"]["kind"], "agent")
 
     async def test_reminders_do_not_call_models(self):
         d = await self.create(execution={"kind": "reminder"})
@@ -577,7 +587,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         d = await self.create(trigger={"kind": "interval", "seconds": 10})
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
-        self.plugin.repo.update_run(run["id"], "running", thread_id="old", turn_id="old-turn")
+        self.plugin.repo.update_run(run["id"], "running", execution_session_id="old", turn_id="old-turn")
         with self.store.db:
             for number in range(105):
                 self.plugin.repo.enqueue(d, f"missed:{number}", "missed")
@@ -719,7 +729,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         d = await self.create()
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
-        self.plugin.repo.update_run(run["id"], "running", thread_id="one", turn_id="one-turn")
+        self.plugin.repo.update_run(run["id"], "running", execution_session_id="one", turn_id="one-turn")
         await self.plugin.request(TaskRequest("pause", {"task_id": d["id"]}))
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
         self.executor.stop.assert_not_awaited()
@@ -1042,12 +1052,16 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             request=AsyncMock(
                 return_value={
                     "data": [
-                        {"id": "x", "model": "x", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+                        {
+                            "id": "x",
+                            "model": "x",
+                            "supported_reasoning_efforts": [{"reasoning_effort": "low"}],
+                        }
                     ]
                 }
             )
         )
-        runner = CodexJobs(SimpleNamespace(client=client), lambda *a, **kw: None)
+        runner = PiJobs(SimpleNamespace(client=client), lambda *a, **kw: None)
         self.assertEqual((await runner.select("x", "low"))["model"], "x")
         with self.assertRaises(ValueError):
             await runner.select("x", "high")
@@ -1056,18 +1070,16 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_executor_only_routes_its_threads(self):
         updates = []
-        runner = CodexJobs(
-            SimpleNamespace(client=SimpleNamespace()), lambda *a, **kw: updates.append((a, kw))
-        )
+        runner = PiJobs(SimpleNamespace(client=SimpleNamespace()), lambda *a, **kw: updates.append((a, kw)))
         runner.threads = {"background": "run"}
         self.assertFalse(
             await runner.event(
-                {"method": "turn/started", "params": {"threadId": "foreground", "turn": {"id": "t"}}}
+                {"kind": "run.started", "data": {"session_id": "foreground", "run": {"id": "t"}}}
             )
         )
         self.assertTrue(
             await runner.event(
-                {"method": "turn/started", "params": {"threadId": "background", "turn": {"id": "t"}}}
+                {"kind": "run.started", "data": {"session_id": "background", "run": {"id": "t"}}}
             )
         )
         self.assertEqual(len(updates), 1)
@@ -1079,7 +1091,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         run = self.plugin.repo.update_run(
             run["id"],
             "failed",
-            thread_id="owned-thread",
+            execution_session_id="owned-thread",
             progress="retained result",
             completion_delivered=True,
         )
@@ -1106,7 +1118,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
     async def test_continuation_waits_for_finalize_and_rearms_next_round(self):
         task = await self.create(auto_archive=False, notify_completion=False)
         run = self.plugin.repo.enqueue(task, "cleanup", "running")
-        run = self.plugin.repo.update_run(run["id"], "failed", thread_id="owned-thread")
+        run = self.plugin.repo.update_run(run["id"], "failed", execution_session_id="owned-thread")
         started, release = asyncio.Event(), asyncio.Event()
 
         async def finish(_):
@@ -1134,7 +1146,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
     async def test_finalizer_does_not_block_notifications_or_main_management(self):
         task = await self.create(auto_archive=False, notify_completion=False)
         run = self.plugin.repo.enqueue(task, "cleanup", "running")
-        self.plugin.repo.update_run(run["id"], "completed", thread_id="owned-thread")
+        self.plugin.repo.update_run(run["id"], "completed", execution_session_id="owned-thread")
         started, release = asyncio.Event(), asyncio.Event()
 
         async def finish(_):
@@ -1170,7 +1182,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             "unknown",
             "waiting_user",
         ):
-            run = self.plugin.repo.enqueue(task, state, state, {"thread_id": "thread-" + state})
+            run = self.plugin.repo.enqueue(task, state, state, {"execution_session_id": "thread-" + state})
             if state in {"completed", "failed", "canceled", "missed"}:
                 expected.add(run["id"])
         self.plugin.repo.enqueue(task, "no-thread", "completed")
@@ -1335,7 +1347,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.executor.launch.await_count, 1)
         await self.runtime.close()
         self.runtime = Runtime(self.store)
-        for name in ("codex", "conversation"):
+        for name in ("pi", "conversation"):
             self.runtime.add(Dummy(name))
         self.plugin = TasksPlugin(self.host)
         self.runtime.add(NotificationsPlugin(self.host))
@@ -1352,13 +1364,25 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(d["next_at"], time.time())
         self.assertEqual(self.plugin.repo.runs(d["id"]), [])
 
+    async def test_goal_round_budget_stops_without_claiming_completion(self):
+        task = await self.create(long_term=True)
+        run = self.plugin.repo.enqueue(task, "goal-budget", "running")
+        self.plugin.repo.update_run(
+            run["id"], goal={"status": "active"}, goal_rounds=self.plugin.settings.max_goal_rounds - 1
+        )
+        self.plugin.provider_update(run["id"], "completed", turn_active=False)
+        final = self.plugin.repo.run(run["id"])
+        self.assertEqual(final["state"], "waiting_user")
+        self.assertEqual(final["data"]["goal_rounds"], self.plugin.settings.max_goal_rounds)
+        self.assertEqual(self.plugin.repo.definition(task["id"])["state"], "enabled")
+
     async def test_goal_intermediate_turn_is_not_completion(self):
         d = await self.create(long_term=True)
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
         self.plugin.repo.update_run(run["id"], "running", goal={"status": "active"})
         self.plugin.provider_update(run["id"], "completed", turn_active=False)
-        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
+        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "queued")
         self.plugin.provider_update(run["id"], None, goal={"status": "complete"})
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "completed")
 
@@ -1486,33 +1510,35 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repaired["state"], "waiting_user")
         self.assertEqual(repaired["data"]["spec"]["resources"], ["media:quark_series"])
 
-    async def test_one_shot_native_goal_keeps_media_authority_between_turns(self):
+    async def test_authorized_goal_continuation_keeps_identity_and_scope(self):
         from assistant_runtime.plugins.media.plugin import MediaPlugin
 
-        task = await self.create(resources=["media:series"])
+        task = await self.create(resources=["media:series"], long_term=True)
         run = self.plugin.repo.enqueue(task, "native-goal", "running")
         self.plugin.repo.update_run(run["id"], turn_id="first", turn_active=True)
         media = MediaPlugin(self.host)
-        runner = CodexJobs(SimpleNamespace(client=SimpleNamespace()), self.plugin.provider_update)
-        runner.threads["thread"] = run["id"]
+        runner = PiJobs(SimpleNamespace(client=SimpleNamespace()), self.plugin.provider_update)
+        runner.threads["session"] = run["id"]
         runner.handles[run["id"]] = {"turn_id": "first"}
 
         async def event(method, **params):
-            return await runner.event({"method": method, "params": {"threadId": "thread", **params}})
+            return await runner.event({"kind": method, "data": {"session_id": "session", **params}})
 
-        await event("thread/goal/updated", goal={"status": "active"})
-        await event("turn/completed", turn={"id": "first", "status": "completed"})
-        self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
-        await asyncio.sleep(0.6)  # Give delivery/archive workers a chance to observe the boundary.
+        await event("goal.updated", goal={"status": "active"})
+        await event("run.completed", run={"id": "first", "status": "completed"})
+        continued = self.plugin.repo.run(run["id"])
+        self.assertEqual(continued["state"], "queued")
+        self.assertEqual(continued["data"]["goal_rounds"], 1)
+        self.plugin.repo.update_run(run["id"], "running")
         self.assertEqual(self.plugin.repo.definition(task["id"])["state"], "enabled")
         self.assertIsNone(self.plugin.repo.finalization(run["id"]))
         self.assertEqual(await media.authorize(run["id"], "series"), "task:" + task["id"])
         with self.assertRaisesRegex(ValueError, "media:movies"):
             await media.authorize(run["id"], "movies")
-        await event("turn/started", turn={"id": "second"})
-        await event("thread/goal/updated", goal={"status": "complete"})
+        await event("run.started", run={"id": "second"})
+        await event("goal.updated", goal={"status": "complete"})
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "running")
-        await event("turn/completed", turn={"id": "second", "status": "completed"})
+        await event("run.completed", run={"id": "second", "status": "completed"})
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "completed")
         with self.assertRaisesRegex(ValueError, "active"):
             await media.authorize(run["id"])

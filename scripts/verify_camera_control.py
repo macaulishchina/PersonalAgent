@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import dataclasses
 import json
 from pathlib import Path
 import tempfile
@@ -15,12 +14,14 @@ from assistant_runtime.cli import request
 from assistant_runtime.config import Config
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.mcp.device import create_server
-from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.plugins.ai_usage.service import UsageService
+from assistant_runtime.plugins.ai_usage.settings import UsageSettings
 from assistant_runtime.store import Store
 from verify_video_onboarding import snapshot
 
 
-async def verify(config, device, fixed, codex):
+async def verify(config, device, fixed, execution):
     folder = config.state_dir / "acceptance" / "camera-control"
     folder.mkdir(parents=True, exist_ok=True)
     report = {
@@ -63,7 +64,7 @@ async def verify(config, device, fixed, codex):
                 stop = (await client.call_tool("stop_camera", {"device_id": device})).structured_content
                 assert stop["stop_sent"]
                 report[direction + "_frame"], _ = await snapshot(config, device)
-        if codex:
+        if execution:
             with tempfile.TemporaryDirectory(prefix="camera-control-ai-", dir=config.state_dir) as temp:
                 store = Store(Path(temp) / "acceptance.sqlite3")
 
@@ -73,19 +74,23 @@ async def verify(config, device, fixed, codex):
                 async def no_control(*args):
                     raise RuntimeError("Acceptance cannot control audio")
 
-                backend = CodexBackend(
-                    dataclasses.replace(config, codex_sandbox="read-only", approval_policy="never"),
+                usage = UsageService(Path(temp) / "ai-usage", UsageSettings(max_requests=12))
+                await usage.start()
+                backend = PiBackend(
+                    config,
                     store,
                     no_speech,
                     no_control,
+                    usage=usage,
+                    runtime_dir=Path(temp) / "executions",
                 )
                 calls = []
                 original_get = backend.client.events.get
 
                 async def trace():
                     event = await original_get()
-                    item = event.get("params", {}).get("item", {})
-                    if event.get("method") == "item/completed" and item.get("type") == "mcpToolCall":
+                    item = event.get("data", {}).get("item", {})
+                    if event.get("kind") == "activity.completed" and item.get("type") == "mcp":
                         calls.append(
                             {k: item.get(k) for k in ("server", "tool", "arguments", "status", "error")}
                         )
@@ -106,8 +111,8 @@ async def verify(config, device, fixed, codex):
                         while backend.busy:
                             await asyncio.sleep(0.25)
                     assert not backend.last_error, backend.last_error
-                    report["codex_tools"] = calls
-                    report["codex_result"] = store.recent(1)
+                    report["execution_tools"] = calls
+                    report["execution_result"] = store.recent(1)
                     movement = [call for call in calls if call["tool"] == "move_camera"]
                     assert len(movement) == 2 and all(call["status"] == "completed" for call in movement)
                     arguments = [
@@ -120,13 +125,17 @@ async def verify(config, device, fixed, codex):
                     assert all(a["device_id"] == device and a.get("duration_ms", 80) == 80 for a in arguments)
                     assert not any(call["tool"] == "capture_image" for call in calls)
                     assert store.recent(1)[0]["status"] == "completed"
-                    report["codex_validated"] = True
+                    report["execution_validated"] = True
                 finally:
-                    await backend.close()
-                    store.db.close()
+                    try:
+                        await backend.close()
+                    finally:
+                        await usage.close()
+                        store.db.close()
         after = await request(config, {"command": "status"})
         assert after["session_id"] == before["session_id"] and after["voice_io"] == before["voice_io"]
-        assert after["capture_recent"] and after["wake_count"] == before["wake_count"]
+        assert after["capture_recent"] == before["capture_recent"]
+        assert after["wake_count"] == before["wake_count"]
         report.update(
             passed=True, microphone_preserved=True, voice_not_activated=True, session_preserved=True
         )
@@ -144,7 +153,7 @@ async def verify(config, device, fixed, codex):
                     k: report.get(k)
                     for k in (
                         "passed",
-                        "codex_validated",
+                        "execution_validated",
                         "fixed_move_rejected",
                         "microphone_preserved",
                         "voice_not_activated",
@@ -163,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", required=True)
     parser.add_argument("--fixed-device")
     parser.add_argument(
-        "--codex", action="store_true", help="Exercise real Codex control tools; no image upload"
+        "--execution", action="store_true", help="Exercise real Pi control tools; no image upload"
     )
     args = parser.parse_args()
-    asyncio.run(verify(Config.load(args.config), args.device, args.fixed_device, args.codex))
+    asyncio.run(verify(Config.load(args.config), args.device, args.fixed_device, args.execution))

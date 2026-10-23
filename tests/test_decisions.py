@@ -1,5 +1,8 @@
 """Real shadow worker/storage with isolated HTTP, lifecycle and ingress tests."""
 
+from usage_fixture import decision_host
+from assistant_runtime.kernel.ai_usage import UsageRequest
+
 import asyncio
 import copy
 import json
@@ -30,7 +33,7 @@ from assistant_runtime.kernel.contracts import (
 from assistant_runtime.kernel.decisions import decide, fallback
 from assistant_runtime.mcp.decisions import create_server
 from assistant_runtime.mcp.catalog import DECISION_TOOLS
-from assistant_runtime.plugins.codex.mcp import server_config
+from assistant_runtime.plugins.pi.mcp import server_config
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.decisions.jev import DecisionError, JevProvider, answer, credential
 from assistant_runtime.plugins.decisions.plugin import DecisionsPlugin
@@ -125,7 +128,7 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.config = Config(root=self.root, decisions={"mode": "shadow", "external_data_consent": True})
         self.runtime = Runtime(self.store)
         self.provider = FakeProvider()
-        self.plugin = DecisionsPlugin(SimpleNamespace(config=self.config), self.provider)
+        self.plugin = DecisionsPlugin(decision_host(self.config, self.runtime), self.provider)
         self.runtime.add(self.plugin)
         await self.runtime.start()
 
@@ -153,7 +156,8 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.runtime.invoke(Control("stop")), 0.2)
         self.assertEqual(controlled, ["stop"])
         self.assertEqual(
-            set(self.runtime.handlers), {DecisionRequest, DecisionQuery, DecisionOutcome, Control}
+            set(self.runtime.handlers),
+            {DecisionRequest, DecisionQuery, DecisionOutcome, Control, UsageRequest},
         )
         self.assertFalse(self.plugin.diagnostics()["execution_enabled"])
         self.provider.release.set()
@@ -193,8 +197,8 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()
         self.assertTrue(self.provider.closed)
         provider = FakeProvider()
-        plugin = DecisionsPlugin(SimpleNamespace(config=self.config), provider)
         self.runtime = Runtime(self.store)
+        plugin = DecisionsPlugin(decision_host(self.config, self.runtime), provider)
         self.runtime.add(plugin)
         await self.runtime.start()
         plugin.enqueue(sample(), "assistant")
@@ -278,8 +282,8 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.plugin.receipts.call("claim", job))
         await self.runtime.close()  # Simulate a process lost after intent, before a response receipt.
         provider = FakeProvider()
-        plugin = DecisionsPlugin(SimpleNamespace(config=self.config), provider)
         self.runtime = Runtime(self.store)
+        plugin = DecisionsPlugin(decision_host(self.config, self.runtime), provider)
         self.runtime.add(plugin)
         await self.runtime.start()
         plugin.enqueue(sample(), "assistant")
@@ -406,8 +410,8 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_start_does_not_construct_optional_http_provider(self):
         await self.runtime.close()
         self.config.decisions = {"enabled": False}
-        plugin = DecisionsPlugin(SimpleNamespace(config=self.config))
         self.runtime = Runtime(self.store)
+        plugin = DecisionsPlugin(decision_host(self.config, self.runtime))
         self.runtime.add(plugin)
         with patch("assistant_runtime.plugins.decisions.jev.JevProvider", side_effect=AssertionError):
             await self.runtime.start()
@@ -761,7 +765,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
         service.quiet_active = lambda: False
         service.input_count = 3
         service.conversation = SimpleNamespace(voice_revision=12)
-        service.backend = SimpleNamespace(session_id="main", active_turn="turn")
+        service.backend = SimpleNamespace(session_id="main", active_turn="run")
         service.control = AsyncMock()
         entered, release = asyncio.Event(), asyncio.Event()
 
@@ -772,7 +776,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
 
         service.runtime = SimpleNamespace(invoke=delayed)
         for attr, value in (("epoch", 8), ("input_count", 4), ("voice_revision", 13)):
-            task = asyncio.create_task(service._voice_decision("请结束一下", 7, 3, "turn", 12))
+            task = asyncio.create_task(service._voice_decision("请结束一下", 7, 3, "run", 12))
             await entered.wait()
             owner = (
                 service.voice
@@ -790,14 +794,14 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
             entered.clear()
             release.clear()
         service.runtime = SimpleNamespace(invoke=AsyncMock(return_value=fallback("timeout")))
-        await service._voice_decision("请结束一下", 7, 3, "turn", 12)
+        await service._voice_decision("请结束一下", 7, 3, "run", 12)
         service.control.assert_not_awaited()
         service.runtime.invoke.return_value = {"status": "ok", "choice": "cancel"}
         service.backend.active_turn = "new-turn"
-        await service._voice_decision("取消刚才的任务", 7, 3, "turn", 12)
+        await service._voice_decision("取消刚才的任务", 7, 3, "run", 12)
         service.control.assert_not_awaited()
-        service.backend.active_turn = "turn"
-        await service._voice_decision("取消刚才的任务", 7, 3, "turn", 12)
+        service.backend.active_turn = "run"
+        await service._voice_decision("取消刚才的任务", 7, 3, "run", 12)
         service.control.assert_not_awaited()  # No scoped coordinator: never pretend takeover succeeded.
 
     async def test_cancel_control_passes_captured_turn_after_playback_wait(self):
@@ -1046,7 +1050,7 @@ class ModelIngressTest(unittest.IsolatedAsyncioTestCase):
         self.executor.models.return_value.append(
             {
                 "model": "custom",
-                "supportedReasoningEfforts": [{"reasoningEffort": e} for e in ("low", "high")],
+                "supported_reasoning_efforts": [{"reasoning_effort": e} for e in ("low", "high")],
             }
         )
         judge.return_value["choice"] = "custom_high"
@@ -1088,7 +1092,7 @@ class ModelIngressTest(unittest.IsolatedAsyncioTestCase):
     async def test_single_supported_choice_is_local_and_invalid_explicit_effort_is_not_hidden(self):
         judge = self.register_advice("deep_high")
         self.executor.models.return_value = [
-            {"model": "gpt-6.1-sol", "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]}
+            {"model": "gpt-6.1-sol", "supported_reasoning_efforts": [{"reasoning_effort": "medium"}]}
         ]
         selected = (await self.create(execution={"profile": "deep", "reason": "已确定模型"}))["spec"][
             "execution"

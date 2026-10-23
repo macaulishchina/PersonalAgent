@@ -47,7 +47,7 @@ RUN_SUMMARIES = {
 
 
 class TasksPlugin:
-    manifest = Manifest("tasks", ("conversation", "codex", "notifications"))
+    manifest = Manifest("tasks", ("conversation", "pi", "notifications"))
 
     def __init__(self, host):
         self.host = host
@@ -126,6 +126,40 @@ class TasksPlugin:
         context.spawn(self.event_inbox.listen(event_queue), "event-hints")
         context.spawn(self.event_inbox.run(), "event-inbox")
 
+    async def usage_blocked(self, notice):
+        owners = []
+        for run in self.repo.active_runs():
+            scope = await self.host.ai_usage.service.binding(run["id"])
+            if not scope or scope.work_id != notice["work_id"]:
+                continue
+            self.repo.update_run(run["id"], ai_usage=await self.host.ai_usage.service.snapshot(scope.work_id))
+            owners.append({"run": run, "feedback": self.feedback.describe(run)})
+            definition = self.repo.definition(run["task_id"])
+            if definition["state"] == "enabled":
+                with self.repo.db:
+                    self.repo.db.execute(
+                        "UPDATE job_definitions SET state='paused',revision=revision+1,updated=? WHERE id=?",
+                        (time.time(), definition["id"]),
+                    )
+                self.schedule(self.repo.definition(definition["id"]))
+        # Pre-dispatch/event judgments may belong to a plan before a run exists.
+        # The durable latch is authoritative even without an active executor.
+        for task_id, blocked in self.host.ai_usage.service.blocked_plans.items():
+            if blocked["work_id"] != notice["work_id"]:
+                continue
+            try:
+                definition = self.repo.definition(task_id)
+            except ValueError:
+                continue
+            if definition["state"] == "enabled":
+                with self.repo.db:
+                    self.repo.db.execute(
+                        "UPDATE job_definitions SET state='paused',revision=revision+1,updated=? WHERE id=?",
+                        (time.time(), task_id),
+                    )
+                self.schedule(self.repo.definition(task_id))
+        return owners
+
     def schedule(self, d):
         ident = d["id"]
         if self.scheduler.get_job(ident):
@@ -191,6 +225,16 @@ class TasksPlugin:
         if d["state"] != "enabled" or d["next_at"] is None:
             return
         now = time.time()
+        usage = getattr(self.host, "ai_usage", None)
+        if usage and d["spec"]["execution"]["kind"] == "agent":
+            if usage.service.blocked_plans.get(d["id"]):
+                with self.repo.db:
+                    self.repo.db.execute(
+                        "UPDATE job_definitions SET state='paused',revision=revision+1,updated=? WHERE id=?",
+                        (time.time(), d["id"]),
+                    )
+                self.schedule(self.repo.definition(d["id"]))
+                return
         at = d["next_at"]
         spec = d["spec"]
         occurrence = at
@@ -234,7 +278,7 @@ class TasksPlugin:
         if trace:
             self.trace.append(ident, trace)
         if run["state"] in TERMINAL | {"paused"}:
-            identifiers = {k: v for k, v in data.items() if k in {"thread_id", "turn_id"}}
+            identifiers = {k: v for k, v in data.items() if k in {"execution_session_id", "turn_id"}}
             if identifiers:
                 self.repo.update_run(ident, **identifiers)
             return False
@@ -257,17 +301,44 @@ class TasksPlugin:
         if state == "completed" and run["state"] == "waiting_user":
             state = "waiting_user"
         if state == "completed" and (run["data"]["spec"].get("long_term") or goal):
-            # A native Goal can be created during an ordinary one-shot, too.
-            # Turn completion must not release its resources between continuations.
-            state = "completed" if goal.get("status") == "complete" else "running"
-            if goal.get("status") in {"blocked", "paused", "budgetLimited", "usageLimited"}:
+            rounds = run["data"].get("goal_rounds", 0) + 1
+            data["goal_rounds"] = rounds
+            if goal.get("status") == "complete":
+                state = "completed"
+            elif (
+                not run["data"]["spec"].get("long_term")
+                or goal.get("status") in {"blocked", "paused", "budgetLimited", "usageLimited"}
+                or rounds >= self.settings.max_goal_rounds
+            ):
                 state = "waiting_user"
+                data["progress"] = "目标尚未完成；自动执行已停止，请核对进展后明确继续。"
+            else:
+                # Pi owns one agent run; tasks owns bounded goal continuation.
+                # The SAME run, budget and grants survive. Never restart a whole plan.
+                state = "queued"
+                data["continuation"] = (
+                    run["data"]["spec"]["prompt"]
+                    + "\n继续尚未完成的已授权目标。先核对实际操作回执，不重做已完成动作；"
+                    "结果不明先查证。上一轮摘要只作线索：\n"
+                    + str(data.get("result", run["data"].get("result", "")))[:2000]
+                )
         if data.get("goal") and state not in {"failed", "canceled", "unknown", "paused"}:
             status = goal.get("status")
             if status == "complete" and not data.get("turn_active", run["data"].get("turn_active")):
                 state = "completed"
             elif status in {"blocked", "paused", "budgetLimited", "usageLimited"}:
                 state = "waiting_user"
+        if (data.get("ai_usage") or {}).get("blocked") and state != "completed":
+            state = "paused" if state not in {"unknown", "canceled"} else state
+            data["progress"] = "AI 调用预算已暂停；已完成的操作保持实际结果，请核对后明确继续。"
+            definition = self.repo.definition(run["task_id"])
+            with self.repo.db:
+                self.repo.db.execute(
+                    "UPDATE job_definitions SET state='paused',revision=revision+1,updated=? WHERE id=?",
+                    (time.time(), definition["id"]),
+                )
+            if self.scheduler:
+                self.schedule(self.repo.definition(definition["id"]))
         self.repo.update_run(ident, state, **data)
         return True
 
@@ -380,7 +451,7 @@ class TasksPlugin:
         if preserved_execution is not None:
             s["execution"] = json.loads(json.dumps(preserved_execution))
             return s
-        if requested.get("kind", "codex") not in {"codex", "reminder", "device_query"}:
+        if requested.get("kind", "agent") not in {"agent", "reminder", "device_query"}:
             raise ValueError("Unknown execution kind")
         if requested.get("kind") == "device_query":
             if requested.get("device_id") not in self.host.config.devices:
@@ -431,6 +502,23 @@ class TasksPlugin:
                 raise ValueError("Invalid event timing/hysteresis")
 
     async def request(self, request):
+        from ...kernel.ai_usage import current_usage
+
+        token = None
+        usage = getattr(self.host, "ai_usage", None)
+        if (
+            usage
+            and request.action == "create"
+            and request.arguments.get("spec", {}).get("execution", {}).get("kind", "agent") == "agent"
+        ):
+            token = current_usage.set(await usage.scope(request.caller_run))
+        try:
+            return await self._locked_request(request)
+        finally:
+            if token is not None:
+                current_usage.reset(token)
+
+    async def _locked_request(self, request):
         if request.action in {"reschedule_self", "complete_self"}:
             if not request.caller_run:
                 raise ValueError("Self scheduling requires the bound background execution identity")
@@ -513,7 +601,7 @@ class TasksPlugin:
                     "state": run["state"],
                     "resources": run["data"]["spec"].get("resources", []),
                     "execution_version": {
-                        "thread_id": run["data"].get("thread_id"),
+                        "execution_session_id": run["data"].get("execution_session_id"),
                         "turn_id": run["data"].get("turn_id"),
                         "model_segments": len(run["data"].get("model_upgrades", [])),
                     },
@@ -533,6 +621,11 @@ class TasksPlugin:
             runs, active, before, updates = self.repo.run_page(ident, args)
             for run in [*runs, *active, *updates]:
                 run["feedback"] = self.feedback.describe(run)
+                usage = getattr(self.host, "ai_usage", None)
+                if usage and usage.service.ready:
+                    scope = await usage.service.binding(run["id"])
+                    if scope:
+                        run["data"]["ai_usage"] = await usage.service.snapshot(scope.work_id)
                 references = run["data"].get("attachments")
                 if references:
                     run["data"]["attachments"] = self.host.conversation.media.resolve(references)
@@ -605,6 +698,11 @@ class TasksPlugin:
             if saved[1] != fingerprint:
                 raise ValueError("Task request ID reused with different contents")
             d = self.repo.definition(saved[0])
+            if spec["trigger"]["kind"] == "immediate" and spec["execution"]["kind"] == "agent":
+                usage = getattr(self.host, "ai_usage", None)
+                if usage:
+                    scope = await usage.scope(caller)
+                    await usage.service.bind("plan:" + d["id"], scope)
             self.schedule(d)
             return d
         if a == "workfiles":
@@ -709,6 +807,9 @@ class TasksPlugin:
                 on_update=lambda saved: self.event_inbox.reset(saved, event_cursor),
             )
         elif a in {"pause", "resume", "archive", "terminate"}:
+            if a == "resume" and getattr(self.host, "ai_usage", None):
+                await self.host.ai_usage.service.call("resume_plan", d["id"])
+                self.host.ai_usage.service.blocked_plans.pop(d["id"], None)
             state = {
                 "pause": "paused",
                 "resume": "enabled",
@@ -764,10 +865,27 @@ class TasksPlugin:
         return f"tasks/{run['task_id']}/{run['id']}"
 
     async def launch(self, run):
+        from ...kernel.ai_usage import current_usage
+
         ident = run["id"]
+        usage_token = None
         try:
             if self.repo.run(ident)["state"] != "queued":
                 return
+            usage = getattr(self.host, "ai_usage", None)
+            if usage and run["data"]["spec"]["execution"]["kind"] == "agent":
+                parent = await usage.service.binding("plan:" + run["task_id"])
+                await usage.bind_task(run, parent)
+                scope = await usage.service.binding(ident)
+                usage_token = current_usage.set(scope)
+                snapshot = await usage.service.snapshot(scope.work_id)
+                self.repo.update_run(ident, ai_usage=snapshot)
+                if snapshot.get("blocked"):
+                    await self.usage_blocked({"work_id": scope.work_id})
+                    self.repo.update_run(
+                        ident, "paused", progress="AI 调用预算已暂停，请明确调整额度后继续。"
+                    )
+                    return
             if not await self.event_inbox.prepare(run):
                 return
             run = self.repo.run(ident)
@@ -808,9 +926,11 @@ class TasksPlugin:
             # A provider request may have executed before its reply was lost.
             current = self.repo.run(ident)
             if current["state"] not in {"canceled", "paused"}:
-                state = "failed" if run["data"]["spec"]["execution"]["kind"] != "codex" else "unknown"
+                state = "failed" if run["data"]["spec"]["execution"]["kind"] != "agent" else "unknown"
                 self.repo.update_run(ident, state, progress=str(exc)[:600])
         finally:
+            if usage_token is not None:
+                current_usage.reset(usage_token)
             self.launching.discard(ident)
 
     async def worker(self):
@@ -887,7 +1007,10 @@ class TasksPlugin:
                             self.delivering_results.add(r["id"])
                             self.context.spawn(self.deliver_result(r), "task-result:" + r["id"])
                         continue
-                elif r["state"] in {"waiting_user", "unknown"}:
+                elif r["state"] in {"waiting_user", "unknown"} and not r["data"].get("ai_usage", {}).get(
+                    "blocked"
+                ):
+                    # Budget attention is delivered once by ai_usage's durable outbox.
                     # User participation is distinct from routine completion preferences.
                     # Same structured request survives retries and progress-only revisions.
                     questions = r["data"].get("questions", [])

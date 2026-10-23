@@ -34,10 +34,10 @@ class ModelPolicy:
     fallbacks: dict = field(default_factory=dict)
     profiles: dict = field(
         default_factory=lambda: {
-            "fast": {"model": "gpt-6-luna", "reasoning_effort": "low"},
-            "balanced": {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
-            "deep": {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
-            "ultra": {"model": "gpt-6-astra", "reasoning_effort": "high"},
+            "fast": {"model": "go-gpt", "reasoning_effort": "low"},
+            "balanced": {"model": "go-gpt", "reasoning_effort": "medium"},
+            "deep": {"model": "go-gpt", "reasoning_effort": "high"},
+            "ultra": {"model": "go-gpt", "reasoning_effort": "max"},
         }
     )
 
@@ -118,8 +118,8 @@ class ModelPolicy:
                     "available": values["model"] in catalog
                     and values["reasoning_effort"]
                     in [
-                        e["reasoningEffort"]
-                        for e in catalog[values["model"]].get("supportedReasoningEfforts", [])
+                        e["reasoning_effort"]
+                        for e in catalog[values["model"]].get("supported_reasoning_efforts", [])
                     ],
                 }
                 for name, values in self.profiles.items()
@@ -183,9 +183,9 @@ class ModelPolicy:
         result = {}
         for tier in profiles:
             selected_model = model if model not in (None, "auto") else self.profiles[tier]["model"]
-            supported = catalog.get(selected_model, {}).get("supportedReasoningEfforts", [])
+            supported = catalog.get(selected_model, {}).get("supported_reasoning_efforts", [])
             for item in supported:
-                value = item["reasoningEffort"]
+                value = item["reasoning_effort"]
                 if value not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
                     continue
                 if effort not in (None, "auto", value):
@@ -252,7 +252,7 @@ class ModelPolicy:
             "resolved": resolved,
         }
         return {
-            "kind": "codex",
+            "kind": "agent",
             **resolved,
             "profile": actual,
             "reason": reason,

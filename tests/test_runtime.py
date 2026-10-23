@@ -167,12 +167,12 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "db"
             s = Store(path)
-            ident = s.logical_session("codex", "opaque-thread")
+            ident = s.logical_session("pi", "opaque-thread")
             s.create_task("task", "side effect")
             s.update_task("task", "unknown")
             s.db.close()
             s = Store(path)
-            self.assertEqual(s.logical_session("codex", "opaque-thread"), ident)
+            self.assertEqual(s.logical_session("pi", "opaque-thread"), ident)
             self.assertEqual(s.unfinished(), [("task", None, "unknown")])
             s.db.close()
 

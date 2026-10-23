@@ -32,7 +32,7 @@ async def verify(config):
                 "prompt": "这是框架一次合成验收。不要使用shell、记忆、设备、语音，不创建子任务。开发者指令给出你的task_id；先用get_task读自己的最新任务版本和self_schedule授权。验收条件现在已满足：本任务就是明确授权的调度测试。请用update_own_task_schedule把自身trigger改成{kind:interval,seconds:86400}，使用一个新规范UUID，附上简短reason和evidence=本次用户授权的合成调度验收。读回自己的计划确认trigger为86400并且next_at在将来，简短结束。不修改任何其他字段或任务。",
                 "trigger": {"kind": "interval", "seconds": 1800},
                 "execution": {
-                    "model": config.memory_model,
+                    "model": config.main_model,
                     "reasoning_effort": "low",
                     "reason": "明确工具和验收条件的合成接入测试",
                 },

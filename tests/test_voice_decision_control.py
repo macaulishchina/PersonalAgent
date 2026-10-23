@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 from assistant_runtime.interaction.voice_control import VoiceControl
 from assistant_runtime.kernel.contracts import VoiceDecisionRequest, TaskRequest
-from assistant_runtime.plugins.codex.backend import CodexBackend
+from assistant_runtime.plugins.pi.backend import PiBackend
 
 
 class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +22,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
                 voice_revision=4, feedback=SimpleNamespace(get=lambda _: {"source": "voice", "epoch": 2})
             ),
             backend=SimpleNamespace(
-                active_turn="turn",
+                active_turn="run",
                 import_voice_messages=AsyncMock(),
                 control_checkpoint=AsyncMock(return_value=True),
                 cancel=AsyncMock(),
@@ -33,7 +33,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.result = {"status": "ok", "decision_id": "a" * 32, "choice": "correct"}
 
     async def offer(self):
-        await self.owner.offer(self.result, "不是第一季，是第二季", 2, 3, "turn", 4)
+        await self.owner.offer(self.result, "不是第一季，是第二季", 2, 3, "run", 4)
 
     async def confirm(self, **changes):
         return await self.owner.request(
@@ -48,7 +48,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         )
         result = await self.confirm()
         self.assertEqual(result["state"], "applied")
-        self.host.backend.control_checkpoint.assert_awaited_once_with("turn")
+        self.host.backend.control_checkpoint.assert_awaited_once_with("run")
         self.assertFalse((await self.confirm())["replayed"])
         self.host.backend.control_checkpoint.assert_awaited_once()
 
@@ -94,7 +94,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.owner.capture_turn())
 
     async def test_takeover_during_pause_prevents_old_correction_from_resuming(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         pausing, release = asyncio.Event(), asyncio.Event()
         actions = []
 
@@ -117,7 +117,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         confirming = asyncio.create_task(self.confirm())
         try:
             await asyncio.wait_for(pausing.wait(), 1)
-            self.assertTrue(await self.owner.stop("turn"))
+            self.assertTrue(await self.owner.stop("run"))
         finally:
             release.set()
         self.assertEqual((await confirming)["state"], "expired")
@@ -132,7 +132,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.host.backend.control_checkpoint.assert_not_awaited()
 
     async def test_correction_pauses_only_bound_run_then_continues_without_archiving_plan(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         calls = []
 
         async def invoke(request, **kwargs):
@@ -155,7 +155,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 3)
 
     async def test_unknown_stop_never_starts_replacement_or_retries(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         actions = []
 
         async def invoke(request, **kwargs):
@@ -173,7 +173,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions, ["get", "pause_run"])
 
     async def test_new_input_during_stop_prevents_continuation(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         actions = []
 
         async def invoke(request, **kwargs):
@@ -191,8 +191,8 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions, ["get", "pause_run"])
 
     async def test_multiple_associated_tasks_require_clarification(self):
-        await self.owner.bind("turn", "task-one")
-        await self.owner.bind("turn", "task-two")
+        await self.owner.bind("run", "task-one")
+        await self.owner.bind("run", "task-two")
         self.host.runtime.invoke.reset_mock()
         await self.offer()
         self.assertEqual((await self.confirm())["state"], "clarification")
@@ -201,7 +201,7 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_supplement_uses_bound_run_without_interrupt(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         self.result["choice"] = "supplement"
         actions = []
 
@@ -217,11 +217,11 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions, ["get", "supplement"])
 
     async def test_original_run_cannot_be_replaced_by_next_scheduled_run(self):
-        await self.owner.bind("turn", "task")
+        await self.owner.bind("run", "task")
         self.host.runtime.invoke.return_value = {"active_runs": [{"id": "later-run"}]}
         await self.offer()
         self.assertEqual((await self.confirm())["state"], "clarification")
-        self.assertFalse(await self.owner.stop("turn"))
+        self.assertFalse(await self.owner.stop("run"))
         actions = [
             c.args[0].action
             for c in self.host.runtime.invoke.await_args_list
@@ -231,10 +231,10 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_foreground_stop_requires_readback_not_interrupt_ack(self):
         self.host.backend.control_checkpoint.return_value = False
-        self.assertFalse(await self.owner.stop("turn"))
-        self.host.backend.cancel.assert_awaited_once_with(expected_turn="turn")
+        self.assertFalse(await self.owner.stop("run"))
+        self.host.backend.cancel.assert_awaited_once_with(expected_turn="run")
         self.host.backend.active_turn = "other-turn"
-        self.assertFalse(await self.owner.stop("turn"))
+        self.assertFalse(await self.owner.stop("run"))
         self.host.backend.cancel.assert_awaited_once()
 
     async def test_cancelled_confirmation_is_not_replayed(self):
@@ -248,18 +248,18 @@ class VoiceControlTest(unittest.IsolatedAsyncioTestCase):
 
 class CheckpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_active_or_unknown_side_effects_prevent_checkpoint(self):
-        backend = CodexBackend.__new__(CodexBackend)
-        backend.thread_id, backend.active_turn = "thread", "turn"
-        record = {"id": "turn", "status": "inProgress", "items": []}
+        backend = PiBackend.__new__(PiBackend)
+        backend.execution_session_id, backend.active_turn = "session", "run"
+        record = {"id": "run", "status": "running", "items": []}
 
         async def rpc(method, params):
-            return {"thread": {"turns": [record]}} if method == "thread/read" else {"data": []}
+            return {"session": {"runs": [record]}} if method == "session.read" else {"data": []}
 
         backend.client = SimpleNamespace(request=AsyncMock(side_effect=rpc))
-        self.assertTrue(await backend.control_checkpoint("turn"))
-        record["items"] = [{"type": "mcpToolCall", "status": "inProgress", "server": "external"}]
-        self.assertFalse(await backend.control_checkpoint("turn"))
+        self.assertTrue(await backend.control_checkpoint("run"))
+        record["items"] = [{"type": "mcp", "status": "running", "server": "external"}]
+        self.assertFalse(await backend.control_checkpoint("run"))
         record["items"][0]["status"] = "completed"
-        self.assertFalse(await backend.control_checkpoint("turn", stopped=True))
+        self.assertFalse(await backend.control_checkpoint("run", stopped=True))
         record["status"] = "interrupted"
-        self.assertTrue(await backend.control_checkpoint("turn", stopped=True))
+        self.assertTrue(await backend.control_checkpoint("run", stopped=True))

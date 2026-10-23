@@ -62,7 +62,7 @@ class TaskTrace:
             "state": run["state"],
             "trigger_context": run["data"].get("trigger_context"),
             "model_review": run["data"].get("model_review"),
-            "thread_id": run["data"].get("thread_id"),
+            "execution_session_id": run["data"].get("execution_session_id"),
             "turn_id": run["data"].get("turn_id"),
             "items": [{"seq": row[0], "at": row[1], **json.loads(row[2])} for row in rows[:limit]],
             "next": rows[limit - 1][0] if len(rows) > limit else None,
@@ -70,6 +70,8 @@ class TaskTrace:
             "outcome_scope": "provider_reported",
             "model_selections": run["data"].get("model_selections", []),
             "model_fallback": run["data"].get("model_fallback"),
+            "ai_usage": run["data"].get("ai_usage"),
+            "goal_rounds": run["data"].get("goal_rounds", 0),
             "resource_repairs": run["data"].get("resource_repairs", []),
             "model_upgrades": [
                 {k: v for k, v in u.items() if k != "request"} for u in run["data"].get("model_upgrades", [])

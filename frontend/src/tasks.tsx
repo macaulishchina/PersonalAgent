@@ -216,6 +216,13 @@ export function TaskPanel({
             ` · 启动前已排除 ${r.data.trigger_context.invalidated_before_dispatch} 条失效观察`}
         </p>
       )}
+      {r.data.ai_usage && (
+        <p className="task-hint">
+          本次工作 AI 调用 {r.data.ai_usage.requests}/{r.data.ai_usage.limit}
+          {r.data.ai_usage.blocked ? " · 调用已暂停" : r.data.ai_usage.warning ? " · 已达到预警用量" : ""}
+          {r.data.ai_usage.unknown_usage > 0 && ` · ${r.data.ai_usage.unknown_usage} 次用量未知`}
+        </p>
+      )}
       <p>{runSummary(r)}</p>
       <TaskTrace
         runId={r.id}

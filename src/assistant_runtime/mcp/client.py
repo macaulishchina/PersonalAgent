@@ -25,9 +25,11 @@ from ..kernel.contracts import (
 )
 
 from ..kernel.models import ModelRequest
+from ..kernel.ai_usage import UsageRequest
 
 Request = (
-    ModelRequest
+    UsageRequest
+    | ModelRequest
     | VoiceDecisionRequest
     | DecisionOutcome
     | DecisionQuery
@@ -56,11 +58,14 @@ class CapabilityClient(Protocol):
 
 
 class LocalRuntimeClient:
-    def __init__(self, socket: str | Path, timeout: float = 95):
+    def __init__(self, socket: str | Path, timeout: float = 95, *, execution_session=None):
         self.socket, self.timeout = str(socket), timeout
+        self.execution_session = execution_session
 
     async def invoke(self, request: Request) -> dict:
-        if isinstance(request, ModelRequest):
+        if isinstance(request, UsageRequest):
+            payload = {"command": "ai-usage", **asdict(request)}
+        elif isinstance(request, ModelRequest):
             payload = {"command": "models", **asdict(request)}
         elif isinstance(request, VoiceDecisionRequest):
             payload = {"command": "voice-decision", **asdict(request)}
@@ -113,6 +118,8 @@ class LocalRuntimeClient:
         return await self.request({"command": "status"})
 
     async def request(self, payload: dict) -> dict:
+        if self.execution_session:
+            payload = {**payload, "execution_session": self.execution_session}
         wire = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
         if len(wire) > 64 * 1024:
             raise ValueError("Capability request exceeds 64 KiB")

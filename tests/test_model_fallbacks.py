@@ -12,7 +12,7 @@ import test_task_models
 import test_job_lifecycle
 from assistant_runtime.kernel.models import ModelCallError
 from assistant_runtime.plugins.models.settings import ModelSettings
-from assistant_runtime.plugins.codex.failures import model_failure
+from assistant_runtime.plugins.pi.failures import model_failure
 from assistant_runtime.plugins.tasks.selection import ModelPolicy
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.tasks.plugin import TasksPlugin
@@ -151,10 +151,10 @@ class TaskFallbackTest(unittest.IsolatedAsyncioTestCase):
         await self.plugin.fallbacks.apply(run["id"])
         first = self.executor.launch.call_args.args[0]
         self.assertEqual(first["id"], run["id"])
-        self.assertIsNone(first["data"]["thread_id"])
+        self.assertIsNone(first["data"]["execution_session_id"])
         self.assertEqual(first["data"]["spec"]["execution"]["model"], "api-two")
         self.plugin.provider_update(
-            run["id"], "running", thread_id="new-thread", turn_id="new-turn", turn_active=True
+            run["id"], "running", execution_session_id="new-thread", turn_id="new-turn", turn_active=True
         )
         self.fail(self.plugin.repo.run(run["id"]))
         await self.plugin.fallbacks.apply(run["id"])
@@ -162,7 +162,7 @@ class TaskFallbackTest(unittest.IsolatedAsyncioTestCase):
             self.executor.launch.call_args.args[0]["data"]["spec"]["execution"]["model"], "api-three"
         )
         self.plugin.provider_update(
-            run["id"], "running", thread_id="last-thread", turn_id="last-turn", turn_active=True
+            run["id"], "running", execution_session_id="last-thread", turn_id="last-turn", turn_active=True
         )
         self.fail(self.plugin.repo.run(run["id"]))
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "failed")
@@ -211,7 +211,7 @@ class TaskFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.executor.reconcile.return_value = ("completed", "old turn")
         self.runtime = Runtime(self.store)
         self.host.runtime = self.runtime
-        self.runtime.add(test_tasks.Dummy("codex"))
+        self.runtime.add(test_tasks.Dummy("pi"))
         self.runtime.add(test_tasks.Dummy("conversation"))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)
@@ -229,40 +229,40 @@ class ProviderFallbackTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_readback_must_prove_no_actions_and_detach_rejects_late_events(self):
         run = copy.deepcopy(self.run)
-        run["data"].update(thread_id="background", turn_id="turn")
+        run["data"].update(execution_session_id="background", turn_id="run")
         self.runner.handles[run["id"]] = {
-            "thread_id": "background",
+            "execution_session_id": "background",
             "fresh_execution": True,
             "activity": False,
         }
         self.runner.threads["background"] = run["id"]
         turn = {
-            "id": "turn",
+            "id": "run",
             "status": "failed",
-            "error": {"codexErrorInfo": "usageLimitExceeded"},
+            "error": {"status": 429},
             "items": [],
             "itemsView": "full",
         }
         self.runner.client.request = AsyncMock(
-            side_effect=[{"thread": {"status": {"type": "systemError"}, "turns": [turn]}}, {"data": []}]
+            side_effect=[{"session": {"status": {"type": "systemError"}, "runs": [turn]}}, {"data": []}]
         )
         await self.runner.fallback_ready(run)
         for change in (
-            {"items": [{"type": "commandExecution"}]},
-            {"items": [{"type": "mcpToolCall"}]},
+            {"items": [{"type": "command"}]},
+            {"items": [{"type": "mcp"}]},
             {"status": "completed"},
             {"itemsView": "notLoaded"},
             {"error": {"codexErrorInfo": "other"}},
         ):
             self.runner.client.request = AsyncMock(
-                return_value={"thread": {"status": {"type": "idle"}, "turns": [{**turn, **change}]}}
+                return_value={"session": {"status": {"type": "idle"}, "runs": [{**turn, **change}]}}
             )
             with self.assertRaises(RuntimeError):
                 await self.runner.fallback_ready(run)
         await self.runner.detach(run)
         self.assertFalse(
             await self.runner.event(
-                {"method": "turn/completed", "params": {"threadId": "background", "turn": turn}}
+                {"kind": "run.completed", "data": {"session_id": "background", "run": turn}}
             )
         )
 
@@ -274,11 +274,7 @@ class ProviderFallbackTest(unittest.IsolatedAsyncioTestCase):
             {"codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 503}}},
         ):
             self.assertFalse(model_failure(error)["fallback_allowed"])
-        self.assertTrue(
-            model_failure({"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 402}}})[
-                "fallback_allowed"
-            ]
-        )
+        self.assertTrue(model_failure({"status": 402})["fallback_allowed"])
 
     def test_chains_are_bounded_and_reject_unknown_or_duplicate_targets(self):
         for targets in (["missing"], ["test-model"], ["other"] * 4):

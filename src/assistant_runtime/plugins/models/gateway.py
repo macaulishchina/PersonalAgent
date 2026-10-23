@@ -30,7 +30,7 @@ def configuration(settings):
     models = []
     for ident, entry in settings.entries.items():
         p = settings.providers[entry["provider"]]
-        if not settings.enabled or not p.get("enabled", False):
+        if not settings.enabled or not p.get("enabled", False) or p["protocol"] == "pi":
             continue
         protocol = p["protocol"]
         prefix = {

@@ -19,8 +19,8 @@ def upstream_headers(provider, incoming, environment, session_headers=("x-assist
         headers["Authorization"] = "Bearer " + key
     if target := provider.get("session_header"):
         incoming = {k.lower(): v for k, v in incoming.items()}
-        # Auxiliary inference binds identity server-side; Codex supplies its native
-        # thread header. Never invent a new session for every model turn.
+        # Auxiliary inference and Pi bind identity server-side.
+        # Never invent a new session for every model turn.
         session = next((incoming[h] for h in session_headers if incoming.get(h)), None)
         if not isinstance(session, str) or not 1 <= len(session) <= 256:
             raise ValueError("Provider requires a bounded conversation identity")

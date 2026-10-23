@@ -9,7 +9,7 @@ import uuid
 from aiohttp import ClientSession
 
 from assistant_runtime.kernel.contracts import VideoClip
-from assistant_runtime.plugins.codex.conversation import task_event
+from assistant_runtime.plugins.pi.conversation import task_event
 from test_reply_images import provider_item
 from test_video_recording import sample_video
 import test_web
@@ -41,7 +41,7 @@ class ReplyVideoTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(clip.path.exists())
         item = provider_item([{"type": "text", "text": json.dumps(result)}], ident="clip-tool")
         item["item"]["tool"] = "record_video"
-        event = task_event("item/completed", item)
+        event = task_event("activity.completed", item)
         c.provider_event(event)
         message = c.store.get("task:session:clip-tool")
         attachment = message["attachments"][0]
@@ -93,7 +93,7 @@ class ReplyVideoTest(unittest.IsolatedAsyncioTestCase):
             {
                 "kind": "message",
                 "message_id": "forged",
-                "turn_id": "turn",
+                "turn_id": "run",
                 "text": "fake",
                 "detail": False,
                 "status": "complete",

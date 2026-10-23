@@ -89,13 +89,14 @@ def retry_delay(value):
 
 
 class DeepSeek:
-    def __init__(self, session, endpoint, key, requests_per_second=5):
+    def __init__(self, session, endpoint, key, requests_per_second=5, *, usage):
         self.session, self.endpoint, self.key = session, endpoint, key
+        self.usage = usage
         self.interval = 1 / requests_per_second
         self.rate_lock = asyncio.Lock()
         self.next_request = 0.0
 
-    async def call(self, action, payload, metrics, deadline):
+    async def call(self, action, payload, metrics, deadline, *, scope, provider):
         if not self.key:
             raise SearchError("credentials_missing")
         if len(self.key) > 4096 or any(ord(c) <= 32 or ord(c) >= 127 for c in self.key):
@@ -104,7 +105,18 @@ class DeepSeek:
             async with self.rate_lock:
                 await asyncio.sleep(max(0, self.next_request - time.monotonic()))
                 self.next_request = time.monotonic() + self.interval
+            from ...kernel.ai_usage import UsageError
+
+            try:
+                ticket = await self.usage.admit(
+                    scope, service="search", provider=provider, model=action, body=payload
+                )
+            except UsageError as exc:
+                raise SearchError(exc.code) from None
             metrics["upstream_attempts"] += 1
+            metrics.setdefault("usage_call_ids", []).append(ticket["id"])
+            confirmed = False
+            http_status = None
             delay = 0.25
             try:
                 async with self.session.post(
@@ -113,6 +125,8 @@ class DeepSeek:
                     headers={"Authorization": "Bearer " + self.key},
                     allow_redirects=False,
                 ) as response:
+                    confirmed = True
+                    http_status = response.status
                     ident = response.headers.get("x-request-id", "")
                     if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", ident):
                         metrics["provider_request_id"] = ident
@@ -147,6 +161,13 @@ class DeepSeek:
                     delay = retry_delay(response.headers.get("Retry-After"))
             except (aiohttp.ClientError, OSError, TimeoutError):
                 code = "provider_network_error"
+            finally:
+                await self.usage.settle(
+                    ticket["id"],
+                    state="completed" if http_status == 200 else "rejected" if confirmed else "unknown",
+                    http_status=http_status,
+                    provider_request_id=metrics.get("provider_request_id"),
+                )
             if attempt or time.monotonic() + delay >= deadline:
                 raise SearchError(code)
             await asyncio.sleep(delay)

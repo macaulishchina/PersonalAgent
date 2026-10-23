@@ -3,7 +3,6 @@
 import asyncio
 import json
 import time
-from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
@@ -102,7 +101,9 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()
         self.config.decisions.update(settings)
         self.runtime = type(self.runtime)(self.store)
-        self.plugin = type(self.plugin)(SimpleNamespace(config=self.config), self.provider)
+        from usage_fixture import decision_host
+
+        self.plugin = type(self.plugin)(decision_host(self.config, self.runtime), self.provider)
         self.runtime.add(self.plugin)
         await asyncio.wait_for(self.runtime.start(), 0.5)
 
@@ -164,7 +165,9 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         self.provider.warmup = AsyncMock()
         self.config.decisions["mode"] = "active"
         self.runtime = Runtime(self.store)
-        self.plugin = type(self.plugin)(SimpleNamespace(config=self.config), self.provider)
+        from usage_fixture import decision_host
+
+        self.plugin = type(self.plugin)(decision_host(self.config, self.runtime), self.provider)
         self.runtime.add(self.plugin)
         self.runtime.add(Initializing())
         startup = asyncio.create_task(self.runtime.start())
@@ -192,6 +195,7 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["reason"], "timeout")
         self.assertGreater(time.monotonic() - started, 2.8)
         self.assertLess(time.monotonic() - started, 3.5)
+        await asyncio.wait_for(self.runtime.close(), 1)
 
 
 class SettingsTest(unittest.TestCase):

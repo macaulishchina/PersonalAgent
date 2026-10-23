@@ -18,7 +18,7 @@ from assistant_runtime.plugins.events.plugin import EventsPlugin
 from assistant_runtime.plugins.tasks.plugin import TasksPlugin
 from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
 from assistant_runtime.plugins.tasks.event_inbox import validate_subscription, EventInbox
-from assistant_runtime.plugins.codex.jobs import tool_trace
+from assistant_runtime.plugins.pi.jobs import tool_trace
 from assistant_runtime.workfiles import WorkFiles
 
 
@@ -56,7 +56,7 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
             conversation=SimpleNamespace(store=ConversationStore(self.store), session="main"),
             workfiles=WorkFiles(self.root, self.store.db),
         )
-        for name in ("codex", "conversation"):
+        for name in ("pi", "conversation"):
             self.runtime.add(Dummy(name))
         self.events = EventsPlugin(self.host)
         self.runtime.add(self.events)
@@ -268,10 +268,10 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
         await self.inbox.cycle()
         run = self.tasks.repo.runs(d["id"])[0]
         event = {
-            "turnId": "turn",
+            "run_id": "run",
             "item": {
                 "id": "tool",
-                "type": "mcpToolCall",
+                "type": "mcp",
                 "server": "device",
                 "tool": "set_audio_volume",
                 "arguments": {"device_id": "speaker", "operation_id": "op", "secret": "never-store"},
@@ -279,7 +279,7 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
                 "status": "completed",
             },
         }
-        trace = tool_trace("item/completed", event)
+        trace = tool_trace("activity.completed", event)
         self.tasks.provider_update(run["id"], None, tool_trace=trace)
         self.tasks.provider_update(run["id"], None, tool_trace=trace)
         result = await self.tasks.request(TaskRequest("trace", {"run_id": run["id"]}))

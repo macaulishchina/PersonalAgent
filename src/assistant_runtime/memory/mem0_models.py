@@ -1,4 +1,4 @@
-"""Thin upstream provider adapters: official Codex task callback and local FastEmbed."""
+"""Thin upstream provider adapters: framework model callback and local FastEmbed."""
 
 import json
 
@@ -13,12 +13,12 @@ from .policy import FACT_SCHEMA, ACTION_SCHEMA, validate_facts
 CHANNEL = None
 
 
-class CodexSubscriptionLLM(LLMBase):
+class FrameworkLLM(LLMBase):
     def generate_response(self, messages, tools=None, tool_choice="auto", **kwargs):
         if tools:
             raise ValueError("Memory model must not execute tools")
         if CHANNEL is None:
-            raise RuntimeError("Codex subscription callback unavailable")
+            raise RuntimeError("Memory model callback unavailable")
         extracting = any(m.get("role") == "system" for m in messages)
         try:
             response = CHANNEL.complete(messages, FACT_SCHEMA if extracting else ACTION_SCHEMA)

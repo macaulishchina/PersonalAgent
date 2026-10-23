@@ -67,7 +67,7 @@ def answer(payload, criteria, requested):
             "choice": choice,
             "confidence": confidence,
             "probabilities": values,
-            "usage": {k: usage.get(k, 0) for k in ("input_tokens", "output_tokens")},
+            "usage": {k: usage[k] for k in ("input_tokens", "output_tokens") if k in usage},
         }
     except (KeyError, TypeError, ValueError, AttributeError):
         raise DecisionError("invalid_response") from None

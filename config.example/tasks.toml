@@ -1,8 +1,9 @@
 # 后台任务并发、模型四档、升级规则、工作文件和通知。
 
 [tasks]
+max_goal_rounds = 8 # 同一长期目标单轮任务内有限续跑，不重置调用预算
 timezone = "Asia/Shanghai"
-concurrency = 2
+concurrency = 4
 misfire_seconds = 300
 
 [tasks.execution]
@@ -10,43 +11,26 @@ model = "auto"
 reasoning_effort = "auto"
 
 [tasks.model_policy]
-# off: original selection; shadow: observe; active: correct assistant recommendations.
-# Active threshold: decisions.thresholds.model_review (0..1, default 0.90).
-review_mode = "shadow"
+review_mode = "active"
 default_profile = "fast"
 max_upgrades = 1
 
-[tasks.model_policy.profiles]
-
 [tasks.model_policy.profiles.fast]
-model = "gpt-6-luna"
+model = "go-gpt"
 reasoning_effort = "low"
-
 [tasks.model_policy.profiles.balanced]
-model = "gpt-6.1-sol"
-reasoning_effort = "low"
-
-[tasks.model_policy.profiles.deep]
-model = "gpt-6.1-sol"
+model = "go-gpt"
 reasoning_effort = "medium"
-
-[tasks.model_policy.profiles.ultra]
-model = "gpt-6-astra"
+[tasks.model_policy.profiles.deep]
+model = "go-gpt"
 reasoning_effort = "high"
-
-# 可选：主模型明确失败且确认没有执行动作时，按顺序切换。
-# [tasks.model_policy.fallbacks]
-# gpt-6-luna = [{ model = "deepseek-assist", reasoning_effort = "none" }]
-# 实际模型别名和能力须在 models.toml 配置、启用并完成验收。
+[tasks.model_policy.profiles.ultra]
+model = "go-gpt"
+reasoning_effort = "max"
+[tasks.model_policy.fallbacks]
+go-gpt = [{model="go-claude", reasoning_effort="medium"}, {model="deepseek-assist", reasoning_effort="high"}]
+go-claude = [{model="go-gpt", reasoning_effort="medium"}, {model="deepseek-assist", reasoning_effort="high"}]
+deepseek-assist = [{model="go-gpt", reasoning_effort="medium"}, {model="go-claude", reasoning_effort="medium"}]
 
 [work_files]
 retention_days = 7
-
-[notifications]
-channels = ["chat", "context"]
-voice_enabled = true
-voice_spacing_seconds = 60
-max_attempts = 5
-retry_seconds = 5
-delivery_timeout = 45
-max_notifications = 10000

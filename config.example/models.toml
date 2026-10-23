@@ -1,107 +1,141 @@
-# 主会话订阅模型和 API 接入。密钥留在实例根目录 .env。
-codex_model = "gpt-6.1-sol"
-codex_reasoning_effort = "high"
+# 主会话与辅助模型统一 API 接入。密钥留在实例根目录 .env。
+main_model = "go-gpt"
+main_reasoning_effort = "medium"
 
+# API 总开关；主会话与后台执行共用模型目录，语音暂未启用。
 [model_api]
+memory = "go-gpt"
 execution_max_output_tokens = 16384
-enabled = false
+enabled = true
+gateway_url = "http://127.0.0.1:4010/v1"
 concurrency = 4
 queue_size = 16
 timeout_seconds = 60
 max_output_tokens = 8192
+# memory 必须显式绑定已验收的结构化模型；未设置时不启动提取代理。
 
-[model_api.providers]
-
-[model_api.providers.openai]
-preset = "openai"
-enabled = false
-
-[model_api.providers.claude]
-preset = "claude"
-enabled = false
-
-[model_api.providers.gemini]
-preset = "gemini"
-enabled = false
-
+# 调用计量和预算在 ai-usage.toml 中配置；本文件只管理模型接入。
 [model_api.providers.deepseek]
 preset = "deepseek"
-enabled = false
+enabled = true # 使用 .env 的 DEEPSEEK_API_KEY
 
 [model_api.providers.go-responses]
 preset = "opencode_go_responses"
-enabled = false
-
-[model_api.providers.go-chat]
-preset = "opencode_go_chat"
-enabled = false
+enabled = true # 使用 .env 的 OPENCODE_API_KEY，固定 Go URL
 
 [model_api.providers.go-anthropic]
 preset = "opencode_go_anthropic"
-enabled = false
+enabled = true
 
+[model_api.providers.go-chat]
+preset = "opencode_go_chat"
+enabled = true
+
+# Contributor 仅做过合成测试；暂不启用线上私人数据调用。
 [model_api.providers.go-gemini]
 preset = "opencode_go_gemini"
 enabled = false
 
-[model_api.entries]
-
-[model_api.entries.go-gpt]
-reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
-default_reasoning_effort = "low"
-provider = "go-responses"
-model = "gpt-6-luna"
-context_window = 128000
-execution_validated = false
-
-[model_api.entries.go-glm]
-provider = "go-chat"
-model = "glm-5.3-flash"
-context_window = 128000
-reasoning_efforts = ["low", "high", "max"]
-default_reasoning_effort = "low"
-execution_validated = false
-
-# 此表中可选：fallbacks = ["go-gpt", "go-glm"]
-# 仅辅助推理使用，按顺序、每个一次；不递归展开备选自己的列表。
-# 所有候选须先启用并验收所需能力。
-[model_api.entries.go-claude]
-reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
-default_reasoning_effort = "medium"
-provider = "go-anthropic"
-model = "claude-haiku-5-5"
-context_window = 128000
-execution_validated = false
-
-[model_api.entries.go-gemini]
-reasoning_efforts = ["low", "medium", "high"]
-default_reasoning_effort = "medium"
-provider = "go-gemini"
-model = "gemini-4-argon-contributor"
-execution_validated = false
-
+# 日常辅助推理和普通后台任务备选；不支持严格 JSON Schema。
 [model_api.entries.deepseek-assist]
 provider = "deepseek"
 model = "deepseek-flash"
-images = false
+images = true
 structured = false
-execution_validated = false
+execution_validated = true
 context_window = 128000
 reasoning_efforts = ["none", "low", "high", "max"]
 default_reasoning_effort = "low"
 max_output_tokens = 8192
-# model_api.enabled 是 API 总开关；providers.<name>.enabled 是供应商开关。
-# 不改变供应商的数据留存/训练政策，也不会按任务内容自动过滤。
+fallbacks = ["go-claude", "go-gpt", "go-glm"]
 
-# 自定义第三方示例（与固定官方/Go preset 二选一，不同时填写）：
-# [model_api.providers.company]
-# protocol = "openai_chat" # openai_responses / openai_chat / anthropic / gemini
-# base_url = "https://provider.example/v1" # Gemini 使用版本路径，例如 /v1beta
-# key_env = "COMPANY_MODEL_API_KEY"
-# enabled = false
-# auth_scheme = "bearer" # 可选，默认按协议认证
-# session_header = "x-session-id" # 可选，服务端绑定的会话标识
-# capability 字段和 reasoning_efforts 按实际验收填写，不按名称推测。
+# OpenCode Go 模型：按实际能力选择。
+# fallbacks 在此仅用于无工具辅助推理；后台执行链写在 tasks.toml。
+[model_api.entries.go-claude]
+provider = "go-anthropic"
+model = "claude-haiku-5-5"
+images = true
+structured = true
+execution_validated = true
+context_window = 128000
+reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
+default_reasoning_effort = "medium"
+fallbacks = ["go-gpt", "go-glm"]
+
+[model_api.entries.go-gpt]
+provider = "go-responses"
+model = "gpt-6-luna"
+images = true
+structured = true
+execution_validated = true
+context_window = 128000
+reasoning_efforts = ["none", "low", "medium", "high", "xhigh", "max"]
+default_reasoning_effort = "low"
+fallbacks = ["go-claude", "go-glm"]
+
+[model_api.entries.go-glm]
+provider = "go-chat"
+model = "glm-5.3-flash"
+images = true
+structured = true
+execution_validated = true
+context_window = 128000
+reasoning_efforts = ["low", "high", "max"]
+default_reasoning_effort = "low"
+fallbacks = ["go-claude", "go-gpt"]
+
+[model_api.entries.go-gemini]
+provider = "go-gemini"
+model = "gemini-4-argon-contributor"
+images = true
+structured = true
+execution_validated = false
+context_window = 128000
+reasoning_efforts = ["low", "medium", "high"]
+default_reasoning_effort = "medium"
+
+# enabled 只是本地开关，不更改供应商的数据政策。
+# 一次调用只展开首选的列表，每个候选一次；不会递归展开备选列表。
 
 # reasoning_efforts 是该模型的有效档位；default_reasoning_effort 用于未显式指定的辅助调用。
 # 输出预算包含思考：max_output_tokens 用于辅助推理，execution_max_output_tokens 用于后台执行。
+
+# Pi 原生账号接入：不启动第二套代理；独立于 Coding AI / Codex 的登录文件。
+# OAuth 在 model-accounts login 中通过供应商网页授权，TOML 不填写令牌或密码。
+[model_api.accounts.chatgpt]
+provider = "openai"
+auth = "oauth"
+# ChatGPT 订阅接口不接受单次输出上限；显式使用模型上限预留用量。
+# 全局 max_output_tokens / execution_max_output_tokens 不能限制这条上游路线。
+output_limit = "model"
+
+[model_api.providers.chatgpt]
+account = "chatgpt"
+enabled = false # 登录并按用途验收后再开启，不自动改变主模型。
+
+[model_api.entries.subscription-sol]
+provider = "chatgpt"
+model = "gpt-6.1-sol" # 先查询 model-accounts catalog；静态目录不等于账号有权限。
+images = false
+structured = false
+execution_validated = false
+context_window = 128000
+reasoning_efforts = ["low", "medium", "high"]
+default_reasoning_effort = "medium"
+
+# 其他原生账号配置示例（未登录、未验收）：
+# [model_api.accounts.claude]
+# provider = "anthropic"
+# auth = "oauth"
+#
+# [model_api.accounts.copilot]
+# provider = "github-copilot"
+# auth = "oauth"
+#
+# [model_api.accounts.gemini]
+# provider = "google"
+# auth = "api_key"
+# key_env = "GEMINI_API_KEY"
+#
+# 同一家可声明多个命名账号，provider/account/model 分别维护。
+# 用 model-accounts providers 查询固定 Pi 版本支持的真实账号方式。

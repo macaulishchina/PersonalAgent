@@ -1,11 +1,16 @@
 # 总入口：实例目录、插件和运行基础设置。include 相对本文件，禁止递归包含或重复字段。
 profile = "headless"
+backend = "pi"
+pi_binary = "pi"
+# 实例技能仅从 <root>/config/skills/<名称>/SKILL.md 显式加载；不读取 .agents/。
+# 通用技能随其业务插件启用，无需在此列出。私有设备经验可按需添加。
+instance_skills = []
 root = ".."
 include = [
   "voice.toml",
   "devices.toml",
   "hid-buttons.toml",
-  "models.toml",
+  "models.toml", "ai-usage.toml",
   "decisions.toml",
   "tasks.toml",
   "memory.toml",
@@ -13,7 +18,7 @@ include = [
   "search.toml",
   "services.toml",
 ]
-# 实际语音实例需设置 profile="voice"，并在 voice/devices 文件配置主设备。
+# 语音暂未启用；voice/devices 中的固定设备绑定保留供后续独立验收。
 # workspace = "/absolute/workspace"
 # model_dir = "/absolute/wake-models"
-# plugins = ["decisions", "pipewire", "keyword", "codex", "memory", "gesture", "notifications", "tasks"]
+# plugins = ["decisions", "pipewire", "voice_disabled", "pi", "memory", "gesture", "notifications", "tasks"]

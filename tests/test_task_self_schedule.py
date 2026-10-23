@@ -305,7 +305,7 @@ class SelfScheduleTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()
         self.runtime = Runtime(self.store)
         self.host.runtime = self.runtime
-        for name in ("codex", "conversation"):
+        for name in ("pi", "conversation"):
             self.runtime.add(fixtures.Dummy(name))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)

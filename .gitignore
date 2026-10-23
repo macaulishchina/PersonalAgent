@@ -29,6 +29,8 @@ memory-export*.json
 /tmp/
 /scratch/
 /artifacts/
+/.agents/
+/.agent/
 *.log
 *.tmp
 *.swp

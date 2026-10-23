@@ -17,17 +17,8 @@ class McpRegistry:
         self.path = (
             Path(self.settings.registry_path)
             if self.settings.registry_path
-            else root / ".agents/mcp/servers.json"
+            else root / "config/mcp/servers.json"
         )
-        if (
-            not self.settings.registry_path
-            and not self.path.exists()
-            and (root / "state/mcp/servers.json").exists()
-        ):
-            raise ValueError(
-                "MCP registry moved to .agents/mcp/servers.json; migrate non-secret definitions "
-                "or explicitly set registry_path to retain the private registry"
-            )
         self.work = root / "state/mcp/servers"
         self.lock = asyncio.Lock()
         self.data = {"revision": 0, "servers": {}, "removed": []}
