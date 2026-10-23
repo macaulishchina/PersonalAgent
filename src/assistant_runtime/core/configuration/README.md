@@ -20,6 +20,15 @@ private at `state/configuration/admin-token`; it is separate from the chat login
 resolves the same bootstrap before parsing business configuration, so damaged business
 TOML does not prevent the repair page from starting. Initialization does not start services.
 
+After login, **修改密码** sets a custom administrator password (12–256 characters,
+without leading/trailing whitespace, line breaks or NUL). It verifies the current password
+and repeated new input, shares the login rate limit, and atomically updates the private
+credential. This account operation takes effect immediately, invalidates every administrator
+session and requires login again; it does not restart the business process or depend on valid
+business TOML. Only the action is audited, never the passwords. CLI `reset-token` remains the
+local recovery path and generates a new random credential. Configuration restore does not
+restore administrator passwords.
+
 The page groups application/core settings by function and extension settings by owner.
 Model providers, accounts and aliases have typed named-object forms, references and
 reasoning selections. Low-frequency maps/lists retain bounded structured editors.

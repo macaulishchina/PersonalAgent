@@ -295,9 +295,11 @@ def main():
                 path = settings.root / "state/configuration/admin-token"
                 if args.action == "reset-token":
                     from assistant_runtime.core.configuration.files import atomic
+                    from assistant_runtime.api.configuration_io import configuration_lock
                     import secrets
 
-                    atomic(path, (secrets.token_urlsafe(32) + "\n").encode())
+                    with configuration_lock(settings.root):
+                        atomic(path, (secrets.token_urlsafe(32) + "\n").encode())
                 AdminAccess(path)
                 print(path.read_text().strip())
             return

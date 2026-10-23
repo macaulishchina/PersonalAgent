@@ -7,3 +7,4 @@
 a{color:#c1dfcb}details{margin:14px 0}details>details{margin-left:14px}button{margin:3px}select{max-width:100%;padding:10px;border-radius:8px}#repair{padding:20px;border:1px solid #785e36;border-radius:12px;margin-top:20px}#account-flows:empty{display:none}label{overflow-wrap:anywhere}.application{padding:12px 0;margin-bottom:20px}.hint{line-height:1.6}code{overflow-wrap:anywhere}
 
 .owner-panel{padding:18px 20px;border:1px solid #344338;border-radius:12px;margin:0 0 14px}.owner-panel>summary{font-weight:600;font-size:17px;padding:2px 0}.owner-panel[open]>summary{margin-bottom:16px}
+.header-actions{display:flex;flex-wrap:wrap;justify-content:flex-end}#password-change{max-width:560px}#password-change input{background:#141a16;color:inherit}

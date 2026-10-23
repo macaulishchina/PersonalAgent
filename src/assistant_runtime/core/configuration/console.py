@@ -1,15 +1,17 @@
 """Separate authenticated operator entrance. No assistant tools are registered."""
 
 import asyncio
+import logging
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from aiohttp import web
-from .auth import AdminAccess
+from .auth import AdminAccess, PasswordPolicyError
 from .files import Conflict
 from .catalog import catalog
 
 COOKIE = "personal_agent_admin"
+log = logging.getLogger(__name__)
 
 
 class Console:
@@ -61,6 +63,8 @@ class Console:
             response = web.json_response({"error": "配置已被其他操作修改，请重新加载"}, status=409)
         except PermissionError:
             response = web.json_response({"error": "登录失败或请求过于频繁"}, status=403)
+        except PasswordPolicyError as exc:
+            response = web.json_response({"error": str(exc)}, status=400)
         except (ValueError, TypeError, KeyError, OSError):
             # Parser and owner exception strings may contain credentials. Do not echo them.
             response = web.json_response(
@@ -84,6 +88,8 @@ class Console:
                 web.get("/console.css", self.styles),
                 web.post("/api/login", self.login),
                 web.post("/api/logout", self.logout),
+                web.get("/api/admin-password", self.password_policy),
+                web.post("/api/admin-password", self.change_password),
                 web.get("/api/status", self.status),
                 web.get("/api/configuration", self.read),
                 web.post("/api/configuration", self.save),
@@ -155,6 +161,36 @@ class Console:
     async def logout(self, request):
         self.access.logout(request.cookies.get(COOKIE, ""))
         response = web.json_response({"ok": True})
+        response.del_cookie(COOKIE, path="/")
+        return response
+
+    async def password_policy(self, request):
+        return web.json_response(self.access.password_policy())
+
+    async def change_password(self, request):
+        from assistant_runtime.api.configuration_io import configuration_lock
+        import time
+
+        data = await request.json()
+        async with self.writes:
+            with configuration_lock(self.settings.root):
+                self.access.change_password(
+                    data.get("current_password"),
+                    data.get("new_password"),
+                    data.get("confirmation"),
+                    request.remote,
+                )
+            try:
+                self.files._audit(
+                    {
+                        "time": time.time(),
+                        "actor": "administrator",
+                        "result": "administrator_password_changed",
+                    }
+                )
+            except OSError:
+                log.warning("Administrator password changed; configuration audit unavailable")
+        response = web.json_response({"changed": True, "reauthentication_required": True})
         response.del_cookie(COOKIE, path="/")
         return response
 

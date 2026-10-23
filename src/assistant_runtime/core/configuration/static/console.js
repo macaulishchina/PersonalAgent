@@ -10,9 +10,14 @@ const drafts=new Map();
 const hiddenValue=(value)=>value==="••••••••"||(value&&typeof value==="object"&&(Object.keys(value).length===1&&Object.hasOwn(value,"configured")||Object.values(value).some(hiddenValue)));
 const key=(path)=>JSON.stringify(path);
 const node=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
+function signedOut(){
+  $("login").hidden=false;$("editor").hidden=true;$("password-open").hidden=true;$("password-change").hidden=true;$("repair").hidden=true;
+  document.querySelectorAll('input[type="password"]').forEach(input=>{input.value="";});
+  clearTimeout(applicationTimer);clearTimeout(accountTimer);
+}
 async function api(path, body) {
   const response=await fetch(path,body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(response.status===401){$("login").hidden=false;$("editor").hidden=true;throw Error("请先登录");}
+  if(response.status===401){signedOut();throw Error("请先登录");}
   if(!response.headers.get("Content-Type")?.includes("application/json"))throw Error(`请求失败（${response.status}）`);
   const data=await response.json();if(!response.ok)throw Error(data.error||"请求失败");return data;
 }
@@ -119,12 +124,29 @@ async function load(){
   const [config,status,descriptions,resources]=await Promise.all([api("/api/configuration"),api("/api/status"),api("/api/catalog"),api("/api/resources")]);
   resourceInventory=resources.resources;resourceEdits.clear();
   snapshot=config;inventory=descriptions;edits.clear();invalid.clear();drafts.clear();
-  $("diagnostics").replaceChildren(...(inventory.issues||[]).map(item=>node("p",`${item.id}：配置描述不可用（${item.error}）`,"hint")));$("login").hidden=true;$("editor").hidden=false;
+  $("diagnostics").replaceChildren(...(inventory.issues||[]).map(item=>node("p",`${item.id}：配置描述不可用（${item.error}）`,"hint")));$("login").hidden=true;$("editor").hidden=false;$("password-open").hidden=false;
   $("state").textContent=status.loaded_version===config.version?"文件与已加载版本一致":"已保存的配置待重启生效";
   $("health").textContent=`业务状态：${({running:"运行中",stopped:"已停止",failed:"启动失败",degraded:"部分功能不可用",starting:"启动中"})[status.state]||status.state}`;
   render();await applicationStatus();
 }
-$("login").addEventListener("submit",e=>{e.preventDefault();action(async()=>{await api("/api/login",{token:$("token").value});$("token").value="";await load();$("notice").textContent="";});});
+$("login").addEventListener("submit",e=>{e.preventDefault();action(async()=>{await api("/api/login",{token:$("token").value});$("token").value="";$("password-open").hidden=false;await load();$("notice").textContent="";});});
+$("password-open").addEventListener("click",()=>action(async()=>{
+  const policy=await api("/api/admin-password");
+  for(const id of ["new-password","confirm-password"]){$(id).minLength=policy.min_length;$(id).maxLength=policy.max_length;}
+  $("password-policy").textContent=`新密码须为 ${policy.min_length}–${policy.max_length} 个字符，首尾不能有空白。`;
+  $("password-change").reset();$("password-change").hidden=false;$("current-password").focus();
+}));
+$("password-cancel").addEventListener("click",()=>{$("password-change").reset();$("password-change").hidden=true;});
+$("password-change").addEventListener("submit",e=>{e.preventDefault();action(async()=>{
+  if($("new-password").value!==$("confirm-password").value)throw Error("两次输入的新密码不一致。");
+  if((dirty()||invalid.size)&&!confirm("修改密码后需要重新登录，未保存的编辑会丢失。是否继续？"))return;
+  $("password-save").disabled=true;
+  try{
+    await api("/api/admin-password",{current_password:$("current-password").value,new_password:$("new-password").value,confirmation:$("confirm-password").value});
+    edits.clear();resourceEdits.clear();invalid.clear();drafts.clear();signedOut();
+    $("notice").textContent="管理员密码已修改，所有设备需使用新密码重新登录。无需重启业务服务。";$("token").focus();
+  }finally{$("password-change").reset();$("password-save").disabled=false;}
+});});
 $("refresh").addEventListener("click",()=>action(load));
 $("save").addEventListener("click",()=>action(async()=>{
   if(invalid.size)throw Error("请先修正字段格式："+[...invalid.values()].join("、"));
