@@ -275,6 +275,36 @@ asyncio.run(main())
             with self.assertRaisesRegex(ValueError, "already exists"):
                 initialize(root)
 
+    async def test_configured_camera_uses_declared_state_path_through_composition(self):
+        from assistant_runtime.app.config import Config
+        from assistant_runtime.app.host import AssistantService
+
+        with tempfile.TemporaryDirectory() as folder:
+            config = Config(
+                root=Path(folder),
+                plugins=["devices", "go2rtc"],
+                devices={
+                    "camera": {
+                        "adapter": "go2rtc",
+                        "kind": "camera",
+                        "label": "Synthetic camera",
+                        "location": "test",
+                        "connection": {"base_url": "http://127.0.0.1:8553", "stream": "camera"},
+                    }
+                },
+            )
+            host = AssistantService(config)
+            try:
+                plugin = host.runtime.plugins["go2rtc"]
+                self.assertEqual(
+                    plugin.providers["camera"].recording_folder, config.state_dir / "video-recordings"
+                )
+                self.assertFalse(hasattr(plugin.public.config, "root"))
+                self.assertFalse(hasattr(plugin.public.config, "model_api"))
+            finally:
+                host.store.db.close()
+                host.lock_file.close()
+
     async def test_composition_failure_closes_database_and_instance_lock(self):
         import fcntl
         import sqlite3

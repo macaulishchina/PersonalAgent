@@ -13,5 +13,5 @@ DECLARATION = PluginDefinition(
     Manifest("go2rtc", (), critical=False),
     create=create,
     resources=("directory", "video_inputs", "camera_controls"),
-    config_fields=(),
+    config_fields=("state_dir",),
 )
