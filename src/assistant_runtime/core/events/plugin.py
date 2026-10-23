@@ -18,6 +18,13 @@ class EventsPlugin:
         self.storage = Storage(host.config.state_dir / "events", self.settings)
         self.context = self.ingress = None
 
+    def maintenance_pending(self):
+        return (
+            [{"state": "finalizing"}]
+            if self.ingress and (self.ingress.inflight or any(self.ingress.pending.values()))
+            else []
+        )
+
     async def start(self, context):
         self.context = context
         context.own(self.close)

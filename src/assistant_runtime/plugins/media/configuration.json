@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "namespace": "media",
+  "title": "媒体资源",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "accounts": {
+        "type": "object",
+        "title": "账号",
+        "default": {
+          "aliyun": {
+            "provider": "aliyun",
+            "file_backend": "native"
+          }
+        },
+        "additionalProperties": {}
+      },
+      "file_backend": {
+        "type": "string",
+        "title": "文件操作实现",
+        "default": "openlist"
+      },
+      "search_url": {
+        "type": "string",
+        "title": "search_url",
+        "default": "http://127.0.0.1:8888"
+      },
+      "openlist_url": {
+        "type": "string",
+        "title": "openlist_url",
+        "default": ""
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "title": "请求超时（秒）",
+        "default": 15,
+        "minimum": 0
+      },
+      "max_operations": {
+        "type": "integer",
+        "title": "操作记录上限",
+        "default": 10000
+      },
+      "queue_capacity": {
+        "type": "integer",
+        "title": "queue_capacity",
+        "default": 128
+      },
+      "targets": {
+        "type": "object",
+        "title": "网盘保存目标",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "local_targets": {
+        "type": "object",
+        "title": "本地存储目标",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "download_min_free_bytes": {
+        "type": "integer",
+        "title": "download_min_free_bytes",
+        "default": 1073741824
+      }
+    }
+  }
+}

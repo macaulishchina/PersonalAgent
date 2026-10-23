@@ -18,7 +18,13 @@ async def request(config, payload):
         writer.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
         await writer.drain()
         response = json.loads(
-            await asyncio.wait_for(reader.readline(), 180 if payload["command"] == "mcp" else 95)
+            await asyncio.wait_for(
+                reader.readline(),
+                max(
+                    3690 if payload["command"] == "mcp" else 95,
+                    config.model_api.get("timeout_seconds", 600) + 90,
+                ),
+            )
         )
         if not response["ok"]:
             raise RuntimeError(response["error"])
@@ -56,6 +62,9 @@ def main():
     files = sub.add_parser("files", help="Register and inspect bounded input resources")
     files.add_argument("action", choices=["put", "get"])
     files.add_argument("arguments", help="JSON: put accepts name, base64 data, and optional kind=file|image")
+    management = sub.add_parser("configuration", help="Independent operator configuration console")
+    management.add_argument("action", choices=["serve", "token", "reset-token"])
+    management.add_argument("--management", required=True, help="Independent management.toml path")
     run = sub.add_parser("run")
     run.add_argument("--no-mic", action="store_true")
     for name in [
@@ -272,6 +281,32 @@ def main():
             if not args.config:
                 raise ValueError("prepare-config requires an explicit --config source")
             print(json.dumps(prepare(args.config, args.destination), ensure_ascii=False, indent=2))
+            return
+        if args.command == "configuration":
+            from assistant_runtime.core.configuration.settings import ManagementSettings
+            from assistant_runtime.core.configuration.auth import AdminAccess
+
+            settings = ManagementSettings.load(args.management)
+            if args.action == "serve":
+                from assistant_runtime.app.management import serve
+
+                asyncio.run(serve(settings))
+            else:
+                path = settings.root / "state/configuration/admin-token"
+                if args.action == "reset-token":
+                    from assistant_runtime.core.configuration.files import atomic
+                    import secrets
+
+                    atomic(path, (secrets.token_urlsafe(32) + "\n").encode())
+                AdminAccess(path)
+                print(path.read_text().strip())
+            return
+        if args.command == "run" and os.environ.get("PERSONAL_AGENT_SUPERVISOR_PID") != str(os.getppid()):
+            from .management import serve
+            from assistant_runtime.core.configuration.settings import ManagementSettings
+            from .management_bootstrap import resolve_management
+
+            asyncio.run(serve(ManagementSettings.load(resolve_management(args.config))))
             return
         config = Config.load(args.config)
         if args.command == "plugins":

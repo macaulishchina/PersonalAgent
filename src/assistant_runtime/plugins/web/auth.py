@@ -10,6 +10,9 @@ from collections import OrderedDict
 
 class Access:
     def __init__(self, path, db, *, approved_short_password_sha256=""):
+        from assistant_runtime.api.configuration_io import configuration_path
+
+        path = configuration_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

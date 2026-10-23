@@ -1,15 +1,21 @@
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 
 
 @dataclass
 class NotificationSettings:
-    channels: list[str] = field(default_factory=lambda: ["chat", "context"])
-    max_attempts: int = 5
-    retry_seconds: int = 5
-    delivery_timeout: int = 45
-    max_notifications: int = 10000
-    voice_enabled: bool = True
-    voice_spacing_seconds: int = 60
+    channels: list[str] = field(default_factory=lambda: configuration_default(__file__, "channels"))
+    max_attempts: int = field(default_factory=lambda: configuration_default(__file__, "max_attempts"))
+    retry_seconds: int = field(default_factory=lambda: configuration_default(__file__, "retry_seconds"))
+    delivery_timeout: int = field(default_factory=lambda: configuration_default(__file__, "delivery_timeout"))
+    max_notifications: int = field(
+        default_factory=lambda: configuration_default(__file__, "max_notifications")
+    )
+    voice_enabled: bool = field(default_factory=lambda: configuration_default(__file__, "voice_enabled"))
+    voice_spacing_seconds: int = field(
+        default_factory=lambda: configuration_default(__file__, "voice_spacing_seconds")
+    )
 
     @classmethod
     def parse(cls, data):

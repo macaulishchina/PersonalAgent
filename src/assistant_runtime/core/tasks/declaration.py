@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import TaskSettings
 from pathlib import Path
@@ -13,7 +14,8 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest(
+    configuration=configuration_spec(__file__),
+    manifest=Manifest(
         "tasks",
         ("execution", "pi", "notifications", "workfiles"),
         optional=("conversation", "devices"),

@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import IntegrationSettings
 
@@ -9,7 +10,8 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("integrations", (), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("integrations", (), critical=False),
     internal_factory=build,
     config_key="external_mcp",
     validate=IntegrationSettings.parse,

@@ -168,6 +168,9 @@ class RecordingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_canceling_real_ipc_request_cancels_capture_before_attachment_publication(self):
         service = object.__new__(AssistantService)
+        from assistant_runtime.api.lifecycle import WorkIntake
+
+        service.intake = WorkIntake()
         canceled, started = asyncio.Event(), asyncio.Event()
 
         async def capture(*args, **kwargs):

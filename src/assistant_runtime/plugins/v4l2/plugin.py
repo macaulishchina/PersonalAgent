@@ -20,6 +20,9 @@ class V4L2Plugin:
                     raise ValueError("V4L2 adapter only supports camera inputs")
                 self.providers[ident] = V4L2Camera(ident, spec)
 
+    def maintenance_pending(self):
+        return []  # Passive discovery; capture operations belong to core/devices.
+
     async def start(self, context):
         self.context = context
         for ident, provider in self.providers.items():

@@ -94,7 +94,9 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         for now in (2.01, 2.02, 10):
             self.plugin.report(self.button, b"\x01\xfe", now)
-        self.runtime.invoke.assert_awaited_once_with(Trigger("hid_buttons:speakerphone", "wake"), timeout=15)
+        self.runtime.invoke.assert_awaited_once_with(
+            Trigger("hid_buttons:speakerphone", "wake"), timeout=None
+        )
         self.assertEqual(len(self.context.tasks), 1)
         gate.set()
         await asyncio.gather(*self.context.tasks)

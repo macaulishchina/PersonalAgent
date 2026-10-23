@@ -24,6 +24,39 @@ class Plugin:
 
 
 class RuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_owner_deadline_is_inherited_overridden_and_cleaned_up(self):
+        runtime = Runtime(None)
+        cancelled = asyncio.Event()
+
+        async def slow(request):
+            try:
+                await asyncio.sleep(0.08)
+                return "done"
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        class Owner:
+            manifest = Manifest("owner")
+
+            async def start(self, context):
+                context.register(str, slow, timeout=0.3)
+
+        runtime.add(Owner())
+        await runtime.start()
+        try:
+            self.assertEqual(await runtime.invoke("slow"), "done")
+            with self.assertLogs("assistant_runtime.kernel.runtime", level="WARNING") as logs:
+                with self.assertRaises(TimeoutError):
+                    await runtime.invoke("short", timeout=0.01)
+            self.assertTrue(cancelled.is_set())
+            self.assertIn("request=str", logs.output[0])
+            self.assertEqual(await runtime.invoke("again"), "done")
+        finally:
+            await runtime.close()
+        self.assertFalse(runtime.timeouts)
+        self.assertFalse(runtime.handlers)
+
     async def test_readiness_follows_startup_and_clears_before_cleanup(self):
         runtime = Runtime(None)
         entered, release, warmed = asyncio.Event(), asyncio.Event(), asyncio.Event()

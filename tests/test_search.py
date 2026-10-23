@@ -345,7 +345,9 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ipc_dispatch_and_disconnect_cancel_search_without_other_effects(self):
         socket_path = self.root / "capability.sock"
-        service = SimpleNamespace(runtime=self.runtime)
+        from assistant_runtime.api.lifecycle import WorkIntake
+
+        service = SimpleNamespace(runtime=self.runtime, intake=WorkIntake())
         service._operation_for_client = lambda reader, operation: AssistantService._operation_for_client(
             service, reader, operation
         )

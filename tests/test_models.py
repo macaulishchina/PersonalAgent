@@ -44,16 +44,26 @@ def settings(**changes):
 class SettingsTest(unittest.TestCase):
     def test_context_maintenance_configuration(self):
         settings = ModelSettings.parse({})
-        self.assertEqual(settings.compaction_timeout_seconds, 180)
-        self.assertEqual(settings.timeout_seconds, 60)
+        self.assertEqual(settings.compaction_timeout_seconds, 600)
+        self.assertEqual(settings.timeout_seconds, 600)
         self.assertEqual(settings.tool_result_max_chars, 6000)
         self.assertEqual(settings.max_loaded_tools, 12)
         for value in [0, True, 65]:
             with self.assertRaises(ValueError):
                 ModelSettings.parse({"max_loaded_tools": value})
-        for value in [0, -1, True, 601]:
+        for value in [0, -1, True, 3601]:
             with self.assertRaises(ValueError):
                 ModelSettings.parse({"compaction_timeout_seconds": value})
+
+    def test_long_deadlines_keep_outer_envelopes_above_inner_limits(self):
+        for normal, compaction in [(600, 600), (3600, 600), (600, 3600)]:
+            parsed = ModelSettings.parse(
+                settings(timeout_seconds=normal, compaction_timeout_seconds=compaction)
+            )
+            self.assertEqual(
+                configuration(parsed)["model_list"][0]["litellm_params"]["timeout"],
+                max(normal, compaction) + 60,
+            )
 
     def test_execution_limits_belong_only_to_ai_usage(self):
         with self.assertRaises(ValueError):
@@ -77,7 +87,7 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]["reasoning"])
         route = configuration(parsed)["model_list"][0]["litellm_params"]
         self.assertEqual(route["max_tokens"], parsed.execution_max_output_tokens)
-        self.assertEqual(route["timeout"], 180)  # Gateway must not cut compaction off at 60s.
+        self.assertEqual(route["timeout"], 660)  # Gateway leaves settlement margin beyond the model deadline.
         for invalid in (
             {"default_reasoning_effort": "medium"},
             {"reasoning_efforts": ["low", "low"]},
@@ -228,7 +238,7 @@ class SettingsTest(unittest.TestCase):
         for changes in (
             {"gateway_url": "http://192.168.1.2:4010"},
             {"queue_size": 0},
-            {"timeout_seconds": 81},
+            {"timeout_seconds": 3601},
             {"memory": "missing"},
             {"enabled": 1},
         ):
@@ -265,6 +275,29 @@ class SettingsTest(unittest.TestCase):
 
 
 class ModelsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_inference_inherits_owner_timeout_and_cancellation_never_replays(self):
+        self.assertEqual(self.runtime.timeouts[ModelRequest], 630)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original = self.client.complete.return_value
+
+        async def slow(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return original
+
+        self.client.complete.side_effect = slow
+        operation = self.request()
+        work = asyncio.create_task(self.runtime.invoke(operation))
+        await asyncio.wait_for(entered.wait(), 2)
+        work.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await work
+        release.set()
+        result = await self.runtime.invoke(operation)
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual(self.client.complete.await_count, 1)
+
     async def test_auxiliary_reasoning_default_explicit_override_and_validation(self):
         self.plugin.settings.entries["test-model"].update(
             reasoning_efforts=["none", "low", "high"], default_reasoning_effort="low"

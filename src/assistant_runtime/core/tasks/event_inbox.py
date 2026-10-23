@@ -241,6 +241,8 @@ class EventInbox:
         return samples
 
     def dispatch(self, definition):
+        if not getattr(self.plugin, "accepting_schedule", True):
+            return
         task, now = definition["id"], time.time()
         if self.repo.active_runs(task):
             return

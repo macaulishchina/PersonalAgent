@@ -13,6 +13,9 @@ class PipeWirePlugin:
         self.player = StreamPlayer(self.route)
         self.devices = PipeWireDevices(config, self.route, directory)
 
+    def maintenance_pending(self):
+        return [{"state": "running"}] if self.player.playing or not self.player.queue.empty() else []
+
     async def start(self, context):
         self.devices.register()
         from .io import PipeWireEndpoint

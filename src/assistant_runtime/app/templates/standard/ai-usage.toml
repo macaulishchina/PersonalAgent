@@ -1,6 +1,6 @@
 # Metering is separate from execution authorization. Configuration applies on restart.
 [ai_usage]
-max_requests = 100
+max_requests = 256
 warning_fraction = 0.5
 retention_days = 90
 aggregate_days = 365

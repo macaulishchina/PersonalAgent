@@ -15,6 +15,18 @@ from assistant_runtime.core.pi.mcp import server_config
 class PiIntegrations:
     def __init__(self, backend, registry):
         self.backend, self.registry = backend, registry
+        from assistant_runtime.api.configuration_io import configuration_path
+
+        frozen = configuration_path(registry.path)
+        self.runtime_data = None
+        if frozen != registry.path:
+            from assistant_runtime.core.integrations.configuration import validate_registry
+
+            self.runtime_data = (
+                validate_registry(json.loads(frozen.read_text()))
+                if frozen.exists()
+                else {"revision": 0, "servers": {}, "removed": []}
+            )
         self.inherited = {}
         self.applied_revision = None
         self.applied_configuration = None
@@ -42,6 +54,26 @@ class PiIntegrations:
             inherited=result["config"].get("mcp_servers", {}),
         )
 
+    def credential_environment(self, spec):
+        from assistant_runtime.core.models.gateway import credential
+
+        transport = spec["transport"]
+        refs = (
+            transport.get("env_vars", [])
+            if transport["type"] == "stdio"
+            else [
+                *transport.get("env_headers", {}).values(),
+                *([transport["bearer_token_env"]] if transport.get("bearer_token_env") else []),
+            ]
+        )
+        values = {}
+        for key in refs:
+            try:
+                values[key] = credential(self.registry.root, key)
+            except ValueError:
+                pass
+        return refs, values
+
     def configuration(self, context, task_run=None, *, probe=None, manage_integrations=False, inherited=None):
         cfg = self.backend.config
         disabled = context == "maintenance" or probe is not None
@@ -59,7 +91,9 @@ class PiIntegrations:
                 plugins=cfg.enabled_plugins,
             )
         )
-        data = self.registry.snapshot()
+        data = (
+            self.registry.snapshot() if probe is not None or self.runtime_data is None else self.runtime_data
+        )
         for ident in data["removed"]:
             result["external_" + ident] = {
                 "command": sys.executable,
@@ -68,6 +102,10 @@ class PiIntegrations:
             }
         for ident, row in data["servers"].items():
             spec, transport = row["definition"], copy.deepcopy(row["definition"]["transport"])
+            _, environment = self.credential_environment(spec)
+            client = getattr(self.backend, "client", None)
+            if client is not None and hasattr(client, "environment"):
+                client.environment.update(environment)
             kind = transport.pop("type")
             if kind == "stdio":
                 directory = Path(transport.get("cwd") or self.registry.work / ident)
@@ -118,7 +156,9 @@ class PiIntegrations:
             "foreground_pending": self.applied_revision != self.registry.revision,
             "failed_revision": self.failed_revision,
             "last_apply_error": self.last_error,
-            "background_policy": "snapshot_at_execution_start",
+            "background_policy": "restart_required"
+            if self.runtime_data is not None
+            else "snapshot_at_execution_start",
             "inherited_user_servers": sorted(
                 set(self.inherited) - services(self.backend.config.enabled_plugins).keys() - {"device"}
             ),
@@ -132,6 +172,13 @@ class PiIntegrations:
     async def apply(self, force=False):
         backend = self.backend
         async with backend.submit_lock:
+            if self.runtime_data is not None and self.applied_revision is not None:
+                return {
+                    "state": "restart_required"
+                    if self.applied_revision != self.registry.revision
+                    else "applied",
+                    **self.status(),
+                }
             if not force and self.failed_revision == self.registry.revision:
                 return {
                     "state": "failed",
@@ -145,7 +192,9 @@ class PiIntegrations:
             if backend.busy or backend.active_turn or backend.voice_active():
                 return {"state": "deferred", "reason": "foreground_or_voice_active", **self.status()}
             config = await self.capture("foreground")
-            revision = self.registry.revision
+            revision = (
+                self.runtime_data["revision"] if self.runtime_data is not None else self.registry.revision
+            )
             summary = (
                 await backend.client.request(
                     "session.read", {"session_id": backend.execution_session_id, "include_runs": False}
@@ -251,17 +300,8 @@ class PiIntegrations:
         if context not in spec["contexts"]:
             raise ValueError("MCP server is excluded from this context")
         transport = spec["transport"]
-        refs = (
-            transport.get("env_vars", [])
-            if transport["type"] == "stdio"
-            else list(transport["env_headers"].values())
-            + ([transport["bearer_token_env"]] if transport.get("bearer_token_env") else [])
-        )
-        missing_env = [
-            key
-            for key in refs
-            if key not in transport.get("env", {}) and (key not in os.environ or key == "OPENAI_API_KEY")
-        ]
+        refs, environment = self.credential_environment(spec)
+        missing_env = [key for key in refs if key not in transport.get("env", {}) and key not in environment]
         if missing_env:
             return {
                 "state": "unavailable",

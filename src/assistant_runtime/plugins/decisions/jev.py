@@ -1,5 +1,7 @@
 """TypeSafe HTTP adapter. Secrets, native question fields and errors stay here."""
 
+from assistant_runtime.api.configuration_io import configuration_path
+
 import asyncio
 import json
 import math
@@ -16,11 +18,11 @@ from .questions import execution_questions
 def credential(root):
     key = os.environ.get("TYPESAFE_API_KEY")
     if not key:
-        path = Path(root) / ".env"
+        path = configuration_path(Path(root) / ".env")
         if path.is_file():
             if path.stat().st_size > 65536:
                 raise DecisionError("credential_file_too_large")
-            key = dotenv_values(path, interpolate=False).get("TYPESAFE_API_KEY")
+            key = dotenv_values(configuration_path(path), interpolate=False).get("TYPESAFE_API_KEY")
     return normalize_credential(key)
 
 

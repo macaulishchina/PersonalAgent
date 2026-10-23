@@ -114,6 +114,48 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_force_maintenance_cancels_accepted_immediate_plan_before_timer_dispatch(self):
+        self.plugin.scheduler.pause()
+        definition = await self.create(trigger={"kind": "immediate"})
+        self.assertEqual(self.plugin.repo.runs(definition["id"]), [])
+        self.plugin.maintenance_pause()
+        self.assertTrue(self.plugin.maintenance_pending())
+        await self.plugin.maintenance_cancel()
+        runs = self.plugin.repo.runs(definition["id"])
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["state"], "canceled")
+        self.assertIsNone(self.plugin.repo.definition(definition["id"])["next_at"])
+        self.plugin.due(definition["id"])
+        self.assertEqual(len(self.plugin.repo.runs(definition["id"])), 1)
+        self.executor.launch.assert_not_awaited()
+
+    async def test_global_pause_still_holds_timers_if_another_owner_fails_to_resume(self):
+        from assistant_runtime.api.lifecycle import WorkIntake
+
+        self.host.intake = WorkIntake()
+        self.plugin.scheduler.pause()
+        definition = await self.create(trigger={"kind": "interval", "seconds": 3600})
+        self.host.intake.paused = True
+        self.plugin.maintenance_pause()
+        self.plugin.maintenance_resume()  # Another owner may still prevent global resume.
+        self.assertFalse(self.plugin.accepting_schedule)
+        self.plugin.due(definition["id"])
+        self.assertEqual(self.plugin.repo.runs(definition["id"]), [])
+        self.host.intake.paused = False
+        self.assertTrue(self.plugin.accepting_schedule)
+
+    async def test_maintenance_holds_new_scheduled_occurrences_until_withdrawal(self):
+        self.plugin.scheduler.pause()
+        definition = await self.create(trigger={"kind": "interval", "seconds": 3600})
+        self.plugin.maintenance_pause()
+        before = self.plugin.repo.definition(definition["id"])["next_at"]
+        self.plugin.due(definition["id"])
+        self.assertEqual(self.plugin.repo.runs(definition["id"]), [])
+        self.assertEqual(self.plugin.repo.definition(definition["id"])["next_at"], before)
+        self.plugin.maintenance_resume()
+        self.assertFalse(self.plugin.draining)
+        self.assertIsNotNone(self.plugin.scheduler.get_job(definition["id"]))
+
     async def test_definition_pages_are_bounded_stable_and_search_all_tasks(self):
         definitions = [
             await self.create(title=f"项目 {number}", trigger={"kind": "interval", "seconds": 3600})

@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "namespace": "model_api",
+  "title": "模型与账号",
+  "group": "models",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "title": "启用",
+        "default": false
+      },
+      "gateway_url": {
+        "type": "string",
+        "title": "模型网关地址",
+        "default": "http://127.0.0.1:4010/v1",
+        "x-advanced": true
+      },
+      "gateway_key_env": {
+        "type": "string",
+        "title": "网关密钥环境变量",
+        "default": "ASSISTANT_MODEL_GATEWAY_KEY",
+        "x-advanced": true
+      },
+      "concurrency": {
+        "type": "integer",
+        "title": "并发数量",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 16
+      },
+      "queue_size": {
+        "type": "integer",
+        "title": "队列容量",
+        "default": 16,
+        "minimum": 1,
+        "maximum": 64
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "title": "请求超时（秒）",
+        "default": 600,
+        "minimum": 1,
+        "maximum": 3600,
+        "x-advanced": true
+      },
+      "compaction_timeout_seconds": {
+        "type": "integer",
+        "title": "上下文压缩超时（秒）",
+        "default": 600,
+        "minimum": 1,
+        "maximum": 3600,
+        "x-advanced": true
+      },
+      "tool_result_max_chars": {
+        "type": "integer",
+        "title": "工具结果文本上限",
+        "default": 6000,
+        "x-advanced": true,
+        "minimum": 1,
+        "maximum": 50000
+      },
+      "max_loaded_tools": {
+        "type": "integer",
+        "title": "单次工具加载上限",
+        "default": 12,
+        "x-advanced": true,
+        "minimum": 1,
+        "maximum": 64
+      },
+      "max_output_tokens": {
+        "type": "integer",
+        "title": "辅助推理输出预算",
+        "default": 8192,
+        "minimum": 1,
+        "maximum": 16384
+      },
+      "execution_max_output_tokens": {
+        "type": "integer",
+        "title": "执行输出预算",
+        "default": 16384,
+        "minimum": 1,
+        "maximum": 131072
+      },
+      "providers": {
+        "type": "object",
+        "title": "服务供应商",
+        "default": {},
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "preset": {
+              "type": "string",
+              "title": "预设接口",
+              "enum": [
+                "openai",
+                "claude",
+                "gemini",
+                "deepseek",
+                "opencode_go_responses",
+                "opencode_go_chat",
+                "opencode_go_anthropic",
+                "opencode_go_gemini"
+              ]
+            },
+            "account": {
+              "type": "string",
+              "title": "原生账号",
+              "x-reference": "model_api.accounts"
+            },
+            "enabled": {
+              "type": "boolean",
+              "title": "启用供应商"
+            },
+            "protocol": {
+              "type": "string",
+              "title": "自定义协议",
+              "enum": [
+                "openai_responses",
+                "openai_chat",
+                "anthropic",
+                "gemini"
+              ]
+            },
+            "base_url": {
+              "type": "string",
+              "title": "自定义接口地址"
+            },
+            "key_env": {
+              "type": "string",
+              "title": "凭据环境变量名称"
+            },
+            "auth_scheme": {
+              "type": "string",
+              "title": "鉴权方式",
+              "enum": [
+                "native",
+                "bearer"
+              ]
+            },
+            "session_header": {
+              "type": "string",
+              "title": "会话请求头"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "accounts": {
+        "type": "object",
+        "title": "账号",
+        "default": {},
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "title": "Pi 供应商标识"
+            },
+            "auth": {
+              "type": "string",
+              "title": "认证方式",
+              "enum": [
+                "oauth",
+                "api_key"
+              ]
+            },
+            "key_env": {
+              "type": "string",
+              "title": "可选 API Key 环境变量引用"
+            },
+            "output_limit": {
+              "type": "string",
+              "title": "输出上限方式",
+              "enum": [
+                "request",
+                "model"
+              ]
+            }
+          },
+          "required": [
+            "provider",
+            "auth"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "entries": {
+        "type": "object",
+        "title": "模型别名",
+        "default": {},
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "title": "供应商",
+              "x-reference": "model_api.providers"
+            },
+            "model": {
+              "type": "string",
+              "title": "实际模型名称"
+            },
+            "reasoning_efforts": {
+              "type": "array",
+              "title": "模型支持的思考深度",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ]
+              }
+            },
+            "default_reasoning_effort": {
+              "type": "string",
+              "title": "默认思考深度",
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ]
+            },
+            "images": {
+              "type": "boolean",
+              "title": "支持图片"
+            },
+            "structured": {
+              "type": "boolean",
+              "title": "支持结构化结果"
+            },
+            "execution_validated": {
+              "type": "boolean",
+              "title": "执行能力已经验收"
+            },
+            "context_window": {
+              "type": "integer",
+              "minimum": 8192,
+              "maximum": 2000000,
+              "title": "上下文窗口"
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384,
+              "title": "辅助调用输出上限"
+            },
+            "execution_max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 131072,
+              "title": "执行输出上限"
+            },
+            "fallbacks": {
+              "type": "array",
+              "title": "有序回退模型",
+              "items": {
+                "type": "string",
+                "x-reference": "model_api.entries"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "memory": {
+        "type": "string",
+        "title": "记忆整理模型",
+        "default": "",
+        "x-reference": "model_api.entries"
+      }
+    }
+  }
+}

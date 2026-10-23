@@ -26,6 +26,20 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(timing_header({}, "timing"))
         self.assertEqual(timing_header({"timing": "3.25"}, "timing"), 3.25)
 
+    async def test_continuous_output_still_has_total_deadline_without_retry(self):
+        import time
+        from dataclasses import replace
+
+        await self.client.close()
+        self.client = GatewayClient(replace(self.client.settings, timeout_seconds=0.15), "private-key")
+        await self.client.start()
+        self.mode = "streaming-slow"
+        started = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            await self.client.complete({"model": "synthetic", "input": []})
+        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertEqual(len(self.requests), 1)
+
     async def asyncSetUp(self):
         self.mode, self.requests, self.headers = "sse", [], []
         self.gate = asyncio.Event()
@@ -49,6 +63,17 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         self.requests.append(await request.json())
         self.headers.append(dict(request.headers))
         self.assertEqual(request.headers["Authorization"], "Bearer private-key")
+        if self.mode == "streaming-slow":
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            try:
+                for _ in range(30):
+                    await response.write(b'data: {"type":"response.output_text.delta","delta":"x"}\n\n')
+                    await asyncio.sleep(0.03)
+                await response.write_eof()
+            except ConnectionResetError:
+                pass
+            return response
         if self.mode == "error":
             return web.Response(status=429, text="secret response body")
         if self.mode.startswith("http-"):

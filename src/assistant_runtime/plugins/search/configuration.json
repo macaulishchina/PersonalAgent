@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "namespace": "search",
+  "title": "网页搜索",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "default_provider": {
+        "type": "string",
+        "title": "默认搜索供应商",
+        "default": ""
+      },
+      "providers": {
+        "type": "object",
+        "title": "服务供应商",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "title": "请求超时（秒）",
+        "default": 20,
+        "minimum": 1,
+        "maximum": 60
+      },
+      "concurrency": {
+        "type": "integer",
+        "title": "并发数量",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 16
+      },
+      "max_pending": {
+        "type": "integer",
+        "title": "排队请求上限",
+        "default": 16,
+        "minimum": 1,
+        "maximum": 64
+      },
+      "cache_seconds": {
+        "type": "integer",
+        "title": "缓存有效期（秒）",
+        "default": 60,
+        "minimum": 0,
+        "maximum": 300
+      },
+      "requests_per_second": {
+        "type": "integer",
+        "title": "每秒请求上限",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 100
+      }
+    }
+  }
+}

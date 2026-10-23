@@ -138,7 +138,7 @@ class PiBackend:
                 else ""
             )
             + (
-                "\n第三方 MCP 使用 integrations MCP 管理本实例：先 list/inspect 读取版本，再 configure，按 foreground/background 配置范围和工具权限。不要改共享配置。安装依赖的后台任务声明 resources=[mcp_management]，才能在授权范围内配置、验证和申请刷新；普通后台任务只有查询/验证权限。后台执行保留启动时工具配置，下一次执行用新配置。验证只初始化并列举工具，不证明实际操作成功；按用户授权再调用真实的 external_ 名称工具验收。配置保存不等于连接验证或主会话已应用，主会话与语音空闲后自动刷新，不为添加 MCP 重启/终止主对话或修改主音频设备。凭据使用环境引用或私有文件，不写命令参数、仓库或聊天。"
+                "\n第三方 MCP 使用 integrations MCP 管理本实例：先 list/inspect 读取版本，再 configure，按 foreground/background 配置范围和工具权限。不要改共享配置。安装依赖的后台任务声明 resources=[mcp_management]，才能在授权范围内配置、验证和申请刷新；普通后台任务只有查询/验证权限。后台执行保留启动时工具配置。验证只初始化并列举工具，不证明实际操作成功；按用户授权再调用真实的 external_ 名称工具验收。配置保存不等于连接验证或已应用；托管服务需要操作者在系统配置页确认重启后才生效，不自行重启或终止主对话，不修改主音频设备。凭据使用环境引用或私有文件，不写命令参数、仓库或聊天。"
                 if "integrations" in self.config.plugins
                 else ""
             )

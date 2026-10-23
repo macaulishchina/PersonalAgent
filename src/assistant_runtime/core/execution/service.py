@@ -1,5 +1,7 @@
 """Single-run coordination over the existing executor; no agent loop or scheduler."""
 
+from assistant_runtime.api.lifecycle import admits_work
+
 import asyncio
 import hashlib
 import json
@@ -28,6 +30,7 @@ class ExecutionService:
         skill_paths=(),
         concurrency=4,
         queue_size=64,
+        intake=None,
     ):
         if type(concurrency) is not int or not 1 <= concurrency <= 8:
             raise ValueError("Execution concurrency must be 1..8")
@@ -42,6 +45,7 @@ class ExecutionService:
         from .admission import Admission
 
         self.admission = Admission(self)
+        self.intake = intake
         self.stopping = False
         self.sessions, self.questions, self.finished = {}, {}, {}
         self.context = None
@@ -145,6 +149,7 @@ class ExecutionService:
                 )
             return self.view(self.records.get(row["id"]))
 
+    @admits_work()
     async def submit(self, args):
         if set(args) - {"request_id", "text", "model", "effort", "inputs", "tools", "skills"}:
             raise ValueError("Unsupported execution submission fields")

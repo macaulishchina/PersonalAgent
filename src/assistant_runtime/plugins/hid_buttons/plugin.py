@@ -47,6 +47,15 @@ class HidButtonsPlugin:
         self.last_report = {}
         self.pending = {}
 
+    def maintenance_pause(self):
+        self.maintenance_paused = True
+
+    def maintenance_resume(self):
+        self.maintenance_paused = False
+
+    def maintenance_pending(self):
+        return [{"id": name, "state": "running"} for name, task in self.pending.items() if not task.done()]
+
     async def start(self, context):
         self.context = context
         for button in self.buttons:
@@ -62,6 +71,8 @@ class HidButtonsPlugin:
         )
 
     def report(self, button, packet, now=None):
+        if getattr(self, "maintenance_paused", False):
+            return
         if packet != button.report or not self.context.ready.is_set() or self.context.cancelled.is_set():
             return
         now = time.monotonic() if now is None else now

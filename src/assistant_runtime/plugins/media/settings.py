@@ -1,5 +1,7 @@
 """Small, explicit instance configuration. Secrets never belong in tool arguments."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,18 +29,18 @@ def identifier(value):
 
 @dataclass
 class MediaSettings:
-    accounts: dict = field(
-        default_factory=lambda: {"aliyun": {"provider": "aliyun", "file_backend": "native"}}
+    accounts: dict = field(default_factory=lambda: configuration_default(__file__, "accounts"))
+    file_backend: str = field(default_factory=lambda: configuration_default(__file__, "file_backend"))
+    search_url: str = field(default_factory=lambda: configuration_default(__file__, "search_url"))
+    openlist_url: str = field(default_factory=lambda: configuration_default(__file__, "openlist_url"))
+    timeout_seconds: int = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
+    max_operations: int = field(default_factory=lambda: configuration_default(__file__, "max_operations"))
+    queue_capacity: int = field(default_factory=lambda: configuration_default(__file__, "queue_capacity"))
+    targets: dict = field(default_factory=lambda: configuration_default(__file__, "targets"))
+    local_targets: dict = field(default_factory=lambda: configuration_default(__file__, "local_targets"))
+    download_min_free_bytes: int = field(
+        default_factory=lambda: configuration_default(__file__, "download_min_free_bytes")
     )
-    file_backend: str = "openlist"
-    search_url: str = "http://127.0.0.1:8888"
-    openlist_url: str = ""
-    timeout_seconds: int = 15
-    max_operations: int = 10000
-    queue_capacity: int = 128
-    targets: dict = field(default_factory=dict)
-    local_targets: dict = field(default_factory=dict)
-    download_min_free_bytes: int = 1024**3
 
     @classmethod
     def parse(cls, data):

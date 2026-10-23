@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "namespace": "external_mcp",
+  "title": "外部 MCP",
+  "group": "connections",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "registry_path": {
+        "type": "string",
+        "title": "注册表路径",
+        "default": "",
+        "readOnly": true,
+        "description": "由本机部署维护，修改前需检查路径或访问配置。"
+      },
+      "max_servers": {
+        "type": "integer",
+        "title": "外部服务器上限",
+        "default": 32,
+        "minimum": 1,
+        "maximum": 64
+      },
+      "inherit_user_servers": {
+        "type": "boolean",
+        "title": "继承用户 MCP 服务器",
+        "default": false
+      }
+    }
+  }
+}

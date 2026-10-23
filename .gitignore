@@ -7,6 +7,7 @@ state/
 .env
 config.toml
 /config/
+/management.toml
 !/config.example/config.toml
 .ruff_cache/
 .mypy_cache/

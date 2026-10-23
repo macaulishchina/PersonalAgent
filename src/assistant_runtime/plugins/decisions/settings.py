@@ -1,5 +1,7 @@
 """Explicit external-context consent and bounded optional judgment settings."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 import math
 import re
@@ -7,23 +9,33 @@ import re
 
 @dataclass
 class DecisionSettings:
-    enabled: bool = True
-    external_data_consent: bool = False
-    mode: str = "active"
-    model: str = "jev-1.13.0"
-    queue_size: int = 32
-    retention: int = 2000
-    timeout_seconds: float = 8
-    max_age_seconds: int = 30
-    active_timeout_seconds: float = 3
-    warmup_enabled: bool = True
-    keepalive_seconds: int = 120
-    dns_cache_seconds: int = 300
-    default_threshold: float = 0.6
-    concurrency: int = 4
-    timezone: str = "Asia/Shanghai"
-    thresholds: dict = field(default_factory=dict)
-    scenes: dict = field(default_factory=dict)
+    enabled: bool = field(default_factory=lambda: configuration_default(__file__, "enabled"))
+    external_data_consent: bool = field(
+        default_factory=lambda: configuration_default(__file__, "external_data_consent")
+    )
+    mode: str = field(default_factory=lambda: configuration_default(__file__, "mode"))
+    model: str = field(default_factory=lambda: configuration_default(__file__, "model"))
+    queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
+    retention: int = field(default_factory=lambda: configuration_default(__file__, "retention"))
+    timeout_seconds: float = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
+    max_age_seconds: int = field(default_factory=lambda: configuration_default(__file__, "max_age_seconds"))
+    active_timeout_seconds: float = field(
+        default_factory=lambda: configuration_default(__file__, "active_timeout_seconds")
+    )
+    warmup_enabled: bool = field(default_factory=lambda: configuration_default(__file__, "warmup_enabled"))
+    keepalive_seconds: int = field(
+        default_factory=lambda: configuration_default(__file__, "keepalive_seconds")
+    )
+    dns_cache_seconds: int = field(
+        default_factory=lambda: configuration_default(__file__, "dns_cache_seconds")
+    )
+    default_threshold: float = field(
+        default_factory=lambda: configuration_default(__file__, "default_threshold")
+    )
+    concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
+    timezone: str = field(default_factory=lambda: configuration_default(__file__, "timezone"))
+    thresholds: dict = field(default_factory=lambda: configuration_default(__file__, "thresholds"))
+    scenes: dict = field(default_factory=lambda: configuration_default(__file__, "scenes"))
 
     def policy(self, kind):
         defaults = {"voice_intent": "parallel", "selection": "parallel"}

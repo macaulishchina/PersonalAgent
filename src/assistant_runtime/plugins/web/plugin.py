@@ -26,6 +26,10 @@ class WebPlugin:
         self.streams = set()
         self.upload_lock = asyncio.Lock()
 
+    def maintenance_pending(self):
+        # HTTP submits are admitted by conversation/tasks; retention is passive housekeeping.
+        return []
+
     async def start(self, context):
         if not self.settings.enable:
             return

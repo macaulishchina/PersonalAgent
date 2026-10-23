@@ -65,7 +65,6 @@ type State = {
   notifications_unread?: number;
   sync_error?: string;
   configuration_required?: boolean;
-  ai_usage?: { requests: number; limit: number; warning?: boolean; blocked?: string | null } | null;
 };
 const initial: State = {
   name: "个人助理",
@@ -1014,12 +1013,6 @@ function App() {
                 </button>
               )}
             </div>
-            {state.ai_usage && (
-              <p className="task-hint" role={state.ai_usage.blocked ? "status" : undefined}>
-                AI 调用 {state.ai_usage.requests}/{state.ai_usage.limit}
-                {state.ai_usage.blocked ? " · 已暂停，需明确调整额度" : state.ai_usage.warning ? " · 已达到预警用量" : ""}
-              </p>
-            )}
             {state.configuration_required && (
               <p className="error">请先在实例配置中选择模型并完成授权，然后重启服务。</p>
             )}

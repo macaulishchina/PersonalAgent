@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "namespace": "apple_home",
+  "title": "Apple Home",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": "string",
+        "title": "监听地址",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "type": "integer",
+        "title": "监听端口",
+        "default": 8047,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "hap_port": {
+        "type": "integer",
+        "title": "HomeKit 端口",
+        "default": 51827,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "poll_seconds": {
+        "type": "integer",
+        "title": "轮询间隔（秒）",
+        "default": 60,
+        "minimum": 30,
+        "maximum": 3600
+      },
+      "refresh_timeout": {
+        "type": "integer",
+        "title": "刷新超时（秒）",
+        "default": 10,
+        "minimum": 1,
+        "maximum": 10
+      },
+      "log_invalid_values": {
+        "type": "boolean",
+        "title": "记录无效数值",
+        "default": false
+      }
+    },
+    "x-listeners": [
+      {
+        "host": "host",
+        "port": "port"
+      },
+      {
+        "host": "host",
+        "port": "hap_port"
+      }
+    ]
+  }
+}

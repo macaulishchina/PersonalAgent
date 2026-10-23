@@ -1,17 +1,21 @@
 """Strict instance settings; importing configuration needs no HomeKit library."""
 
-from dataclasses import dataclass
+from assistant_runtime.api.configuration import configuration_default
+
+from dataclasses import dataclass, field
 import ipaddress
 
 
 @dataclass(frozen=True)
 class AppleHomeSettings:
-    host: str = "127.0.0.1"
-    port: int = 8047
-    hap_port: int = 51827
-    poll_seconds: int = 60
-    refresh_timeout: int = 10
-    log_invalid_values: bool = False
+    host: str = field(default_factory=lambda: configuration_default(__file__, "host"))
+    port: int = field(default_factory=lambda: configuration_default(__file__, "port"))
+    hap_port: int = field(default_factory=lambda: configuration_default(__file__, "hap_port"))
+    poll_seconds: int = field(default_factory=lambda: configuration_default(__file__, "poll_seconds"))
+    refresh_timeout: int = field(default_factory=lambda: configuration_default(__file__, "refresh_timeout"))
+    log_invalid_values: bool = field(
+        default_factory=lambda: configuration_default(__file__, "log_invalid_values")
+    )
 
     @classmethod
     def parse(cls, data):

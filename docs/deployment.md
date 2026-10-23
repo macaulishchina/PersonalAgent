@@ -22,7 +22,8 @@ scripts/setup_pi.sh /absolute/pi-runtime
 .venv/bin/python -m assistant_runtime.app.cli --config /absolute/slim-instance/config/config.toml run
 ```
 
-slim 不需要前端构建，不监听 TCP 端口；本地 CLI 通过实例私有 Unix socket 调用能力。
+slim 不需要聊天前端构建；两种部署均默认提供独立配置网页 `0.0.0.0:8047`。
+slim 不启动聊天端口，本地执行 CLI 通过实例私有 Unix socket 调用能力。
 `executions submit|get|events|answer|supplement|cancel` 在两种组合中相同。
 模型未配置时可启动和查看状态，执行提交明确报错，不寻找其他付费模型。
 公共执行支持文字、登记文件／图片和单次工具／技能范围；`files put|get` 管理输入引用。
@@ -124,3 +125,26 @@ personal-agent --config /absolute/old/config/config.toml prepare-config /absolut
 候选目录内 `original/` 留存原文件副本。命令不启动插件、不请求模型、不修改源文件、
 数据库或服务，也不覆盖已有候选目录。输出列出新增插件，便于审查。它面向以前依赖
 隐式助手装配的配置，不应拿来把新建的 slim 自动扩成 standard。审核后，生产替换另行安排。
+
+## 系统配置管理
+
+`run` 默认启动独立管理进程及其业务进程；服务安装器使用同一管理入口。
+业务重启不关闭配置页面；模型待配置、业务配置损坏或可选插件失败时仍可管理。
+
+```sh
+personal-agent configuration token --management /absolute/instance/management.toml
+personal-agent configuration reset-token --management /absolute/instance/management.toml
+```
+
+在 8047 端口使用独立管理员口令登录。编辑保存只修改文件，确认应用才会等待或
+终止当前工作并重启。普通配置、静态凭据和已选技能使用同一文件版本；OAuth 登录、
+退出是单独确认的即时操作。备份、审计及回滚日志位于实例私有的 `state/configuration/`。
+外部网关的部署步骤不能通过业务重启代替，页面会保留待处理标记。
+
+`management.toml` 是独立启动配置，不能在线迁移 root/entry。管理监听地址变化会在
+应用时尝试新地址，失败保留旧入口。若已启用的 Apple Home receiver 也使用 8047，
+需显式选择另一个管理端口；校验会报告冲突，不擅自改变家庭设备配置。
+代理来源、文件修复和恢复边界详见 [配置模块说明](../src/assistant_runtime/core/configuration/README.md)。
+
+现有生产安装不会因修改安装器或运行自动测试而切换。部署时需按既有程序先核对在途
+工作、停服备份，再更新单个服务入口；不要同时运行新旧两个业务实例。

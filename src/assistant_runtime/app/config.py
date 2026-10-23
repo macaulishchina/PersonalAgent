@@ -1,5 +1,7 @@
 """Instance configuration. Hardware identities never belong in code defaults."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
@@ -14,7 +16,7 @@ def default_root():
     return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "personal-agent"
 
 
-def read_config(path, *, text=None):
+def _read_config(path, *, text=None):
     """Combine one entry file and its explicit, nonrecursive includes without overrides."""
     path = Path(path).expanduser().resolve()
 
@@ -66,71 +68,77 @@ def read_config(path, *, text=None):
     return combined
 
 
+def read_config(path, *, text=None):
+    from assistant_runtime.api.configuration_io import configuration_lock
+
+    path = Path(path).expanduser().resolve()
+    try:
+        entry = tomllib.loads(path.read_text() if text is None else text)
+    except tomllib.TOMLDecodeError:
+        raise ValueError("Invalid entry configuration") from None
+    root = Path(entry.get("root", path.parent)).expanduser()
+    root = (path.parent / root).resolve() if not root.is_absolute() else root.resolve()
+    with configuration_lock(root):
+        if (root / "state/configuration/transaction.json").exists():
+            raise ValueError(
+                "Incomplete configuration transaction; start configuration management to recover"
+            )
+        return _read_config(path, text=text)
+
+
 @dataclass
 class Config:
     root: Path = field(default_factory=default_root)
-    profile: str = "headless"
-    backend: str = "pi"
-    realtime_voice: str = "juniper"
+    profile: str = field(default_factory=lambda: configuration_default(__file__, "profile"))
+    backend: str = field(default_factory=lambda: configuration_default(__file__, "backend"))
+    realtime_voice: str = field(default_factory=lambda: configuration_default(__file__, "realtime_voice"))
     workspace: str = field(default_factory=lambda: str(Path.cwd()))
-    pi_binary: str = "pi"
-    instance_skills: list[str] = field(default_factory=list)
-    main_model: str = "unconfigured"
-    main_reasoning_effort: str = "medium"
-    assistant_name: str = "个人助理"
-    wake_words: list[str] = field(default_factory=lambda: ["嘟嘟"])
-    idle_seconds: int = 60
-    voice_follow_up_seconds: int = 8
-    quiet_hours: dict[str, str | bool] = field(default_factory=dict)
+    pi_binary: str = field(default_factory=lambda: configuration_default(__file__, "pi_binary"))
+    instance_skills: list[str] = field(
+        default_factory=lambda: configuration_default(__file__, "instance_skills")
+    )
+    main_model: str = field(default_factory=lambda: configuration_default(__file__, "main_model"))
+    main_reasoning_effort: str = field(
+        default_factory=lambda: configuration_default(__file__, "main_reasoning_effort")
+    )
+    assistant_name: str = field(default_factory=lambda: configuration_default(__file__, "assistant_name"))
+    wake_words: list[str] = field(default_factory=lambda: configuration_default(__file__, "wake_words"))
+    idle_seconds: int = field(default_factory=lambda: configuration_default(__file__, "idle_seconds"))
+    voice_follow_up_seconds: int = field(
+        default_factory=lambda: configuration_default(__file__, "voice_follow_up_seconds")
+    )
+    quiet_hours: dict[str, str | bool] = field(
+        default_factory=lambda: configuration_default(__file__, "quiet_hours")
+    )
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
-    interaction: dict = field(default_factory=dict)
+    interaction: dict = field(default_factory=lambda: configuration_default(__file__, "interaction"))
     ai_usage: dict = field(default_factory=dict)
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     search: dict = field(default_factory=dict)
-    hid_buttons: dict = field(default_factory=dict)
+    hid_buttons: dict = field(default_factory=lambda: configuration_default(__file__, "hid_buttons"))
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     execution: dict = field(default_factory=dict)
-    work_files: dict = field(default_factory=dict)
-    input_device: str = ""
-    default_output: str = ""
-    minimum_volume: int = 80
-    echo_cancel: bool = True
-    devices: dict[str, dict] = field(default_factory=dict)
-    model_dir: str = ""
-    unit_name: str = "personal-agent.service"
-    plugins: list[str] = field(
-        default_factory=lambda: [
-            "ai_usage",
-            "workfiles",
-            "devices",
-            "assistant",
-            "conversation",
-            "execution",
-            "models",
-            "voice_disabled",
-            "pi",
-            "notifications",
-            "tasks",
-            "web",
-        ]
-    )
-    bindings: dict[str, str] = field(
-        default_factory=lambda: {
-            "audio": "pipewire",
-            "trigger": "voice_disabled",
-            "brain": "pi",
-            "memory": "memory",
-        }
-    )
+    work_files: dict = field(default_factory=lambda: configuration_default(__file__, "work_files"))
+    input_device: str = field(default_factory=lambda: configuration_default(__file__, "input_device"))
+    default_output: str = field(default_factory=lambda: configuration_default(__file__, "default_output"))
+    minimum_volume: int = field(default_factory=lambda: configuration_default(__file__, "minimum_volume"))
+    echo_cancel: bool = field(default_factory=lambda: configuration_default(__file__, "echo_cancel"))
+    devices: dict[str, dict] = field(default_factory=lambda: configuration_default(__file__, "devices"))
+    model_dir: str = field(default_factory=lambda: configuration_default(__file__, "model_dir"))
+    unit_name: str = field(default_factory=lambda: configuration_default(__file__, "unit_name"))
+    plugins: list[str] = field(default_factory=lambda: configuration_default(__file__, "plugins"))
+    bindings: dict[str, str] = field(default_factory=lambda: configuration_default(__file__, "bindings"))
     plugin_settings: dict[str, dict] = field(default_factory=dict)
     external_mcp: dict = field(default_factory=dict)
-    memory_enabled: bool = False
-    memory_auto_capture: bool = True
+    memory_enabled: bool = field(default_factory=lambda: configuration_default(__file__, "memory_enabled"))
+    memory_auto_capture: bool = field(
+        default_factory=lambda: configuration_default(__file__, "memory_auto_capture")
+    )
 
     def __post_init__(self):
         if (
@@ -147,6 +155,12 @@ class Config:
             not isinstance(value, dict) for value in self.plugin_settings.values()
         ):
             raise ValueError("plugin_settings must contain configuration tables")
+
+        from assistant_runtime.core.configuration.owners import validate_stored
+
+        from .extensions import discover
+
+        validate_stored(self, discover)
 
         from assistant_runtime.app.skills import validate_names
 

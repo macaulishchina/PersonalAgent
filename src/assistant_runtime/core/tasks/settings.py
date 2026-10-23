@@ -1,5 +1,7 @@
 """Strict instance settings, independent from foreground and memory models."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 from assistant_runtime.core.tasks.selection import ModelPolicy
@@ -7,12 +9,12 @@ from assistant_runtime.core.tasks.selection import ModelPolicy
 
 @dataclass
 class TaskSettings:
-    timezone: str = "Asia/Shanghai"
-    concurrency: int = 2
-    misfire_seconds: int = 300
-    max_goal_rounds: int = 8
-    execution: dict = field(default_factory=lambda: {"model": "auto", "reasoning_effort": "auto"})
-    model_policy: dict = field(default_factory=dict)
+    timezone: str = field(default_factory=lambda: configuration_default(__file__, "timezone"))
+    concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
+    misfire_seconds: int = field(default_factory=lambda: configuration_default(__file__, "misfire_seconds"))
+    max_goal_rounds: int = field(default_factory=lambda: configuration_default(__file__, "max_goal_rounds"))
+    execution: dict = field(default_factory=lambda: configuration_default(__file__, "execution"))
+    model_policy: dict = field(default_factory=lambda: configuration_default(__file__, "model_policy"))
 
     @classmethod
     def parse(cls, data):
@@ -28,7 +30,7 @@ class TaskSettings:
             raise ValueError("Invalid task misfire window")
         if not isinstance(result.execution, dict) or set(result.execution) - {"model", "reasoning_effort"}:
             raise ValueError("Unknown task execution settings")
-        result.execution = {"model": "auto", "reasoning_effort": "auto", **result.execution}
+        result.execution = {**configuration_default(__file__, "execution"), **result.execution}
         if any(not isinstance(v, str) or not v.strip() for v in result.execution.values()):
             raise ValueError("Task execution settings must be nonempty strings")
         ModelPolicy.parse(result.model_policy)

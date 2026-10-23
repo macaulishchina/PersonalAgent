@@ -5,6 +5,8 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import logging
 import re
+import math
+import time
 from typing import Any, Awaitable, Callable
 
 from .events import API_VERSION, Event
@@ -102,7 +104,7 @@ class Context:
     def set_health(self, state, error=None):
         self.state, self.error = state, error
 
-    async def invoke(self, request, timeout=15):
+    async def invoke(self, request, timeout=None):
         return await self.runtime.invoke(request, timeout=timeout)
 
     def subscribe(self, capacity=128):
@@ -121,13 +123,14 @@ class Context:
     def set(self, key, value):
         self.runtime.store.set(f"plugin.{self.name}.{key}", value)
 
-    def register(self, request_type, handler):
-        self.runtime.register(self.name, request_type, handler)
+    def register(self, request_type, handler, *, timeout=15):
+        self.runtime.register(self.name, request_type, handler, timeout=timeout)
 
         async def unregister():
             current = self.runtime.handlers.get(request_type)
             if current and current[0] == self.name:
                 self.runtime.handlers.pop(request_type)
+                self.runtime.timeouts.pop(request_type, None)
 
         self.own(unregister)
 
@@ -159,6 +162,7 @@ class Runtime:
         self.plugins: dict[str, Any] = {}
         self.contexts: dict[str, Context] = {}
         self.handlers: dict[type, tuple[str, Callable[..., Awaitable]]] = {}
+        self.timeouts: dict[type, float] = {}
         self.subscribers: dict[str, asyncio.Queue] = {}
         self.dropped: dict[str, int] = {}
         self.started: list[str] = []
@@ -175,12 +179,15 @@ class Runtime:
         name = self.bindings[capability]
         return self.plugins[name]
 
-    def register(self, owner, request_type, handler):
+    def register(self, owner, request_type, handler, *, timeout=15):
         if request_type in self.handlers:
             raise ValueError(f"Multiple handlers for {request_type.__name__}")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Capability timeout must be finite and positive")
         self.handlers[request_type] = owner, handler
+        self.timeouts[request_type] = timeout
 
-    async def invoke(self, request, timeout=15):
+    async def invoke(self, request, timeout=None):
         if type(request) not in self.handlers:
             raise RuntimeError(f"{type(request).__name__} unavailable: plugin is starting or disabled")
         owner, handler = self.handlers[type(request)]
@@ -188,10 +195,21 @@ class Runtime:
         epoch = context.generation
         if context.state not in {"ready", "degraded"}:
             raise RuntimeError(f"{owner} unavailable")
+        timeout = self.timeouts[type(request)] if timeout is None else timeout
+        started = time.monotonic()
         pending = asyncio.ensure_future(handler(request))
         context.calls.add(pending)
         try:
             result = await asyncio.wait_for(pending, timeout)
+        except TimeoutError:
+            log.warning(
+                "capability_timeout owner=%s request=%s timeout_seconds=%s elapsed_seconds=%.3f",
+                owner,
+                type(request).__name__,
+                timeout,
+                time.monotonic() - started,
+            )
+            raise
         finally:
             context.calls.discard(pending)
         if epoch != context.generation:

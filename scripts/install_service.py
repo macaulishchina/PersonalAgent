@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 
-def unit_text(python, config, workspace):
+def unit_text(python, config, workspace, management=None, shutdown_seconds=60):
     def quote(value):
         return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
 
@@ -25,17 +25,18 @@ def unit_text(python, config, workspace):
     )
     return f"""[Unit]
 Description=Personal Agent
-StartLimitIntervalSec=0
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
 WorkingDirectory={str(workspace).replace("%", "%%")}
-ExecStart={quote(python)} -m assistant_runtime.app.cli --config {quote(config)} run
+ExecStart={quote(python)} -m assistant_runtime.app.cli configuration serve --management {quote(management or Path(config).parent.parent / "management.toml")}
 Environment=PYTHONUNBUFFERED=1
 Environment="PATH={path}"
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=30
+TimeoutStopSec={shutdown_seconds + 15}
 KillMode=control-group
 UMask=0077
 
@@ -53,7 +54,12 @@ def main():
 
     path = Path(a.config).expanduser().resolve()
     config = Config.load(path)
-    content = unit_text(sys.executable, path, config.workspace)
+    from assistant_runtime.app.management_bootstrap import ensure_management
+    from assistant_runtime.core.configuration.settings import ManagementSettings
+
+    management = ensure_management(config.root, path)
+    settings = ManagementSettings.load(management)
+    content = unit_text(sys.executable, path, config.workspace, management, settings.shutdown_seconds)
     unit = Path(a.output) if a.output else Path.home() / ".config/systemd/user" / config.unit_name
     unit.parent.mkdir(parents=True, exist_ok=True)
     unit.write_text(content)

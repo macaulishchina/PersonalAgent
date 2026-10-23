@@ -20,6 +20,8 @@ class MemoryPlugin:
         self.lock = asyncio.Lock()
         self.context = None
         self.current = None
+        self.maintenance_busy = False
+        self.draining = False
         self.ready = False
         self.cache = []
         self.retry_after = 0.0
@@ -29,6 +31,15 @@ class MemoryPlugin:
         context.own(self.provider.close)
         context.register(MemoryRequest, self.handle)
         context.spawn(self.run(), "memory-worker")
+
+    def maintenance_pause(self):
+        self.draining = True
+
+    def maintenance_resume(self):
+        self.draining = False
+
+    def maintenance_pending(self):
+        return [{"state": "memory_capture"}] if self.maintenance_busy else []
 
     def enqueue(self):
         if self.config.memory_auto_capture:
@@ -212,6 +223,10 @@ class MemoryPlugin:
 
     async def run(self):
         while True:
+            if self.draining:
+                await asyncio.sleep(0.2)
+                continue
+            self.maintenance_busy = True
             try:
                 if not self.ready:
                     await self.provider.start()
@@ -268,4 +283,6 @@ class MemoryPlugin:
                 self.ready = False
                 self.context.state = "degraded"
                 self.context.error = str(exc)[:200]
+            finally:
+                self.maintenance_busy = False
             await asyncio.sleep(5)

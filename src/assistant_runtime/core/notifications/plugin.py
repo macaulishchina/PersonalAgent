@@ -40,6 +40,12 @@ class NotificationsPlugin:
     def project_chat(self, messages):
         self.repo.groups.project_chat(messages)
 
+    def maintenance_pending(self):
+        rows = self.repo.db.execute(
+            "SELECT notification_id FROM notification_deliveries WHERE state='inflight' LIMIT 100"
+        ).fetchall()
+        return [{"id": row[0], "state": "finalizing"} for row in rows]
+
     async def start(self, context):
         if set(self.settings.channels) - self.channels.keys():
             raise ValueError("Configured notification channel is not registered")

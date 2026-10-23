@@ -1,6 +1,8 @@
 """Authenticated Pi transport; accounting and policy belong to ai_usage."""
 
 import asyncio
+import logging
+import time
 from dataclasses import replace
 import json
 
@@ -117,6 +119,12 @@ class ExecutionTransport:
             )
             settled = True
 
+        started = time.monotonic()
+        deadline = (
+            self.client.settings.compaction_timeout_seconds
+            if worker.compacting
+            else self.client.settings.timeout_seconds
+        )
         try:
             headers = {
                 "Authorization": request.headers["Authorization"],
@@ -172,7 +180,14 @@ class ExecutionTransport:
                     await response.write(chunk)
                 await response.write_eof()
                 return response
-        except (OSError, TimeoutError, ValueError):
+        except (OSError, TimeoutError, ValueError) as exc:
+            if isinstance(exc, TimeoutError):
+                logging.getLogger(__name__).warning(
+                    "model_timeout layer=api compaction=%s timeout_seconds=%s elapsed_seconds=%.3f",
+                    worker.compacting,
+                    deadline,
+                    time.monotonic() - started,
+                )
             if response is None:
                 return web.json_response(
                     {"error": {"message": "Execution transport outcome unknown"}}, status=502

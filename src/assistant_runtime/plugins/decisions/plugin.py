@@ -54,6 +54,15 @@ class DecisionsPlugin:
             json.dumps(asdict(self.settings), sort_keys=True).encode()
         ).hexdigest()[:16]
 
+    def maintenance_pause(self):
+        self.maintenance_paused = True
+
+    def maintenance_resume(self):
+        self.maintenance_paused = False
+
+    def maintenance_pending(self):
+        return [{"state": "model_call"}] if self.working or self.queue.pending else []
+
     async def start(self, context):
         self.context = context
         context.own(self.receipts.close)
@@ -148,7 +157,8 @@ class DecisionsPlugin:
             event = await self.events.get()
             try:
                 if (
-                    self.settings.enabled
+                    not getattr(self, "maintenance_paused", False)
+                    and self.settings.enabled
                     and self.settings.mode == "shadow"
                     and event.kind == "decision.observed"
                     and event.source in {"assistant", "tasks"}

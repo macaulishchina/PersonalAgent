@@ -30,6 +30,10 @@ class Go2RTCPlugin:
                     physical_controllers.add(physical)
                     self.controllers[ident] = Go2RTCPanTilt(self.providers[ident])
 
+    def maintenance_pending(self):
+        # Discovery only; finite device operations are owned by core/devices.
+        return []
+
     async def start(self, context):
         self.context = context
         for ident, provider in self.providers.items():

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "namespace": "events",
+  "title": "事件",
+  "group": "notifications",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "quota_bytes": {
+        "type": "integer",
+        "title": "存储配额（字节）",
+        "default": 2147483648,
+        "minimum": 1048576,
+        "maximum": 1099511627776
+      },
+      "queue_size": {
+        "type": "integer",
+        "title": "队列容量",
+        "default": 128,
+        "minimum": 8,
+        "maximum": 1024
+      },
+      "query_seconds": {
+        "type": "number",
+        "title": "查询超时（秒）",
+        "default": 2.0,
+        "minimum": 0.1,
+        "maximum": 10
+      }
+    }
+  }
+}

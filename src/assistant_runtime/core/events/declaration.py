@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import EventSettings
 from pathlib import Path
@@ -10,7 +11,8 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("events", (), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("events", (), critical=False),
     internal_factory=build,
     config_key="events",
     validate=EventSettings.parse,

@@ -43,6 +43,13 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 'execution_validated=true\nimages=true\nreasoning_efforts=["low"]\n'
             )
             (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            from assistant_runtime.app.management_bootstrap import ensure_management
+
+            management = ensure_management(root, path)
+            with socket.socket() as admin_socket:
+                admin_socket.bind(("127.0.0.1", 0))
+                admin_port = admin_socket.getsockname()[1]
+            management.write_text(management.read_text().replace("port = 8047", f"port = {admin_port}"))
             config = Config.load(path)
             with (root / "service.log").open("wb") as log:
                 process = await asyncio.create_subprocess_exec(

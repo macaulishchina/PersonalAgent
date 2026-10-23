@@ -3,8 +3,16 @@
 import asyncio
 import base64
 import hashlib
+import json
 from pathlib import Path
-from assistant_runtime.api import Manifest, PluginDefinition, Tool, ExecutionRequest, FileRequest
+from assistant_runtime.api import (
+    ConfigurationSpec,
+    Manifest,
+    PluginDefinition,
+    Tool,
+    ExecutionRequest,
+    FileRequest,
+)
 
 
 class Notes:
@@ -13,6 +21,8 @@ class Notes:
         self.submissions = asyncio.Lock()
 
     async def start(self):
+        policy = self.context.configuration_resource("policy")
+        self.policy = json.loads(policy.read_text()) if policy.exists() else {}
         self.context.log.info("sample ready")
 
     async def read(self, arguments):
@@ -122,20 +132,14 @@ class Notes:
         )
 
 
-def validate(config):
-    if not isinstance(config, dict) or set(config) - {"max_length"}:
-        raise ValueError("Unknown sample configuration")
-    maximum = config.get("max_length", 2000)
-    if type(maximum) is not int or not 1 <= maximum <= 2000:
-        raise ValueError("sample.max_length must be 1..2000")
-    return {"max_length": maximum}
-
-
 def definition():
     return PluginDefinition(
         Manifest("sample", ("execution", "workfiles")),
         Notes,
-        validate,
+        None,
         (Path(__file__).parent / "skills" / "sample-notes",),
         uses=(ExecutionRequest, FileRequest),
+        configuration=ConfigurationSpec(
+            **json.loads((Path(__file__).parent / "configuration.json").read_text())
+        ),
     )

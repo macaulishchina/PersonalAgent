@@ -1,5 +1,7 @@
 """One durable conversation; provider events and entrances share this owner."""
 
+from assistant_runtime.api.lifecycle import admits_work
+
 import asyncio
 import base64
 from dataclasses import asdict
@@ -46,6 +48,18 @@ class Conversation:
         host.voice.on_conversation = self.media_event
         host.backend.on_conversation_done = self.task_done
         host.backend.on_conversation_notice = self.provider_notice
+
+    async def maintenance_cancel(self):
+        if self.host.backend.busy:
+            await self.host.backend.cancel()
+
+    def maintenance_pending(self):
+        return [
+            {"id": row[0], "state": row[1]}
+            for row in self.store.db.execute(
+                "SELECT id,state FROM chat_requests WHERE state='sending'"
+            ).fetchall()
+        ]
 
     @property
     def session(self):
@@ -578,6 +592,7 @@ class Conversation:
             and receipt["revision"] == self.voice_revision
         )
 
+    @admits_work()
     async def submit(self, request_id, text, attachments, notification_id=None):
         if not isinstance(request_id, str):
             raise ValueError("发送标识必须是 UUID")

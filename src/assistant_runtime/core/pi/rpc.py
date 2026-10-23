@@ -840,10 +840,7 @@ class PiClient:
                         "maxRetries": 0,
                         "provider": {
                             "maxRetries": 0,
-                            "timeoutMs": max(
-                                self.settings.timeout_seconds, self.settings.compaction_timeout_seconds
-                            )
-                            * 1000,
+                            "timeoutMs": self.settings.outer_timeout_seconds * 1000,
                         },
                     },
                     "compaction": {"enabled": True},
@@ -1061,9 +1058,18 @@ class PiClient:
             }
             if "command" in transport:
                 transport["env"] = {**os.environ, **self.environment, **transport.get("env", {})}
+            if "headers" in transport:
+                environment = {**os.environ, **self.environment}
+                for header, value in transport["headers"].items():
+                    for key, secret in environment.items():
+                        value = value.replace("${" + key + "}", secret)
+                    transport["headers"][header] = value
             try:
-                async with Client({"mcpServers": {name: transport}}, timeout=30) as client:
-                    tools = await asyncio.wait_for(client.list_tools(), 30)
+                startup_timeout = spec.get("startup_timeout_sec", 60)
+                async with Client(
+                    {"mcpServers": {name: transport}}, timeout=startup_timeout, init_timeout=startup_timeout
+                ) as client:
+                    tools = await asyncio.wait_for(client.list_tools(), startup_timeout)
                 rows.append(
                     {
                         "name": name,

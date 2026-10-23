@@ -207,6 +207,15 @@ asyncio.run(main())
             previous = list(sys.path)
             sys.path.insert(0, str(target))
             try:
+                from assistant_runtime.core.configuration.catalog import installed_descriptions
+
+                with patch(
+                    "importlib.metadata.EntryPoint.load", side_effect=AssertionError("runtime import")
+                ):
+                    described = next(item for item in installed_descriptions() if item["id"] == "sample")
+                self.assertEqual(
+                    described["configuration"]["schema"]["properties"]["max_length"]["default"], 2000
+                )
                 declaration = discover(["sample"])["sample"]
                 self.assertTrue((declaration.skills[0] / "SKILL.md").is_file())
                 store = Store(root / "state.db")

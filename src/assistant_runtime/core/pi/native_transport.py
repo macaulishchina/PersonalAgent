@@ -1,6 +1,8 @@
 """Meter native Pi model streaming under the same host-bound execution identity."""
 
 import asyncio
+import logging
+import time
 import json
 from contextlib import aclosing
 from aiohttp import web
@@ -76,6 +78,7 @@ async def forward(transport, request, worker):
         settled = True
 
     worker.last_usage_call = ticket["id"]
+    started = time.monotonic()
     try:
         await response.prepare(request)
         args.update(
@@ -98,6 +101,14 @@ async def forward(transport, request, worker):
                         # Length-limited generation is observed but is not a completed business operation.
                         state, usage = "completed", telemetry(event["message"])
                         request_id = request_id or event["message"].get("responseId")
+                        logging.getLogger(__name__).info(
+                            "native_model_timing call=%s model=%s input_tokens=%s cached_input_tokens=%s timings=%s",
+                            ticket["id"],
+                            alias,
+                            (usage or {}).get("input_tokens"),
+                            (usage or {}).get("cached_input_tokens"),
+                            event.get("transport_timings", {}),
+                        )
                         await finish()
                     elif event["type"] == "error":
                         status = event.get("http_status", status)
@@ -106,6 +117,14 @@ async def forward(transport, request, worker):
                     await response.write((json.dumps(event) + "\n").encode())
         await response.write_eof()
         return response
+    except TimeoutError:
+        logging.getLogger(__name__).warning(
+            "model_timeout layer=native compaction=%s timeout_seconds=%s elapsed_seconds=%.3f",
+            worker.compacting,
+            timeout,
+            time.monotonic() - started,
+        )
+        raise
     finally:
         if not settled:
             await finish()

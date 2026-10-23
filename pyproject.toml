@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 core = [
-    "aiohttp>=3.14,<4", "pillow>=12,<13", "jsonschema>=4.23,<5",
+    "aiohttp>=3.14,<4", "pillow>=12,<13", "jsonschema>=4.23,<5", "tomlkit==0.13.3",
     "python-dotenv>=1.2,<2", "fastmcp==4.0.0b1", "APScheduler==3.11.0",
     "fastembed==0.9.0", "mcp==2.3.0", "mem0ai==1.0.11",
 ]
@@ -44,7 +44,9 @@ personal-agent = "assistant_runtime.app.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"*" = ["configuration.json"]
 "assistant_runtime.app" = ["templates/*/*.toml"]
+"assistant_runtime.core.configuration" = ["static/*"]
 "assistant_runtime.plugins.media" = ["README.md", "skills/*/SKILL.md"]
 "assistant_runtime.core.tasks" = ["README.md", "skills/*/SKILL.md"]
 "assistant_runtime.core.events" = ["README.md", "skills/*/SKILL.md"]
@@ -73,6 +75,8 @@ cache-keys = [
     { file = "pyproject.toml" },
     { file = "src/**/*.py" },
     { file = "src/**/*.toml" },
+    { file = "src/**/*.json" },
+    { file = "src/assistant_runtime/core/configuration/static/*" },
     { file = "src/**/*.md" },
     { file = "src/**/*.ts" },
     { file = "src/**/*.mjs" },

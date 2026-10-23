@@ -59,17 +59,17 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
         await self.usage.settle(ticket["id"], state="unknown")
         self.assertEqual((await self.usage.snapshot("work"))["unknown_execution_requests"], 1)
 
-    async def test_default_50_warning_100_allowed_101_denied(self):
-        for n in range(100):
+    async def test_default_128_warning_256_allowed_257_denied(self):
+        for n in range(256):
             ticket = await self.admit()
             await self.done(ticket, usage={"input_tokens": 1000000, "output_tokens": 1000000})
             notices = await self.usage.call("notices")
-            self.assertEqual(any(v["kind"] == "warning" for v in notices), n >= 49)
+            self.assertEqual(any(v["kind"] == "warning" for v in notices), n >= 127)
         with self.assertRaisesRegex(UsageError, "max_requests"):
             await self.admit()
         snapshot = await self.usage.snapshot("work")
-        self.assertEqual(snapshot["requests"], 100)
-        self.assertEqual(snapshot["input_tokens"], 100000000)
+        self.assertEqual(snapshot["requests"], 256)
+        self.assertEqual(snapshot["input_tokens"], 256000000)
         self.assertEqual(len(await self.usage.call("notices")), 2)
 
     async def test_parallel_children_share_one_atomic_allowance(self):
@@ -328,7 +328,7 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 UsageSettings.parse(config)
-        self.assertEqual(UsageSettings.parse({}).max_requests, 100)
+        self.assertEqual(UsageSettings.parse({}).max_requests, 256)
 
 
 class BoundaryTest(unittest.IsolatedAsyncioTestCase):

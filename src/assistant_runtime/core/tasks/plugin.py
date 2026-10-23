@@ -1,5 +1,7 @@
 """Durable task management. Scheduling callbacks never execute model work inline."""
 
+from assistant_runtime.api.lifecycle import admits_work
+
 from .declaration import DECLARATION
 
 import asyncio
@@ -81,6 +83,8 @@ class TasksPlugin:
         self.upgrading = set()
         self.scheduler = None
         self.launching = set()
+        self.draining = False
+        self.drain_plans = set()
         self.started = False
         self.notification_error = None
         self.run_locks = weakref.WeakValueDictionary()
@@ -120,6 +124,18 @@ class TasksPlugin:
                 except Exception:
                     state, text = "unknown", "无法核对上次执行结果，未自动重做"
                 self.provider_update(run["id"], state, progress=text, turn_active=False)
+        interruption = self.host.config.state_dir / "configuration/unclean.json"
+        if interruption.exists():
+            # No dispatch occurred for these rows. Do not replay them after an orphan cleanup.
+            self.maintenance_pause()
+            for ident in list(self.drain_plans):
+                self.due(ident)
+            for row in self.repo.pending():
+                if row["state"] == "queued":
+                    self.repo.update_run(row["id"], "canceled", progress="管理进程异常中断，未自动执行。")
+            self.draining = False
+            self.drain_plans.clear()
+            interruption.unlink(missing_ok=True)
         self.repo.seed_finalizations()
         self.archive_finished()
         for definition in self.repo.definitions():
@@ -234,7 +250,14 @@ class TasksPlugin:
     async def scheduled_due(self, ident):
         self.due(ident)
 
+    @property
+    def accepting_schedule(self):
+        return not self.draining and not getattr(getattr(self.host, "intake", None), "paused", False)
+
     def due(self, ident):
+        if not self.accepting_schedule and ident not in self.drain_plans:
+            return
+        self.drain_plans.discard(ident)
         d = self.repo.definition(ident)
         if d["state"] != "enabled" or d["next_at"] is None:
             return
@@ -518,6 +541,7 @@ class TasksPlugin:
             if type(e.get(key, 0)) not in (int, float) or not 0 <= e.get(key, 0) <= 86400:
                 raise ValueError("Invalid event timing/hysteresis")
 
+    @admits_work(lambda request: request.action in {"create", "run", "continue", "upgrade_model"})
     async def request(self, request):
         from assistant_runtime.api.ai_usage import current_usage
 
@@ -724,6 +748,8 @@ class TasksPlugin:
                 if usage:
                     scope = await usage.scope(caller)
                     await usage.service.bind("plan:" + d["id"], scope)
+            if self.draining and spec["trigger"]["kind"] == "immediate":
+                self.drain_plans.add(d["id"])
             self.schedule(d)
             return d
         if a == "workfiles":
@@ -1161,6 +1187,9 @@ class TasksPlugin:
 
     async def watch_events(self):
         while True:
+            if not self.accepting_schedule:
+                await asyncio.sleep(0.2)
+                continue
             for d in self.repo.definitions():
                 if d["state"] != "enabled" or d["spec"]["trigger"]["kind"] != "event":
                     continue
@@ -1231,6 +1260,43 @@ class TasksPlugin:
                         "INSERT OR REPLACE INTO job_event_cursor VALUES (?,?)", (d["id"], json.dumps(cursor))
                     )
             await asyncio.sleep(1)
+
+    def maintenance_pause(self):
+        self.draining = True
+        self.drain_plans = {
+            d["id"]
+            for d in self.repo.definitions()
+            if d["state"] == "enabled"
+            and d["next_at"] is not None
+            and d["spec"]["trigger"]["kind"] == "immediate"
+        }
+
+    def maintenance_resume(self):
+        self.draining = False
+        self.drain_plans.clear()
+        for definition in self.repo.definitions():
+            self.schedule(definition)
+
+    async def maintenance_cancel(self):
+        # Materialize accepted immediate occurrences so cancellation has a durable receipt;
+        # otherwise their untouched schedule could launch them after the restart.
+        for ident in list(self.drain_plans):
+            self.due(ident)
+        for run in self.repo.pending():
+            if run["state"] not in {"unknown", "paused"}:
+                await self.request(TaskRequest("cancel_run", {"run_id": run["id"]}))
+
+    def maintenance_pending(self):
+        pending = [{"id": row["id"], "state": row["state"]} for row in self.repo.pending()]
+        pending.extend({"id": ident, "state": "scheduled_immediate"} for ident in self.drain_plans)
+        pending.extend({"id": ident, "state": "finalizing"} for ident in self.repo.finalizations())
+        pending.extend(
+            {"id": row[0], "state": "model_review"}
+            for row in self.repo.db.execute(
+                "SELECT id FROM job_runs WHERE json_extract(data,'$.model_review.state') IN ('queued','running')"
+            ).fetchall()
+        )
+        return pending
 
     async def close(self):
         self.started = False

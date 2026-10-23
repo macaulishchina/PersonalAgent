@@ -42,6 +42,9 @@ class AppleHomePlugin:
         self.refresh_state = {}
         self.context = None
 
+    def maintenance_pending(self):
+        return [{"id": name, "state": "running"} for name, task in self.refreshing.items() if not task.done()]
+
     async def start(self, context):
         self.context = context
         self.root = self.config.state_dir / "apple-home"

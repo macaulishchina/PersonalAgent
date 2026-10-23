@@ -37,6 +37,13 @@ class AssistantService:
             raise
         self.stop_event = asyncio.Event()
         self.started = time.time()
+        from assistant_runtime.api.lifecycle import WorkIntake
+
+        self.intake = WorkIntake()
+        from .maintenance import Maintenance
+
+        self.maintenance = Maintenance(self)
+        self.startup_complete = False
         self.assistant = None
         from assistant_runtime.app.bootstrap import compose
 
@@ -46,6 +53,11 @@ class AssistantService:
             self.store.db.close()
             self.lock_file.close()
             raise
+
+    def _tool_timeout(self):
+        from assistant_runtime.core.models.settings import ModelSettings
+
+        return ModelSettings.parse(self.config.model_api).outer_timeout_seconds
 
     def status(self):
         if self.assistant is not None:
@@ -98,6 +110,68 @@ class AssistantService:
         try:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
             action = d["command"]
+            if action in {"management-pause", "management-resume", "management-work", "management-cancel"}:
+                if d.get("execution_session"):
+                    raise ValueError("Lifecycle control is operator-only")
+                callback = {
+                    "management-pause": self.maintenance.pause,
+                    "management-resume": self.maintenance.resume,
+                    "management-work": self.maintenance.status,
+                    "management-cancel": self.maintenance.cancel,
+                }[action]
+                result = callback()
+                if asyncio.iscoroutine(result):
+                    result = await result
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
+            if action == "management-status":
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "ok": True,
+                                "result": {
+                                    "startup_complete": self.startup_complete,
+                                    "pid": os.getpid(),
+                                    "supervisor_pid": int(
+                                        os.environ.get("PERSONAL_AGENT_SUPERVISOR_PID", os.getpid())
+                                    ),
+                                    "configuration_version": os.environ.get(
+                                        "PERSONAL_AGENT_CONFIGURATION_VERSION"
+                                    ),
+                                    "plugins": self.runtime.health(),
+                                    "critical": [
+                                        name
+                                        for name, plugin in self.runtime.plugins.items()
+                                        if plugin.manifest.critical
+                                    ],
+                                },
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
+                await writer.drain()
+                return
+            if self.intake.paused and not d.get("execution_session"):
+                query = d.get("action", action)
+                if query not in {
+                    "status",
+                    "get",
+                    "list",
+                    "models",
+                    "events",
+                    "trace",
+                    "health",
+                    "artifacts",
+                    "answer",
+                    "cancel",
+                    "supplement",
+                    "cancel_run",
+                    "pause_run",
+                }:
+                    raise RuntimeError("Service is waiting to restart; new work is paused")
             if d.get("execution_session") and action != "plugin-tools":
                 from assistant_runtime.api.ai_usage import UsageScope, UsageError, current_usage
 
@@ -141,10 +215,10 @@ class AssistantService:
                     uuid.uuid4().hex,
                     scope.work_id,
                     scope.caller if scope.task_id else None,
-                    time.monotonic() + 90,
+                    time.monotonic() + self._tool_timeout(),
                 )
                 result = await self.extension_tools.invoke(
-                    d["name"], d.get("arguments", {}), identity=identity, timeout=90
+                    d["name"], d.get("arguments", {}), identity=identity, timeout=self._tool_timeout()
                 )
             elif action == "wake":
                 if self.assistant is None:
@@ -244,7 +318,7 @@ class AssistantService:
                 from assistant_runtime.api.models import ModelRequest
 
                 result = await self.runtime.invoke(
-                    ModelRequest(d["action"], d.get("arguments", {}), d.get("caller_run")), timeout=90
+                    ModelRequest(d["action"], d.get("arguments", {}), d.get("caller_run"))
                 )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
@@ -327,7 +401,7 @@ class AssistantService:
                     reader,
                     self.runtime.invoke(
                         IntegrationRequest(d["action"], d.get("arguments", {}), d.get("caller_run")),
-                        timeout=170,
+                        timeout=3660,
                     ),
                 )
                 writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
@@ -420,6 +494,7 @@ class AssistantService:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 asyncio.get_running_loop().add_signal_handler(sig, self.stop_event.set)
             await self.runtime.start()
+            self.startup_complete = not self.runtime.fatal.is_set()
             if getattr(self, "backend", None) and self.backend.session_id:
                 self.store.set("session_id", self.backend.session_id)
             waiters = [

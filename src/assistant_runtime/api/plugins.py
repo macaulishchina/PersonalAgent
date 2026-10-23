@@ -9,6 +9,7 @@ import logging
 import time
 
 from assistant_runtime.kernel.runtime import Manifest
+from .configuration import ConfigurationSpec
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class PluginDefinition:
     tools_factory: str | None = None
     task_context: bool = True
     background_tools: tuple[str, ...] | None = None
+    configuration: ConfigurationSpec | None = None
 
 
 class PluginContext:
@@ -93,6 +95,7 @@ class PluginContext:
         readiness=None,
         health=None,
         dropped=None,
+        configuration_resource=None,
     ):
         self.name, self.config = name, config
         self.state_dir = Path(state_dir)
@@ -108,6 +111,7 @@ class PluginContext:
         self.ready = readiness or asyncio.Event()
         self.__health = health
         self.__dropped = dropped or (lambda: 0)
+        self.__configuration_resource = configuration_resource
 
     @property
     def identity(self):
@@ -118,15 +122,21 @@ class PluginContext:
             raise ValueError("Undeclared plugin resource: " + name)
         return self.__resources[name]
 
+    def configuration_resource(self, name):
+        """Read a declared private configuration resource from the loaded generation."""
+        if self.__configuration_resource is None:
+            raise ValueError("No configuration resource adapter")
+        return self.__configuration_resource(name)
+
     def repository(self, factory, *args, **kwargs):
         if self.__repository is None:
             raise RuntimeError("Plugin repository unavailable")
         return self.__repository(factory, *args, **kwargs)
 
-    def register(self, request_type, handler):
+    def register(self, request_type, handler, *, timeout=15):
         if self.__register is None:
             raise RuntimeError("Plugin cannot register this capability")
-        self.__register(request_type, handler)
+        self.__register(request_type, handler, timeout=timeout)
 
     def event_reporter(self, source=None):
         if self.__reporter is None:
@@ -151,15 +161,19 @@ class PluginContext:
     def credential(self, name):
         return self.__credential(name)
 
-    async def invoke(self, request, timeout=15):
+    async def invoke(self, request, timeout=None):
         if type(request) not in self.__capabilities:
             raise ValueError("Capability not declared by this plugin")
         if self.cancelled.is_set():
             raise RuntimeError("Plugin stopped")
         identity = self.identity
         if identity and identity.deadline is not None:
-            timeout = min(timeout, identity.deadline - time.monotonic())
-        if timeout <= 0:
+            timeout = (
+                (identity.deadline - time.monotonic())
+                if timeout is None
+                else min(timeout, identity.deadline - time.monotonic())
+            )
+        if timeout is not None and timeout <= 0:
             raise TimeoutError("Request deadline exceeded")
         return await self.__invoke(request, timeout=timeout)
 

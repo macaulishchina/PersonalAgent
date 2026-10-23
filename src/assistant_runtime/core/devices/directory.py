@@ -197,6 +197,16 @@ class DevicesPlugin:
         )
         self.manifest = Manifest("devices", owners, critical=True)
 
+    def maintenance_pending(self):
+        return [
+            {"id": ident, "state": "running"}
+            for ident, task in self.operations.running.items()
+            if not task.done()
+        ]
+
+    async def maintenance_cancel(self):
+        await self.operations.close()
+
     async def start(self, context):
         expected = {i for i, d in self.directory.config.items() if d.get("enabled", True)}
         if set(self.directory.entries) != expected:

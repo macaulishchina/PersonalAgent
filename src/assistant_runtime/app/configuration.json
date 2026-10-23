@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "基础与能力装配",
+  "group": "access",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "root": {
+        "type": "string",
+        "title": "root",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "profile": {
+        "type": "string",
+        "title": "运行入口",
+        "default": "headless",
+        "x-advanced": true
+      },
+      "backend": {
+        "type": "string",
+        "title": "backend",
+        "default": "pi",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "realtime_voice": {
+        "type": "string",
+        "title": "realtime_voice",
+        "default": "juniper",
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "workspace": {
+        "type": "string",
+        "title": "workspace",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "pi_binary": {
+        "type": "string",
+        "title": "pi_binary",
+        "default": "pi",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "instance_skills": {
+        "type": "array",
+        "title": "实例技能",
+        "default": [],
+        "items": {},
+        "x-advanced": true
+      },
+      "main_model": {
+        "type": "string",
+        "title": "主对话模型别名",
+        "default": "unconfigured",
+        "x-group": "models",
+        "x-reference": "model_api.entries"
+      },
+      "main_reasoning_effort": {
+        "type": "string",
+        "title": "主对话思考深度",
+        "default": "medium",
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "x-group": "models"
+      },
+      "assistant_name": {
+        "type": "string",
+        "title": "助手名称",
+        "default": "个人助理",
+        "x-group": "conversation"
+      },
+      "wake_words": {
+        "type": "array",
+        "title": "wake_words",
+        "default": [
+          "嘟嘟"
+        ],
+        "items": {},
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "idle_seconds": {
+        "type": "integer",
+        "title": "idle_seconds",
+        "default": 60,
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "voice_follow_up_seconds": {
+        "type": "integer",
+        "title": "voice_follow_up_seconds",
+        "default": 8,
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "quiet_hours": {
+        "type": "object",
+        "title": "静默时段",
+        "default": {},
+        "additionalProperties": {},
+        "x-group": "conversation"
+      },
+      "interaction": {
+        "type": "object",
+        "title": "interaction",
+        "default": {},
+        "additionalProperties": {},
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "hid_buttons": {
+        "type": "object",
+        "title": "hid_buttons",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "work_files": {
+        "type": "object",
+        "title": "工作文件",
+        "default": {},
+        "additionalProperties": {},
+        "x-group": "resources"
+      },
+      "input_device": {
+        "type": "string",
+        "title": "input_device",
+        "default": "",
+        "x-advanced": true
+      },
+      "default_output": {
+        "type": "string",
+        "title": "default_output",
+        "default": "",
+        "x-advanced": true
+      },
+      "minimum_volume": {
+        "type": "integer",
+        "title": "minimum_volume",
+        "default": 80,
+        "x-advanced": true
+      },
+      "echo_cancel": {
+        "type": "boolean",
+        "title": "echo_cancel",
+        "default": true,
+        "x-advanced": true
+      },
+      "devices": {
+        "type": "object",
+        "title": "设备资源",
+        "default": {},
+        "additionalProperties": {},
+        "x-group": "resources"
+      },
+      "model_dir": {
+        "type": "string",
+        "title": "model_dir",
+        "default": "",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "unit_name": {
+        "type": "string",
+        "title": "unit_name",
+        "default": "personal-agent.service",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true
+      },
+      "plugins": {
+        "type": "array",
+        "title": "启用插件",
+        "default": [
+          "ai_usage",
+          "workfiles",
+          "devices",
+          "assistant",
+          "conversation",
+          "execution",
+          "models",
+          "voice_disabled",
+          "pi",
+          "notifications",
+          "tasks",
+          "web"
+        ],
+        "items": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "maxItems": 64,
+        "uniqueItems": true
+      },
+      "bindings": {
+        "type": "object",
+        "title": "能力绑定",
+        "default": {
+          "audio": "pipewire",
+          "trigger": "voice_disabled",
+          "brain": "pi",
+          "memory": "memory"
+        },
+        "additionalProperties": {}
+      },
+      "memory_enabled": {
+        "type": "boolean",
+        "title": "启用记忆",
+        "default": false,
+        "x-group": "resources"
+      },
+      "memory_auto_capture": {
+        "type": "boolean",
+        "title": "自动提取记忆",
+        "default": true,
+        "x-group": "resources"
+      }
+    }
+  }
+}

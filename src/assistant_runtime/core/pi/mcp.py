@@ -1,6 +1,7 @@
 """Agent-specific MCP registration; MCP services themselves do not import provider code."""
 
 import sys
+from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 
 from assistant_runtime.core.plugin_catalog import services
 
@@ -37,16 +38,16 @@ def server_config(
                 else {}
             ),
             "default_tools_approval_mode": "approve",
-            "startup_timeout_sec": 30,
-            "tool_timeout_sec": 200 if name == "integrations" else 100,
+            "startup_timeout_sec": 60,
+            "tool_timeout_sec": LOCAL_TRANSPORT_SECONDS,
         }
     result["extensions"] = {
         "command": sys.executable,
         "args": ["-m", "assistant_runtime.mcp", "extensions", "--socket", str(socket)],
         "enabled": enabled,
         "default_tools_approval_mode": "approve",
-        "startup_timeout_sec": 30,
-        "tool_timeout_sec": 100,
+        "startup_timeout_sec": 60,
+        "tool_timeout_sec": LOCAL_TRANSPORT_SECONDS,
     }
     return result
 
@@ -61,7 +62,7 @@ def to_pi_mcp_json(mcp_servers):
         entry = {
             "enabled": enabled,
             "exposure": "deferred",
-            "timeout": int(spec.get("tool_timeout_sec") or spec.get("startup_timeout_sec") or 60),
+            "timeout": int(spec.get("tool_timeout_sec") or spec.get("startup_timeout_sec") or 600),
         }
         if "command" in spec:
             entry["command"] = spec["command"]

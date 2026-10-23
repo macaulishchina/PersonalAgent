@@ -30,9 +30,16 @@ class IntegrationsPlugin:
             raise RuntimeError("Reasoning provider has no MCP integration adapter")
         return adapter
 
+    def maintenance_pending(self):
+        return (
+            [{"state": "running"}]
+            if self.pending or getattr(self.adapter, "logins", {}) or getattr(self.adapter, "probes", set())
+            else []
+        )
+
     async def start(self, context):
         self.context = context
-        context.register(IntegrationRequest, self.request)
+        context.register(IntegrationRequest, self.request, timeout=3660)
         context.spawn(self.refresh(), "apply-at-idle")
 
     async def refresh(self):
@@ -94,7 +101,9 @@ class IntegrationsPlugin:
                 return {
                     "revision": self.registry.revision,
                     "state": "saved",
-                    "application": "queued_for_idle_foreground_and_new_background_executions",
+                    "application": "restart_required"
+                    if getattr(self.adapter, "runtime_data", None) is not None
+                    else "queued_for_idle_foreground_and_new_background_executions",
                     **({"server": self.entry(args["name"])} if action in {"configure", "enable"} else {}),
                 }
         if action == "apply":

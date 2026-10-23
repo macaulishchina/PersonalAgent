@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "namespace": "decisions",
+  "title": "快速判断",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "title": "启用",
+        "default": true
+      },
+      "external_data_consent": {
+        "type": "boolean",
+        "title": "允许向服务发送数据",
+        "default": false
+      },
+      "mode": {
+        "type": "string",
+        "title": "决策模式",
+        "default": "active",
+        "enum": [
+          "shadow",
+          "active"
+        ]
+      },
+      "model": {
+        "type": "string",
+        "title": "模型标识",
+        "default": "jev-1.13.0"
+      },
+      "queue_size": {
+        "type": "integer",
+        "title": "队列容量",
+        "default": 32,
+        "minimum": 1,
+        "maximum": 128
+      },
+      "retention": {
+        "type": "integer",
+        "title": "决策记录保留数量",
+        "default": 2000,
+        "minimum": 100,
+        "maximum": 10000,
+        "x-advanced": true
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "title": "请求超时（秒）",
+        "default": 8,
+        "minimum": 0.1,
+        "maximum": 30
+      },
+      "max_age_seconds": {
+        "type": "integer",
+        "title": "建议有效期（秒）",
+        "default": 30,
+        "minimum": 1,
+        "maximum": 300
+      },
+      "active_timeout_seconds": {
+        "type": "number",
+        "title": "关键决策等待上限（秒）",
+        "default": 3,
+        "minimum": 0.1,
+        "maximum": 5
+      },
+      "warmup_enabled": {
+        "type": "boolean",
+        "title": "启用预热",
+        "default": true,
+        "x-advanced": true
+      },
+      "keepalive_seconds": {
+        "type": "integer",
+        "title": "连接保活（秒）",
+        "default": 120,
+        "minimum": 15,
+        "maximum": 600,
+        "x-advanced": true
+      },
+      "dns_cache_seconds": {
+        "type": "integer",
+        "title": "DNS 缓存（秒）",
+        "default": 300,
+        "minimum": 0,
+        "maximum": 3600,
+        "x-advanced": true
+      },
+      "default_threshold": {
+        "type": "number",
+        "title": "默认采纳阈值",
+        "default": 0.6,
+        "minimum": 0,
+        "maximum": 1
+      },
+      "concurrency": {
+        "type": "integer",
+        "title": "并发数量",
+        "default": 4,
+        "minimum": 2,
+        "maximum": 16
+      },
+      "timezone": {
+        "type": "string",
+        "title": "时区",
+        "default": "Asia/Shanghai"
+      },
+      "thresholds": {
+        "type": "object",
+        "title": "场景采纳阈值",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "scenes": {
+        "type": "object",
+        "title": "场景策略",
+        "default": {},
+        "additionalProperties": {}
+      }
+    }
+  }
+}

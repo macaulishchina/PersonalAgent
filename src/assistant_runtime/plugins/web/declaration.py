@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import WebSettings
 
@@ -11,7 +12,8 @@ def create(api):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("web", ("conversation",), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("web", ("conversation",), critical=False),
     create=create,
     uses=(
         TaskRequest,

@@ -49,6 +49,7 @@ async def complete(accounts, payload, session_id):
     )
     args.update(route)
     started, first, status, request_id, message = time.monotonic(), None, None, None, None
+    timings = None
     args["inference"] = True
     async with aclosing(worker.events("stream", args)) as events:
         async for item in events:
@@ -68,6 +69,7 @@ async def complete(accounts, payload, session_id):
                 raise RuntimeError("Native model outcome unknown or authentication unavailable")
             elif kind == "done":
                 message = event["message"]
+                timings = event.get("transport_timings")
                 request_id = request_id or message.get("responseId")
     if not message or message["stopReason"] != "stop":
         raise RuntimeError("Native model did not confirm complete text")
@@ -82,4 +84,5 @@ async def complete(accounts, payload, session_id):
         "provider_request_id": request_id,
         "elapsed_ms": round((time.monotonic() - started) * 1000),
         "first_text_ms": round(first * 1000) if first is not None else None,
+        "transport_timings": timings,
     }

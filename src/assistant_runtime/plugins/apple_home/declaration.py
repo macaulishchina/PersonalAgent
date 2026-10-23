@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import AppleHomeSettings
 
@@ -9,7 +10,8 @@ def create(api):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("apple_home", (), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("apple_home", (), critical=False),
     create=create,
     resources=("state", "directory"),
     config_fields=("apple_home", "state_dir"),

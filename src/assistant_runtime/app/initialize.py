@@ -19,6 +19,19 @@ def initialize(destination, template=None, *, preset="standard"):
             path.chmod(0o700 if path.is_dir() else 0o600)
         (destination / "state").mkdir(mode=0o700)
         (destination / ".env").touch(mode=0o600)
+        import json
+        from assistant_runtime.core.configuration.auth import AdminAccess
+
+        management = destination / "management.toml"
+        management.write_text(
+            "root = " + json.dumps(str(destination)) + "\n"
+            "entry = " + json.dumps(str(destination / "config/config.toml")) + "\n"
+            'host = "0.0.0.0"\nport = 8047\n'
+        )
+        management.chmod(0o600)
+        private = destination / "state/configuration"
+        private.mkdir(mode=0o700)
+        AdminAccess(private / "admin-token")
     except BaseException:
         shutil.rmtree(destination)
         raise

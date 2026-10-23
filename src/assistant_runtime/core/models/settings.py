@@ -1,5 +1,9 @@
 """One immutable startup snapshot; explicit protocols, capabilities and provider switches."""
 
+from assistant_runtime.api.deadlines import MAX_OPERATION_SECONDS, TRANSPORT_MARGIN_SECONDS
+
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -85,21 +89,33 @@ def url(value, *, local=False):
 
 @dataclass(frozen=True)
 class ModelSettings:
-    enabled: bool = False
-    gateway_url: str = "http://127.0.0.1:4010/v1"
-    gateway_key_env: str = "ASSISTANT_MODEL_GATEWAY_KEY"
-    concurrency: int = 4
-    queue_size: int = 16
-    timeout_seconds: int = 60
-    compaction_timeout_seconds: int = 180
-    tool_result_max_chars: int = 6000
-    max_loaded_tools: int = 12
-    max_output_tokens: int = 8192
-    execution_max_output_tokens: int = 16384
-    providers: dict = field(default_factory=dict)
-    accounts: dict = field(default_factory=dict)
-    entries: dict = field(default_factory=dict)
-    memory: str = ""
+    enabled: bool = field(default_factory=lambda: configuration_default(__file__, "enabled"))
+    gateway_url: str = field(default_factory=lambda: configuration_default(__file__, "gateway_url"))
+    gateway_key_env: str = field(default_factory=lambda: configuration_default(__file__, "gateway_key_env"))
+    concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
+    queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
+    timeout_seconds: int = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
+    compaction_timeout_seconds: int = field(
+        default_factory=lambda: configuration_default(__file__, "compaction_timeout_seconds")
+    )
+    tool_result_max_chars: int = field(
+        default_factory=lambda: configuration_default(__file__, "tool_result_max_chars")
+    )
+    max_loaded_tools: int = field(default_factory=lambda: configuration_default(__file__, "max_loaded_tools"))
+    max_output_tokens: int = field(
+        default_factory=lambda: configuration_default(__file__, "max_output_tokens")
+    )
+    execution_max_output_tokens: int = field(
+        default_factory=lambda: configuration_default(__file__, "execution_max_output_tokens")
+    )
+    providers: dict = field(default_factory=lambda: configuration_default(__file__, "providers"))
+    accounts: dict = field(default_factory=lambda: configuration_default(__file__, "accounts"))
+    entries: dict = field(default_factory=lambda: configuration_default(__file__, "entries"))
+    memory: str = field(default_factory=lambda: configuration_default(__file__, "memory"))
+
+    @property
+    def outer_timeout_seconds(self):
+        return max(self.timeout_seconds, self.compaction_timeout_seconds) + TRANSPORT_MARGIN_SECONDS
 
     @classmethod
     def parse(cls, value):
@@ -131,8 +147,8 @@ class ModelSettings:
         for key, maximum in (
             ("concurrency", 16),
             ("queue_size", 64),
-            ("timeout_seconds", 80),
-            ("compaction_timeout_seconds", 600),
+            ("timeout_seconds", MAX_OPERATION_SECONDS),
+            ("compaction_timeout_seconds", MAX_OPERATION_SECONDS),
             ("tool_result_max_chars", 50000),
             ("max_loaded_tools", 64),
             ("max_output_tokens", 16384),

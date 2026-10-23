@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.sample",
+  "title": "示例笔记",
+  "group": "extensions",
+  "description": "独立插件的配置声明、默认值和界面示例。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "max_length": {
+        "type": "integer",
+        "title": "笔记长度上限",
+        "description": "每次写入允许的最大字符数。",
+        "minimum": 1,
+        "maximum": 2000,
+        "default": 2000
+      },
+      "report": {
+        "type": "object",
+        "title": "报告选项",
+        "additionalProperties": false,
+        "properties": {
+          "style": {
+            "type": "string",
+            "title": "报告风格",
+            "enum": [
+              "brief",
+              "detailed"
+            ],
+            "default": "brief"
+          },
+          "heading": {
+            "type": "string",
+            "title": "标题",
+            "maxLength": 100
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "style": {
+                  "const": "detailed"
+                }
+              },
+              "required": [
+                "style"
+              ]
+            },
+            "then": {
+              "required": [
+                "heading"
+              ]
+            }
+          }
+        ]
+      },
+      "access_key": {
+        "type": "string",
+        "title": "可选凭据示例",
+        "writeOnly": true
+      }
+    }
+  },
+  "resources": [
+    {
+      "id": "policy",
+      "path": "policy.json",
+      "kind": "json",
+      "title": "示例插件报告策略"
+    }
+  ]
+}

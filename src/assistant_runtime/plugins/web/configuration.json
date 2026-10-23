@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "namespace": "web",
+  "title": "聊天网页",
+  "group": "access",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enable": {
+        "type": "boolean",
+        "title": "启用",
+        "default": false
+      },
+      "host": {
+        "type": "string",
+        "title": "监听地址",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "type": "integer",
+        "title": "监听端口",
+        "default": 8046,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "token_file": {
+        "type": "string",
+        "title": "访问凭据文件",
+        "default": "",
+        "readOnly": true,
+        "description": "由本机部署维护，修改前需检查路径或访问配置。"
+      },
+      "approved_short_password_sha256": {
+        "type": "string",
+        "title": "弱口令例外指纹",
+        "default": "",
+        "readOnly": true,
+        "description": "由本机部署维护，修改前需检查路径或访问配置。",
+        "writeOnly": true
+      }
+    },
+    "x-listeners": [
+      {
+        "host": "host",
+        "port": "port",
+        "enabled": "enable"
+      }
+    ]
+  }
+}

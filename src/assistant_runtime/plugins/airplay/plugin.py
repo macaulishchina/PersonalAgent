@@ -21,6 +21,9 @@ class AirPlayPlugin:
                     raise ValueError("AirPlay adapter only supports speaker outputs")
                 self.providers[ident] = AirPlayOutput(spec)
 
+    def maintenance_pending(self):
+        return []  # Passive discovery; output operations belong to core/devices.
+
     async def start(self, context):
         self.context = context
         for ident, provider in self.providers.items():

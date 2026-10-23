@@ -21,6 +21,11 @@ class ObservationsPlugin:
         self.context = None
         self.accepting = False
 
+    def maintenance_pending(self):
+        # Sources only observe; accepted durable writes are tracked by core/events.
+        # Task event dispatch is paused by the task owner, never inferred from time.
+        return []
+
     async def start(self, context):
         self.context = context
         context.own(self.close)

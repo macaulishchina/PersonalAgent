@@ -1340,6 +1340,7 @@ core = [
     { name = "mem0ai" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "tomlkit" },
 ]
 decisions = [
     { name = "aiohttp" },
@@ -1388,6 +1389,7 @@ slim = [
     { name = "mem0ai" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "tomlkit" },
 ]
 standard = [
     { name = "aiohttp" },
@@ -1399,6 +1401,7 @@ standard = [
     { name = "mem0ai" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "tomlkit" },
 ]
 tasks = [
     { name = "apscheduler" },
@@ -1477,6 +1480,7 @@ requires-dist = [
     { name = "sherpa-onnx", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "soxr", marker = "extra == 'voice'", specifier = ">=0.5" },
+    { name = "tomlkit", marker = "extra == 'core'", specifier = "==0.13.3" },
 ]
 provides-extras = ["core", "slim", "standard", "voice", "tasks", "events", "models", "decisions", "media", "reyee", "integrations", "web", "airplay", "apple-home", "camera", "memory", "dev"]
 
@@ -2224,6 +2228,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/77/4e/babede85d0d19f5e3deeef0063e01848141329934d3d77c31b5cab5ac2b4/tokenizers-0.23.3-cp310-abi3-win32.whl", hash = "sha256:1ebf28794e7e4954e20a7f70fbea410b2d1f0418f7dbbca97ca384fcfef38c25", size = 2588086, upload-time = "2026-10-09T10:16:35.686Z" },
     { url = "https://files.pythonhosted.org/packages/d1/6c/24f074c9a0efb98e61b20aafe6b2641922d5db24e447d5d6daffd9e17555/tokenizers-0.23.3-cp310-abi3-win_amd64.whl", hash = "sha256:1f0823bb00c5fdc98e487354d54dd55a03848d61a1a0bf29a68c77f24f3b26c3", size = 2872101, upload-time = "2026-10-09T10:16:37.533Z" },
     { url = "https://files.pythonhosted.org/packages/53/77/a476b6f73a661c11d113a342d2326b91506cf2285f0995d1212a6bb2022d/tokenizers-0.23.3-cp310-abi3-win_arm64.whl", hash = "sha256:7e48734d2de9260d86f03ab056d2cfeeff3869f61dbd49aaa15a2793b5f3458b", size = 2742580, upload-time = "2026-10-09T10:16:39.244Z" },
+]
+
+[[package]]
+name = "tomlkit"
+version = "0.13.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/18/0bbf3884e9eaa38819ebe46a7bd25dcd56b67434402b66a58c4b8e552575/tomlkit-0.13.3.tar.gz", hash = "sha256:430cf247ee57df2b94ee3fbe588e71d362a941ebb545dec29b53961d61add2a1", size = 185207, upload-time = "2025-06-05T07:13:44.947Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/75/8539d011f6be8e29f339c42e633aae3cb73bffa95dd0f9adec09b9c58e85/tomlkit-0.13.3-py3-none-any.whl", hash = "sha256:c89c649d79ee40629a9fda55f8ace8c6a1b42deb912b2a8fd8d942ddadb606b0", size = 38901, upload-time = "2025-06-05T07:13:43.546Z" },
 ]
 
 [[package]]

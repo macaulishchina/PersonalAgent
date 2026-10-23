@@ -12,6 +12,7 @@ from assistant_runtime.core.integrations.settings import IntegrationSettings, de
 
 class McpRegistry:
     def __init__(self, root, settings):
+        self.root = Path(root).resolve()
         self.settings = IntegrationSettings.parse(settings)
         root = Path(root)
         self.path = (
@@ -36,32 +37,9 @@ class McpRegistry:
         if self.path.stat().st_size > 512 * 1024:
             raise ValueError("MCP registry exceeds 512 KiB")
         data = json.loads(self.path.read_text())
-        if (
-            not isinstance(data, dict)
-            or set(data) != {"revision", "servers", "removed"}
-            or type(data["revision"]) is not int
-            or data["revision"] < 0
-        ):
-            raise ValueError("Invalid MCP registry")
-        if not isinstance(data["servers"], dict) or len(data["servers"]) > self.settings.max_servers:
-            raise ValueError("Too many MCP servers")
-        from assistant_runtime.core.integrations.settings import strings
+        from .configuration import validate_registry
 
-        data["removed"] = strings(data["removed"], "removed servers", 256)
-        for ident in data["removed"]:
-            name(ident)
-        for ident, row in data["servers"].items():
-            name(ident)
-            if (
-                not isinstance(row, dict)
-                or set(row) != {"revision", "definition"}
-                or type(row["revision"]) is not int
-                or not 1 <= row["revision"] <= data["revision"]
-            ):
-                raise ValueError("Invalid MCP server revision")
-            row["definition"] = definition(row["definition"])
-        if set(data["removed"]) & data["servers"].keys():
-            raise ValueError("MCP server cannot also be removed")
+        data = validate_registry(data, self.settings.max_servers)
         if data != self.data and data["revision"] <= self.revision:
             raise ValueError("Increment registry revision when editing MCP configuration")
         self.data = data
@@ -79,18 +57,26 @@ class McpRegistry:
         raw = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode()
         if len(raw) > 512 * 1024:
             raise ValueError("MCP registry exceeds 512 KiB")
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as handle:
-            temporary = Path(handle.name)
-            try:
-                os.chmod(temporary, 0o600)
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-                os.replace(temporary, self.path)
-            finally:
-                temporary.unlink(missing_ok=True)
-        self.data = data
+        from assistant_runtime.api.configuration_io import configuration_lock
+
+        with configuration_lock(self.root):
+            if (self.root / "state/configuration/transaction.json").exists():
+                raise ValueError("Configuration recovery is required before writing")
+            current = json.loads(self.path.read_text()) if self.path.exists() else {"revision": 0}
+            if current["revision"] != self.revision:
+                raise ValueError("MCP registry changed; reload before writing")
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as handle:
+                temporary = Path(handle.name)
+                try:
+                    os.chmod(temporary, 0o600)
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    os.replace(temporary, self.path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            self.data = data
 
     def configure(self, ident, changes, revision):
         name(ident)

@@ -148,6 +148,36 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             await self.accounts.route("subscription", "ultra")
         self.assertEqual(len(self.gateway.requests), 1)
 
+    async def test_native_cache_affinity_and_cached_usage_survive_real_sdk(self):
+        def reply(step, body):
+            events = sse_text_reply(str(step), "OK")
+            events[-1]["response"]["usage"] = {
+                "input_tokens": 1000,
+                "output_tokens": 2,
+                "total_tokens": 1002,
+                "input_tokens_details": {"cached_tokens": 900},
+            }
+            return events
+
+        self.gateway.script_fn = reply
+        payload = self.payload()
+        for _ in range(2):
+            result = await complete(self.accounts, payload, "stable-cache-session")
+            self.assertEqual(result["usage"]["input_tokens"], 1000)
+            self.assertEqual(result["usage"]["cached_input_tokens"], 900)
+            timings = result["transport_timings"]
+            self.assertGreater(timings["request_bytes"], 0)
+            self.assertLessEqual(timings["prepared_ms"], timings["response_headers_ms"])
+            self.assertLessEqual(timings["response_headers_ms"], timings["first_text_ms"])
+            self.assertLessEqual(timings["first_text_ms"], timings["total_ms"])
+        self.assertEqual(len(self.gateway.requests), 2)
+        for request, headers in zip(self.gateway.requests, self.gateway.headers):
+            self.assertEqual(request["prompt_cache_key"], "stable-cache-session")
+            self.assertNotEqual(request.get("prompt_cache_options", {}).get("mode"), "explicit")
+            self.assertEqual({k.lower(): v for k, v in headers.items()}["session_id"], "stable-cache-session")
+        self.assertEqual(self.gateway.requests[0]["input"], self.gateway.requests[1]["input"])
+        self.assertEqual(self.gateway.step, 2)  # No automatic warming or replay requests.
+
     async def test_missing_oauth_never_uses_environment_key_or_global_codex(self):
         oauth = NativeAccounts(self.root, ModelSettings.parse(configuration("oauth")))
         try:

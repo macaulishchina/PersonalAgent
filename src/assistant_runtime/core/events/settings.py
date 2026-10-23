@@ -1,11 +1,13 @@
-from dataclasses import dataclass
+from assistant_runtime.api.configuration import configuration_default
+
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class EventSettings:
-    quota_bytes: int = 2 * 1024**3
-    queue_size: int = 128
-    query_seconds: float = 2.0
+    quota_bytes: int = field(default_factory=lambda: configuration_default(__file__, "quota_bytes"))
+    queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
+    query_seconds: float = field(default_factory=lambda: configuration_default(__file__, "query_seconds"))
 
     @classmethod
     def parse(cls, values):

@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "namespace": "ai_usage",
+  "title": "调用与用量",
+  "group": "execution",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "max_requests": {
+        "type": "integer",
+        "title": "每项工作调用上限",
+        "default": 256,
+        "minimum": 0
+      },
+      "warning_fraction": {
+        "type": "number",
+        "title": "用量预警比例",
+        "default": 0.5,
+        "exclusiveMinimum": 0,
+        "exclusiveMaximum": 1
+      },
+      "queue_size": {
+        "type": "integer",
+        "title": "队列容量",
+        "default": 256,
+        "minimum": 0,
+        "x-advanced": true
+      },
+      "retention_days": {
+        "type": "integer",
+        "title": "明细保留天数",
+        "default": 90
+      },
+      "aggregate_days": {
+        "type": "integer",
+        "title": "汇总保留天数",
+        "default": 365,
+        "x-advanced": true
+      },
+      "body_enabled": {
+        "type": "boolean",
+        "title": "保存调用正文",
+        "default": false,
+        "x-advanced": true
+      },
+      "body_days": {
+        "type": "integer",
+        "title": "正文保留天数",
+        "default": 7,
+        "x-advanced": true
+      },
+      "body_max_bytes": {
+        "type": "integer",
+        "title": "单条正文上限（字节）",
+        "default": 32768,
+        "x-advanced": true
+      },
+      "work_limits": {
+        "type": "object",
+        "title": "共享工作额度",
+        "default": {},
+        "additionalProperties": {}
+      },
+      "rules": {
+        "type": "array",
+        "title": "分维度限制规则",
+        "default": [],
+        "items": {},
+        "x-advanced": true
+      },
+      "prices": {
+        "type": "object",
+        "title": "计费单价",
+        "default": {},
+        "additionalProperties": {},
+        "x-advanced": true
+      }
+    }
+  }
+}

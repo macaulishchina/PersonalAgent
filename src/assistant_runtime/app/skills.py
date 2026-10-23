@@ -23,5 +23,7 @@ def instance_skill_paths(root, names):
         entry = path / "SKILL.md"
         if not path.is_relative_to(base) or not entry.resolve().is_relative_to(base) or not entry.is_file():
             raise ValueError(f"Instance skill must exist inside config/skills: {name}")
-        paths.append(path)
+        from assistant_runtime.api.configuration_io import configuration_path
+
+        paths.append(configuration_path(entry).parent)
     return tuple(paths)

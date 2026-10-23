@@ -1,6 +1,7 @@
 """Bounded local transport; no memory storage or hardware implementation."""
 
 import asyncio
+from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -65,7 +66,9 @@ class CapabilityClient(Protocol):
 
 
 class LocalRuntimeClient:
-    def __init__(self, socket: str | Path, timeout: float = 95, *, execution_session=None):
+    def __init__(
+        self, socket: str | Path, timeout: float = LOCAL_TRANSPORT_SECONDS, *, execution_session=None
+    ):
         self.socket, self.timeout = str(socket), timeout
         self.execution_session = execution_session
 

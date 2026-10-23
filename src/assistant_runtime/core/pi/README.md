@@ -47,7 +47,7 @@ composition still owns foreground callbacks; no second executor is introduced.
 
 ## Context size and compaction recovery
 
-`model_api.compaction_timeout_seconds` defaults to 180 seconds (configurable 1..600),
+`model_api.compaction_timeout_seconds` defaults to 600 seconds (configurable 1..3600),
 independent of ordinary `timeout_seconds`. The host enforces the deadline on both
 Responses and native-account routes; Pi's outer provider timeout permits this longer
 maintenance operation. The provider adapter still owns the only execution loop.
@@ -109,6 +109,41 @@ retry tools, or grant approvals. Model turns still consume the same shared AI al
 evicted names and declared schema character count (not estimated tokens). No tool
 arguments, results or credentials enter those logs. This bounds tool-definition growth;
 ordinary task data still needs pagination, file references and native compaction.
+
+## Native prompt-cache reuse and timings
+
+Native account calls use Pi's normal `cacheRetention="short"` and retain the
+host-bound execution session identity for provider-supported cache affinity.
+This reuses computation from already requested input; native cache warming and
+automatic retries remain disabled. Do not force `none` to disable warming: these
+are separate mechanisms. OAuth/API compatibility and supported cache parameters
+remain owned by Pi's provider library; the adapter does not inject unsupported
+retention fields into ChatGPT requests or promise a cache hit.
+
+The helper measures request preparation (including native auth/lazy loading),
+response headers, first content/text and stream completion using one monotonic
+clock. Execution logs join these numeric timings with the usage call ID and
+reported input/cache-read tokens. Auxiliary inference receipts include the same
+`transport_timings`. Request size is bytes, not model tokens. No bodies, images,
+headers or credentials are recorded. The interval to response headers includes
+connection, upload and upstream waiting; it cannot alone identify any one of them.
+
+Real ChatGPT synthetic acceptance on 2026-10-23 used one shared bounded allowance,
+11 model requests, no tools and no real conversations/photos. A repeated 18,749-token
+text input had zero reported cache reads with the former `none` adapter policy;
+native `short` reuse reached 18,560 cached tokens. A separate 73,150-token text
+input reached 72,960 cached tokens and completed in 4.537 seconds when repeated.
+Synthetic large-PNG requests reached 73,856/74,221 cache reads yet still took
+50.874–107.622 seconds; a follow-up retained 73,856/74,240. JPEG variants reached
+73,856/74,201 and took 9.680–17.764 seconds. These are small, non-interleaved samples,
+not latency guarantees or proof that caching alone fixes the production slowdown.
+Image encoding and upstream variability remain separate concerns. Production was
+not restarted, real images were not changed, and private receipts remain outside Git.
+
+The real-SDK/local-server regression verifies stable cache/session parameters,
+cache-read telemetry without double counting, monotonic timing order, and exactly
+the requested calls with no warming or replay. Live supplier acceptance remains
+explicit and is never part of automatic tests.
 
 Real Pi/local-provider tests cover no upfront MCP schemas, scoped discovery and calls,
 repeated search/eviction/reload, bounded historical schema projection, oversized searches,

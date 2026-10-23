@@ -1,5 +1,7 @@
 """Plugin-owned metering policy. Absence of an optional limit means disabled."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field, asdict
 import hashlib
 import json
@@ -30,17 +32,19 @@ def limits(value):
 
 @dataclass(frozen=True)
 class UsageSettings:
-    max_requests: int = 100
-    warning_fraction: float = 0.5
-    queue_size: int = 256
-    retention_days: int = 90
-    aggregate_days: int = 365
-    body_enabled: bool = False
-    body_days: int = 7
-    body_max_bytes: int = 32768
-    work_limits: dict = field(default_factory=dict)
-    rules: list = field(default_factory=list)
-    prices: dict = field(default_factory=dict)
+    max_requests: int = field(default_factory=lambda: configuration_default(__file__, "max_requests"))
+    warning_fraction: float = field(
+        default_factory=lambda: configuration_default(__file__, "warning_fraction")
+    )
+    queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
+    retention_days: int = field(default_factory=lambda: configuration_default(__file__, "retention_days"))
+    aggregate_days: int = field(default_factory=lambda: configuration_default(__file__, "aggregate_days"))
+    body_enabled: bool = field(default_factory=lambda: configuration_default(__file__, "body_enabled"))
+    body_days: int = field(default_factory=lambda: configuration_default(__file__, "body_days"))
+    body_max_bytes: int = field(default_factory=lambda: configuration_default(__file__, "body_max_bytes"))
+    work_limits: dict = field(default_factory=lambda: configuration_default(__file__, "work_limits"))
+    rules: list = field(default_factory=lambda: configuration_default(__file__, "rules"))
+    prices: dict = field(default_factory=lambda: configuration_default(__file__, "prices"))
 
     @classmethod
     def parse(cls, value):

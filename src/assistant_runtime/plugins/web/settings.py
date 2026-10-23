@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from assistant_runtime.api.configuration import configuration_default
+
+from dataclasses import dataclass, field
 from pathlib import Path
 import ipaddress
 import re
@@ -6,11 +8,13 @@ import re
 
 @dataclass(frozen=True)
 class WebSettings:
-    enable: bool = False
-    host: str = "127.0.0.1"
-    port: int = 8046
-    token_file: str = ""
-    approved_short_password_sha256: str = ""
+    enable: bool = field(default_factory=lambda: configuration_default(__file__, "enable"))
+    host: str = field(default_factory=lambda: configuration_default(__file__, "host"))
+    port: int = field(default_factory=lambda: configuration_default(__file__, "port"))
+    token_file: str = field(default_factory=lambda: configuration_default(__file__, "token_file"))
+    approved_short_password_sha256: str = field(
+        default_factory=lambda: configuration_default(__file__, "approved_short_password_sha256")
+    )
 
     @classmethod
     def parse(cls, value):

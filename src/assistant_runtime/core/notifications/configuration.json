@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "namespace": "notifications",
+  "title": "通知",
+  "group": "notifications",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "channels": {
+        "type": "array",
+        "title": "通知渠道",
+        "default": [
+          "chat",
+          "context"
+        ],
+        "items": {}
+      },
+      "max_attempts": {
+        "type": "integer",
+        "title": "最大投递次数",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 20
+      },
+      "retry_seconds": {
+        "type": "integer",
+        "title": "投递重试间隔（秒）",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 3600
+      },
+      "delivery_timeout": {
+        "type": "integer",
+        "title": "投递超时（秒）",
+        "default": 45,
+        "minimum": 5,
+        "maximum": 120
+      },
+      "max_notifications": {
+        "type": "integer",
+        "title": "通知保留数量",
+        "default": 10000,
+        "minimum": 100,
+        "maximum": 100000
+      },
+      "voice_enabled": {
+        "type": "boolean",
+        "title": "语音通知",
+        "default": true
+      },
+      "voice_spacing_seconds": {
+        "type": "integer",
+        "title": "语音通知间隔（秒）",
+        "default": 60,
+        "minimum": 0,
+        "maximum": 3600
+      }
+    }
+  }
+}

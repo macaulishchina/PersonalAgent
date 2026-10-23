@@ -38,6 +38,18 @@ class MediaPlugin:
         self.wakeup = asyncio.Event()
         self.accepting = False
 
+    def maintenance_pending(self):
+        # Accepted operations must finish or be explicitly resolved. Unknown/auth-wait
+        # states remain blockers; silence is never evidence of completion.
+        rows = self.repo.db.execute(
+            "SELECT id,state FROM media_operations WHERE state NOT IN ('completed','failed','cancelled') LIMIT 100"
+        ).fetchall()
+        result = [{"id": row[0], "state": row[1]} for row in rows]
+        rows = self.repo.db.execute(
+            "SELECT id,state FROM media_batches WHERE state IN ('queued','running','waiting_auth') LIMIT 100"
+        ).fetchall()
+        return result + [{"id": row[0], "state": row[1]} for row in rows]
+
     async def start(self, context):
         import aiohttp
 

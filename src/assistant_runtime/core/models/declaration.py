@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import ModelSettings
 
@@ -9,7 +10,8 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("models", ("ai_usage",), optional=("workfiles",), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("models", ("ai_usage",), optional=("workfiles",), critical=False),
     internal_factory=build,
     config_key="model_api",
     validate=ModelSettings.parse,

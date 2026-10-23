@@ -76,7 +76,15 @@ class PiJobs:
             if integration_adapter
             else None
         )
-        mcp_revision = integration_adapter.registry.revision if integration_adapter else None
+        mcp_revision = (
+            (
+                integration_adapter.runtime_data["revision"]
+                if getattr(integration_adapter, "runtime_data", None) is not None
+                else integration_adapter.registry.revision
+            )
+            if integration_adapter
+            else None
+        )
         params = {
             "model": selection["model"],
             "cwd": str(directory / "scratch"),

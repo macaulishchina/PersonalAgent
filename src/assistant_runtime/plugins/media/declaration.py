@@ -1,3 +1,4 @@
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import MediaSettings
 from pathlib import Path
@@ -12,7 +13,8 @@ def create(api):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("media", ("notifications",), critical=False),
+    configuration=configuration_spec(__file__),
+    manifest=Manifest("media", ("notifications",), critical=False),
     create=create,
     uses=(
         TaskRequest,

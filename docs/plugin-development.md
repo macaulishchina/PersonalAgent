@@ -80,3 +80,85 @@ when surrounding user-facing text is Chinese. Avoid duplicate giant examples or 
 manuals in descriptions; package operational guidance in skills and return large data
 through pagination/file references. Plugins do not activate tools themselves or alter
 the caller's scope. Deferred exposure changes visibility, not authorization.
+
+## Capability deadlines
+
+A provider declares its default deadline with `context.register(RequestType, handler,
+timeout=seconds)`. Callers use `await context.invoke(request)` to inherit the owner's
+default; an explicit shorter timeout or host-bound tool deadline can still cancel it.
+Defaults must account for the real operation: model inference owns its configured
+600-second budget, rather than inheriting the kernel's 15-second management default.
+Deadline registration is removed with the capability on shutdown or failed startup.
+Transport return margins do not expand the provider's inner operation budget.
+
+## Configuration descriptions
+
+An extension can declare `configuration=ConfigurationSpec(...)`. The installed-plugin
+adapter applies schema defaults and validates basic constraints before invoking the
+owner's semantic validator. The frontend must use this same description, not duplicate
+its defaults. Schema errors identify the field and rule without echoing secret values.
+
+Package a static `configuration.json` alongside the package used by the entry point.
+It contains `version: 1`, `namespace`, `title`, `group`, `description` and `schema`.
+The entry point reads the same resource to construct `ConfigurationSpec`; the operator
+catalog reads its installed package-data file without calling the entry point. Include
+it explicitly in setuptools package data. The sample extension demonstrates this path.
+
+Default resolution fills declared properties only inside objects that already exist,
+unless the object itself has an explicit default. Optional features are not instantiated
+merely because their children have defaults. Semantic validation remains plugin-owned.
+Both presets include the independent operator console; see `core/configuration/README.md`.
+
+The generic operator form supports schema `title`, `description`, `enum`, numeric bounds,
+objects/lists, `readOnly`, `writeOnly`, `x-advanced` and `x-group`. The owner supplies these
+annotations; the frontend contains no copy of plugin defaults. `sensitive` and `read_only`
+paths are relative to the owner's namespace and may use `*` for named-object entries.
+For external packages the host always binds configuration under `plugin_settings.<id>`;
+a package cannot declare a different owner's namespace. Metadata and runtime schemas must
+agree when configured plugin settings are validated.
+
+Use `writeOnly: true` for a secret even if its name does not resemble a credential.
+Secret defaults/examples are not returned by the management API. Browser writes use
+`set`/`default` for ordinary fields and `replace_secret`/`clear_secret` for secret fields.
+`default` removes an override; it does not copy a rendered default into TOML. Parent table
+replacement is refused when it contains declared secrets. Array/dictionary editing uses
+a structured editor when no more specific schema is declared.
+
+A static `schema.x-listeners` list can identify TCP bindings, each with `host` and `port`
+property names and an optional boolean `enabled` property name. Startup preparation checks
+these against the independent management listener without opening ports or probing devices.
+Configuration descriptors must remain static package data; arbitrary frontend scripts and
+runtime network probes are not part of this interface.
+
+
+## Operator drain hooks
+
+Optional synchronous `maintenance_pause()` / `maintenance_resume()` hooks stop and resume
+new autonomous work; they must not cancel already accepted operations. A synchronous
+`maintenance_pending()` returns bounded records containing `id` (optional) and `state`,
+without payloads or credentials. Include queued work, preparation, clarification, external
+operations and finalization. Empty means the owner has no finite work remaining. Passive
+polling/housekeeping may explicitly return an empty list if it cannot initiate business work.
+External package adapters forward these hooks without exposing the host. An extension with
+background workers and no pending-work contract blocks a graceful configuration restart;
+silence is not evidence of completion. Operator force still follows cancellation and owned
+shutdown, retaining unknown outcomes and existing no-replay semantics.
+
+Configuration resources can be declared in the same JSON description:
+
+```json
+{"resources":[{"id":"policy","path":"policy.json","kind":"json","title":"Report policy"}]}
+```
+
+Resources are confined to `config/plugins/<plugin-id>/`, bounded, versioned and restored
+with configuration. Kinds are `text`, `json`, `credential`; `sensitive: true` makes the
+resource replacement-only without returning its contents. JSON may declare `schema` for
+validation. Secrets should normally use declared `.env` references instead. OAuth/rotating
+login stores are account operations and must not be registered as static restore resources.
+
+Use `context.configuration_resource("policy")` to read the loaded generation; do not
+reopen the mutable source path. This returns only the caller's declared resource. Optional
+resources may not yet exist. `x-reference` points at another configuration object (e.g.
+`model_api.entries`) for a read-only name selector, without inference or network discovery.
+Schema `$ref` values must be acyclic local references. The sample package covers automatic
+forms, conditional fields, a secret and a private JSON resource as well as tools/skills.

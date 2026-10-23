@@ -1,7 +1,10 @@
 """Provider-neutral MCP transport and usage policy validation."""
 
 import copy
-from dataclasses import dataclass
+from assistant_runtime.api.deadlines import MAX_OPERATION_SECONDS
+from assistant_runtime.api.configuration import configuration_default
+
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -45,9 +48,11 @@ def mapping(value, label):
 
 @dataclass(frozen=True)
 class IntegrationSettings:
-    registry_path: str = ""
-    max_servers: int = 32
-    inherit_user_servers: bool = False
+    registry_path: str = field(default_factory=lambda: configuration_default(__file__, "registry_path"))
+    max_servers: int = field(default_factory=lambda: configuration_default(__file__, "max_servers"))
+    inherit_user_servers: bool = field(
+        default_factory=lambda: configuration_default(__file__, "inherit_user_servers")
+    )
 
     @classmethod
     def parse(cls, data):
@@ -88,8 +93,8 @@ def definition(value):
         "deny_tools": [],
         "approval": "prompt",
         "tool_approvals": {},
-        "startup_timeout_seconds": 30,
-        "tool_timeout_seconds": 60,
+        "startup_timeout_seconds": 60,
+        "tool_timeout_seconds": 600,
         **copy.deepcopy(value),
     }
     if type(spec["enabled"]) is not bool:
@@ -106,8 +111,8 @@ def definition(value):
     if any(v not in APPROVALS for v in policies.values()):
         raise ValueError("Invalid per-tool approval policy")
     for key in ("startup_timeout_seconds", "tool_timeout_seconds"):
-        if type(spec[key]) is not int or not 1 <= spec[key] <= 120:
-            raise ValueError("MCP timeout must be 1..120 seconds")
+        if type(spec[key]) is not int or not 1 <= spec[key] <= MAX_OPERATION_SECONDS:
+            raise ValueError("MCP timeout must be 1..3600 seconds")
     t = spec.get("transport")
     if not isinstance(t, dict):
         raise ValueError("MCP requires a transport")

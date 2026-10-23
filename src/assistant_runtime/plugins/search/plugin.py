@@ -1,5 +1,7 @@
 """Shared lookup owner: bounded IO, caller checks, metadata receipts, ephemeral cache."""
 
+from assistant_runtime.api.configuration_io import configuration_path
+
 from .declaration import DECLARATION
 
 import asyncio
@@ -27,11 +29,11 @@ log = logging.getLogger(__name__)
 def credential(root, name):
     value = os.environ.get(name)
     if not value:
-        path = Path(root) / ".env"
+        path = configuration_path(Path(root) / ".env")
         if path.is_file():
             if path.stat().st_size > 65536:
                 raise SearchError("credential_file_too_large")
-            value = dotenv_values(path, interpolate=False).get(name)
+            value = dotenv_values(configuration_path(path), interpolate=False).get(name)
     return value if isinstance(value, str) else ""
 
 
@@ -49,6 +51,13 @@ class SearchPlugin:
         self.accepting = False
         self.last_error = {}
         self.repo = api.repository(SearchRepository)
+
+    def maintenance_pending(self):
+        return [
+            {"state": "running", "id": key}
+            for key, flight in self.flights.items()
+            if not flight["task"].done()
+        ]
 
     async def start(self, context):
         self.context = context

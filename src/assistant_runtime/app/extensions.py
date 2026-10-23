@@ -1,5 +1,7 @@
 """Explicit installed-extension discovery and owned public-context construction."""
 
+from assistant_runtime.api.configuration_io import configuration_path
+
 import asyncio
 import copy
 from importlib.metadata import entry_points
@@ -7,6 +9,7 @@ import re
 
 from assistant_runtime.api import CallIdentity, PluginContext, PluginDefinition
 from assistant_runtime.api.plugins import current_call
+from assistant_runtime.core.configuration.schema import resolve_definition
 
 GROUP = "personal_agent.plugins"
 
@@ -104,8 +107,12 @@ class ToolRegistry:
         generation = guard() if guard else None
         Draft202012Validator(tool.input_schema).validate(arguments)
         if identity.deadline is not None:
-            timeout = min(timeout, identity.deadline - time.monotonic())
-        if timeout <= 0:
+            timeout = (
+                (identity.deadline - time.monotonic())
+                if timeout is None
+                else min(timeout, identity.deadline - time.monotonic())
+            )
+        if timeout is not None and timeout <= 0:
             raise TimeoutError("Request deadline exceeded")
         token = current_call.set(identity)
         current = asyncio.current_task()
@@ -127,11 +134,29 @@ class ToolRegistry:
 class InstalledPlugin:
     def __init__(self, definition, config, root, credential, capabilities, tools, *, resources=None):
         self.manifest = definition.manifest
+        self.context = None
         self.definition, self.config, self.root = definition, config, root
         self.credential, self.capabilities, self.tools = credential, capabilities, tools
         self.resources = resources or {}
 
+    def maintenance_pause(self):
+        callback = getattr(getattr(self, "instance", None), "maintenance_pause", None)
+        if callback:
+            callback()
+
+    def maintenance_resume(self):
+        callback = getattr(getattr(self, "instance", None), "maintenance_resume", None)
+        if callback:
+            callback()
+
+    def maintenance_pending(self):
+        callback = getattr(getattr(self, "instance", None), "maintenance_pending", None)
+        if callback:
+            return callback()
+        return [{"state": "drain_not_supported"}] if self.context and self.context.tasks else []
+
     async def start(self, context):
+        self.context = context
         state = self.root / "state" / "plugins" / self.manifest.name
         state.mkdir(parents=True, mode=0o700, exist_ok=True)
 
@@ -144,7 +169,7 @@ class InstalledPlugin:
             context.own(cleanup)
             return queue
 
-        async def invoke(request, timeout=15):
+        async def invoke(request, timeout=None):
             handler = context.runtime.handlers.get(type(request))
             if handler is None:
                 raise RuntimeError("Requested capability unavailable")
@@ -161,16 +186,30 @@ class InstalledPlugin:
                 request = replace(request, caller_run=identity.task_run)
             return await context.runtime.invoke(request, timeout=timeout)
 
-        def register(kind, handler):
+        def register(kind, handler, *, timeout=15):
             if kind not in self.definition.provides:
                 raise ValueError("Undeclared plugin capability")
-            context.register(kind, handler)
+            context.register(kind, handler, timeout=timeout)
+
+        def configuration_resource(name):
+            from assistant_runtime.api.configuration_io import configuration_path
+
+            specs = self.definition.configuration.resources if self.definition.configuration else ()
+            resource = next((r for r in specs if r["id"] == name), None)
+            if resource is None:
+                raise ValueError("Undeclared configuration resource")
+            base = self.root / "config/plugins" / self.manifest.name
+            path = base / resource["path"]
+            if not path.resolve().is_relative_to(base.resolve()) or any(
+                p.is_symlink() for p in [path, *path.parents]
+            ):
+                raise ValueError("Invalid configuration resource path")
+            return configuration_path(path)
 
         public = PluginContext(
+            configuration_resource=configuration_resource,
             name=self.manifest.name,
-            config=self.definition.validate(copy.deepcopy(self.config))
-            if self.definition.validate
-            else copy.deepcopy(self.config),
+            config=resolve_definition(self.definition, self.config),
             state_dir=state,
             get=context.get,
             set=context.set,
@@ -216,9 +255,9 @@ def extension_credential(root, definition, name):
         raise ValueError("Undeclared plugin credential")
     if name in os.environ:
         return os.environ[name]
-    path = root / ".env"
+    path = configuration_path(root / ".env")
     if not path.exists():
         return None
     if path.stat().st_size > 65536:
         raise ValueError("Credential file too large")
-    return dotenv_values(path, interpolate=False).get(name)
+    return dotenv_values(configuration_path(path), interpolate=False).get(name)

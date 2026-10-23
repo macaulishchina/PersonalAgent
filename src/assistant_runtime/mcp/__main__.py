@@ -1,6 +1,7 @@
 """Explicit MCP projection, using the owner's single tool declaration factory."""
 
 import argparse
+from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 from importlib import import_module
 from pathlib import Path
 from .client import LocalRuntimeClient
@@ -16,7 +17,7 @@ def main():
     args = parser.parse_args()
     client = LocalRuntimeClient(
         args.socket,
-        timeout=180 if args.service == "integrations" else 95,
+        timeout=LOCAL_TRANSPORT_SECONDS,
         execution_session=args.execution_session,
     )
     if args.service == "extensions":

@@ -26,7 +26,7 @@ The preparer generates a private Compose manifest and secret-free gateway assets
 
 Stable request UUIDs are scoped/fingerprinted and reserved before dispatch. Reusing a UUID returns its receipt; lost response, cancellation or restart during a request remains unknown. Do not resubmit uncertain work using a new UUID. Each receipt includes caller/version, selected model, upstream request ID, latency, usage and explicit outcome without copying input bodies into audit logs.
 
-Defaults: 4 workers, 16 queued calls, 60-second total deadline, 24,000 text characters, 4 images, 2 MiB response and 8,192 output tokens. Execution has its own 16,384-token per-request output default. Both output budgets allow per-entry overrides and include reasoning. A cap may truncate a tool argument or thinking as well as an answer; it is unrelated to account quota.
+Defaults: 4 workers, 16 queued calls, 600-second total deadline, 24,000 text characters, 4 images, 2 MiB response and 8,192 output tokens. Execution has its own 16,384-token per-request output default. Both output budgets allow per-entry overrides and include reasoning. A cap may truncate a tool argument or thinking as well as an answer; it is unrelated to account quota.
 
 ## Native accounts and subscriptions
 
@@ -98,3 +98,19 @@ Run `scripts/check.py --group models --group execution --group tasks`. Native Pi
 The explicit acceptance entry caps forwarded requests and output tokens, uses a temporary workspace and no household MCPs, and never restarts production. Unverified images/search/long-context/provider-specific capabilities remain unverified. Voice and interactive MCP OAuth are TODOs.
 
 Instance acceptance on 2026-10-23: independent ChatGPT OAuth authorization persisted and was reused across provider processes. `gpt-6.1-sol` at medium effort passed exact text, native image-color identification without tools, a real file command with readback, and strict JSON Schema extraction with synthetic source fields (5 total requests). An isolated host then passed subscription-main to native DeepSeek task delegation at low effort: duplicate submission produced one task, two caller identities shared one durable work allowance, and the saved file was read back (6 requests, all within the configured cap). A separate real Mem0 worker with local embeddings passed synthetic source-backed capture, search, restart/readback, receipt replay without another model call, and deletion, using 2 subscription requests through the models and usage plugins. Its database and usage ledger were temporary; OAuth used the existing locked account store without copying tokens. No production model, service, household data, memory database or voice route was changed. Receipts remain in private instance acceptance storage. This validates the tested routes, not every subscription model, long-context behavior or natural token-expiry refresh. Corrections, source rejection, stale jobs and cancellation additionally retain local real-engine contract tests.
+
+## Deadlines
+
+Ordinary inference and compaction each default to 600 seconds, configurable independently
+with `model_api.timeout_seconds` and `model_api.compaction_timeout_seconds` (1..3600).
+These are total deadlines, including streaming output; one task may contain many calls.
+The models capability owns its configured inference deadline plus 30 seconds for settlement;
+public plugin callers inherit it unless they explicitly supply a shorter deadline. Auxiliary
+inference includes admission and configured fallback attempts in its total budget.
+The gateway and Pi outer provider envelope use the larger configured deadline plus 60 seconds;
+local CLI/MCP transports allow further return margin. They do not extend the inner deadline.
+Jev advisory fallback and device cancellation retain independent short deadlines.
+Timeout logs include owning layer, operation, effective deadline and elapsed time, not payloads.
+Timeouts never imply that a remote request or tool action did not occur: metering stays durable,
+unknown results are not replayed. Regenerate gateway assets and recreate it explicitly when
+applying new configuration; restarting the assistant alone cannot update container configuration.

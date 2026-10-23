@@ -1,5 +1,7 @@
 """Optional inference owner with durable receipts, bounded admission and caller checks."""
 
+from assistant_runtime.api.lifecycle import admits_work
+
 from .declaration import DECLARATION
 
 import asyncio
@@ -41,7 +43,7 @@ class ModelsPlugin:
 
     async def start(self, context):
         self.context = context
-        context.register(ModelRequest, self.request)
+        context.register(ModelRequest, self.request, timeout=self.settings.timeout_seconds + 30)
         if not self.settings.enabled:
             return
         try:
@@ -64,6 +66,13 @@ class ModelsPlugin:
             context.own(self.close)
         except Exception:
             self.error = "gateway_initialization_failed"
+
+    async def maintenance_cancel(self):
+        for task in list(self.active):
+            task.cancel()
+
+    def maintenance_pending(self):
+        return [{"state": "model_call"} for task in self.active if not task.done()]
 
     async def close(self):
         self.stopping = True
@@ -140,6 +149,7 @@ class ModelsPlugin:
             )
         return content
 
+    @admits_work(lambda request: request.action == "infer")
     async def request(self, request):
         if self.stopping:
             raise RuntimeError("Model service stopping")
@@ -200,6 +210,7 @@ class ModelsPlugin:
         if self.pending >= self.settings.concurrency + self.settings.queue_size:
             raise RuntimeError("Model request queue full")
         self.pending += 1
+        started = time.monotonic()
         try:
             async with asyncio.timeout(self.settings.timeout_seconds):
                 async with self.semaphore:
@@ -379,5 +390,13 @@ class ModelsPlugin:
                                 ),
                             )
                         raise
+        except TimeoutError:
+            log.warning(
+                "model_timeout layer=auxiliary request=%s timeout_seconds=%s elapsed_seconds=%.3f",
+                ident,
+                self.settings.timeout_seconds,
+                time.monotonic() - started,
+            )
+            raise
         finally:
             self.pending -= 1

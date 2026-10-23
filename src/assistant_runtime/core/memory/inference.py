@@ -24,7 +24,6 @@ async def complete(service, messages, schema):
                     "schema": schema,
                 },
             ),
-            timeout=90,
         )
     finally:
         current_usage.reset(token)

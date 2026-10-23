@@ -94,6 +94,9 @@ function modelFor(args) {
 }
 
 async function run(id, args, signal) {
+  const started = performance.now();
+  const timings = {};
+  const elapsed = () => Math.round(performance.now() - started);
   const { model, effort } = modelFor(args);
   const context = structuredClone(args.context);
   // Restore native model identity only for this alias's history; Pi owns cross-provider conversion.
@@ -114,7 +117,9 @@ async function run(id, args, signal) {
     transport: "sse",
     maxTokens: args.max_tokens,
     reasoning: effort,
-    cacheRetention: "none",
+    // Reuse already processed input through Pi's normal provider cache/session
+    // affinity. This does not enable cache warming or automatic model requests.
+    cacheRetention: "short",
     sessionId: args.session_id,
     onPayload: async (payload) => {
       if (signal.aborted) throw new Error("native_cancelled");
@@ -150,23 +155,33 @@ async function run(id, args, signal) {
         if (!Number.isInteger(cap) || cap < 1 || cap > args.max_tokens)
           throw new Error("native_request_output_limit_unsupported");
       }
+      timings.request_bytes = Buffer.byteLength(JSON.stringify(payload));
+      timings.prepared_ms = elapsed();
       dispatched = true;
       await emit({ id, event: { type: "dispatch" } });
       return payload;
     },
-    onResponse: async (response) =>
-      emit({
+    onResponse: async (response) => {
+      timings.response_headers_ms = elapsed();
+      await emit({
         id,
         event: {
           type: "response",
           status: response.status,
           request_id: response.headers["x-request-id"],
         },
-      }),
+      });
+    },
   };
   const stream = runtime.streamSimple(model, context, options);
   let emitted = 0;
   for await (const event of stream) {
+    if (event.type.endsWith("_delta") && event.delta?.length) {
+      timings.first_content_ms ??= elapsed();
+      if (event.type === "text_delta") timings.first_text_ms ??= elapsed();
+    }
+    if (event.type === "done" || event.type === "error")
+      event.transport_timings = { ...timings, total_ms: elapsed() };
     if (event.type === "error") {
       // Native SDK errors can include request bodies and credentials. Only fixed codes leave here.
       const raw = event.error?.errorMessage || "";

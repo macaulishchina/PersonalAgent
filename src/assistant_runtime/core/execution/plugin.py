@@ -21,6 +21,7 @@ class ExecutionPlugin:
             default_model=host.config.main_model,
             default_effort=host.config.main_reasoning_effort,
             servers=self.servers,
+            intake=getattr(host, "intake", None),
             **settings(host.config.execution),
         )
         host.backend.executions = self.service
@@ -35,6 +36,20 @@ class ExecutionPlugin:
 
         context.own(detach)
         await self.service.start(context)
+
+    async def maintenance_cancel(self):
+        if self.service:
+            for row in self.service.records.active():
+                if row["data"].get("source", "execution") == "execution":
+                    await self.service.cancel(row)
+
+    def maintenance_pending(self):
+        if self.service is None:
+            return []
+        records = {row["id"]: row for row in self.service.records.active()}
+        for ident in self.service.admission.leases:
+            records[ident] = self.service.records.get(ident)
+        return [{"id": row["id"], "state": row["state"]} for row in records.values()]
 
     def servers(self):
         from assistant_runtime.api.plugins import current_call

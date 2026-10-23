@@ -1,5 +1,7 @@
 """Startup-only search instances. Credentials are environment references."""
 
+from assistant_runtime.api.configuration import configuration_default
+
 from dataclasses import dataclass, field
 import re
 from urllib.parse import urlsplit
@@ -7,13 +9,15 @@ from urllib.parse import urlsplit
 
 @dataclass(frozen=True)
 class SearchSettings:
-    default_provider: str = ""
-    providers: dict = field(default_factory=dict)
-    timeout_seconds: int = 20
-    concurrency: int = 4
-    max_pending: int = 16
-    cache_seconds: int = 60
-    requests_per_second: int = 5
+    default_provider: str = field(default_factory=lambda: configuration_default(__file__, "default_provider"))
+    providers: dict = field(default_factory=lambda: configuration_default(__file__, "providers"))
+    timeout_seconds: int = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
+    concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
+    max_pending: int = field(default_factory=lambda: configuration_default(__file__, "max_pending"))
+    cache_seconds: int = field(default_factory=lambda: configuration_default(__file__, "cache_seconds"))
+    requests_per_second: int = field(
+        default_factory=lambda: configuration_default(__file__, "requests_per_second")
+    )
 
     @classmethod
     def parse(cls, data):
@@ -27,7 +31,7 @@ class SearchSettings:
             ("cache_seconds", 0, 300),
             ("requests_per_second", 1, 100),
         ):
-            v = values.get(key, cls.__dataclass_fields__[key].default)
+            v = values.get(key, configuration_default(__file__, key))
             if type(v) is not int or not low <= v <= high:
                 raise ValueError("Invalid search " + key)
         providers = data.get("providers", {})

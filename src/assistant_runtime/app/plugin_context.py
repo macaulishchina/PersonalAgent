@@ -72,10 +72,10 @@ def environment(
     def subscribe(capacity):
         return box[0].subscribe(capacity)
 
-    def register(kind, handler):
+    def register(kind, handler, *, timeout=15):
         if kind not in provides:
             raise ValueError("Undeclared capability provider")
-        box[0].register(kind, handler)
+        box[0].register(kind, handler, timeout=timeout)
 
     public = PluginContext(
         name=name,
@@ -84,7 +84,7 @@ def environment(
         get=lambda key, default=None: store.get(prefix + key, default),
         set=lambda key, value: store.set(prefix + key, value),
         credential=credential,
-        invoke=lambda request, timeout=15: runtime().invoke(request, timeout=timeout),
+        invoke=lambda request, timeout=None: runtime().invoke(request, timeout=timeout),
         publish=lambda kind, **data: box[0].publish(kind, **data),
         subscribe=subscribe,
         spawn=lambda coro, label="worker": box[0].spawn(coro, label),

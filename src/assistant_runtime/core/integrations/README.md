@@ -70,8 +70,8 @@ Top-level definition fields:
 | `deny_tools` | `[]` | Excluded tools; denial wins |
 | `approval` | `prompt` | prompt / approve / reject |
 | `tool_approvals` | `{}` | Per-tool prompt / approve / reject |
-| `startup_timeout_seconds` | 30 | Connection startup bound, 1–120 |
-| `tool_timeout_seconds` | 60 | Native tool call bound, 1–120 |
+| `startup_timeout_seconds` | 60 | Connection startup bound, 1–3600 |
+| `tool_timeout_seconds` | 600 | Native tool call bound, 1–3600 |
 
 `reject` denies calls (it is translated to native disabled-tool policy); it does
 not invent a provider approval enum. A server-wide reject denies every tool.

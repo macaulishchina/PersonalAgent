@@ -114,6 +114,8 @@ class RegistryTest(unittest.TestCase):
             {"enabled": 1},
             {"approval": "automatic"},
             {"tool_timeout_seconds": True},
+            {"tool_timeout_seconds": 3601},
+            {"startup_timeout_seconds": 3601},
             {"allow_tools": "all"},
             {"unknown": True},
             {"transport": {"type": "stdio", "command": "p", "cwd": "relative"}},

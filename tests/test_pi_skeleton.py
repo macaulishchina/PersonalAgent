@@ -308,6 +308,30 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
         self.assertEqual(len(self.gateway.requests), 2)
 
+    async def test_slow_first_response_and_stream_use_configured_total_deadline(self):
+        from dataclasses import replace
+        import time
+
+        self.client.settings = replace(self.settings, timeout_seconds=3, compaction_timeout_seconds=2)
+
+        def delayed(step, body):
+            time.sleep(1.2)
+            for event in sse_text_reply("slow", "SLOW_OK"):
+                time.sleep(0.1)
+                yield event
+
+        self.gateway.script_fn = delayed
+        ident = await self.session(budget_id="slow-stream")
+        folder = Path(self.client.workers[ident].meta["agent_dir"])
+        outer = json.loads((folder / "settings.json").read_text())
+        self.assertEqual(outer["retry"]["provider"]["timeoutMs"], 63000)
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "Synthetic slow stream"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        self.assertEqual(len(self.gateway.requests), 1)
+        self.assertEqual((await self.usage.snapshot("slow-stream"))["requests"], 1)
+
     async def test_lost_compaction_can_be_retried_with_independent_timeout_and_budget(self):
         from dataclasses import replace
 
