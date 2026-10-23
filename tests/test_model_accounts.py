@@ -12,11 +12,11 @@ import unittest
 from unittest.mock import patch
 
 from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
-from assistant_runtime.plugins.models.settings import ModelSettings
-from assistant_runtime.plugins.pi.accounts import NativeAccounts, installation
-from assistant_runtime.plugins.pi.inference import complete, output_bound
-from assistant_runtime.plugins.pi.rpc import PiClient
-from assistant_runtime.plugins.ai_usage.service import UsageService
+from assistant_runtime.core.models.settings import ModelSettings
+from assistant_runtime.core.pi.accounts import NativeAccounts, installation
+from assistant_runtime.core.pi.inference import complete, output_bound
+from assistant_runtime.core.pi.rpc import PiClient
+from assistant_runtime.core.ai_usage.service import UsageService
 
 
 def configuration(auth="api_key"):
@@ -46,10 +46,18 @@ def configuration(auth="api_key"):
 
 def local_package(root, installed, url):
     """Replace only provider endpoint/auth fixtures, retain the real SDK and file credential store."""
-    package = root / "native-package"
-    api = package / "node_modules/@earendil-works/pi-ai/dist"
+    package = root / "native-package/node_modules/@earendil-works/pi-coding-agent"
+    # Match a lock-installed runtime with sibling/hoisted dependencies.
+    api = package.parent / "pi-ai/dist"
     (api / "providers").mkdir(parents=True)
-    actual = installed / "node_modules/@earendil-works/pi-ai/dist"
+    actual = next(
+        parent / "node_modules/@earendil-works/pi-ai/dist"
+        for parent in (installed, *installed.parents)
+        if (parent / "node_modules/@earendil-works/pi-ai/package.json").is_file()
+    )
+    (api.parent / "package.json").write_text(
+        '{"name":"@earendil-works/pi-ai","type":"module","main":"./dist/index.js"}'
+    )
     (api / "index.js").write_text(f"export * from {json.dumps((actual / 'index.js').as_uri())};")
     (api / "providers/all.js").write_text(f"""
 import {{ openaiProvider }} from {json.dumps((actual / "providers/openai.js").as_uri())};
@@ -79,7 +87,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             lambda step, body: sse_text_reply(str(step), '{"answer":"synthetic"}')
         )
         package = local_package(self.root, await installation(), self.gateway.base_url)
-        self.override = patch("assistant_runtime.plugins.pi.accounts.installation", return_value=package)
+        self.override = patch("assistant_runtime.core.pi.accounts.installation", return_value=package)
         self.override.start()
         (self.root / ".env").write_text("TEST_MODEL_KEY=sk-synthetic-test\n")
         self.settings = ModelSettings.parse(configuration())
@@ -249,8 +257,86 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             await client.close()
             await usage.close()
 
+    async def test_native_compaction_timeout_keeps_context_and_can_resume(self):
+        from assistant_runtime.core.pi.rpc import RpcError
+
+        settings = replace(self.settings, timeout_seconds=1, compaction_timeout_seconds=2)
+        usage = UsageService(self.root / "compaction-usage")
+        await usage.start()
+        client = PiClient(
+            cwd=str(self.root),
+            settings=settings,
+            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            runtime_dir=self.root / "executions",
+            usage=usage,
+            accounts=self.accounts,
+        )
+        try:
+            await client.start()
+            ident = (
+                await client.request(
+                    "session.create",
+                    {
+                        "model": "subscription",
+                        "budget_id": "native-compaction",
+                        "config": {"model_reasoning_effort": "medium"},
+                    },
+                )
+            )["session"]["id"]
+            worker = client.workers[ident]
+            path = Path(worker.meta["agent_dir"]) / "settings.json"
+            config = json.loads(path.read_text())
+            config["compaction"]["keepRecentTokens"] = 100
+            path.write_text(json.dumps(config))
+
+            async def prompt():
+                await client.request(
+                    "run.start",
+                    {
+                        "session_id": ident,
+                        "input": [{"type": "text", "text": "synthetic original context " * 100}],
+                    },
+                )
+                async with asyncio.timeout(15):
+                    while True:
+                        event = await client.events.get()
+                        if event["kind"] == "run.completed":
+                            self.assertEqual(event["data"]["run"]["status"], "completed", event)
+                            return
+
+            await prompt()
+            await prompt()
+
+            def too_slow(step, body):
+                import time
+
+                time.sleep(2.3)
+                return []
+
+            self.gateway.script_fn = too_slow
+            with self.assertRaises(RpcError):
+                await worker.command({"type": "compact"})
+            snapshot = await usage.snapshot("native-compaction")
+            self.assertEqual(snapshot["unknown_requests"], 1)
+            self.assertEqual(snapshot["unknown_execution_requests"], 0)
+
+            def slow_success(step, body):
+                import time
+
+                time.sleep(1.3)
+                return sse_text_reply("summary", "Original task context preserved")
+
+            self.gateway.script_fn = slow_success
+            await worker.command({"type": "compact"})
+            self.assertEqual((await usage.snapshot("native-compaction"))["requests"], 4)
+            self.gateway.script_fn = lambda step, body: sse_text_reply("resumed", "done")
+            await prompt()
+        finally:
+            await client.close()
+            await usage.close()
+
     async def test_explicit_rejection_is_sanitized_without_retry(self):
-        from assistant_runtime.kernel.models import ModelCallError
+        from assistant_runtime.api.models import ModelCallError
 
         self.gateway.script_fn = lambda step, body: (402, {"error": {"message": "private test detail"}})
         with self.assertRaises(ModelCallError) as caught:
@@ -321,7 +407,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.gateway.requests), 1)
 
     async def test_native_main_delegates_gateway_task_with_shared_work_identity(self):
-        from assistant_runtime.config import Config
+        from assistant_runtime.app.config import Config
         from scripts.verify_pi_host import verify
         from test_pi_skeleton import configuration as gateway_config
 
@@ -332,6 +418,10 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             counts[model] = counts.get(model, 0) + 1
             target = re.search(r"/tmp/pi-release-host-[A-Za-z0-9_-]+/result.txt", json.dumps(body))[0]
             if model == "gpt-6.1-sol" and counts[model] == 1:
+                return sse_tool_call(
+                    "discover", "tool_search", {"query": "create task request_id title prompt", "limit": 8}
+                )
+            if model == "gpt-6.1-sol" and counts[model] == 2:
                 return sse_tool_call(
                     "delegate",
                     "mcp__tasks__create_task",
@@ -365,17 +455,17 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         config = Config(root=self.root, model_api=raw)
         result = await verify(config, "subscription", "model-b", effort="low", max_requests=6)
         self.assertEqual(result["state"], "completed", result)
-        self.assertEqual(result["requests"], 4)
+        self.assertEqual(result["requests"], 5)
         self.assertEqual(result["callers"], 2)
         self.assertTrue(result["shared_work_id"])
 
     async def test_model_service_native_memory_receipt_is_idempotent_and_metered(self):
         from types import SimpleNamespace
         from usage_fixture import attach_usage
-        from assistant_runtime.kernel.models import ModelRequest
+        from assistant_runtime.api.models import ModelRequest
         from assistant_runtime.kernel.runtime import Runtime
-        from assistant_runtime.plugins.models.plugin import ModelsPlugin
-        from assistant_runtime.store import Store
+        from assistant_runtime.core.models.plugin import ModelsPlugin
+        from assistant_runtime.app.store import Store
 
         store = Store(self.root / "models.sqlite3")
         runtime = Runtime(store)
@@ -429,7 +519,7 @@ class SettingsTest(unittest.TestCase):
             ModelSettings.parse(value)
 
     def test_native_credentials_never_enter_litellm_configuration(self):
-        from assistant_runtime.plugins.models.gateway import configuration as gateway
+        from assistant_runtime.core.models.gateway import configuration as gateway
 
         settings = ModelSettings.parse(configuration())
         self.assertEqual(gateway(settings)["model_list"], [])

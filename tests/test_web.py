@@ -11,10 +11,18 @@ import unittest
 
 from aiohttp import ClientSession, CookieJar, FormData
 from PIL import Image
+from assistant_runtime.app.bundled import context_for
 from assistant_runtime.plugins.web.plugin import WebPlugin
 from assistant_runtime.plugins.web.auth import Access
 from assistant_runtime.plugins.web.settings import WebSettings
 from test_conversation import fixture, Owned
+
+
+def with_timeout(handler):
+    async def invoke(request, **kwargs):
+        return await handler(request)
+
+    return invoke
 
 
 class WebTest(unittest.IsolatedAsyncioTestCase):
@@ -27,7 +35,7 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.host.config = replace(self.host.config, web={"enable": True, "host": "127.0.0.1", "port": port})
         self.context = Owned()
         await self.host.conversation.start(self.context)
-        self.plugin = WebPlugin(self.host)
+        self.plugin = WebPlugin(context_for(self.host, "web"))
         await self.plugin.start(self.context)
         self.base = f"http://127.0.0.1:{port}"
         self.client = ClientSession(cookie_jar=CookieJar(unsafe=True), headers={"Origin": self.base})
@@ -65,8 +73,8 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
     async def test_task_pages_use_owner_filter_cursor_and_details(self):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
-        from assistant_runtime.plugins.tasks.repository import TaskRepository
-        from assistant_runtime.plugins.tasks.plugin import TasksPlugin
+        from assistant_runtime.core.tasks.repository import TaskRepository
+        from assistant_runtime.core.tasks.plugin import TasksPlugin
         import json
         import uuid
 
@@ -84,11 +92,11 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         owner = object.__new__(TasksPlugin)
         owner.host = self.host
         owner.repo = repo
-        from assistant_runtime.plugins.tasks.feedback import TaskFeedback
+        from assistant_runtime.core.tasks.feedback import TaskFeedback
 
         owner.feedback = TaskFeedback(owner)
         self.host.runtime.plugins = {"tasks": SimpleNamespace()}
-        self.host.runtime.invoke = AsyncMock(side_effect=owner.request)
+        self.host.runtime.invoke = AsyncMock(side_effect=with_timeout(owner.request))
         response = await self.client.get(
             self.base + "/api/tasks?view=temporary&include_archived=true&limit=20"
         )
@@ -139,12 +147,12 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 400)
 
     async def test_notification_group_routes_preserve_snapshot_and_reject_internal_links(self):
-        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-        from assistant_runtime.kernel.contracts import NotificationRequest
+        from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.api.contracts import NotificationRequest
         from unittest.mock import AsyncMock
 
         notifications = NotificationsPlugin(self.host)
-        self.host.runtime.invoke = AsyncMock(side_effect=notifications.request)
+        self.host.runtime.invoke = AsyncMock(side_effect=with_timeout(notifications.request))
         for i in range(25):
             await notifications.request(
                 NotificationRequest(
@@ -195,13 +203,13 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(notifications.repo.unread_count(), 1)
 
     async def test_notification_inbox_auth_read_and_follow_up_context(self):
-        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-        from assistant_runtime.kernel.contracts import NotificationRequest
+        from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.api.contracts import NotificationRequest
         from unittest.mock import AsyncMock
         import uuid
 
         notifications = NotificationsPlugin(self.host)
-        self.host.runtime.invoke = AsyncMock(side_effect=notifications.request)
+        self.host.runtime.invoke = AsyncMock(side_effect=with_timeout(notifications.request))
         response = await self.client.get(self.base + "/api/notifications")
         self.assertEqual(response.status, 401)
         await self.login()
@@ -283,7 +291,7 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.host.config = replace(
             self.host.config, web={**self.host.config.web, "approved_short_password_sha256": approval}
         )
-        self.plugin = WebPlugin(self.host)
+        self.plugin = WebPlugin(context_for(self.host, "web"))
         await self.plugin.start(self.context)
         r = await self.client.post(self.base + "/api/login", json={"token": "wrong123"})
         self.assertEqual(r.status, 401)
@@ -330,8 +338,8 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_report_group_projection_matches_history_and_sse(self):
         import json
-        from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-        from assistant_runtime.kernel.contracts import NotificationRequest
+        from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+        from assistant_runtime.api.contracts import NotificationRequest
 
         notifications = NotificationsPlugin(self.host)
         notice = await notifications.request(
@@ -382,8 +390,8 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
     async def test_task_trace_is_authenticated_bounded_read_only_projection(self):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
-        from assistant_runtime.plugins.tasks.repository import TaskRepository
-        from assistant_runtime.plugins.tasks.trace import TaskTrace
+        from assistant_runtime.core.tasks.repository import TaskRepository
+        from assistant_runtime.core.tasks.trace import TaskTrace
         import json
         import uuid
 
@@ -412,7 +420,9 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             )
         trace.append(other["id"], {"call_id": "unrelated", "phase": "started"})
         self.host.runtime.plugins = {"tasks": SimpleNamespace()}
-        self.host.runtime.invoke = AsyncMock(side_effect=lambda request: trace.read(request.arguments))
+        self.host.runtime.invoke = AsyncMock(
+            side_effect=lambda request, **kwargs: trace.read(request.arguments)
+        )
         path = self.base + f"/api/tasks/{run['id']}/trace"
         response = await self.client.get(path)
         self.assertEqual(response.status, 401)

@@ -6,7 +6,7 @@ import math
 import os
 import time
 
-from assistant_runtime.devices.inputs import AudioInputs
+from assistant_runtime.core.devices.inputs import AudioInputs
 from assistant_runtime.plugins.pipewire.audio import audio_env
 from assistant_runtime.plugins.pipewire.io import PipeWireEndpoint
 

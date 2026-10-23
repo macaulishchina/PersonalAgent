@@ -35,7 +35,7 @@ normal physical transitions establish semantics separately.
 
 ## Add a producer
 
-1. Keep a protocol-family owner outside `plugins/events` and `kernel`. Define a trusted
+1. Keep a protocol-family owner outside `core/events` and `kernel`. Define a trusted
    provider with `description` (schema, event types/versions), `max_instances`, `validate`
    and `create(reporter, config)`. Register it in the composition root.
 2. Its instance exposes `health`, async `run()` and read-only async `verify()`. Cleanup

@@ -14,7 +14,7 @@ import aiohttp
 from PIL import Image
 import yaml
 
-from ...kernel.contracts import VideoFrame
+from assistant_runtime.api.contracts import VideoFrame
 
 
 class GatewayUnavailable(RuntimeError):

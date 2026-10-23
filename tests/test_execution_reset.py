@@ -5,8 +5,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from assistant_runtime.store import Store
-from assistant_runtime.plugins.tasks.repository import TaskRepository
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.tasks.repository import TaskRepository
 from scripts.reset_execution_state import reset
 
 
@@ -16,20 +16,20 @@ class ResetTest(unittest.TestCase):
             root = Path(folder)
             db = Store(root / "state/assistant.sqlite3")
             TaskRepository(db.db)
-            db.transcript("user", "memory source")
-            db.create_task("old", "old execution")
+            db.transcripts.append("user", "memory source")
+            db.executions.create_task("old", "old execution")
             db.set("thread_id", "old-executor")
             db.db.execute("CREATE TABLE media_evidence(id TEXT)")
             db.db.execute("INSERT INTO media_evidence VALUES('keep')")
             db.db.commit()
             self.assertEqual(reset(root)["state"], "preview")
-            self.assertEqual(len(db.recent()), 1)
+            self.assertEqual(len(db.executions.recent()), 1)
             with self.assertRaises(ValueError):
                 reset(root, apply=True)
             result = reset(root, apply=True, confirmed_stopped=True)
             self.assertEqual(result["state"], "reset")
-            self.assertEqual(db.recent(), [])
-            self.assertEqual(db.max_transcript(), 1)
+            self.assertEqual(db.executions.recent(), [])
+            self.assertEqual(db.transcripts.last_id(), 1)
             self.assertEqual(db.db.execute("SELECT id FROM media_evidence").fetchone()[0], "keep")
             backup = sqlite3.connect(Path(result["backup"]) / "assistant.sqlite3")
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)

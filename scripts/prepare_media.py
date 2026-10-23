@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import re
 
-from assistant_runtime.config import Config, read_config
+from assistant_runtime.app.config import Config, read_config
 from assistant_runtime.plugins.media.aliyun import Aliyun
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.private import save

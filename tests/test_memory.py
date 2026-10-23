@@ -6,9 +6,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from assistant_runtime.kernel.contracts import MemoryRequest
-from assistant_runtime.memory.service import MemoryPlugin
-from assistant_runtime.store import Store
+from assistant_runtime.api.contracts import MemoryRequest
+from assistant_runtime.core.memory.service import MemoryPlugin
+from assistant_runtime.app.store import Store
 
 
 class FakeMemory:
@@ -44,7 +44,7 @@ class FakeMemory:
         return [r for r in await self.export() if query in r["text"] and r["scope"] == scope]
 
     async def capture(self, sources, scope, project, job_id):
-        from assistant_runtime.memory.policy import validate_facts
+        from assistant_runtime.core.memory.policy import validate_facts
 
         self.capture_calls += 1
         if scope == "project":
@@ -87,7 +87,7 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         return await self.plugin.handle(MemoryRequest(action, kw))
 
     def batch(self, text="我喜欢乌龙茶，不加糖。"):
-        self.store.transcript("user", text)
+        self.store.transcripts.append("user", text)
         self.plugin.enqueue()
         return self.store.db.execute(
             "SELECT id,start_id,end_id,epoch FROM memory_jobs ORDER BY id DESC LIMIT 1"
@@ -158,7 +158,7 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.provider.export(), [])
 
     async def test_assistant_guess_is_not_user_evidence(self):
-        self.store.transcript("assistant", "我喜欢乌龙茶，不加糖。")
+        self.store.transcripts.append("assistant", "我喜欢乌龙茶，不加糖。")
         self.plugin.enqueue()
         job = self.store.db.execute("SELECT id,start_id,end_id,epoch FROM memory_jobs").fetchone()
         self.curator.return_value = [self.candidate()]

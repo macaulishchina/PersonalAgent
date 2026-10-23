@@ -10,12 +10,12 @@ from types import SimpleNamespace
 import unittest
 import uuid
 from aiohttp import web
-from assistant_runtime.plugins.models.client import GatewayClient, timing_header
-from assistant_runtime.plugins.models.settings import ModelSettings
-from assistant_runtime.plugins.models.plugin import ModelsPlugin
-from assistant_runtime.kernel.models import ModelRequest
+from assistant_runtime.core.models.client import GatewayClient, timing_header
+from assistant_runtime.core.models.settings import ModelSettings
+from assistant_runtime.core.models.plugin import ModelsPlugin
+from assistant_runtime.api.models import ModelRequest
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 from test_models import settings
 
 

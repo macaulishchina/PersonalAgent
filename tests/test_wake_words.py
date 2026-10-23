@@ -3,8 +3,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.assistant.commands import parse_command
-from assistant_runtime.config import Config
+from assistant_runtime.core.speech.commands import parse_command
+from assistant_runtime.app.config import Config
 from assistant_runtime.plugins.keyword.recognition import Recognizer
 
 

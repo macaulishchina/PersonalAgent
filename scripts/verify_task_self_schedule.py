@@ -7,8 +7,8 @@ from pathlib import Path
 import time
 import uuid
 
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import TaskRequest
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.mcp.client import LocalRuntimeClient
 
 

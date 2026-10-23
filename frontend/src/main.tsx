@@ -64,6 +64,7 @@ type State = {
   web_dispatching: boolean;
   notifications_unread?: number;
   sync_error?: string;
+  configuration_required?: boolean;
   ai_usage?: { requests: number; limit: number; warning?: boolean; blocked?: string | null } | null;
 };
 const initial: State = {
@@ -843,6 +844,8 @@ function App() {
   }
   const status = !online
     ? "连接已断开"
+    : state.configuration_required
+      ? "待配置模型"
     : state.task_running
       ? "正在处理"
       : state.speaking
@@ -1016,6 +1019,9 @@ function App() {
                 AI 调用 {state.ai_usage.requests}/{state.ai_usage.limit}
                 {state.ai_usage.blocked ? " · 已暂停，需明确调整额度" : state.ai_usage.warning ? " · 已达到预警用量" : ""}
               </p>
+            )}
+            {state.configuration_required && (
+              <p className="error">请先在实例配置中选择模型并完成授权，然后重启服务。</p>
             )}
             {state.sync_error && (
               <div className="notice" role="status">

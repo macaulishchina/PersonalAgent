@@ -7,7 +7,7 @@ import json
 import time
 import wave
 
-from assistant_runtime.devices.outputs import AudioOutputs
+from assistant_runtime.core.devices.outputs import AudioOutputs
 from assistant_runtime.plugins.pipewire.io import PipeWireEndpoint
 
 READING = "今天上午天气不错，我准备整理书桌，然后看看窗外。"

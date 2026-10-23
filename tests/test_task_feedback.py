@@ -6,10 +6,10 @@ import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
 import test_tasks as tasks
-from assistant_runtime.conversation.service import Conversation
-from assistant_runtime.kernel.contracts import ConversationFeedbackRequest, TaskRequest
-from assistant_runtime.plugins.notifications.channels import ChatChannel
-from assistant_runtime.plugins.tasks.feedback import TaskFeedback
+from assistant_runtime.core.conversation.service import Conversation
+from assistant_runtime.api.contracts import ConversationFeedbackRequest, TaskRequest
+from assistant_runtime.core.notifications.channels import ChatChannel
+from assistant_runtime.core.tasks.feedback import TaskFeedback
 
 
 class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
@@ -378,7 +378,7 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         current = await self.settled(run)
         message = self.c.store.get(current["data"]["completion_feedback"]["message_id"])
         self.host.notifications.project_chat([message])
-        from assistant_runtime.plugins.notifications.groups import association
+        from assistant_runtime.core.notifications.groups import association
 
         group, _ = association(
             "task:" + run["task_id"], "", {"title": "test", "origin": {"run_id": run["id"]}}

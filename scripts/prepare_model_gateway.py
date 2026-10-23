@@ -8,9 +8,9 @@ import secrets
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
-from assistant_runtime.plugins.models.gateway import configuration, credential, gateway_credential
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
+from assistant_runtime.core.models.gateway import configuration, credential, gateway_credential
 
 # Pulled from the official repository; independently checked package version: 1.106.0.
 IMAGE = "ghcr.io/berriai/litellm@sha256:2e4c0371f3a8c28e4da131d77abaa8341cd3b0c2fcc4d34d7c5900431af7b9d0"
@@ -92,13 +92,13 @@ def prepare(config):
         if settings.providers[entry["provider"]].get("enabled", False)
         and settings.providers[entry["provider"]]["protocol"] != "pi"
     }
-    from assistant_runtime.plugins.pi.catalog import MODEL_SESSION_HEADER
+    from assistant_runtime.core.pi.catalog import MODEL_SESSION_HEADER
 
     private_write(
         assets / "routes.json",
         json.dumps({"providers": routes, "session_headers": ["x-assistant-session", MODEL_SESSION_HEADER]}),
     )
-    from assistant_runtime.plugins.models import gateway_transport
+    from assistant_runtime.core.models import gateway_transport
 
     private_write(assets / "gateway_transport.py", Path(gateway_transport.__file__).read_text())
     private_write(

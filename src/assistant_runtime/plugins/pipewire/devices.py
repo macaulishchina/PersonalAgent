@@ -3,7 +3,7 @@
 import re
 import time
 
-from ...kernel.contracts import DeviceObservation
+from assistant_runtime.api.contracts import DeviceObservation
 from .volume import hardware_volume
 
 MAC = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
@@ -101,11 +101,11 @@ class PipeWireDevices:
         while True:
             try:
                 await self.refresh()
-                context.error = None
-                context.state = "ready"
+                context.set_health("ready")
             except (RuntimeError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
-                context.error = str(exc)[:200]
-                context.state = "degraded"
+                context.set_health("degraded", str(exc)[:200])
                 for ident in self.specs:
-                    self.directory.observe("pipewire", ident, DeviceObservation("error", error=context.error))
+                    self.directory.observe(
+                        "pipewire", ident, DeviceObservation("error", error=str(exc)[:200])
+                    )
             await asyncio.sleep(3)

@@ -5,8 +5,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.kernel.contracts import NotificationLink, NotificationRequest
-from assistant_runtime.plugins.notifications.repository import Notifications
+from assistant_runtime.api.contracts import NotificationLink, NotificationRequest
+from assistant_runtime.core.notifications.repository import Notifications
 from assistant_runtime.plugins.media.notifications import publish as publish_media, restore_associations
 from types import SimpleNamespace
 
@@ -288,7 +288,7 @@ class GroupTest(unittest.IsolatedAsyncioTestCase):
         ctx = SimpleNamespace(get=lambda *args: False, set=lambda *args: None)
         p = SimpleNamespace(
             repo=SimpleNamespace(db=self.repo.db),
-            host=SimpleNamespace(runtime=SimpleNamespace(invoke=invoke)),
+            api=SimpleNamespace(invoke=invoke),
             context=ctx,
         )
         args = {"event_key": "media-complete:op", "title": "已完成", "body": "操作核验"}

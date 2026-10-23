@@ -12,19 +12,19 @@ from unittest.mock import AsyncMock, patch
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import IntegrationRequest, TaskRequest
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import IntegrationRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Runtime, Manifest
-from assistant_runtime.mcp.catalog import INTEGRATION_TOOLS
-from assistant_runtime.mcp.integrations import create_server
-from assistant_runtime.plugins.pi.backend import PiBackend
-from assistant_runtime.plugins.pi.integrations import PiIntegrations
-from assistant_runtime.plugins.pi.mcp import server_config
-from assistant_runtime.plugins.pi.voice import DisabledVoice
-from assistant_runtime.plugins.integrations.registry import McpRegistry
-from assistant_runtime.plugins.integrations.settings import IntegrationSettings, definition
-from assistant_runtime.plugins.integrations.plugin import IntegrationsPlugin
-from assistant_runtime.store import Store
+from tool_expectations import INTEGRATION_TOOLS
+from assistant_runtime.core.integrations.tools import create_server
+from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.pi.integrations import PiIntegrations
+from assistant_runtime.core.pi.mcp import server_config
+from assistant_runtime.core.speech.disabled import DisabledVoice
+from assistant_runtime.core.integrations.registry import McpRegistry
+from assistant_runtime.core.integrations.settings import IntegrationSettings, definition
+from assistant_runtime.core.integrations.plugin import IntegrationsPlugin
+from assistant_runtime.app.store import Store
 
 STDIO = {"transport": {"type": "stdio", "command": "python", "args": ["--flag", "--flag", ""]}}
 HTTP = {"transport": {"type": "http", "url": "https://example.test/mcp?private=value"}}
@@ -54,7 +54,7 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(reopened.snapshot(), r.snapshot())
         before = r.snapshot()
         with patch(
-            "assistant_runtime.plugins.integrations.registry.os.replace", side_effect=OSError("disk error")
+            "assistant_runtime.core.integrations.registry.os.replace", side_effect=OSError("disk error")
         ):
             with self.assertRaises(OSError):
                 r.configure("mobile", {"enabled": False}, 2)
@@ -276,6 +276,7 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         adapter = backend.integrations
         backend.execution_session_id = "foreground"
         backend.client = self.client
+        backend.client.settings = SimpleNamespace(enabled=True)
         await adapter.apply()
         self.registry.configure("mobile", {"enabled": False}, self.registry.revision)
 
@@ -448,11 +449,15 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
     def test_background_management_catalog_is_explicit(self):
         for manage in (False, True):
             item = server_config(
-                self.config.socket, task_run="run", integrations=True, manage_integrations=manage
+                self.config.socket,
+                task_run="run",
+                manage_integrations=manage,
+                plugins=["memory", "devices", "ai_usage"] + (["integrations"] if True else []),
             )["integrations"]
-            self.assertEqual(
-                set(item["enabled_tools"]), set(INTEGRATION_TOOLS if manage else INTEGRATION_TOOLS[:3])
-            )
+            if manage:
+                self.assertNotIn("enabled_tools", item)
+            else:
+                self.assertEqual(set(item["enabled_tools"]), set(INTEGRATION_TOOLS[:3]))
             self.assertEqual("--manage-integrations" in item["args"], manage)
 
 

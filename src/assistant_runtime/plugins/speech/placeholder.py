@@ -1,10 +1,10 @@
 """Unavailable voice entrance, without loading wake or recognition models."""
 
-from ...kernel.runtime import Manifest
+from .declaration import DECLARATION
 
 
 class VoicePlaceholder:
-    manifest = Manifest("voice_disabled")
+    manifest = DECLARATION.manifest
 
     def __init__(self):
         self.recognizer = self

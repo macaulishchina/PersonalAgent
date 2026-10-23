@@ -8,10 +8,10 @@ from pathlib import Path
 import tempfile
 import uuid
 
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.models.gateway import gateway_credential
-from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
+from assistant_runtime.app.host import AssistantService
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.models.gateway import gateway_credential
+from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 
 
 async def verify(config, main_model, task_model, *, effort="low", max_requests=10, max_tokens=1024):
@@ -42,7 +42,19 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
             pi_binary=config.pi_binary,
             main_model=main_model,
             main_reasoning_effort=effort,
-            plugins=["ai_usage", "models", "pi", "voice_disabled", "pipewire", "tasks", "notifications"],
+            plugins=[
+                "ai_usage",
+                "workfiles",
+                "devices",
+                "assistant",
+                "conversation",
+                "execution",
+                "models",
+                "pi",
+                "voice_disabled",
+                "tasks",
+                "notifications",
+            ],
             memory_enabled=False,
             model_api=raw,
             ai_usage={"max_requests": max_requests, "work_limits": {"max_seconds": 120}},
@@ -61,7 +73,7 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
             notifications={"channels": ["chat"], "voice_enabled": False},
         )
         host = AssistantService(isolated)
-        from assistant_runtime.plugins.pi.accounts import NativeAccounts
+        from assistant_runtime.core.pi.accounts import NativeAccounts
 
         # Share the original locked credential store; never copy rotating OAuth credentials.
         host.backend.client.accounts = NativeAccounts(config.root, ModelSettings.parse(raw))
@@ -100,6 +112,21 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
                         break
                     if serving.done():
                         await serving
+                    recent = host.store.executions.recent()
+                    if (
+                        not runs
+                        and recent
+                        and not host.backend.busy
+                        and recent[0]["status"]
+                        in {
+                            "completed",
+                            "failed",
+                            "interrupted",
+                            "unknown",
+                        }
+                    ):
+                        evidence.update(task_count=0, stage="before_delegation")
+                        raise RuntimeError("foreground_ended_without_delegation")
                     await asyncio.sleep(0.2)
             evidence.update(task_count=len(definitions), task_state=runs[0]["state"])
             if runs[0]["state"] != "completed":
@@ -120,7 +147,7 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
                 requests=summary["requests"],
                 callers=2,
                 file_readback=True,
-                voice_opened=host.voice.opened,
+                voice_opened=host.assistant.voice.opened,
                 usage=summary,
                 calls=calls["items"],
                 main_model=main_model,

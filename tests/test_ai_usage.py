@@ -8,9 +8,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.kernel.ai_usage import UsageScope, UsageError, UsageRequest
-from assistant_runtime.plugins.ai_usage.service import UsageService, metered
-from assistant_runtime.plugins.ai_usage.settings import UsageSettings
+from assistant_runtime.api.ai_usage import UsageScope, UsageError, UsageRequest
+from assistant_runtime.core.ai_usage.service import UsageService
+from assistant_runtime.api.ai_usage import metered
+from assistant_runtime.core.ai_usage.settings import UsageSettings
 
 
 class UsageTest(unittest.IsolatedAsyncioTestCase):
@@ -36,6 +37,27 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
 
     async def done(self, ticket, **kwargs):
         return await self.usage.settle(ticket["id"], state="completed", **kwargs)
+
+    async def test_unknown_compaction_retains_budget_without_poisoning_execution(self):
+        ticket = await self.usage.admit(
+            self.scope,
+            service="execution",
+            provider="p",
+            model="m",
+            compaction=True,
+            bounds={"input_tokens": 100, "output_tokens": 50},
+        )
+        await self.usage.settle(ticket["id"], state="unknown")
+        await self.usage.close()
+        self.usage = UsageService(self.root)
+        await self.usage.start()
+        snapshot = await self.usage.snapshot("work")
+        self.assertEqual(snapshot["requests"], 1)
+        self.assertEqual(snapshot["unknown_requests"], 1)
+        self.assertEqual(snapshot["unknown_execution_requests"], 0)
+        ticket = await self.usage.admit(self.scope, service="execution", provider="p", model="m")
+        await self.usage.settle(ticket["id"], state="unknown")
+        self.assertEqual((await self.usage.snapshot("work"))["unknown_execution_requests"], 1)
 
     async def test_default_50_warning_100_allowed_101_denied(self):
         for n in range(100):
@@ -223,7 +245,7 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_retention_prunes_details_once_preserves_counts_and_active_unknown(self):
         old = time.time() - 100 * 86400
-        with patch("assistant_runtime.plugins.ai_usage.ledger.time.time", return_value=old):
+        with patch("assistant_runtime.core.ai_usage.ledger.time.time", return_value=old):
             await self.done(await self.admit(), usage={"input_tokens": 7, "output_tokens": 3})
         await self.usage.call("prune")
         await self.usage.call("prune")
@@ -258,7 +280,7 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_detail_expiry_keeps_exact_dimension_statistics(self):
         old = time.time() - 100 * 86400
-        with patch("assistant_runtime.plugins.ai_usage.ledger.time.time", return_value=old):
+        with patch("assistant_runtime.core.ai_usage.ledger.time.time", return_value=old):
             await self.done(await self.admit(), usage={"input_tokens": 7, "output_tokens": 3})
         await self.done(await self.admit(), usage={"input_tokens": 11, "output_tokens": 5})
         await self.usage.call("prune")
@@ -312,7 +334,7 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
 class BoundaryTest(unittest.IsolatedAsyncioTestCase):
     async def test_mcp_is_read_only_and_task_identity_is_bound(self):
         from fastmcp import Client
-        from assistant_runtime.mcp.ai_usage import create_server
+        from assistant_runtime.core.ai_usage.tools import create_server
 
         class Calls:
             def __init__(self):
@@ -341,7 +363,7 @@ class BoundaryTest(unittest.IsolatedAsyncioTestCase):
         scope = UsageScope("event-batch", "event-check", "plan")
         case.plugin.enqueue(sample(), "assistant", scope)
         await case.settle()
-        rows = await case.plugin.host.ai_usage.service.call("query", {"work_id": "event-batch"})
+        rows = await case.runtime.plugins["ai_usage"].service.call("query", {"work_id": "event-batch"})
         self.assertEqual(len(rows["items"]), 1)
         self.assertEqual(rows["items"][0]["task_id"], "plan")
 
@@ -354,8 +376,8 @@ class TaskBudgetTest(unittest.IsolatedAsyncioTestCase):
     create = Fixtures.create
 
     async def test_plan_pause_is_durable_before_next_scheduler_occurrence(self):
-        from assistant_runtime.plugins.ai_usage.plugin import AIUsagePlugin
-        from assistant_runtime.kernel.contracts import TaskRequest
+        from assistant_runtime.core.ai_usage.plugin import AIUsagePlugin
+        from assistant_runtime.api.contracts import TaskRequest
 
         self.host.config.ai_usage = {"max_requests": 1}
         self.host.ai_usage = AIUsagePlugin(self.host)
@@ -381,8 +403,8 @@ class TaskBudgetTest(unittest.IsolatedAsyncioTestCase):
             await self.host.ai_usage.service.admit(scope, service="execution", provider="provider")
 
     async def test_preflight_and_parallel_review_share_the_task_work(self):
-        from assistant_runtime.kernel.ai_usage import current_usage
-        from assistant_runtime.plugins.ai_usage.plugin import AIUsagePlugin
+        from assistant_runtime.api.ai_usage import current_usage
+        from assistant_runtime.core.ai_usage.plugin import AIUsagePlugin
         from unittest.mock import AsyncMock, Mock
 
         self.plugin.scheduler.pause()
@@ -412,7 +434,7 @@ class TaskBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.host.ai_usage.service.snapshot(seen[0]))["requests"], 2)
 
     async def test_task_bound_query_cannot_escape_or_increase_budget(self):
-        from assistant_runtime.plugins.ai_usage.plugin import AIUsagePlugin
+        from assistant_runtime.core.ai_usage.plugin import AIUsagePlugin
 
         self.host.ai_usage = AIUsagePlugin(self.host)
         await self.host.ai_usage.service.start()

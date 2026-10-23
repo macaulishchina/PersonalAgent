@@ -5,7 +5,7 @@ import json
 import math
 import re
 
-from ...kernel.contracts import DecisionSample
+from assistant_runtime.api.contracts import DecisionSample
 
 VERSIONS = {"voice_intent": 2, "event_relevance": 2, "model_profile": 6, "model_review": 1, "selection": 2}
 PROFILES = {

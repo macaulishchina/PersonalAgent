@@ -4,9 +4,10 @@ import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any, Awaitable, Callable
 
-from .contracts import API_VERSION, Event
+from .events import API_VERSION, Event
 from .event_reporting import EventReporter, EventSink, identifier
 
 log = logging.getLogger(__name__)
@@ -18,6 +19,22 @@ class Manifest:
     requires: tuple[str, ...] = ()
     api_version: int = API_VERSION
     critical: bool = False
+    version: str = "1.0.0"
+    optional: tuple[str, ...] = ()
+    dependency_versions: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self):
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.name):
+            raise ValueError("Invalid plugin identifier")
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", self.version):
+            raise ValueError("Plugin version must be major.minor.patch")
+        if len(set(self.requires + self.optional)) != len(self.requires + self.optional):
+            raise ValueError("Duplicate plugin dependency")
+        if self.name in self.requires + self.optional:
+            raise ValueError("Plugin cannot depend on itself")
+        for name, version in self.dependency_versions:
+            if name not in self.requires + self.optional or not re.fullmatch(r"[0-9]+", version):
+                raise ValueError("Dependency version must name a declared dependency and supported major")
 
 
 class Context:
@@ -25,9 +42,12 @@ class Context:
         self.runtime, self.name = runtime, name
         self.generation = 1
         self.tasks: set[asyncio.Task] = set()
+        self.calls: set[asyncio.Future] = set()
         self.resources = AsyncExitStack()
         self.error: str | None = None
         self.state = "starting"
+        self.cancelled = asyncio.Event()
+        self.optional_unavailable: tuple[str, ...] = ()
 
     def own(self, cleanup):
         self.resources.push_async_callback(cleanup)
@@ -71,6 +91,30 @@ class Context:
 
         self.own(unregister)
 
+    @property
+    def ready(self):
+        return self.runtime.ready
+
+    @property
+    def dropped(self):
+        return sum(v for k, v in self.runtime.dropped.items() if k.startswith(self.name))
+
+    def set_health(self, state, error=None):
+        self.state, self.error = state, error
+
+    async def invoke(self, request, timeout=15):
+        return await self.runtime.invoke(request, timeout=timeout)
+
+    def subscribe(self, capacity=128):
+        name = self.name + ":events"
+        queue = self.runtime.subscribe(name, capacity)
+
+        async def cleanup():
+            self.runtime.unsubscribe(name)
+
+        self.own(cleanup)
+        return queue
+
     def get(self, key, default=None):
         return self.runtime.store.get(f"plugin.{self.name}.{key}", default)
 
@@ -80,15 +124,24 @@ class Context:
     def register(self, request_type, handler):
         self.runtime.register(self.name, request_type, handler)
 
+        async def unregister():
+            current = self.runtime.handlers.get(request_type)
+            if current and current[0] == self.name:
+                self.runtime.handlers.pop(request_type)
+
+        self.own(unregister)
+
     def publish(self, kind, **data):
         self.runtime.publish(Event(kind, self.name, data, generation=self.generation))
 
     async def close(self):
         self.generation += 1
+        self.cancelled.set()
         self.state = "stopping"
-        tasks = list(self.tasks)
+        current = asyncio.current_task()
+        tasks = list((self.tasks | self.calls) - {current})
         for task in tasks:
-            if not task.cancelling():
+            if not task.done() and not (isinstance(task, asyncio.Task) and task.cancelling()):
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         try:
@@ -135,7 +188,12 @@ class Runtime:
         epoch = context.generation
         if context.state not in {"ready", "degraded"}:
             raise RuntimeError(f"{owner} unavailable")
-        result = await asyncio.wait_for(handler(request), timeout)
+        pending = asyncio.ensure_future(handler(request))
+        context.calls.add(pending)
+        try:
+            result = await asyncio.wait_for(pending, timeout)
+        finally:
+            context.calls.discard(pending)
         if epoch != context.generation:
             raise RuntimeError("Stale plugin result discarded")
         return result
@@ -171,8 +229,18 @@ class Runtime:
             if name in visiting or name not in self.plugins:
                 raise ValueError(f"Missing dependency or cycle: {name}")
             visiting.add(name)
-            for dependency in self.plugins[name].manifest.requires:
+            manifest = self.plugins[name].manifest
+            for dependency in manifest.requires:
                 visit(dependency)
+            for dependency in manifest.optional:
+                if dependency in self.plugins:
+                    visit(dependency)
+            for dependency, major in manifest.dependency_versions:
+                if (
+                    dependency in self.plugins
+                    and self.plugins[dependency].manifest.version.split(".")[0] != major
+                ):
+                    raise ValueError(f"Incompatible dependency: {name} requires {dependency} major {major}")
             visiting.remove(name)
             result.append(name)
 
@@ -189,6 +257,19 @@ class Runtime:
             for name in self.order():
                 context = self.contexts[name] = Context(self, name)
                 self.started.append(name)
+                manifest = self.plugins[name].manifest
+                unavailable = tuple(dep for dep in manifest.requires if self.contexts[dep].state != "ready")
+                context.optional_unavailable = tuple(
+                    dep
+                    for dep in manifest.optional
+                    if dep not in self.contexts or self.contexts[dep].state != "ready"
+                )
+                if unavailable:
+                    context.state = "blocked"
+                    context.error = "Required dependencies unavailable: " + ", ".join(unavailable)
+                    if manifest.critical:
+                        raise RuntimeError(context.error)
+                    continue
                 try:
                     await self.plugins[name].start(context)
                     context.state = "ready"
@@ -216,9 +297,12 @@ class Runtime:
         return {
             name: {
                 "state": ctx.state,
+                "version": self.plugins[name].manifest.version,
+                "api_version": self.plugins[name].manifest.api_version,
                 "generation": ctx.generation,
                 "error": ctx.error,
                 "tasks": len(ctx.tasks),
+                "optional_unavailable": list(ctx.optional_unavailable),
             }
             for name, ctx in self.contexts.items()
         }

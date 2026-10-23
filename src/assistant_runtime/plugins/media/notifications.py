@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from ...kernel.contracts import NotificationLink, NotificationRequest
+from assistant_runtime.api.contracts import NotificationLink, NotificationRequest
 
 
 def context(plugin, key):
@@ -26,14 +26,12 @@ async def publish(plugin, payload):
     caller, group = context(plugin, payload["event_key"])
     # A queued old receipt may already have committed with the old foreground attribution.
     # Enrich that same notice instead of publishing a second notification after restart.
-    linked = await plugin.host.runtime.invoke(
-        NotificationLink("assistant", payload["event_key"], caller, group)
-    )
+    linked = await plugin.api.invoke(NotificationLink("assistant", payload["event_key"], caller, group))
     if linked.get("linked"):
         return linked
     if group:
         payload = {**payload, "group_key": group}
-    return await plugin.host.runtime.invoke(NotificationRequest("publish", payload, caller))
+    return await plugin.api.invoke(NotificationRequest("publish", payload, caller))
 
 
 async def restore_associations(plugin):
@@ -62,7 +60,7 @@ async def restore_associations(plugin):
                 for pattern in patterns:
                     key = pattern.format(ident)
                     caller, group = context(plugin, key)
-                    await plugin.host.runtime.invoke(NotificationLink("assistant", key, caller, group))
+                    await plugin.api.invoke(NotificationLink("assistant", key, caller, group))
             last = rows[-1][0]
             await asyncio.sleep(0)
     plugin.context.set("notification_groups_v1", True)

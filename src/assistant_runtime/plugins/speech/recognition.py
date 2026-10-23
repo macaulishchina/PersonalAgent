@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import sherpa_onnx
 
-from ...kernel.speech import Recognition
+from assistant_runtime.api.speech import Recognition
 
 
 class LocalRecognition:

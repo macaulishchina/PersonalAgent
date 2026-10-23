@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock
 
 from PIL import Image
 
-from assistant_runtime.config import Config
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.devices.video import VideoInputs
-from assistant_runtime.kernel.contracts import VideoCapture, VideoFrame, DeviceQuery, VideoRecord, VideoClip
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.core.devices.video import VideoInputs
+from assistant_runtime.api.contracts import VideoCapture, VideoFrame, DeviceQuery, VideoRecord, VideoClip
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.go2rtc.camera import validate_connection
 from assistant_runtime.plugins.go2rtc.plugin import Go2RTCPlugin
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 def camera_spec():
@@ -153,7 +153,7 @@ class VideoRegistrationTest(unittest.IsolatedAsyncioTestCase):
 class CameraMcpTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_is_real_mcp_content_not_embedded_json(self):
         from fastmcp import Client
-        from assistant_runtime.mcp.device import create_server
+        from assistant_runtime.core.devices.tools import create_server
 
         payload = {
             "frame": {

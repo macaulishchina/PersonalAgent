@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import time
 
-from assistant_runtime.config import Config
+from assistant_runtime.app.config import Config
 from assistant_runtime.mcp.client import LocalRuntimeClient
 
 

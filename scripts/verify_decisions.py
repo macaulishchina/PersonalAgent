@@ -13,10 +13,10 @@ import uuid
 
 from fastmcp import Client
 
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import DecisionRequest, DecisionQuery
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import DecisionRequest, DecisionQuery
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.mcp.decisions import create_server
+from assistant_runtime.plugins.decisions.tools import create_server
 
 
 def model_state(objective):

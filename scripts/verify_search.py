@@ -8,7 +8,7 @@ import sys
 
 from fastmcp import Client
 
-from assistant_runtime.config import Config
+from assistant_runtime.app.config import Config
 from assistant_runtime.mcp.catalog import SERVICES
 
 

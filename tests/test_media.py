@@ -1,5 +1,7 @@
 """Acquisition persistence, cancellation, authorization and real MCP schema behavior."""
 
+from assistant_runtime.app.bundled import context_for
+
 import asyncio
 import copy
 import json
@@ -13,21 +15,21 @@ import uuid
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.kernel.contracts import (
+from assistant_runtime.api.contracts import (
     MediaRequest,
     NotificationRequest,
     NotificationLink,
     TaskRequest,
 )
 from assistant_runtime.kernel.runtime import Manifest, Runtime
-from assistant_runtime.mcp.catalog import MEDIA_TOOLS
-from assistant_runtime.mcp.media import create_server
-from assistant_runtime.plugins.pi.mcp import server_config
+from tool_expectations import MEDIA_TOOLS
+from assistant_runtime.plugins.media.tools import create_server
+from assistant_runtime.core.pi.mcp import server_config
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.plugin import MediaPlugin
 from assistant_runtime.plugins.media.repository import MediaRepository
 from assistant_runtime.plugins.media.settings import MediaSettings
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 TARGET = {"account": "aliyun", "drive_id": "drive", "folder_id": "folder", "openlist_path": "/test/movies"}
 VIDEO = {
@@ -235,12 +237,14 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
         self.provider = FakeProvider()
         self.host = SimpleNamespace(
             config=SimpleNamespace(
-                media={"targets": {"movies": dict(TARGET)}}, state_dir=Path(self.tmp.name)
+                media={"targets": {"movies": dict(TARGET)}},
+                state_dir=Path(self.tmp.name),
+                root=Path(self.tmp.name),
             ),
             store=self.store,
             runtime=self.runtime,
         )
-        self.plugin = MediaPlugin(self.host, {"aliyun": self.provider})
+        self.plugin = MediaPlugin(context_for(self.host, "media"), {"aliyun": self.provider})
         self.runtime.add(self.plugin)
         await self.runtime.start()
 
@@ -511,9 +515,19 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
                 )
             response = await client.call_tool("media_status", {})
             self.assertIn("targets", response.structured_content)
-        configs = server_config("/tmp/socket", task_run="run", media=True)
+        configs = server_config(
+            "/tmp/socket",
+            task_run="run",
+            plugins=["memory", "devices", "ai_usage"] + (["media"] if True else []),
+        )
         self.assertIn("--task-run", configs["media"]["args"])
-        self.assertFalse(server_config("/tmp/socket", media=True, enabled=False)["media"]["enabled"])
+        self.assertFalse(
+            server_config(
+                "/tmp/socket",
+                enabled=False,
+                plugins=["memory", "devices", "ai_usage"] + (["media"] if True else []),
+            )["media"]["enabled"]
+        )
 
 
 if __name__ == "__main__":

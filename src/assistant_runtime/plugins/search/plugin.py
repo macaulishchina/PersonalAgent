@@ -1,5 +1,7 @@
 """Shared lookup owner: bounded IO, caller checks, metadata receipts, ephemeral cache."""
 
+from .declaration import DECLARATION
+
 import asyncio
 from collections import OrderedDict
 import copy
@@ -14,10 +16,9 @@ import uuid
 import aiohttp
 from dotenv import dotenv_values
 
-from ...kernel.contracts import SearchRequest, TaskRequest
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import SearchRequest, TaskRequest
 from .deepseek import DeepSeek, fetch_result, query_payload, search_result
-from .settings import SearchSettings
+from .repository import SearchRepository
 from .urls import SearchError, public_url, validate_fetch_url
 
 log = logging.getLogger(__name__)
@@ -35,11 +36,11 @@ def credential(root, name):
 
 
 class SearchPlugin:
-    manifest = Manifest("search", ("ai_usage",))
+    manifest = DECLARATION.manifest
 
-    def __init__(self, host):
-        self.host = host
-        self.settings = SearchSettings.parse(host.config.search)
+    def __init__(self, api):
+        self.api = api
+        self.settings = api.config
         self.slots = asyncio.Semaphore(self.settings.concurrency)
         self.pending = 0
         self.flights = {}
@@ -47,10 +48,7 @@ class SearchPlugin:
         self.cache_bytes = 0
         self.accepting = False
         self.last_error = {}
-        self.db = host.store.db
-        self.db.execute(
-            "CREATE TABLE IF NOT EXISTS search_calls(seq INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)"
-        )
+        self.repo = api.repository(SearchRepository)
 
     async def start(self, context):
         self.context = context
@@ -64,7 +62,7 @@ class SearchPlugin:
         clients = {}
         self.providers = {}
         for name, spec in self.settings.providers.items():
-            key = credential(self.host.config.root, spec["api_key_env"])
+            key = self.api.credential(spec["api_key_env"])
             identity = (spec["base_url"], key)
             if identity not in clients:
                 clients[identity] = DeepSeek(
@@ -72,7 +70,7 @@ class SearchPlugin:
                     spec["base_url"],
                     key,
                     self.settings.requests_per_second,
-                    usage=self.host.ai_usage.service,
+                    usage=self.api.resource("usage"),
                 )
             self.providers[name] = clients[identity]
         self.accepting = True
@@ -93,7 +91,7 @@ class SearchPlugin:
             return
         if not isinstance(run, str) or not 1 <= len(run) <= 200:
             raise SearchError("invalid_search_caller")
-        info = await self.host.runtime.invoke(TaskRequest("execution_info", {"run_ids": [run]}))
+        info = await self.api.invoke(TaskRequest("execution_info", {"run_ids": [run]}))
         if info.get(run, {}).get("state") not in {"running", "waiting_user"}:
             raise SearchError("inactive_search_caller")
 
@@ -134,11 +132,7 @@ class SearchPlugin:
     def record(self, receipt):
         # Only bounded operational metadata, never queries, URLs, page bodies, keys or upstream errors.
         raw = json.dumps(receipt, ensure_ascii=False)
-        with self.db:
-            self.db.execute("INSERT INTO search_calls(data) VALUES(?)", (raw,))
-            self.db.execute(
-                "DELETE FROM search_calls WHERE seq NOT IN (SELECT seq FROM search_calls ORDER BY seq DESC LIMIT 1000)"
-            )
+        self.repo.record(raw)
         log.info("search_call %s", raw)
 
     def remember(self, key, result):
@@ -270,14 +264,7 @@ class SearchPlugin:
                         or (before is not None and (type(before) is not int or before < 1))
                     ):
                         raise SearchError("invalid_search_history_page")
-                    rows = self.db.execute(
-                        "SELECT seq,data FROM search_calls WHERE (? IS NULL OR seq<?) ORDER BY seq DESC LIMIT ?",
-                        (before, before, limit + 1),
-                    ).fetchall()
-                    return {
-                        "items": [{"id": seq, **json.loads(data)} for seq, data in rows[:limit]],
-                        "before": rows[limit - 1][0] if len(rows) > limit else None,
-                    }
+                    return self.repo.history(before, limit)
                 provider = args.get("provider") or self.settings.default_provider
                 if not isinstance(provider, str) or provider not in self.providers:
                     provider = None
@@ -293,7 +280,7 @@ class SearchPlugin:
                     if type(maximum) is not int or not 1 <= maximum <= 60000:
                         raise SearchError("invalid_page_content_limit")
                     payload = {"url": public_url(args.get("url"))}
-                scope = await self.host.ai_usage.scope(request.caller_run)
+                scope = await self.api.resource("usage").scope(request.caller_run)
                 result = await self.lookup(
                     provider, action, payload, maximum, refresh, deadline, trace, scope
                 )

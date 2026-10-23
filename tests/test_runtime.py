@@ -5,11 +5,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from assistant_runtime.kernel.contracts import Control, Event, Trigger, AudioFrame
-from assistant_runtime.kernel.media import AudioStream
+from assistant_runtime.api.contracts import Control, Event, Trigger, AudioFrame
+from assistant_runtime.api.media import AudioStream
 from assistant_runtime.kernel.runtime import Runtime, Manifest
 from assistant_runtime.plugins.gesture import GesturePlugin
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 class Plugin:
@@ -167,13 +167,13 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "db"
             s = Store(path)
-            ident = s.logical_session("pi", "opaque-thread")
-            s.create_task("task", "side effect")
-            s.update_task("task", "unknown")
+            ident = s.executions.logical_session("pi", "opaque-thread")
+            s.executions.create_task("task", "side effect")
+            s.executions.update_task("task", "unknown")
             s.db.close()
             s = Store(path)
-            self.assertEqual(s.logical_session("pi", "opaque-thread"), ident)
-            self.assertEqual(s.unfinished(), [("task", None, "unknown")])
+            self.assertEqual(s.executions.logical_session("pi", "opaque-thread"), ident)
+            self.assertEqual(s.executions.unfinished(), [("task", None, "unknown")])
             s.db.close()
 
     async def test_stop_does_not_wait_for_device_reconnect(self):

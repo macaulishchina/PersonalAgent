@@ -5,7 +5,7 @@ import logging
 import os
 import time
 
-from ...kernel.contracts import VoiceBinding
+from assistant_runtime.api.contracts import VoiceBinding
 from .devices import resolve, validate_device
 from .volume import apply_hardware_volume
 

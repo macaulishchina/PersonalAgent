@@ -8,8 +8,8 @@ import uuid
 
 from aiohttp import ClientSession
 
-from assistant_runtime.kernel.contracts import VideoClip
-from assistant_runtime.plugins.pi.conversation import task_event
+from assistant_runtime.api.contracts import VideoClip
+from assistant_runtime.core.pi.conversation import task_event
 from test_reply_images import provider_item
 from test_video_recording import sample_video
 import test_web

@@ -7,18 +7,19 @@ import unittest
 from unittest.mock import AsyncMock
 
 from fastmcp import Client
-from assistant_runtime.kernel.contracts import EventRequest, TaskRequest
+from assistant_runtime.app.bundled import context_for
+from assistant_runtime.api.contracts import EventRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Runtime, Manifest
 from assistant_runtime.plugins.observations.plugin import ObservationsPlugin
-from assistant_runtime.assistant.wake_events import WakeEvents
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.mcp.catalog import EVENT_TOOLS
+from assistant_runtime.core.speech.wake_events import WakeEvents
+from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
+from tool_expectations import EVENT_TOOLS
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.mcp.events import create_server
-from assistant_runtime.plugins.pi.mcp import server_config
-from assistant_runtime.plugins.events.plugin import EventsPlugin
-from assistant_runtime.plugins.events.settings import EventSettings
-from assistant_runtime.plugins.events.storage import Storage
+from assistant_runtime.core.events.tools import create_server
+from assistant_runtime.core.pi.mcp import server_config
+from assistant_runtime.core.events.plugin import EventsPlugin
+from assistant_runtime.core.events.settings import EventSettings
+from assistant_runtime.core.events.storage import Storage
 
 
 def record(key="one", **updates):
@@ -220,7 +221,7 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
             await self.add(record(str(index)))
         # A real expensive SQLite recursive query in the dedicated reader, using
         # the same progress deadline as public queries.
-        from assistant_runtime.plugins.events import storage
+        from assistant_runtime.core.events import storage
 
         original = storage.read
 
@@ -260,8 +261,11 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         self.host = SimpleNamespace(
             config=SimpleNamespace(root=root, state_dir=root / "state", events={}), runtime=self.runtime
         )
+        self.host.assistant = self.host
         self.plugin = EventsPlugin(self.host)
-        self.sources = ObservationsPlugin(self.host, {"wake": WakeEvents(self.host)})
+        self.sources = ObservationsPlugin(
+            context_for(self.host, "observations"), {"wake": WakeEvents(self.host)}
+        )
         self.task_info = {}
         test = self
 
@@ -339,10 +343,10 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wake_enqueue_and_correlated_outcomes(self):
         await self.configure_wake()
-        AssistantService._record_wake(
+        VoiceLifecycle._record_wake(
             self.host, "accepted", "test", entrance="keyword", keyword="configured phrase"
         )
-        AssistantService._record_wake(self.host, "connected", "test")
+        VoiceLifecycle._record_wake(self.host, "connected", "test")
         await self.plugin.ingress.drain("wake")
         rows = (await self.plugin.storage.call("query", source="wake"))["items"]
         accepted = next(r for r in rows if r["type"] == "wake.accepted")
@@ -401,8 +405,12 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
             result = await client.call_tool("event_status", {})
             self.assertIn("coverage", result.structured_content)
         for run in (None, "run"):
-            config = server_config("/tmp/test.sock", events=True, task_run=run)
-            self.assertEqual(set(config["events"]["enabled_tools"]), set(EVENT_TOOLS))
+            config = server_config(
+                "/tmp/test.sock",
+                task_run=run,
+                plugins=["memory", "devices", "ai_usage"] + (["events"] if True else []),
+            )
+            self.assertNotIn("enabled_tools", config["events"])
             self.assertEqual("--task-run" in config["events"]["args"], run is not None)
         self.assertNotIn("events", server_config("/tmp/test.sock"))
 

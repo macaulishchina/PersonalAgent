@@ -9,17 +9,17 @@ import unittest
 from unittest.mock import AsyncMock, patch
 import uuid
 
-from assistant_runtime.config import Config
-from assistant_runtime.store import Store
-from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.kernel.contracts import EventRequest, TaskRequest
+from assistant_runtime.app.config import Config
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.conversation.store import ConversationStore
+from assistant_runtime.api.contracts import EventRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Runtime, Manifest
-from assistant_runtime.plugins.events.plugin import EventsPlugin
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-from assistant_runtime.plugins.tasks.event_inbox import validate_subscription, EventInbox
-from assistant_runtime.plugins.pi.jobs import tool_trace
-from assistant_runtime.workfiles import WorkFiles
+from assistant_runtime.core.events.plugin import EventsPlugin
+from assistant_runtime.core.tasks.plugin import TasksPlugin
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.tasks.event_inbox import validate_subscription, EventInbox
+from assistant_runtime.core.pi.jobs import tool_trace
+from assistant_runtime.core.workfiles import WorkFiles
 
 
 class Dummy:
@@ -56,7 +56,7 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
             conversation=SimpleNamespace(store=ConversationStore(self.store), session="main"),
             workfiles=WorkFiles(self.root, self.store.db),
         )
-        for name in ("pi", "conversation"):
+        for name in ("pi", "conversation", "execution", "workfiles"):
             self.runtime.add(Dummy(name))
         self.events = EventsPlugin(self.host)
         self.runtime.add(self.events)

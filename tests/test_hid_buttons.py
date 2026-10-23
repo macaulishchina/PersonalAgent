@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from assistant_runtime.kernel.contracts import Trigger
+from assistant_runtime.api.contracts import Trigger
 from assistant_runtime.kernel.runtime import Context
 from assistant_runtime.plugins.hid_buttons.plugin import HidButtonsPlugin, discover
 from assistant_runtime.plugins.hid_buttons.settings import parse
@@ -82,7 +82,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
     async def test_exact_reports_debounce_and_no_wake_storm_while_pending(self):
         gate = asyncio.Event()
 
-        async def invoke(request):
+        async def invoke(request, timeout=15):
             await gate.wait()
             return {"accepted": True}
 
@@ -94,7 +94,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         for now in (2.01, 2.02, 10):
             self.plugin.report(self.button, b"\x01\xfe", now)
-        self.runtime.invoke.assert_awaited_once_with(Trigger("hid_buttons:speakerphone", "wake"))
+        self.runtime.invoke.assert_awaited_once_with(Trigger("hid_buttons:speakerphone", "wake"), timeout=15)
         self.assertEqual(len(self.context.tasks), 1)
         gate.set()
         await asyncio.gather(*self.context.tasks)

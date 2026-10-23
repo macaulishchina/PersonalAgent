@@ -10,13 +10,13 @@ import test_models
 import test_tasks
 import test_task_models
 import test_job_lifecycle
-from assistant_runtime.kernel.models import ModelCallError
-from assistant_runtime.plugins.models.settings import ModelSettings
-from assistant_runtime.plugins.pi.failures import model_failure
-from assistant_runtime.plugins.tasks.selection import ModelPolicy
+from assistant_runtime.api.models import ModelCallError
+from assistant_runtime.core.models.settings import ModelSettings
+from assistant_runtime.core.pi.failures import model_failure
+from assistant_runtime.core.tasks.selection import ModelPolicy
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.tasks.plugin import TasksPlugin
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
 
 
 class InferenceFallbackTest(unittest.IsolatedAsyncioTestCase):
@@ -213,6 +213,8 @@ class TaskFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.host.runtime = self.runtime
         self.runtime.add(test_tasks.Dummy("pi"))
         self.runtime.add(test_tasks.Dummy("conversation"))
+        self.runtime.add(test_tasks.Dummy("execution"))
+        self.runtime.add(test_tasks.Dummy("workfiles"))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)
         self.runtime.add(self.plugin)

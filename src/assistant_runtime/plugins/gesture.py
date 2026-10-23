@@ -1,11 +1,12 @@
 """An explicit simulated trigger, useful before a camera/perception plugin exists."""
 
-from ..kernel.contracts import Trigger
-from ..kernel.runtime import Manifest
+from .gesture_declaration import DECLARATION
+
+from assistant_runtime.api.contracts import Trigger
 
 
 class GesturePlugin:
-    manifest = Manifest("gesture")
+    manifest = DECLARATION.manifest
 
     async def start(self, context):
         self.context = context
@@ -13,4 +14,4 @@ class GesturePlugin:
     async def simulate(self, gesture):
         if gesture != "wave":
             raise ValueError("Only the explicit wave trigger is configured")
-        return await self.context.runtime.invoke(Trigger("gesture", "wake"))
+        return await self.context.invoke(Trigger("gesture", "wake"))

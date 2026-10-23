@@ -1,14 +1,15 @@
 """Standard camera registration, availability and owned acquisition cleanup."""
 
+from .declaration import DECLARATION
+
 import asyncio
 
-from ...kernel.contracts import DeviceObservation
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import DeviceObservation
 from .camera import V4L2Camera
 
 
 class V4L2Plugin:
-    manifest = Manifest("v4l2")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config, directory, video):
         self.directory, self.video = directory, video

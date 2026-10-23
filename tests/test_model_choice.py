@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import test_tasks as fixtures
-from assistant_runtime.kernel.contracts import TaskRequest
+from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.plugins.decisions.settings import DecisionSettings
 from assistant_runtime.plugins.decisions.plugin import DecisionsPlugin
 
@@ -47,7 +47,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_assistant_choice_can_change_and_receipt_is_not_a_second_review(self):
         self.enable()
         judge = AsyncMock(return_value=self.result())
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", judge):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", judge):
             d = await self.create(execution=self.recommendation())
         e = d["spec"]["execution"]
         self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6.1-sol", "medium"))
@@ -70,7 +70,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({o["model"] for o in request.state["options"].values()}, {"gpt-6-luna"})
             return self.result("fast_medium", 0.28)
 
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge):
             d = await self.create(
                 execution=self.recommendation(
                     model_source="user",
@@ -81,7 +81,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
         e = d["spec"]["execution"]
         self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6-luna", "medium"))
         self.assertEqual(e["model_source"], "user")
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", return_value=self.result()):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", return_value=self.result()):
             d = await self.create(execution=self.recommendation(model_source="user"))
         self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
         self.assertFalse(d["spec"]["execution"]["selection"]["model_review"]["applied"])
@@ -89,7 +89,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_user_and_legacy_explicit_choices_are_never_overwritten(self):
         self.enable()
         judge = AsyncMock(return_value=self.result())
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", judge):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", judge):
             for execution in (
                 self.recommendation(model_source="user", effort_source="user"),
                 {"model": "gpt-6-luna", "reasoning_effort": "low", "reason": "Legacy explicit choice"},
@@ -112,7 +112,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len({o["reasoning_effort"] for o in request.state["options"].values()}), 1)
             return self.result()
 
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge) as decision:
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge) as decision:
             d = await self.create(execution=requested)
         e = d["spec"]["execution"]
         self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6.1-sol", "medium"))
@@ -128,7 +128,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(preference=preference),
                 patch(
-                    "assistant_runtime.plugins.tasks.model_advice.decide", return_value=self.result()
+                    "assistant_runtime.core.tasks.model_advice.decide", return_value=self.result()
                 ) as judge,
             ):
                 d = await self.create(
@@ -148,7 +148,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                 with (
                     self.subTest(mode=mode, value=value),
                     patch(
-                        "assistant_runtime.plugins.tasks.model_advice.decide",
+                        "assistant_runtime.core.tasks.model_advice.decide",
                         return_value={"status": "fallback", "choice": None, "reason": "transport_failed"},
                     ) as judge,
                 ):
@@ -165,14 +165,14 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("effort_source", e)
                     judge.assert_awaited_once()
         self.host.config.decisions["enabled"] = False
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+        with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             d = await self.create(execution={"model_source": "assistant", "effort_source": "assistant"})
             self.assertNotIn("effort_source", d["spec"]["execution"])
             judge.assert_not_called()
 
     async def test_user_sources_need_actual_choices_and_invalid_sources_still_fail(self):
         self.enable()
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+        with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             for source, field in (("model_source", "model"), ("effort_source", "reasoning_effort")):
                 for missing in ({}, {field: None}, {field: "auto"}):
                     with (
@@ -197,7 +197,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             self.result("invented", 0.99),
             {"status": "fallback", "choice": None, "reason": "transport_failed"},
         ):
-            with patch("assistant_runtime.plugins.tasks.model_advice.decide", return_value=reply) as judge:
+            with patch("assistant_runtime.core.tasks.model_advice.decide", return_value=reply) as judge:
                 d = await self.create(execution=self.recommendation())
                 self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
                 judge.assert_awaited_once()
@@ -207,11 +207,11 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(1)
             return self.result()
 
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=slow):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=slow):
             d = await self.create(execution=self.recommendation(reasoning_effort="auto"))
         self.assertEqual(d["spec"]["execution"]["selection"]["model_review"]["decision"]["reason"], "timeout")
         self.host.config.decisions["enabled"] = False
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+        with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             d = await self.create(execution=self.recommendation())
             judge.assert_not_called()
         self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
@@ -221,7 +221,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
         d = await self.create(
             auto_archive=False, execution=self.recommendation(model_source="user", effort_source="user")
         )
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+        with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             updated = await self.plugin.request(
                 TaskRequest(
                     "update",
@@ -247,7 +247,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                     },
                 )
             )
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide") as judge:
+        with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             updated = await self.plugin.request(
                 TaskRequest(
                     "update",
@@ -308,7 +308,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({o["model"] for o in request.state["options"].values()}, {"deepseek"})
             return self.result("custom_high", 0.3)
 
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge):
             d = await self.create(
                 execution={
                     "model": "deepseek",
@@ -329,7 +329,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        with patch("assistant_runtime.plugins.tasks.model_advice.decide", side_effect=judge):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge):
             work = asyncio.create_task(self.create(execution=self.recommendation()))
             await entered.wait()
             work.cancel()

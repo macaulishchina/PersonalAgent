@@ -1,13 +1,14 @@
 """Read-only Linux HID trigger adapter with bounded work and reconnects."""
 
+from .declaration import DECLARATION
+
 import asyncio
 import logging
 import os
 from pathlib import Path
 import time
 
-from ...kernel.contracts import Trigger
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import Trigger
 from .settings import parse
 
 log = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def discover(button, root=Path("/sys/class/hidraw"), devices=Path("/dev")):
 
 
 class HidButtonsPlugin:
-    manifest = Manifest("hid_buttons", ("assistant",))
+    manifest = DECLARATION.manifest
 
     def __init__(self, config):
         self.buttons = parse(config.hid_buttons)
@@ -56,15 +57,12 @@ class HidButtonsPlugin:
             self.states[name] = state
             log.info("hid_button_state name=%s state=%s", name, state)
         failures = {key: value for key, value in self.states.items() if value != "ready"}
-        self.context.state = "degraded" if failures else "ready"
-        self.context.error = str(failures)[:240] if failures else None
+        self.context.set_health(
+            "degraded" if failures else "ready", str(failures)[:240] if failures else None
+        )
 
     def report(self, button, packet, now=None):
-        if (
-            packet != button.report
-            or not self.context.runtime.ready.is_set()
-            or self.context.state in ("stopping", "stopped")
-        ):
+        if packet != button.report or not self.context.ready.is_set() or self.context.cancelled.is_set():
             return
         now = time.monotonic() if now is None else now
         previous = self.last_report.get(button.name, float("-inf"))
@@ -76,14 +74,14 @@ class HidButtonsPlugin:
 
     async def wake(self, button):
         try:
-            result = await self.context.runtime.invoke(Trigger("hid_buttons:" + button.name, "wake"))
+            result = await self.context.invoke(Trigger("hid_buttons:" + button.name, "wake"))
             log.info("hid_button_wake name=%s accepted=%s", button.name, bool(result.get("accepted")))
         except Exception as exc:
             # Never retry a wake: the request may already have reached the owner.
             log.warning("hid_button_wake_failed name=%s error=%s", button.name, type(exc).__name__)
 
     async def watch(self, button):
-        await self.context.runtime.ready.wait()
+        await self.context.ready.wait()
         while True:
             try:
                 path = discover(button)

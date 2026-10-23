@@ -1,5 +1,7 @@
 """Bounded optional suggestions with explicit fallbacks; never executes actions."""
 
+from .declaration import DECLARATION
+
 import asyncio
 from collections import Counter
 import re
@@ -10,7 +12,7 @@ import hashlib
 import logging
 from dataclasses import asdict
 
-from ...kernel.contracts import (
+from assistant_runtime.api.contracts import (
     DecisionRequest,
     DecisionSample,
     DecisionQuery,
@@ -18,24 +20,21 @@ from ...kernel.contracts import (
     TaskRequest,
     NotificationRequest,
 )
-from ...kernel.decisions import fallback
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.decisions import fallback
 from .errors import DecisionError
 from .questions import prepare, VERSIONS, validate_public_state
 from .repository import Receipts
-from .settings import DecisionSettings
 from .scheduling import DecisionQueue
 
 
 class DecisionsPlugin:
-    manifest = Manifest("decisions", ("ai_usage",))
+    manifest = DECLARATION.manifest
 
-    def __init__(self, host, provider=None):
-        self.host = host
-        self.settings = DecisionSettings.parse(host.config.decisions)
-        self.root = host.config.root
+    def __init__(self, api, provider=None):
+        self.api = api
+        self.settings = api.config
         self.provider = provider
-        self.receipts = Receipts(host.config.state_dir / "decisions", self.settings)
+        self.receipts = Receipts(api.state_dir, self.settings)
         self.queue = DecisionQueue(self.settings.queue_size)
         self.counts = Counter()
         self.error = None
@@ -66,18 +65,16 @@ class DecisionsPlugin:
                 if self.provider is None:
                     from .jev import JevProvider
 
-                    self.provider = JevProvider(self.root, self.settings)
+                    self.provider = JevProvider(
+                        None, self.settings, credential_source=lambda: self.api.credential("TYPESAFE_API_KEY")
+                    )
                 context.own(self.provider.close)
                 await self.provider.start()
                 await self.reload()
             except Exception:
                 self.error = "provider_initialization_failed"
-        self.events = context.runtime.subscribe("decision-shadow", capacity=64)
+        self.events = context.subscribe(capacity=64)
 
-        async def unsubscribe():
-            context.runtime.unsubscribe("decision-shadow")
-
-        context.own(unsubscribe)
         context.register(DecisionRequest, self.request)
         context.register(DecisionQuery, self.judge)
         context.register(DecisionOutcome, self.outcome)
@@ -95,7 +92,7 @@ class DecisionsPlugin:
     async def warmup(self):
         # Other plugin startup can occupy the loop/default executor. Begin the
         # network budget only after their startup phase has finished.
-        await self.context.runtime.ready.wait()
+        await self.context.ready.wait()
         await self.provider.warmup()
 
     async def reload(self):
@@ -131,7 +128,7 @@ class DecisionsPlugin:
         except (ValueError, TypeError, RecursionError):
             self.counts["invalid"] += 1
             return {"accepted": False, "reason": "invalid_or_oversized_sample"}
-        from ...kernel.ai_usage import current_usage
+        from assistant_runtime.api.ai_usage import current_usage
 
         scope = usage_scope or current_usage.get()
         if scope is not None:
@@ -190,17 +187,17 @@ class DecisionsPlugin:
                     )
                     try:
                         async with asyncio.timeout(max(0.001, remaining)):
-                            from ...kernel.ai_usage import UsageScope, UsageError
-                            from ..ai_usage.service import metered
+                            from assistant_runtime.api.ai_usage import UsageScope, UsageError
+                            from assistant_runtime.api.ai_usage import metered
 
                             scope = (
                                 UsageScope(**job["usage_scope"])
                                 if job.get("usage_scope")
-                                else await self.host.ai_usage.scope(independent="decision")
+                                else await self.api.resource("usage").scope(independent="decision")
                             )
                             try:
                                 result = await metered(
-                                    self.host.ai_usage.service,
+                                    self.api.resource("usage"),
                                     scope,
                                     "decision",
                                     "typesafe",
@@ -365,7 +362,7 @@ class DecisionsPlugin:
 
         async def notify():
             try:
-                await self.context.runtime.invoke(
+                await self.api.invoke(
                     NotificationRequest(
                         "publish",
                         {
@@ -488,7 +485,7 @@ class DecisionsPlugin:
         try:
             async with asyncio.timeout_at(deadline):
                 if request.caller_run is not None:
-                    info = await self.context.runtime.invoke(
+                    info = await self.api.invoke(
                         TaskRequest("execution_info", {"run_ids": [request.caller_run]})
                     )
                     if info.get(request.caller_run, {}).get("state") not in {"running", "waiting_user"}:
@@ -503,7 +500,7 @@ class DecisionsPlugin:
                 job = prepare(
                     DecisionSample(request.kind, reference, request.state), source, self.settings.model
                 )
-                job["usage_scope"] = asdict(await self.host.ai_usage.scope(request.caller_run))
+                job["usage_scope"] = asdict(await self.api.resource("usage").scope(request.caller_run))
                 meta["receipt_id"] = job["id"]
                 await self.audit({**meta, "stage": "linked"})
                 row = await self.receipts.call("find", job["id"])
@@ -601,6 +598,6 @@ class DecisionsPlugin:
             "in_flight": self.working,
             "retry_in_seconds": max(0, round(self.retry_at - time.monotonic())),
             "session_counts": dict(self.counts),
-            "bus_dropped": self.context.runtime.dropped.get("decision-shadow", 0) if self.context else 0,
+            "bus_dropped": self.context.dropped if self.context else 0,
             "execution_enabled": False,
         }

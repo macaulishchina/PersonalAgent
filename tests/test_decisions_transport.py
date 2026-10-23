@@ -6,7 +6,8 @@ import time
 import unittest
 from unittest.mock import AsyncMock
 
-from assistant_runtime.kernel.contracts import DecisionQuery, DecisionRequest
+from assistant_runtime.app.bundled import context_for
+from assistant_runtime.api.contracts import DecisionQuery, DecisionRequest
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from assistant_runtime.plugins.decisions.errors import DecisionError
 from assistant_runtime.plugins.decisions.questions import prepare
@@ -103,7 +104,9 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         self.runtime = type(self.runtime)(self.store)
         from usage_fixture import decision_host
 
-        self.plugin = type(self.plugin)(decision_host(self.config, self.runtime), self.provider)
+        self.plugin = type(self.plugin)(
+            context_for(decision_host(self.config, self.runtime), "decisions"), self.provider
+        )
         self.runtime.add(self.plugin)
         await asyncio.wait_for(self.runtime.start(), 0.5)
 
@@ -167,7 +170,9 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         self.runtime = Runtime(self.store)
         from usage_fixture import decision_host
 
-        self.plugin = type(self.plugin)(decision_host(self.config, self.runtime), self.provider)
+        self.plugin = type(self.plugin)(
+            context_for(decision_host(self.config, self.runtime), "decisions"), self.provider
+        )
         self.runtime.add(self.plugin)
         self.runtime.add(Initializing())
         startup = asyncio.create_task(self.runtime.start())

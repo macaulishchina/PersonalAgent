@@ -8,16 +8,16 @@ import unittest
 from aiohttp import web
 import yaml
 
-from assistant_runtime.config import Config
-from assistant_runtime.devices.cameras import CameraControls
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.devices.video import VideoInputs
-from assistant_runtime.kernel.contracts import CameraMotion, DeviceQuery
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.devices.cameras import CameraControls
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.core.devices.video import VideoInputs
+from assistant_runtime.api.contracts import CameraMotion, DeviceQuery
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.go2rtc.camera import Go2RTCCamera, GatewayUnavailable
 from assistant_runtime.plugins.go2rtc.plugin import Go2RTCPlugin
 from assistant_runtime.plugins.go2rtc.ptz import Go2RTCPanTilt
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 class CameraMotionTest(unittest.IsolatedAsyncioTestCase):

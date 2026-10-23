@@ -16,12 +16,12 @@ from aiohttp import ClientSession
 from fastmcp import Client
 from PIL import Image
 
-from assistant_runtime.plugins.pi.conversation import task_event
-from assistant_runtime.kernel.contracts import VideoFrame
-from assistant_runtime.kernel.contracts import TaskRequest
-from assistant_runtime.mcp.tasks import create_server
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
-from assistant_runtime.plugins.tasks.repository import TaskRepository
+from assistant_runtime.core.pi.conversation import task_event
+from assistant_runtime.api.contracts import VideoFrame
+from assistant_runtime.api.contracts import TaskRequest
+from assistant_runtime.core.tasks.tools import create_server
+from assistant_runtime.core.tasks.plugin import TasksPlugin
+from assistant_runtime.core.tasks.repository import TaskRepository
 from test_conversation import fixture, Owned
 import test_web
 
@@ -120,7 +120,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         c.provider_event(event)
         await asyncio.wait_for(c.image_queue.join(), 2)
         self.assertEqual(c.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 1)
-        self.assertEqual(self.host.store.max_transcript(), 0)
+        self.assertEqual(self.host.store.transcripts.last_id(), 0)
         self.host.backend.submit.assert_not_awaited()
         self.host.voice.say.assert_not_awaited()
 
@@ -241,7 +241,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
             return fn(*args, **kwargs)
 
         raw = base64.b64decode(picture()["data"])
-        with patch("assistant_runtime.conversation.media.asyncio.to_thread", side_effect=blocked):
+        with patch("assistant_runtime.core.workfiles.media.asyncio.to_thread", side_effect=blocked):
             task = asyncio.create_task(c.media.add_image(raw, "cancelled", key="cancel"))
             await started.wait()
             task.cancel()
@@ -263,9 +263,12 @@ class ReplyImageHttpTest(unittest.IsolatedAsyncioTestCase):
         c = self.host.conversation
         ref = await c.media.add_image(base64.b64decode(picture()["data"]), "snapshot.jpg")
         owner = object.__new__(TasksPlugin)
+        from assistant_runtime.core.workfiles import WorkFiles
+
+        self.host.workfiles = WorkFiles(self.host.config.state_dir, self.host.store.db)
         owner.host = self.host
         owner.repo = TaskRepository(self.host.store.db)
-        from assistant_runtime.plugins.tasks.feedback import TaskFeedback
+        from assistant_runtime.core.tasks.feedback import TaskFeedback
 
         owner.feedback = TaskFeedback(owner)
         ident = uuid.uuid4().hex

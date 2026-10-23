@@ -11,8 +11,8 @@ from pathlib import Path
 import time
 import uuid
 
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import DecisionRequest, DecisionQuery
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import DecisionRequest, DecisionQuery
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.plugins.decisions.settings import DecisionSettings
 

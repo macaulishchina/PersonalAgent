@@ -1,5 +1,7 @@
 """Durable tasks: duplicate dispatch, isolation, recovery and cleanup boundaries."""
 
+from assistant_runtime.app.bundled import context_for
+
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,18 +13,18 @@ from unittest.mock import AsyncMock, patch
 import uuid
 
 from fastmcp import Client
-from assistant_runtime.config import Config
-from assistant_runtime.store import Store
-from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.kernel.contracts import TaskRequest, DeviceQuery, NotificationRequest
+from assistant_runtime.app.config import Config
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.conversation.store import ConversationStore
+from assistant_runtime.api.contracts import TaskRequest, DeviceQuery, NotificationRequest
 from assistant_runtime.kernel.runtime import Runtime, Manifest
-from assistant_runtime.mcp.tasks import create_server
-from assistant_runtime.mcp.catalog import TASK_TOOLS
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-from assistant_runtime.plugins.tasks.schedules import next_time
-from assistant_runtime.plugins.pi.jobs import PiJobs
-from assistant_runtime.workfiles import WorkFiles
+from assistant_runtime.core.tasks.tools import create_server
+from tool_expectations import TASK_TOOLS
+from assistant_runtime.core.tasks.plugin import TasksPlugin
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.tasks.schedules import next_time
+from assistant_runtime.core.pi.jobs import PiJobs
+from assistant_runtime.core.workfiles import WorkFiles
 
 
 class Dummy:
@@ -81,7 +83,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             task_executor=lambda notify: self.executor,
             conversation=SimpleNamespace(store=self.chat, session="main"),
             voice=SimpleNamespace(opened=False, append_context=AsyncMock(), say=AsyncMock()),
-            workfiles=WorkFiles(self.root, self.store.db),
+            workfiles=WorkFiles(self.config.state_dir, self.store.db),
             devices=SimpleNamespace(
                 snapshot=lambda ident: {"state": "available", "fresh": True, "readings": {}}
             ),
@@ -89,7 +91,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         )
         self.plugin = TasksPlugin(self.host)
         self.runtime = Runtime(self.store)
-        for name in ("pi", "conversation"):
+        for name in ("pi", "conversation", "execution", "workfiles"):
             self.runtime.add(Dummy(name))
         self.runtime.add(NotificationsPlugin(self.host))
         self.host.runtime = self.runtime
@@ -689,8 +691,12 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         (directory / "artifacts/result.txt").write_text("new result")
         await self.plugin.request(TaskRequest("continue", {"run_id": run["id"], "text": "try again"}))
         self.assertFalse(self.plugin.repo.run(run["id"])["data"]["completion_delivered"])
-        await asyncio.sleep(1.2)
-        current = self.plugin.repo.run(run["id"])
+        async with asyncio.timeout(10):
+            while True:
+                current = self.plugin.repo.run(run["id"])
+                if current["data"].get("completion_delivered"):
+                    break
+                await asyncio.sleep(0.05)
         self.assertEqual(current["state"], "completed")
         self.assertEqual(current["data"]["artifacts"][0]["name"], "result.txt")
         for _ in range(30):
@@ -844,28 +850,28 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.due(d["id"])
         r = self.plugin.repo.runs(d["id"])[0]
         repo = self.plugin.repo
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=100):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=100):
             repo.update_run(r["id"], "dispatching")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=110):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=110):
             repo.update_run(r["id"], "running")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=120):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=120):
             repo.update_run(r["id"], "paused")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=200):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=200):
             repo.update_run(r["id"], "queued")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=210):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=210):
             repo.update_run(r["id"], "dispatching")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=225):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=225):
             repo.update_run(r["id"], "completed", progress="done")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=300):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=300):
             result = repo.update_run(r["id"], completion_delivered=True)
         self.assertEqual(result["data"]["duration_seconds"], 35)
         self.assertEqual(result["data"]["started_at"], 100)
         self.assertEqual(result["data"]["finished_at"], 225)
         # Resuming a terminal execution accumulates new work without counting the gap.
         repo.update_run(r["id"], "queued")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=400):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=400):
             repo.update_run(r["id"], "dispatching")
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=410):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=410):
             result = repo.update_run(r["id"], "failed")
         self.assertEqual(result["data"]["duration_seconds"], 45)
 
@@ -900,7 +906,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         d = await self.create(notify_completion=False)
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=100):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=100):
             self.plugin.repo.update_run(run["id"], "running")
         notice = await self.runtime.invoke(
             NotificationRequest(
@@ -919,7 +925,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             before["execution"], {"kind": "attention", "state": "running", "duration_seconds": None}
         )
-        with patch("assistant_runtime.plugins.tasks.repository.time.time", return_value=172.45):
+        with patch("assistant_runtime.core.tasks.repository.time.time", return_value=172.45):
             self.plugin.repo.update_run(run["id"], "completed")
         after = await self.runtime.invoke(NotificationRequest("get", {"id": notice["id"]}))
         self.assertAlmostEqual(after["execution"]["duration_seconds"], 72.45)
@@ -1236,9 +1242,9 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_output_only_notification_preserves_standby(self):
-        from assistant_runtime.assistant.service import AssistantService
+        from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
 
-        host = object.__new__(AssistantService)
+        host = object.__new__(VoiceLifecycle)
         host.active = False
         host.transition = asyncio.Lock()
         host.quiet_active = lambda: False
@@ -1261,9 +1267,9 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(host.voice.say.await_count, 1)
 
     async def test_notification_audio_gap_is_not_a_completed_speech_receipt(self):
-        from assistant_runtime.assistant.service import AssistantService
+        from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
 
-        host = object.__new__(AssistantService)
+        host = object.__new__(VoiceLifecycle)
         host.active = False
         host.transition = asyncio.Lock()
         host.quiet_active = lambda: False
@@ -1347,7 +1353,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.executor.launch.await_count, 1)
         await self.runtime.close()
         self.runtime = Runtime(self.store)
-        for name in ("pi", "conversation"):
+        for name in ("pi", "conversation", "execution", "workfiles"):
             self.runtime.add(Dummy(name))
         self.plugin = TasksPlugin(self.host)
         self.runtime.add(NotificationsPlugin(self.host))
@@ -1387,7 +1393,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.plugin.repo.run(run["id"])["state"], "completed")
 
     async def test_background_media_is_pinned_even_without_completion_notifications(self):
-        from assistant_runtime.conversation.media import MediaAttachments
+        from assistant_runtime.core.workfiles.media import MediaAttachments
         from test_reply_images import picture
         import base64
 
@@ -1405,7 +1411,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_foreground_resource_repair_is_scoped_persistent_and_not_execution(self):
         from assistant_runtime.plugins.media.plugin import MediaPlugin
-        from assistant_runtime.plugins.tasks.repository import TaskRepository
+        from assistant_runtime.core.tasks.repository import TaskRepository
 
         task = await self.create(resources=["media:series"], auto_archive=False)
         run = self.plugin.repo.enqueue(task, "repair", "paused")
@@ -1438,7 +1444,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         await self.plugin.request(TaskRequest("continue", {"run_id": run["id"], "text": "Reconcile first"}))
         self.assertEqual(self.plugin.repo.run(run["id"])["data"]["spec"]["resources"], ["media:quark_series"])
         self.plugin.repo.update_run(run["id"], "running")
-        media = MediaPlugin(self.host)
+        media = MediaPlugin(context_for(self.host, "media"))
         self.assertEqual(await media.authorize(run["id"], "quark_series"), "task:" + task["id"])
         with self.assertRaisesRegex(ValueError, "media:series"):
             await media.authorize(run["id"], "series")
@@ -1516,7 +1522,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         task = await self.create(resources=["media:series"], long_term=True)
         run = self.plugin.repo.enqueue(task, "native-goal", "running")
         self.plugin.repo.update_run(run["id"], turn_id="first", turn_active=True)
-        media = MediaPlugin(self.host)
+        media = MediaPlugin(context_for(self.host, "media"))
         runner = PiJobs(SimpleNamespace(client=SimpleNamespace()), self.plugin.provider_update)
         runner.threads["session"] = run["id"]
         runner.handles[run["id"]] = {"turn_id": "first"}

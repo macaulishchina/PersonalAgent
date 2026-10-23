@@ -1,8 +1,8 @@
-.venv/
+.venv
 __pycache__/
 .pytest_cache/
 *.egg-info/
-/models/
+/models
 state/
 .env
 config.toml
@@ -18,11 +18,11 @@ memory-export*.json
 /reports/
 
 # Local packaging output
-/build/
+build/
 /dist/
 
 # Web frontend dependencies and packaged build output
-/frontend/node_modules/
+/frontend/node_modules
 /src/assistant_runtime/plugins/web/static/
 
 # Local scratch, acceptance output and editor/process leftovers.

@@ -14,7 +14,7 @@ from aiohttp import web
 from fastmcp import Client
 import requests
 
-from assistant_runtime.mcp.media import create_server
+from assistant_runtime.plugins.media.tools import create_server
 from assistant_runtime.plugins.media.aliyun import Aliyun
 from assistant_runtime.plugins.media import aliyun_worker as worker
 from assistant_runtime.plugins.media.errors import MediaError

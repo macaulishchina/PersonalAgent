@@ -1,5 +1,7 @@
 """Optional Apple Home source adapter; sensor data never enters task/memory input."""
 
+from .declaration import DECLARATION
+
 import asyncio
 from dataclasses import asdict
 import hmac
@@ -11,8 +13,7 @@ import time
 
 from aiohttp import web
 
-from ...kernel.contracts import DeviceObservation, SensorReading
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import DeviceObservation, SensorReading
 from .payload import UNITS, PayloadError, diagnostic_fields, parse_payload
 from .settings import AppleHomeSettings, endpoint_settings
 
@@ -20,7 +21,7 @@ http_log = logging.getLogger(__name__ + ".http")
 
 
 class AppleHomePlugin:
-    manifest = Manifest("apple_home")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config, store, directory, bridge_factory=None):
         self.config, self.store, self.directory = config, store, directory
@@ -202,15 +203,15 @@ class AppleHomePlugin:
                 self.receiver_ready = True
                 self.bridge = factory(self.settings, self.root, {i: f[1] for i, f in self.endpoints.items()})
                 await self.bridge.start()
-                self.error = self.context.error = None
-                self.context.state = "ready"
+                self.error = None
+                self.context.set_health("ready")
                 while not self.stopping:
                     await asyncio.sleep(5)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.error = "Apple Home source adapter unavailable: " + type(exc).__name__
-                self.context.error, self.context.state = self.error, "degraded"
+                self.context.set_health("degraded", self.error)
             finally:
                 await self.close_servers()
             if not self.stopping:

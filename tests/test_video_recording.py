@@ -13,10 +13,10 @@ from aiohttp import web
 import imageio_ffmpeg
 import yaml
 
-from assistant_runtime.kernel.contracts import VideoRecord
+from assistant_runtime.api.contracts import VideoRecord
 from assistant_runtime.plugins.go2rtc.camera import Go2RTCCamera
 from assistant_runtime.plugins.go2rtc.recording import inspect_clip
-from assistant_runtime.assistant.service import AssistantService
+from assistant_runtime.app.host import AssistantService
 from assistant_runtime.mcp.client import LocalRuntimeClient
 
 

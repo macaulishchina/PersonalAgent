@@ -9,7 +9,7 @@ import uuid
 
 from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
 from test_pi_skeleton import configuration
-from assistant_runtime.config import Config
+from assistant_runtime.app.config import Config
 from scripts.verify_models import verify
 from scripts.verify_pi_host import verify as verify_host
 
@@ -27,6 +27,12 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
                 if target is None:
                     target = re.search(r"/tmp/pi-release-host-[A-Za-z0-9_-]+/result.txt", json.dumps(body))[0]
                 if model == "model-a" and counts[model] == 1:
+                    return sse_tool_call(
+                        "discover",
+                        "tool_search",
+                        {"query": "create task request_id title prompt", "limit": 8},
+                    )
+                if model == "model-a" and counts[model] == 2:
                     return sse_tool_call(
                         "delegate",
                         "mcp__tasks__create_task",
@@ -60,10 +66,12 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(result["state"], "completed", result)
                         self.assertEqual(result["task_count"], 1)
                         self.assertEqual(result["callers"], 2)
-                        self.assertEqual(result["requests"], 4)
+                        self.assertEqual(result["requests"], 5)
                     else:
                         self.assertEqual(result["state"], "failed", result)
                         self.assertEqual(len(gateway.requests), 1)
+                        self.assertEqual(result["stage"], "before_delegation")
+                        self.assertEqual(result["task_count"], 0)
             finally:
                 await gateway.aclose()
 

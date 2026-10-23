@@ -6,10 +6,10 @@ import unittest
 from unittest.mock import patch
 
 import test_tasks as fixtures
-from assistant_runtime.kernel.contracts import DecisionSample
+from assistant_runtime.api.contracts import DecisionSample
 from assistant_runtime.plugins.decisions.questions import prepare
-from assistant_runtime.plugins.tasks.model_review import assessment, evidence
-from assistant_runtime.plugins.tasks.selection import ModelPolicy
+from assistant_runtime.core.tasks.model_review import assessment, evidence
+from assistant_runtime.core.tasks.selection import ModelPolicy
 
 
 class ReviewTest(unittest.IsolatedAsyncioTestCase):
@@ -79,7 +79,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("deep_medium", prepared["choices"])
             return {"status": "ok", "choice": "deep_medium", "receipt_id": "receipt"}
 
-        with patch("assistant_runtime.plugins.tasks.model_review.decide", side_effect=judgment):
+        with patch("assistant_runtime.core.tasks.model_review.decide", side_effect=judgment):
             await review.evaluate(run["id"])
         updated = self.plugin.repo.run(run["id"])
         self.assertEqual(updated["data"]["spec"]["execution"], original)
@@ -113,7 +113,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("medium", {o["reasoning_effort"] for o in request.state["options"].values()})
             return {"status": "fallback", "choice": None, "reason": "low_confidence"}
 
-        with patch("assistant_runtime.plugins.tasks.model_review.decide", side_effect=judgment):
+        with patch("assistant_runtime.core.tasks.model_review.decide", side_effect=judgment):
             await review.evaluate(run["id"])
         result = self.plugin.repo.run(run["id"])["data"]["model_review"]
         self.assertIsNone(result["recommended"])
@@ -170,7 +170,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             references.append(request.reference)
             return {"status": "ok", "choice": "invented_medium"}
 
-        with patch("assistant_runtime.plugins.tasks.model_review.decide", side_effect=judgment):
+        with patch("assistant_runtime.core.tasks.model_review.decide", side_effect=judgment):
             for run in (first, second):
                 review.enqueue(run)
                 review.queue.get_nowait()

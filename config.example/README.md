@@ -29,8 +29,8 @@
 其他插件路径保持各自现有语义，不随它们所在的片段文件改变。
 
 ```sh
-.venv/bin/python -m assistant_runtime.cli --config config/config.toml doctor
-.venv/bin/python -m assistant_runtime.cli --config config/config.toml models check
+.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml doctor
+.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml models check
 .venv/bin/python scripts/install_service.py --config "$PWD/config/config.toml"
 ```
 

@@ -1,0 +1,109 @@
+"""Expected public tool names; changes require explicit contract review."""
+
+MEMORY_TOOLS = ("search_memory", "read_memory", "remember_memory", "update_memory", "forget_memory")
+
+DEVICE_TOOLS = (
+    "list_devices",
+    "inspect_device",
+    "capture_image",
+    "record_video",
+    "move_camera",
+    "stop_camera",
+    "list_device_operations",
+    "get_device_operation",
+    "cancel_device_operation",
+    "set_audio_volume",
+    "stop_playback",
+    "end_voice_conversation",
+)
+
+TASK_TOOLS = (
+    "list_task_models",
+    "request_task_model_upgrade",
+    "create_task",
+    "list_tasks",
+    "get_task",
+    "transfer_task_feedback",
+    "get_task_event_inbox",
+    "get_task_execution_trace",
+    "update_task",
+    "repair_task_run_resources",
+    "update_own_task_schedule",
+    "complete_own_task",
+    "run_task",
+    "pause_task",
+    "resume_task",
+    "terminate_task",
+    "archive_task",
+    "cancel_task_run",
+    "pause_task_run",
+    "continue_task_run",
+    "supplement_task",
+    "list_task_artifacts",
+)
+
+NOTIFICATION_TOOLS = (
+    "publish_notification",
+    "update_notification",
+    "list_notifications",
+    "get_notification",
+    "mark_notification_read",
+)
+
+INTEGRATION_TOOLS = (
+    "list_mcp_servers",
+    "inspect_mcp_server",
+    "verify_mcp_server",
+    "configure_mcp_server",
+    "set_mcp_server_enabled",
+    "remove_mcp_server",
+    "apply_mcp_configuration",
+    "reload_mcp_configuration",
+    "begin_mcp_login",
+)
+
+EVENT_TOOLS = (
+    "event_capabilities",
+    "list_event_sources",
+    "event_status",
+    "query_events",
+    "get_event",
+    "event_changes",
+    "event_statistics",
+    "record_event",
+    "correct_event",
+    "delete_event",
+    "configure_event_source",
+    "set_event_source_enabled",
+    "remove_event_source",
+    "verify_event_source",
+)
+
+MEDIA_TOOLS = (
+    "media_status",
+    "media_capabilities",
+    "browse_media_library",
+    "preview_media_changes",
+    "apply_media_changes",
+    "media_collection",
+    "get_media_asset",
+    "submit_media_batch",
+    "get_media_batch",
+    "cancel_media_batch",
+    "search_media",
+    "media_search_history",
+    "media_search_sources",
+    "inspect_media_share",
+    "list_media_files",
+    "transfer_media",
+    "download_media",
+    "get_media_operation",
+    "list_media_operations",
+    "cancel_media_operation",
+    "resume_media_operation",
+    "verify_media_operation",
+    "begin_media_login",
+    "get_media_login",
+)
+
+DECISION_TOOLS = ("decision_support_status", "judge_options", "get_voice_decision", "confirm_voice_decision")

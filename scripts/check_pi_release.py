@@ -6,13 +6,13 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from assistant_runtime.bootstrap import assistant_skill_paths
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.ai_usage.settings import UsageSettings
-from assistant_runtime.plugins.integrations.registry import McpRegistry
-from assistant_runtime.plugins.models.gateway import credential, gateway_credential
-from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
-from assistant_runtime.plugins.tasks.settings import TaskSettings
+from assistant_runtime.app.bootstrap import assistant_skill_paths
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.ai_usage.settings import UsageSettings
+from assistant_runtime.core.integrations.registry import McpRegistry
+from assistant_runtime.core.models.gateway import credential, gateway_credential
+from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
+from assistant_runtime.core.tasks.settings import TaskSettings
 
 
 def check(config, *, native=True):
@@ -42,7 +42,7 @@ def check(config, *, native=True):
 
     def tasks():
         policy = TaskSettings.parse(config.tasks)
-        from assistant_runtime.plugins.tasks.selection import ModelPolicy
+        from assistant_runtime.core.tasks.selection import ModelPolicy
 
         selection = ModelPolicy.parse(policy.model_policy)
         for row in selection.profiles.values():
@@ -93,7 +93,7 @@ def check(config, *, native=True):
         from assistant_runtime.plugins.observations.registry import Registry
         from assistant_runtime.plugins.reyee.events import ReyeeEvents
         from assistant_runtime.plugins.adb_tv.events import TelevisionEvents
-        from assistant_runtime.assistant.wake_events import WakeEvents
+        from assistant_runtime.core.speech.wake_events import WakeEvents
 
         registry = Registry(
             config.root,

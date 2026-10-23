@@ -10,14 +10,14 @@ import time
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.cli import request
-from assistant_runtime.config import Config
+from assistant_runtime.app.cli import request
+from assistant_runtime.app.config import Config
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.mcp.device import create_server
-from assistant_runtime.plugins.pi.backend import PiBackend
-from assistant_runtime.plugins.ai_usage.service import UsageService
-from assistant_runtime.plugins.ai_usage.settings import UsageSettings
-from assistant_runtime.store import Store
+from assistant_runtime.core.devices.tools import create_server
+from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.ai_usage.service import UsageService
+from assistant_runtime.core.ai_usage.settings import UsageSettings
+from assistant_runtime.app.store import Store
 from verify_video_onboarding import snapshot
 
 
@@ -112,7 +112,7 @@ async def verify(config, device, fixed, execution):
                             await asyncio.sleep(0.25)
                     assert not backend.last_error, backend.last_error
                     report["execution_tools"] = calls
-                    report["execution_result"] = store.recent(1)
+                    report["execution_result"] = store.executions.recent(1)
                     movement = [call for call in calls if call["tool"] == "move_camera"]
                     assert len(movement) == 2 and all(call["status"] == "completed" for call in movement)
                     arguments = [
@@ -124,7 +124,7 @@ async def verify(config, device, fixed, execution):
                     assert [a["direction"] for a in arguments] == ["left", "right"]
                     assert all(a["device_id"] == device and a.get("duration_ms", 80) == 80 for a in arguments)
                     assert not any(call["tool"] == "capture_image" for call in calls)
-                    assert store.recent(1)[0]["status"] == "completed"
+                    assert store.executions.recent(1)[0]["status"] == "completed"
                     report["execution_validated"] = True
                 finally:
                     try:

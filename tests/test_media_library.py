@@ -14,8 +14,8 @@ import uuid
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.kernel.contracts import MediaRequest
-from assistant_runtime.mcp.media import create_server
+from assistant_runtime.api.contracts import MediaRequest
+from assistant_runtime.plugins.media.tools import create_server
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.repository import MediaRepository
 from assistant_runtime.plugins.media.settings import MediaSettings

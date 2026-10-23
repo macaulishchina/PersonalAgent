@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 from fastmcp import Client
 
-from assistant_runtime.mcp.media import create_server
+from assistant_runtime.plugins.media.tools import create_server
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.search import PanSou, title_match
 from assistant_runtime.plugins.media.search_candidates import public_link

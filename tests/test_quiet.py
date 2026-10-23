@@ -1,14 +1,14 @@
 import asyncio
 from collections import deque
-from assistant_runtime.interaction.input import InputBuffer
+from assistant_runtime.core.speech.interaction.input import InputBuffer
 from datetime import datetime
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from assistant_runtime.assistant.quiet import QuietHours
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.config import Config
+from assistant_runtime.core.speech.quiet import QuietHours
+from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
+from assistant_runtime.app.config import Config
 
 
 SETTINGS = {"enable": True, "start": "23:00", "end": "07:00", "timezone": "Asia/Shanghai"}
@@ -68,7 +68,7 @@ class QuietHoursTest(unittest.TestCase):
 
 class QuietSessionTest(unittest.IsolatedAsyncioTestCase):
     def service(self, active=False):
-        service = AssistantService.__new__(AssistantService)
+        service = VoiceLifecycle.__new__(VoiceLifecycle)
         service.input_buffer = InputBuffer()
         service.native_pending = deque(maxlen=1500)
         service.active = active

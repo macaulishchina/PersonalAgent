@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from assistant_runtime.plugins.pipewire.audio import AudioRoute
-from assistant_runtime.config import Config
-from assistant_runtime.assistant.commands import parse_command
-from assistant_runtime.store import Store
-from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.speech.commands import parse_command
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.pi.backend import PiBackend
 
 
 class CommandsTest(unittest.TestCase):
@@ -43,14 +43,14 @@ class PersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "state.db"
             a = Store(path)
-            a.create_task("one", "write a file")
-            a.update_task("one", "unknown")
+            a.executions.create_task("one", "write a file")
+            a.executions.update_task("one", "unknown")
             a.set("room", "study")
             a.db.close()
             b = Store(path)
-            self.assertEqual(b.unfinished(), [("one", None, "unknown")])
+            self.assertEqual(b.executions.unfinished(), [("one", None, "unknown")])
             self.assertEqual(b.get("room"), "study")
-            self.assertEqual(len(b.recent()), 1)
+            self.assertEqual(len(b.executions.recent()), 1)
             b.db.close()
 
 
@@ -110,6 +110,7 @@ class TaskTest(unittest.IsolatedAsyncioTestCase):
 
 def device_config(**kw):
     return Config(
+        plugins=["pipewire", "voice_disabled", "pi"],
         input_device="living_microphone",
         default_output="living",
         devices={

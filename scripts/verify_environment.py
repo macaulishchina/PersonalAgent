@@ -15,17 +15,17 @@ import time
 from aiohttp import ClientSession
 from fastmcp import Client
 
-from assistant_runtime.cli import request, systemctl
-from assistant_runtime.config import Config
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.kernel.contracts import DeviceQuery
+from assistant_runtime.app.cli import request, systemctl
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.api.contracts import DeviceQuery
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.mcp.client import LocalRuntimeClient
 from assistant_runtime.plugins.apple_home.plugin import AppleHomePlugin
-from assistant_runtime.plugins.pi.backend import PiBackend
-from assistant_runtime.plugins.ai_usage.service import UsageService
-from assistant_runtime.plugins.ai_usage.settings import UsageSettings
-from assistant_runtime.store import Store
+from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.ai_usage.service import UsageService
+from assistant_runtime.core.ai_usage.settings import UsageSettings
+from assistant_runtime.app.store import Store
 
 
 def free_port():
@@ -109,8 +109,8 @@ async def pipeline(config, ident, query, execution, report):
                         ]
                     )
                 if execution:
-                    from assistant_runtime.plugins.models.gateway import gateway_credential
-                    from assistant_runtime.plugins.models.settings import ModelSettings
+                    from assistant_runtime.core.models.gateway import gateway_credential
+                    from assistant_runtime.core.models.settings import ModelSettings
 
                     settings = ModelSettings.parse(config.model_api)
                     private_key = Path(folder) / ".env"
@@ -169,7 +169,7 @@ async def pipeline(config, ident, query, execution, report):
                         and c["status"] == "completed"
                         for c in calls
                     ), calls
-                    result = store.recent(1)[0]
+                    result = store.executions.recent(1)[0]
                     assert result["status"] == "completed", result
                     parsed = json.loads(re.search(r"\{.*\}", result["result"], re.S).group())
                     assert parsed["device_id"] == ident
@@ -241,7 +241,7 @@ async def verify(config, ident, execution, restart, synthetic):
                         ) as response:
                             assert response.status == 200 and (await response.json())["accepted"]
                     await pipeline(source, ident, directory.handle, execution, report)
-                    assert store.max_transcript() == 0 and not store.recent()
+                    assert store.transcripts.last_id() == 0 and not store.executions.recent()
                     report["sensor_update_created_no_task_or_transcript"] = True
                 finally:
                     await runtime.close()

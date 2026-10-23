@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from assistant_runtime.plugins.ai_usage.plugin import AIUsagePlugin
+from assistant_runtime.core.ai_usage.plugin import AIUsagePlugin
 
 
 def attach_usage(host, runtime):

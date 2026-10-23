@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.pi.jobs import PiJobs
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.pi.jobs import PiJobs
 
 
 class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +62,7 @@ class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.runner.catalog_at = time.monotonic()
         self.run = {
+            "task_id": "task",
             "id": "run",
             "state": "completed",
             "data": {
@@ -315,7 +316,7 @@ class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         release.set()
-        with self.assertLogs("assistant_runtime.plugins.pi.jobs", level="WARNING") as logs:
+        with self.assertLogs("assistant_runtime.core.pi.jobs", level="WARNING") as logs:
             await asyncio.gather(*tasks)
         self.assertNotIn("private provider detail", "".join(logs.output))
         self.runner._stop = AsyncMock()

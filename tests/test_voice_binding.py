@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.assistant.commands import parse_command
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.devices.directory import DeviceDirectory
-from assistant_runtime.kernel.contracts import Control, DeviceQuery, VoiceBinding, AudioVolume
-from assistant_runtime.mcp.device import create_server
+from assistant_runtime.core.speech.commands import parse_command
+from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
+from assistant_runtime.core.devices.directory import DeviceDirectory
+from assistant_runtime.api.contracts import Control, DeviceQuery, VoiceBinding, AudioVolume
+from assistant_runtime.core.devices.tools import create_server
 from assistant_runtime.plugins.pipewire.audio import AudioRoute
 from assistant_runtime.plugins.pipewire.devices import PipeWireDevices
 from test_behavior import device_config
@@ -94,7 +94,7 @@ class FixedVoiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"voice_role": "output"', directory.context_text())
 
     async def test_legacy_control_is_rejected_without_touching_playback(self):
-        service = AssistantService.__new__(AssistantService)
+        service = VoiceLifecycle.__new__(VoiceLifecycle)
         service.last_activity = 123
         service.player = SimpleNamespace(stop=AsyncMock())
         service.route = SimpleNamespace(select=AsyncMock())

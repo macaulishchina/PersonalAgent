@@ -8,8 +8,8 @@ import uuid
 
 from playwright.async_api import async_playwright
 
-from assistant_runtime.cli import request
-from assistant_runtime.config import Config
+from assistant_runtime.app.cli import request
+from assistant_runtime.app.config import Config
 from assistant_runtime.plugins.web.settings import WebSettings
 
 

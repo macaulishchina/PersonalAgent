@@ -21,6 +21,10 @@ def credential(root):
             if path.stat().st_size > 65536:
                 raise DecisionError("credential_file_too_large")
             key = dotenv_values(path, interpolate=False).get("TYPESAFE_API_KEY")
+    return normalize_credential(key)
+
+
+def normalize_credential(key):
     if not isinstance(key, str) or not key.strip():
         raise DecisionError("credential_missing")
     key = key.strip()
@@ -77,8 +81,9 @@ class JevProvider:
     endpoint = "https://api.typesafe.ai/v1/systemone"
     models_endpoint = "https://api.typesafe.ai/v1/models"
 
-    def __init__(self, root, settings):
+    def __init__(self, root, settings, *, credential_source=None):
         self.root, self.settings = root, settings
+        self.credential_source = credential_source
         self.key = None
         self.session = None
         self.timings = {}
@@ -87,7 +92,11 @@ class JevProvider:
     def reload(self):
         self.key = None
         try:
-            self.key = credential(self.root)
+            self.key = (
+                normalize_credential(self.credential_source())
+                if self.credential_source
+                else credential(self.root)
+            )
         except (OSError, UnicodeError):
             raise DecisionError("credential_unavailable") from None
 

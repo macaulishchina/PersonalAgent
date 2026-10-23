@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.devices.directory import DeviceDirectory
-from assistant_runtime.kernel.contracts import (
+from assistant_runtime.core.devices.directory import DeviceDirectory
+from assistant_runtime.api.contracts import (
     Control,
     DeviceObservation,
     MemoryRequest,
@@ -24,12 +24,12 @@ from assistant_runtime.kernel.contracts import (
     CameraMotion,
     VideoRecord,
 )
-from assistant_runtime.mcp.catalog import MEMORY_TOOLS, DEVICE_TOOLS
+from tool_expectations import MEMORY_TOOLS, DEVICE_TOOLS
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.mcp.device import create_server as device_server
-from assistant_runtime.mcp.memory import create_server as memory_server
-from assistant_runtime.mcp.media import create_server as media_server
-from assistant_runtime.plugins.pi.mcp import server_config
+from assistant_runtime.core.devices.tools import create_server as device_server
+from assistant_runtime.core.memory.tools import create_server as memory_server
+from assistant_runtime.plugins.media.tools import create_server as media_server
+from assistant_runtime.core.pi.mcp import server_config
 
 
 class McpTest(unittest.IsolatedAsyncioTestCase):
@@ -240,9 +240,9 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
 
     def test_codex_registers_two_scoped_services_and_maintenance_disables_them(self):
         cfg = server_config(Path("/tmp/private.sock"))
-        self.assertEqual(set(cfg), {"memory", "device", "ai_usage"})
-        self.assertEqual(set(cfg["memory"]["enabled_tools"]), set(MEMORY_TOOLS))
-        self.assertEqual(set(cfg["device"]["enabled_tools"]), set(DEVICE_TOOLS))
+        self.assertEqual(set(cfg), {"memory", "device", "ai_usage", "extensions"})
+        self.assertNotIn("enabled_tools", cfg["memory"])
+        self.assertNotIn("enabled_tools", cfg["device"])
         self.assertTrue(all(x["enabled"] for x in cfg.values()))
         self.assertTrue(all(x["default_tools_approval_mode"] == "approve" for x in cfg.values()))
         self.assertTrue(

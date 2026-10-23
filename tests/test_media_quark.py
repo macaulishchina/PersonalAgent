@@ -10,7 +10,7 @@ import uuid
 
 from aiohttp import web
 
-from assistant_runtime.kernel.contracts import MediaRequest
+from assistant_runtime.api.contracts import MediaRequest
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.private import save
 from assistant_runtime.plugins.media.quark import Quark

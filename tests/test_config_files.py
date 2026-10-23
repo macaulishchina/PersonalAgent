@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.config import Config, read_config
+from assistant_runtime.app.config import Config, read_config
 
 
 class ConfigFilesTest(unittest.TestCase):

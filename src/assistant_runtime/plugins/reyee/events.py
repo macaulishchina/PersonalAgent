@@ -4,7 +4,7 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 from ..observations.polling import PollingSource
-from ..observations.schema import fields, interval, schema
+from assistant_runtime.api.observations import fields, interval, schema
 from .protocol import Reyee
 from .snapshot import Snapshot
 

@@ -1,5 +1,7 @@
 """Independent HTTP search, lifecycle, privacy and MCP/IPC contracts; no external IO."""
 
+from assistant_runtime.app.bundled import context_for
+
 from usage_fixture import attach_usage
 
 import asyncio
@@ -17,18 +19,18 @@ from aiohttp import web
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import SearchRequest, TaskRequest
+from assistant_runtime.app.host import AssistantService
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import SearchRequest, TaskRequest
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from assistant_runtime.mcp.client import LocalRuntimeClient
-from assistant_runtime.mcp.search import create_server
-from assistant_runtime.plugins.pi.mcp import server_config
+from assistant_runtime.plugins.search.tools import create_server
+from assistant_runtime.core.pi.mcp import server_config
 from assistant_runtime.plugins.search.deepseek import query_payload, search_result
 from assistant_runtime.plugins.search.plugin import SearchPlugin, credential
 from assistant_runtime.plugins.search.settings import SearchSettings
 from assistant_runtime.plugins.search.urls import SearchError, public_url, validate_fetch_url
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 class Calls:
@@ -109,7 +111,7 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
             runtime=self.runtime,
         )
         attach_usage(self.host, self.runtime)
-        self.plugin = SearchPlugin(self.host)
+        self.plugin = SearchPlugin(context_for(self.host, "search"))
         self.runtime.add(self.plugin)
         with patch.dict(os.environ, {"SEARCH_TEST_KEY": "LOCAL_TEST_SECRET"}):
             await self.runtime.start()
@@ -302,11 +304,21 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
             history = await self.call("history", limit=1)
             self.assertEqual(history["items"][0]["caller"], "run")
             self.assertEqual(history["items"][0]["provider"], "ds")
-        settings = server_config("/tmp/test", search=True, task_run="run")
+        settings = server_config(
+            "/tmp/test",
+            task_run="run",
+            plugins=["memory", "devices", "ai_usage"] + (["search"] if True else []),
+        )
         self.assertIn("search", settings)
         self.assertIn("run", settings["search"]["args"])
         self.assertNotIn("search", server_config("/tmp/test"))
-        self.assertFalse(server_config("/tmp/test", search=True, enabled=False)["search"]["enabled"])
+        self.assertFalse(
+            server_config(
+                "/tmp/test",
+                enabled=False,
+                plugins=["memory", "devices", "ai_usage"] + (["search"] if True else []),
+            )["search"]["enabled"]
+        )
 
     async def test_expired_cache_credentials_and_malformed_unicode(self):
         first = await self.call(query="expires")

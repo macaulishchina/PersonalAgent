@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 
-from ...kernel.contracts import MediaRequest
+from assistant_runtime.api.contracts import MediaRequest
 from .repository import canonical, CURRENT_BATCH
 from .errors import MediaError
 

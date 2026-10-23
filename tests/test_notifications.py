@@ -9,13 +9,13 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastmcp import Client
-from assistant_runtime.config import Config
-from assistant_runtime.store import Store
-from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.kernel.contracts import NotificationRequest
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-from assistant_runtime.mcp.notifications import create_server
-from assistant_runtime.mcp.catalog import NOTIFICATION_TOOLS
+from assistant_runtime.app.config import Config
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.conversation.store import ConversationStore
+from assistant_runtime.api.contracts import NotificationRequest
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.notifications.tools import create_server
+from tool_expectations import NOTIFICATION_TOOLS
 
 
 class NotificationsTest(unittest.IsolatedAsyncioTestCase):
@@ -130,10 +130,10 @@ class NotificationsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_all_covers_pages_but_preserves_new_and_corrected_notices(self):
         now = time.time()
-        with patch("assistant_runtime.plugins.notifications.repository.time.time", return_value=now):
+        with patch("assistant_runtime.core.notifications.repository.time.time", return_value=now):
             notices = [await self.publish(event_key=str(i)) for i in range(60)]
             snapshot = self.repo.list(limit=10)
-        with patch("assistant_runtime.plugins.notifications.repository.time.time", return_value=now + 1):
+        with patch("assistant_runtime.core.notifications.repository.time.time", return_value=now + 1):
             newer = await self.publish(event_key="new")
             corrected = await self.publish(id=notices[0]["id"], revision=1, body="更正")
         result = await self.plugin.request(

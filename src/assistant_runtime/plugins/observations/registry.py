@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from ...kernel.event_reporting import identifier
+from assistant_runtime.api import identifier
 
 
 class Registry:

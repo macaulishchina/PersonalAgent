@@ -8,14 +8,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from assistant_runtime.interaction.input import InputBuffer
-from assistant_runtime.interaction.output import OutputScheduler
-from assistant_runtime.interaction.state import InteractionState
-from assistant_runtime.interaction.settings import InteractionSettings
-from assistant_runtime.interaction.service import Interaction
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.kernel.speech import FeedbackIntent, RequestRef
-from assistant_runtime.kernel.speech import InputChunk
+from assistant_runtime.core.speech.interaction.input import InputBuffer
+from assistant_runtime.core.speech.interaction.output import OutputScheduler
+from assistant_runtime.core.speech.interaction.state import InteractionState
+from assistant_runtime.core.speech.interaction.settings import InteractionSettings
+from assistant_runtime.core.speech.interaction.service import Interaction
+from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
+from assistant_runtime.api.speech import FeedbackIntent, RequestRef
+from assistant_runtime.api.speech import InputChunk
 
 
 class InputTest(unittest.TestCase):
@@ -157,7 +157,8 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
         self.host.runtime.invoke.side_effect = TimeoutError()
         request = self.subject.state.begin("播放电影")
         with patch(
-            "assistant_runtime.interaction.service.decide", AsyncMock(return_value={"status": "fallback"})
+            "assistant_runtime.core.speech.interaction.service.decide",
+            AsyncMock(return_value={"status": "fallback"}),
         ):
             await self.subject.route(request, {}, 1)
         self.assertEqual(self.host.runtime.invoke.await_count, 1)
@@ -168,7 +169,8 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
         old = self.subject.state.begin("播放第一季")
         self.subject.state.begin("播放第二季")
         with patch(
-            "assistant_runtime.interaction.service.decide", AsyncMock(return_value={"status": "fallback"})
+            "assistant_runtime.core.speech.interaction.service.decide",
+            AsyncMock(return_value={"status": "fallback"}),
         ):
             await self.subject.route(old, {}, 1)
         self.host.runtime.invoke.assert_not_awaited()
@@ -180,7 +182,7 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
         request = self.subject.state.begin("不，第二季")
         self.host.runtime.invoke.side_effect = TimeoutError()
         with patch(
-            "assistant_runtime.interaction.service.decide",
+            "assistant_runtime.core.speech.interaction.service.decide",
             AsyncMock(return_value={"status": "ok", "choice": "correction"}),
         ):
             await self.subject.route(request, {}, 1)
@@ -199,7 +201,7 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
     async def test_uncertain_route_clarifies_without_device_execution(self):
         request = self.subject.state.begin("那个")
         with patch(
-            "assistant_runtime.interaction.service.decide",
+            "assistant_runtime.core.speech.interaction.service.decide",
             AsyncMock(return_value={"status": "ok", "choice": "uncertain"}),
         ):
             await self.subject.route(request, {}, 1)
@@ -215,7 +217,8 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
         self.host.runtime.invoke.side_effect = invoke
         request = self.subject.state.begin("查询电视状态")
         with patch(
-            "assistant_runtime.interaction.service.decide", AsyncMock(return_value={"status": "fallback"})
+            "assistant_runtime.core.speech.interaction.service.decide",
+            AsyncMock(return_value={"status": "fallback"}),
         ):
             await self.subject.route(request, {}, 1)
         for _ in range(5):
@@ -236,7 +239,7 @@ class ExecutionTest(unittest.IsolatedAsyncioTestCase):
 
 class CaptureTest(unittest.IsolatedAsyncioTestCase):
     async def test_capture_continues_without_waiting_for_cue_or_inference(self):
-        host = AssistantService.__new__(AssistantService)
+        host = VoiceLifecycle.__new__(VoiceLifecycle)
         host.input_buffer = InputBuffer()
         host.quiet_active = lambda: False
 
@@ -250,7 +253,7 @@ class CaptureTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(host.input_buffer.frames), 10)
 
     async def test_building_connection_buffers_input_instead_of_feeding_unready_provider(self):
-        host = AssistantService.__new__(AssistantService)
+        host = VoiceLifecycle.__new__(VoiceLifecycle)
         host.capture_sequence = 0
         host.quiet_active = lambda: False
         host.active, host.mode, host.interaction = True, "connecting", None

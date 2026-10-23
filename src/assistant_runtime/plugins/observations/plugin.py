@@ -1,20 +1,21 @@
 """Source configuration/lifecycle only. Producers choose how and when to observe."""
 
+from .declaration import DECLARATION
+
 import asyncio
 import time
 
-from ...kernel.contracts import EventRequest, ObservationRequest, TaskRequest
-from ...kernel.event_reporting import identifier
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import EventRequest, ObservationRequest, TaskRequest
+from assistant_runtime.api import identifier
 from .registry import Registry
 
 
 class ObservationsPlugin:
-    manifest = Manifest("observations", ("events",))
+    manifest = DECLARATION.manifest
 
-    def __init__(self, host, providers):
-        self.host, self.providers = host, providers
-        self.registry = Registry(host.config.root, providers)
+    def __init__(self, api, providers):
+        self.api, self.providers = api, providers
+        self.registry = Registry(api.resource("registry_root"), providers)
         self.instances = {}
         self.lock = asyncio.Lock()
         self.context = None
@@ -29,12 +30,8 @@ class ObservationsPlugin:
         for ident, definition in self.registry.sources.items():
             if definition["enabled"]:
                 self.launch(ident, definition)
-        self.updates = context.runtime.subscribe("observation-capacity", 8)
-        context.own(self.unsubscribe)
+        self.updates = context.subscribe(8)
         context.spawn(self.capacity_updates(), "capacity-updates")
-
-    async def unsubscribe(self):
-        self.context.runtime.unsubscribe("observation-capacity")
 
     async def capacity_updates(self):
         while True:
@@ -55,7 +52,7 @@ class ObservationsPlugin:
         # Independent startup and failure: an unavailable source cannot delay others.
         try:
             try:
-                status = await self.host.runtime.invoke(EventRequest("status"))
+                status = await self.api.invoke(EventRequest("status"))
                 prior = next((row for row in status["coverage"] if row["source"] == ident), {})
                 at = prior.get("gap_start") or prior.get("observed_until") or time.time()
                 await reporter.gap("startup_or_resume", at=at)
@@ -79,13 +76,10 @@ class ObservationsPlugin:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         # Stop producer, reject new offers, then finish admitted edges before opening the gap.
-        sink = self.context.runtime.event_sink
-        await reporter.close()
-        if sink:
-            try:
-                await sink.write(ident, "coverage", reason=reason, at=time.time())
-            except Exception:
-                pass  # storage health retains the failure; shutdown must still complete
+        try:
+            await reporter.finish(reason)
+        except Exception:
+            pass  # storage health retains the failure; shutdown must still complete
 
     async def close(self):
         self.accepting = False
@@ -106,7 +100,7 @@ class ObservationsPlugin:
     async def authorize(self, caller):
         if caller is None:
             return True
-        info = await self.host.runtime.invoke(TaskRequest("execution_info", {"run_ids": [caller]}))
+        info = await self.api.invoke(TaskRequest("execution_info", {"run_ids": [caller]}))
         run = info.get(caller)
         if not run or run["state"] not in {"running", "waiting_user"}:
             raise ValueError("Event tools require an active task execution")

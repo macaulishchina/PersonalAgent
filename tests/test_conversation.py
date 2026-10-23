@@ -9,12 +9,12 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 import uuid
 
-from assistant_runtime.config import Config
-from assistant_runtime.conversation.service import Conversation
-from assistant_runtime.conversation.store import ConversationStore
-from assistant_runtime.plugins.pi.conversation import task_event
-from assistant_runtime.plugins.pi.tool_display import tool_display
-from assistant_runtime.store import Store
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.conversation.service import Conversation
+from assistant_runtime.core.conversation.store import ConversationStore
+from assistant_runtime.core.pi.conversation import task_event
+from assistant_runtime.core.pi.tool_display import tool_display
+from assistant_runtime.app.store import Store
 
 
 class Owned:

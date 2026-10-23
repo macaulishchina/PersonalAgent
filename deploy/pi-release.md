@@ -1,8 +1,8 @@
 # Pi release and production cutover
 
 The supported release entrance is Web text/images with configured model execution. Voice and OS
-sandboxing are deferred. Fixed USB bindings remain unchanged. Old conversations and
-plans are archived/reset, not resumed. Memory source transcripts, media, events,
+sandboxing are deferred. Fixed USB bindings remain unchanged. Current Pi conversations, plans, notifications and execution evidence are preserved.
+This consolidation does not reset state or automatically replay failed/unknown executions. Memory source transcripts, media, events,
 credentials and physical files are preserved.
 
 Production has one assistant instance and one model gateway. Cutover replaces the
@@ -28,12 +28,11 @@ Temporary acceptance hosts/containers are removed after testing.
    ```sh
    .venv/bin/python -m scripts.check_pi_release --config /private/candidate/config.toml
    .venv/bin/python -m scripts.verify_integrations
-   .venv/bin/python -m scripts.reset_execution_state --root /absolute/instance
    ```
 
    Preflight reports configuration, local credentials, registries, skills and the
    pinned Pi version. It does not claim an account has quota or a provider works.
-   The reset command without apply is read-only. Investigate unknown executions
+   Investigate unknown executions
    through their recorded tool receipts; never infer that they are safe to replay.
 4. Run bounded real-provider checks only under the user's data/cost authorization.
    Use a separate instance root, private gateway key, loopback port and Docker project
@@ -105,16 +104,11 @@ generic OAuth entrance is therefore not a release gate for this instance.
 1. Resolve model availability and authentication scope first. Inspect current runs,
    pending external/media operations and their latest receipts; cancel or reconcile
    deliberately. A service restart is not task cancellation.
-2. Stop the service and confirm the process and in-flight tools have settled. Take
-   the final stopped-instance backup/reset:
-
-   ```sh
-   .venv/bin/python -m scripts.reset_execution_state --root /absolute/instance \
-     --apply --confirmed-stopped
-   ```
-
-   This backs up the database and private configuration before clearing old execution
-   state. An earlier online snapshot is supplemental, not the final cutover backup.
+2. Stop the service and confirm owned processes/tools have settled. Back up the stopped
+   instance database, private configuration, credentials, work artifacts, usage ledger,
+   service unit and previous dependency/code version. Preserve current Pi records;
+   do not run the historical execution-reset tool for this consolidation.
+   An earlier online snapshot is supplemental, not the final cutover backup.
 3. Replace the existing release and configuration with the reviewed candidate in
    place. Reuse the current service unit, instance root and listening ports; do not
    leave the old assistant or gateway running alongside the new one. Generate the
@@ -132,8 +126,8 @@ generic OAuth entrance is therefore not a release gate for this instance.
    and usage receipts. No device actions, bulk downloads or new recurring plans are
    implied by startup acceptance. Verify request/identity continuity after one clean
    restart once the first execution has fully settled.
-5. Recreate only the plans the user still wants. Never auto-resume old plans or use
-   a model fallback to bypass a metering denial.
+5. Preserve current plans and their states; do not recreate completed work. Existing task
+   policy owns future schedules. Never replay failed/unknown work or bypass usage denial.
 
 ## If startup acceptance fails
 

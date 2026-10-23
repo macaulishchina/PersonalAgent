@@ -1,15 +1,16 @@
 """Register gateway cameras through the shared device and video capabilities."""
 
+from .declaration import DECLARATION
+
 import asyncio
 
-from ...kernel.contracts import DeviceObservation
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import DeviceObservation
 from .camera import Go2RTCCamera
 from .ptz import Go2RTCPanTilt
 
 
 class Go2RTCPlugin:
-    manifest = Manifest("go2rtc")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config, directory, video, camera_controls=None):
         self.directory, self.video = directory, video

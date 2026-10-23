@@ -12,11 +12,11 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import test_tasks as fixtures
-from assistant_runtime.kernel.contracts import TaskRequest
+from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.mcp.tasks import create_server
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
+from assistant_runtime.core.tasks.tools import create_server
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.tasks.plugin import TasksPlugin
 
 
 DAILY = {"kind": "interval", "seconds": 86400}
@@ -305,7 +305,7 @@ class SelfScheduleTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()
         self.runtime = Runtime(self.store)
         self.host.runtime = self.runtime
-        for name in ("pi", "conversation"):
+        for name in ("pi", "conversation", "execution", "workfiles"):
             self.runtime.add(fixtures.Dummy(name))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)

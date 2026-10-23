@@ -10,7 +10,7 @@ import aiohttp
 import imageio_ffmpeg
 from imageio_ffmpeg._parsing import parse_ffmpeg_header
 
-from ...kernel.contracts import VideoClip, MAX_VIDEO_BYTES
+from assistant_runtime.api.contracts import VideoClip, MAX_VIDEO_BYTES
 from .camera import GatewayUnavailable
 
 

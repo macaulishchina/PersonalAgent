@@ -10,7 +10,7 @@ import time
 from imageio_ffmpeg import get_ffmpeg_exe
 from PIL import Image
 
-from ...kernel.contracts import VideoFrame
+from assistant_runtime.api.contracts import VideoFrame
 
 
 def validate_connection(spec):

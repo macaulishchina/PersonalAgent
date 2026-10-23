@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sys
 
-from assistant_runtime.config import Config
+from assistant_runtime.app.config import Config
 from scripts.audio_check.capture import Capture, duration, endpoint_fingerprint, require_stopped
 from scripts.audio_check.guide import CUES, POSITIONS, READING, VOICE_MODEL, GuidePlayer
 from scripts.audio_check.metrics import noise_comparison
@@ -83,7 +83,7 @@ async def run(args):
         await require_stopped(config)
         detector = None
         if args.guided:
-            from assistant_runtime.assistant.commands import normalize
+            from assistant_runtime.core.speech.commands import normalize
             from assistant_runtime.plugins.keyword.fsmn import Fsmn
 
             if any(

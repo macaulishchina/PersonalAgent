@@ -6,9 +6,16 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from ..kernel.contracts import Control, DeviceQuery, MemoryRequest, VideoCapture, CameraMotion, VideoRecord
+from assistant_runtime.api.contracts import (
+    Control,
+    DeviceQuery,
+    MemoryRequest,
+    VideoCapture,
+    CameraMotion,
+    VideoRecord,
+)
 
-from ..kernel.contracts import (
+from assistant_runtime.api.contracts import (
     TaskRequest,
     NotificationRequest,
     DeviceOperationQuery,
@@ -24,8 +31,8 @@ from ..kernel.contracts import (
     VoiceDecisionRequest,
 )
 
-from ..kernel.models import ModelRequest
-from ..kernel.ai_usage import UsageRequest
+from assistant_runtime.api.models import ModelRequest
+from assistant_runtime.api.ai_usage import UsageRequest
 
 Request = (
     UsageRequest

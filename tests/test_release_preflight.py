@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.config import Config
+from assistant_runtime.app.config import Config
 from scripts.check_pi_release import check
 from test_pi_skeleton import configuration
 

@@ -13,7 +13,7 @@ import uuid
 import aiohttp
 from aiohttp import web
 
-from assistant_runtime.kernel.contracts import MediaRequest
+from assistant_runtime.api.contracts import MediaRequest
 from assistant_runtime.plugins.media.errors import MediaError
 from assistant_runtime.plugins.media.library import Library
 from assistant_runtime.plugins.media.openlist import OpenList
@@ -343,12 +343,8 @@ class OpenListTest(unittest.IsolatedAsyncioTestCase):
         plugin = object.__new__(MediaPlugin)
         plugin.__dict__.update(self.plugin.__dict__)
         plugin.accepting = True
-        plugin.host = SimpleNamespace(
-            runtime=SimpleNamespace(
-                invoke=AsyncMock(
-                    return_value={"run": {"state": "running", "task_id": "task", "resources": []}}
-                )
-            )
+        plugin.api = SimpleNamespace(
+            invoke=AsyncMock(return_value={"run": {"state": "running", "task_id": "task", "resources": []}})
         )
         with self.assertRaisesRegex(ValueError, "media:films"):
             await plugin.request(
@@ -427,7 +423,7 @@ class OpenListTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_batch_paths_and_mcp_download_share_existing_permission_route(self):
         from fastmcp import Client
-        from assistant_runtime.mcp.media import create_server
+        from assistant_runtime.plugins.media.tools import create_server
         from assistant_runtime.plugins.media.batches import Batches
 
         batch = Batches(self.plugin)

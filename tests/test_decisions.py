@@ -1,7 +1,9 @@
 """Real shadow worker/storage with isolated HTTP, lifecycle and ingress tests."""
 
+from assistant_runtime.app.bundled import context_for
+
 from usage_fixture import decision_host
-from assistant_runtime.kernel.ai_usage import UsageRequest
+from assistant_runtime.api.ai_usage import UsageRequest
 
 import asyncio
 import copy
@@ -18,10 +20,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import web
 from fastmcp import Client
 
-from assistant_runtime.assistant.dialogue import Dialogue
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import (
+from assistant_runtime.core.speech.dialogue import Dialogue
+from assistant_runtime.core.speech.lifecycle import VoiceLifecycle
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import (
     Control,
     DecisionRequest,
     DecisionSample,
@@ -30,16 +32,16 @@ from assistant_runtime.kernel.contracts import (
     TaskRequest,
     EventRequest,
 )
-from assistant_runtime.kernel.decisions import decide, fallback
-from assistant_runtime.mcp.decisions import create_server
-from assistant_runtime.mcp.catalog import DECISION_TOOLS
-from assistant_runtime.plugins.pi.mcp import server_config
+from assistant_runtime.api.decisions import decide, fallback
+from assistant_runtime.plugins.decisions.tools import create_server
+from tool_expectations import DECISION_TOOLS
+from assistant_runtime.core.pi.mcp import server_config
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.plugins.decisions.jev import DecisionError, JevProvider, answer, credential
 from assistant_runtime.plugins.decisions.plugin import DecisionsPlugin
 from assistant_runtime.plugins.decisions.questions import VERSIONS, prepare, question
 from assistant_runtime.plugins.decisions.settings import DecisionSettings
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 def sample(reference="one", **changes):
@@ -128,7 +130,9 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.config = Config(root=self.root, decisions={"mode": "shadow", "external_data_consent": True})
         self.runtime = Runtime(self.store)
         self.provider = FakeProvider()
-        self.plugin = DecisionsPlugin(decision_host(self.config, self.runtime), self.provider)
+        self.plugin = DecisionsPlugin(
+            context_for(decision_host(self.config, self.runtime), "decisions"), self.provider
+        )
         self.runtime.add(self.plugin)
         await self.runtime.start()
 
@@ -198,7 +202,7 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.provider.closed)
         provider = FakeProvider()
         self.runtime = Runtime(self.store)
-        plugin = DecisionsPlugin(decision_host(self.config, self.runtime), provider)
+        plugin = DecisionsPlugin(context_for(decision_host(self.config, self.runtime), "decisions"), provider)
         self.runtime.add(plugin)
         await self.runtime.start()
         plugin.enqueue(sample(), "assistant")
@@ -283,7 +287,7 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()  # Simulate a process lost after intent, before a response receipt.
         provider = FakeProvider()
         self.runtime = Runtime(self.store)
-        plugin = DecisionsPlugin(decision_host(self.config, self.runtime), provider)
+        plugin = DecisionsPlugin(context_for(decision_host(self.config, self.runtime), "decisions"), provider)
         self.runtime.add(plugin)
         await self.runtime.start()
         plugin.enqueue(sample(), "assistant")
@@ -411,7 +415,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
         await self.runtime.close()
         self.config.decisions = {"enabled": False}
         self.runtime = Runtime(self.store)
-        plugin = DecisionsPlugin(decision_host(self.config, self.runtime))
+        plugin = DecisionsPlugin(context_for(decision_host(self.config, self.runtime), "decisions"))
         self.runtime.add(plugin)
         with patch("assistant_runtime.plugins.decisions.jev.JevProvider", side_effect=AssertionError):
             await self.runtime.start()
@@ -527,8 +531,19 @@ class McpDecisionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["status"], "fallback")
                 self.assertEqual(handler.invoke.await_count, 1)
         cfg = Config(root=Path("/tmp"))
-        self.assertIn("decisions", server_config(cfg.socket, decisions=True))
-        self.assertFalse(server_config(cfg.socket, enabled=False, decisions=True)["decisions"]["enabled"])
+        self.assertIn(
+            "decisions",
+            server_config(
+                cfg.socket, plugins=["memory", "devices", "ai_usage"] + (["decisions"] if True else [])
+            ),
+        )
+        self.assertFalse(
+            server_config(
+                cfg.socket,
+                enabled=False,
+                plugins=["memory", "devices", "ai_usage"] + (["decisions"] if True else []),
+            )["decisions"]["enabled"]
+        )
 
 
 class HttpTest(unittest.IsolatedAsyncioTestCase):
@@ -759,7 +774,7 @@ class ContractTest(unittest.TestCase):
 
 class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
     async def test_semantic_control_ignores_late_epoch_input_focus_and_fallback(self):
-        service = AssistantService.__new__(AssistantService)
+        service = VoiceLifecycle.__new__(VoiceLifecycle)
         service.voice = SimpleNamespace(epoch=7)
         service.active = True
         service.quiet_active = lambda: False
@@ -805,7 +820,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
         service.control.assert_not_awaited()  # No scoped coordinator: never pretend takeover succeeded.
 
     async def test_cancel_control_passes_captured_turn_after_playback_wait(self):
-        service = AssistantService.__new__(AssistantService)
+        service = VoiceLifecycle.__new__(VoiceLifecycle)
         service.player = SimpleNamespace(stop=AsyncMock())
         service.backend = SimpleNamespace(cancel=AsyncMock(return_value=False))
         service.speak = AsyncMock()
@@ -813,7 +828,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
         service.backend.cancel.assert_awaited_once_with(expected_turn="captured-turn")
 
     async def test_real_voice_owner_publishes_sample_and_exits_without_waiting_for_judge(self):
-        service = AssistantService.__new__(AssistantService)
+        service = VoiceLifecycle.__new__(VoiceLifecycle)
         service.mode = "listening"
         service.events = asyncio.Queue()
         service.voice = SimpleNamespace(epoch=7)
@@ -821,7 +836,7 @@ class VoiceIngressTest(unittest.IsolatedAsyncioTestCase):
         service.quiet_active = lambda: False
         service.dialogue = Dialogue()
         service.config = SimpleNamespace(wake_words=["嘟嘟"])
-        service.store = SimpleNamespace(transcript=Mock())
+        service.store = SimpleNamespace(transcripts=SimpleNamespace(append=Mock()))
         service.backend = SimpleNamespace(session_id="main", busy=True)
         service.input_count = 0
         service.context = SimpleNamespace(publish=Mock())

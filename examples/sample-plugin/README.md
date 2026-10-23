@@ -1,0 +1,14 @@
+# Independent plugin example
+
+Build and explicitly install this package into the application's environment.
+Enable `sample` in the instance's `plugins` list. The framework discovers the
+`personal_agent.plugins` entry point; no source registry edit is required.
+
+This example contributes a packaged skill, read/write tools, namespaced durable
+state and an event. It imports only the public plugin API. The note tools make no paid or device requests. The optional report workflow uses the
+configured execution model and its shared usage gate: `sample_report` registers bounded
+text and submits a read/write-scoped run; `sample_report_status` returns result and report
+artifact metadata. It never waits synchronously inside a parent model tool, recursively
+executes another agent loop, or bypasses model configuration. Duplicate request UUIDs
+reuse the registered input and execution. Enable execution/workfiles (already in both
+presets). Real-model calls require the instance's normal authorization and budget. Only trusted packages should be installed; this is not a sandbox.

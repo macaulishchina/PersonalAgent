@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 import wave
 
-from assistant_runtime.kernel.speech import InputChunk
+from assistant_runtime.api.speech import InputChunk
 from assistant_runtime.plugins.speech.recognition import LocalRecognition
 from assistant_runtime.plugins.speech.rendering import LocalSpeech
 

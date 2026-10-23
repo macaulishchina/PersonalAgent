@@ -105,7 +105,7 @@ class DeepSeek:
             async with self.rate_lock:
                 await asyncio.sleep(max(0, self.next_request - time.monotonic()))
                 self.next_request = time.monotonic() + self.interval
-            from ...kernel.ai_usage import UsageError
+            from assistant_runtime.api.ai_usage import UsageError
 
             try:
                 ticket = await self.usage.admit(

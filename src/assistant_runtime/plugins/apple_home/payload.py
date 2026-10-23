@@ -6,7 +6,7 @@ import math
 import re
 import time
 
-from ...kernel.contracts import SensorReading
+from assistant_runtime.api.contracts import SensorReading
 
 UNITS = {"temperature": "°C", "humidity": "%"}
 VALUE = re.compile(r"^([+-]?\d+(?:[.,]\d+)?)\s*(°?[CF]|℃|℉|%|摄氏度|华氏度)?$", re.I)

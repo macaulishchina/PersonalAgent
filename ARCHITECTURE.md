@@ -9,8 +9,9 @@ CLI `run` always starts the same application host and its configured plugins. Th
 ```mermaid
 flowchart TD
     Web[Web conversation and attachments] --> Conversation
-    Conversation --> Pi[Pi execution plugin]
-    Tasks[Durable tasks and Jev selection] --> Pi
+    Conversation --> Execution[Shared execution admission and receipts]
+    Tasks[Durable tasks and Jev selection] --> Execution
+    Execution --> Pi[Pi execution plugin]
     Pi --> Usage[AI usage admission]
     Usage --> Gateway[Local authenticated LiteLLM]
     Usage --> Accounts[Pi native model providers / private accounts]
@@ -26,15 +27,15 @@ flowchart TD
 | bootstrap | Select concrete plugins, wire capabilities and dependencies |
 | conversation | One durable main conversation, registered media, idempotent requests, tool/result presentation |
 | tasks | Definitions, schedules, inbox, run identity, model choice, checkpoints, goals, feedback ownership and durable trace |
-| plugins/pi | Native Pi RPC, isolated execution sessions, model/effort confirmation, normalized execution events, MCP/Skill configuration |
-| plugins/ai_usage | Mandatory AI-service admission, durable metering, budgets, statistics and usage attention |
-| plugins/models | Single immutable model registry, bounded no-tool inference and durable receipts |
+| core/pi | Native Pi RPC, isolated execution sessions, model/effort confirmation, normalized execution events, MCP/Skill configuration |
+| core/ai_usage | Mandatory AI-service admission, durable metering, budgets, statistics and usage attention |
+| core/models | Single immutable model registry, bounded no-tool inference and durable receipts |
 | integrations | Revisioned trusted MCP definitions, caller scopes, credentials, discovery and idle refresh |
 | devices and device plugins | Stable identity, capabilities, resource leases, operation receipts and hardware protocols |
 | notifications | Durable inbox, semantic grouping, deduplication and channel delivery |
 | memory | Upstream Mem0, local vectors/history and original evidence validation |
 
-`kernel/execution.py` declares the provider-neutral executor commands/events. Session commands create/resume/read/close an execution context. Run commands submit/steer/cancel an attempt. Activity events contain tool identity, phase and observed result. The adapter translates native Pi messages once; the host does not simulate another provider's protocol. Unknown commands fail explicitly.
+`api/execution.py` declares the provider-neutral executor commands/events. Session commands create/resume/read/close an execution context. Run commands submit/steer/cancel an attempt. Activity events contain tool identity, phase and observed result. The adapter translates native Pi messages once; the host does not simulate another provider's protocol. Unknown commands fail explicitly.
 
 Main and background work share the same executor implementation and immutable model registry, with separate Pi processes and session files. Auxiliary inference and memory extraction use models directly, with no tools and no second agent loop. Source code contains no subscription/API executor split, compatibility aliases or test-dependent runtime branches.
 
@@ -42,13 +43,13 @@ Main and background work share the same executor implementation and immutable mo
 
 `main_model` and `main_reasoning_effort` reference a configured model alias. `model_api` owns providers, entries, memory binding, gateway limits and declared capabilities. Task profiles reference those same aliases. A model's provider, upstream name, images, context window, output budget and supported reasoning levels are explicit. Unregistered/unvalidated models and unsupported inputs fail before submission.
 
-`model_api.accounts` names provider-owned authentication methods. A native provider references exactly one account; endpoint providers keep their explicit protocol and key reference. `plugins/pi/accounts.*` adapts the pinned upstream provider library and its locked credential store, not another agent. Execution forwards Pi's normalized transcript/events; auxiliary inference supplies no tools. Credentials stay under private `state/model-accounts/<account>/`, separate from Coding AI/Codex/global Pi state. Login is operator-only, never an MCP tool. Native inference passes the same durable usage admission before sending and settles before tool execution; cancellation aborts the native request without replay. Native provider/effort/capability checks occur before dispatch. ChatGPT OAuth requires explicit `output_limit="model"`: its route rejects per-request output caps, so reservation uses the native model's advertised maximum, never the smaller gateway cap. This is a catalog bound, not proof of supplier enforcement. Other unsupported limits fail before dispatch.
+`model_api.accounts` names provider-owned authentication methods. A native provider references exactly one account; endpoint providers keep their explicit protocol and key reference. `core/pi/accounts.*` adapts the pinned upstream provider library and its locked credential store, not another agent. Execution forwards Pi's normalized transcript/events; auxiliary inference supplies no tools. Credentials stay under private `state/model-accounts/<account>/`, separate from Coding AI/Codex/global Pi state. Login is operator-only, never an MCP tool. Native inference passes the same durable usage admission before sending and settles before tool execution; cancellation aborts the native request without replay. Native provider/effort/capability checks occur before dispatch. ChatGPT OAuth requires explicit `output_limit="model"`: its route rejects per-request output caps, so reservation uses the native model's advertised maximum, never the smaller gateway cap. This is a catalog bound, not proof of supplier enforcement. Other unsupported limits fail before dispatch.
 
 Pi's models/settings/MCP files are derived private files, never another editable registry. Each execution receives a stable `x-assistant-session` identity, an explicit project Skill inventory and a captured MCP revision. Pi and gateway automatic retries are disabled; only the existing framework's explicitly configured fallback can start another attempt after proof that no work occurred. Jev may advise on candidates but cannot expand authorization or establish operation success.
 
 The adapter checks Pi's actual selected model/effort before a prompt. Configuration errors are not swallowed. Model upgrades require the task owner's checkpoint and no active/unknown operations, archive the old context, and start a fresh context. User-explicit choices remain protected.
 
-AI-service admission belongs to `plugins/ai_usage`, with plugin-owned configuration and a private SQLite ledger on a dedicated bounded worker. Pi retains protocol transport only; models, memory, Jev and paid search share the gate. Host-bound work identity survives children, continuation, fallback, model changes and restart. Defaults are 100 upstream attempts per work, warning at 50; all other consumption hard limits are opt-in. Reservation precedes sending, settlement precedes observed completion; missing usage is unknown telemetry, not a failed business operation. Metering failure blocks new AI dispatch while devices/events/web continue. Task plans pause on durable consumption limits; attention follows existing result-delivery ownership. See the [plugin guide](src/assistant_runtime/plugins/ai_usage/README.md).
+AI-service admission belongs to `core/ai_usage`, with plugin-owned configuration and a private SQLite ledger on a dedicated bounded worker. Pi retains protocol transport only; models, memory, Jev and paid search share the gate. Host-bound work identity survives children, continuation, fallback, model changes and restart. Defaults are 100 upstream attempts per work, warning at 50; all other consumption hard limits are opt-in. Reservation precedes sending, settlement precedes observed completion; missing usage is unknown telemetry, not a failed business operation. Metering failure blocks new AI dispatch while devices/events/web continue. Task plans pause on durable consumption limits; attention follows existing result-delivery ownership. See the [plugin guide](src/assistant_runtime/core/ai_usage/README.md).
 
 ## Lifecycle, cancellation and restart
 
@@ -74,7 +75,7 @@ Pi file and command execution currently runs with full local permissions (`-na`)
 
 Private `config/` explicitly includes fragments; `config.example/` is the reusable template. `.env`, state, credentials and models remain under the instance root. New installs use a pinned Pi CLI and ship the TypeScript extension in the wheel; `scripts/setup_pi.sh` performs the explicit external installation. `scripts/check.py --group execution` runs executor checks; the full check additionally covers all domains and frontend build.
 
-The cutover has no legacy dialogue/task migration. `scripts/reset_execution_state.py --root ROOT` previews counts. Apply only with the assistant stopped and external actions checked; it backs up the database and configuration, retires old task-linked notices, clears execution/dialogue/plan tables, and is idempotent. It preserves memory source transcripts, media, events, credentials and actual files. New tasks are created explicitly. Changing code/config does not itself authorize killing in-flight operations.
+The slim/standard transition preserves current dialogue/task/notification records and adds links to shared execution receipts. `prepare-config` creates a validated candidate without applying it. The historical `scripts/reset_execution_state.py` is a destructive, explicitly authorized retirement tool, not part of this transition. Changing code/config does not authorize clearing state or killing in-flight operations; production replacement requires a stopped-instance backup and operation review.
 
 Acceptance distinguishes local synthetic transport, real-provider behavior and deployed readiness. API credentials/data/budget require explicit scope. A past Codex acceptance receipt does not validate Pi. Gateway failures must not block event ingestion, device observations or notification persistence.
 
@@ -168,7 +169,7 @@ does not imply measured position. The MCP `move_camera` and `stop_camera` tools
 translate requests without camera protocol code. Directions, duration limits and
 lack of angle feedback are discoverable through the existing device directory.
 
-Define a concrete request contract in `kernel/contracts.py` only when the first integration needs it. Keep protocol-specific fields in the adapter. The current runtime permits one handler per request type: when multiple sensor/device plugins implement the same ability, a single capability owner routes by logical device ID to the matching adapter. Individual physical devices must not each register the same request type. Do not create a universal arbitrary-method execution tool.
+Define a concrete request contract in `api/contracts.py` only when the first integration needs it. Keep protocol-specific fields in the adapter. The current runtime permits one handler per request type: when multiple sensor/device plugins implement the same ability, a single capability owner routes by logical device ID to the matching adapter. Individual physical devices must not each register the same request type. Do not create a universal arbitrary-method execution tool.
 
 The shared directory contains enabled logical IDs, labels/locations, declared capabilities and freshness-aware availability. Every adapter registers devices during start and updates observations in owned background work. One directory plugin owns the query request type and validates that all enabled configuration entries were registered. A future state sensor can reuse list/inspect without changing the directory or adding another handler.
 
@@ -264,7 +265,7 @@ OpenList visibility and actual playback stay separate evidence.
 
 ## Durable notifications
 
-`plugins/notifications/` owns the stable inbox, producer-scoped event identity, revisions,
+`core/notifications/` owns the stable inbox, producer-scoped event identity, revisions,
 revision-aware read/unread state and per-channel delivery receipts. Notifications have
 no archive state; corrections become unread again. `NotificationRequest` is the common
 capability used by independent notifications MCP, CLI and Web. Task identity is derived
@@ -309,7 +310,7 @@ management forwards to `ObservationRequest`. Main and background use the shared 
 catalogue and authorization rules. Source definitions live in private
 `config/observations/sources.json`; credentials in private `state/observations/`;
 records remain in `state/events/`. Recording itself starts no model, notification or
-memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/plugins/events/README.md)
+memory work; explicitly configured task subscriptions consume committed observations. See [recording contracts](src/assistant_runtime/core/events/README.md)
 and [source onboarding](src/assistant_runtime/plugins/observations/README.md).
 
 Notification associations are independent of producer ownership and event deduplication.
@@ -359,3 +360,55 @@ source configuration live in `config/mcp/servers.json` and
 CAS revisions and atomic writes. `config.example/` carries empty reusable templates,
 not household identities, runtime receipts or credentials. Configuration takes effect
 on explicit restart; there is no discovery or automatic migration from Coding AI files.
+
+## Plugin framework consolidation (development checkout)
+
+The source layers are `kernel`, `api`, `core`, `plugins` and `app`. Kernel imports
+only standard-library infrastructure. Public API contracts contain domain messages
+without provider implementations. Core owns reusable services; extensions own
+business/protocol integrations. App owns composition and operator interfaces.
+
+Runtime manifests declare required and optional dependencies and supported dependency
+majors. Missing/cyclic/incompatible dependencies fail preflight. Failed required
+startup blocks its dependents; optional unavailability is visible in health.
+Handlers registered before a failed start are removed during cleanup. Generation
+checks discard stale request and public-tool results; no operation is replayed.
+
+See [plugin development](docs/plugin-development.md) and
+[deployment presets](docs/deployment.md). Plugin-owned declarations drive composition, configuration validation, resources,
+skills and MCP publication. Extension boundary checks supplement behavioral tests;
+production cutover remains an explicit operation.
+
+### Composition ownership during slim consolidation
+
+Device resource construction lives in `core/devices/plugin.py`; dormant assistant control
+registration lives in `core/speech/plugin.py`. Memory's no-tool extraction bridge belongs
+to `core/memory/inference.py`, not the application factory. The application wires these
+owners without duplicating their resource or inference policies. Pi declares usage as
+its required dependency and does not own a voice placeholder or require device startup.
+
+Application construction validates declared dependencies before creating plugin resources,
+then constructs owners in dependency order. The optional assistant owns its own interaction
+state. Configurations without assistant, conversation and devices do not import or create
+those modules. `init --preset slim|standard` writes explicit plugin lists; there are no
+preset branches in runtime execution. Both presets expose the same executions CLI.
+Conversation and task attempts now share public execution admission and durable receipts.
+Their persisted rows are business projections linked by execution_id; only tasks owns
+scheduling/goal/fallback policy. Registered media lives under workfiles and the existing
+on-disk layout/table is retained, with no duplicate media database or wholesale migration.
+
+Registered input resources belong to `core/workfiles`, exposed through `FileRequest`.
+The public execution service captures caller-owned references and tool/skill selections;
+the Pi adapter owns native tool exposure/call filtering and per-session skill loading.
+Neither JSON input nor model text can supply an arbitrary input path or caller identity.
+The one-time `prepare-config` command produces a private, validated candidate with original
+TOML copies and a preserved absolute instance root; it never applies a production cutover.
+
+### Tool definition scale
+
+The Pi adapter maps allowed MCP tools to native deferred exposure. Foreground, task
+and slim execution share native search, bounded active definitions and request-only
+projection of historical schema changes. The plugin catalog owns available capabilities;
+the captured session scope owns authorization; the active loadout owns model visibility.
+These are separate. No vendor-specific discovery protocol or second agent loop is added.
+See core/pi/README.md for limits, lifecycle, observations and test boundaries.

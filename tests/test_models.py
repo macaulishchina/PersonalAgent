@@ -12,15 +12,15 @@ from unittest.mock import AsyncMock
 import uuid
 
 from fastmcp import Client
-from assistant_runtime.kernel.models import ModelRequest
+from assistant_runtime.api.models import ModelRequest
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.store import Store
-from assistant_runtime.plugins.models.settings import ModelSettings, PRESETS
-from assistant_runtime.plugins.models.gateway import configuration
-from assistant_runtime.plugins.models.gateway_transport import upstream_headers, prepare_request
-from assistant_runtime.plugins.pi.catalog import MODEL_SESSION_HEADER
-from assistant_runtime.plugins.models.plugin import ModelsPlugin
-from assistant_runtime.mcp.models import create_server
+from assistant_runtime.app.store import Store
+from assistant_runtime.core.models.settings import ModelSettings, PRESETS
+from assistant_runtime.core.models.gateway import configuration
+from assistant_runtime.core.models.gateway_transport import upstream_headers, prepare_request
+from assistant_runtime.core.pi.catalog import MODEL_SESSION_HEADER
+from assistant_runtime.core.models.plugin import ModelsPlugin
+from assistant_runtime.core.models.tools import create_server
 
 
 def settings(**changes):
@@ -42,6 +42,19 @@ def settings(**changes):
 
 
 class SettingsTest(unittest.TestCase):
+    def test_context_maintenance_configuration(self):
+        settings = ModelSettings.parse({})
+        self.assertEqual(settings.compaction_timeout_seconds, 180)
+        self.assertEqual(settings.timeout_seconds, 60)
+        self.assertEqual(settings.tool_result_max_chars, 6000)
+        self.assertEqual(settings.max_loaded_tools, 12)
+        for value in [0, True, 65]:
+            with self.assertRaises(ValueError):
+                ModelSettings.parse({"max_loaded_tools": value})
+        for value in [0, -1, True, 601]:
+            with self.assertRaises(ValueError):
+                ModelSettings.parse({"compaction_timeout_seconds": value})
+
     def test_execution_limits_belong_only_to_ai_usage(self):
         with self.assertRaises(ValueError):
             ModelSettings.parse(settings(execution_limits={"max_requests": 3}))
@@ -59,11 +72,12 @@ class SettingsTest(unittest.TestCase):
         )
         parsed = ModelSettings.parse(raw)
         self.assertEqual(parsed.catalog()[0]["default_reasoning_effort"], "low")
-        from assistant_runtime.plugins.pi.catalog import pi_models_config
+        from assistant_runtime.core.pi.catalog import pi_models_config
 
         self.assertTrue(pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]["reasoning"])
         route = configuration(parsed)["model_list"][0]["litellm_params"]
         self.assertEqual(route["max_tokens"], parsed.execution_max_output_tokens)
+        self.assertEqual(route["timeout"], 180)  # Gateway must not cut compaction off at 60s.
         for invalid in (
             {"default_reasoning_effort": "medium"},
             {"reasoning_efforts": ["low", "low"]},
@@ -109,7 +123,7 @@ class SettingsTest(unittest.TestCase):
             prepare_request(route, {"reasoning": "high"}, {}, [])
 
     def test_disabled_provider_cannot_be_called_or_routed(self):
-        from assistant_runtime.plugins.pi.catalog import pi_models_config
+        from assistant_runtime.core.pi.catalog import pi_models_config
 
         for enabled in (False, True):
             parsed = ModelSettings.parse(
@@ -270,7 +284,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.complete.await_count, 3)
 
     async def test_composed_memory_uses_explicit_binding_without_error_fallback(self):
-        from assistant_runtime.bootstrap import memory_complete
+        from assistant_runtime.core.memory.inference import complete as memory_complete
 
         self.host.backend = SimpleNamespace(memory_complete=AsyncMock(return_value={"native": True}))
         self.host.config.model_api["memory"] = "test-model"
@@ -289,10 +303,10 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_memory_batch_budget_covers_both_scopes_and_survives_retry_and_reopen(self):
         from dataclasses import replace
-        from assistant_runtime.bootstrap import memory_complete
-        from assistant_runtime.kernel.ai_usage import UsageError, UsageScope, current_usage
-        from assistant_runtime.memory.service import MemoryPlugin
-        from assistant_runtime.plugins.ai_usage.service import UsageService
+        from assistant_runtime.core.memory.inference import complete as memory_complete
+        from assistant_runtime.api.ai_usage import UsageError, UsageScope, current_usage
+        from assistant_runtime.core.memory.service import MemoryPlugin
+        from assistant_runtime.core.ai_usage.service import UsageService
 
         self.host.config.model_api["memory"] = "test-model"
         self.host.config.memory_auto_capture = True
@@ -310,7 +324,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
 
         provider = SimpleNamespace(capture=capture, export=AsyncMock(return_value=[]))
         memory = MemoryPlugin(self.host.config, self.store, provider, lambda: False)
-        self.store.transcript("user", "Synthetic tea preference")
+        self.store.transcripts.append("user", "Synthetic tea preference")
         memory.enqueue()
         job = self.store.db.execute(
             "SELECT id,start_id,end_id,epoch FROM memory_jobs ORDER BY id DESC LIMIT 1"
@@ -341,7 +355,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await reopened.snapshot(work))["requests"], 2)
             self.assertEqual(current_usage.get(), foreground)
 
-            self.store.transcript("user", "A new synthetic preference")
+            self.store.transcripts.append("user", "A new synthetic preference")
             memory.enqueue()
             next_job = self.store.db.execute(
                 "SELECT id,start_id,end_id,epoch FROM memory_jobs ORDER BY id DESC LIMIT 1"
@@ -539,7 +553,7 @@ class DeploymentTest(unittest.TestCase):
     def test_only_referenced_secrets_are_private_and_inputs_are_derived(self):
         import os
         from unittest.mock import patch
-        from assistant_runtime.config import Config
+        from assistant_runtime.app.config import Config
         from scripts.prepare_model_gateway import prepare, IMAGE
 
         with tempfile.TemporaryDirectory() as folder:

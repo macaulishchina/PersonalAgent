@@ -11,10 +11,10 @@ import json
 
 import aiohttp
 
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.pi.integrations import PiIntegrations
-from assistant_runtime.plugins.pi.rpc import PiClient
-from assistant_runtime.plugins.integrations.registry import McpRegistry
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.pi.integrations import PiIntegrations
+from assistant_runtime.core.pi.rpc import PiClient
+from assistant_runtime.core.integrations.registry import McpRegistry
 
 FIXTURE = """from fastmcp import FastMCP
 import sys
@@ -45,7 +45,7 @@ async def verify(binary):
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        from assistant_runtime.plugins.models.settings import ModelSettings
+        from assistant_runtime.core.models.settings import ModelSettings
 
         probe_models = {
             "enabled": True,
@@ -67,7 +67,7 @@ async def verify(binary):
                 }
             },
         }
-        from assistant_runtime.plugins.ai_usage.service import UsageService
+        from assistant_runtime.core.ai_usage.service import UsageService
 
         usage = UsageService(root / "ai-usage")
         await usage.start()
@@ -155,7 +155,7 @@ async def verify(binary):
                         },
                     )
                     from fastmcp import Client
-                    from assistant_runtime.plugins.pi.mcp import to_pi_mcp_json
+                    from assistant_runtime.core.pi.mcp import to_pi_mcp_json
 
                     configuration = to_pi_mcp_json(client.workers[thread].meta["mcp_servers"])
                     entry = configuration["mcpServers"]["external_" + name]

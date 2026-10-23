@@ -15,16 +15,16 @@ from aiohttp import ClientSession
 from fastmcp import Client
 from pyhap.accessory_driver import get_topic
 
-from assistant_runtime.config import Config
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.kernel.contracts import DeviceObservation, SensorReading
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.api.contracts import DeviceObservation, SensorReading
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.mcp.device import create_server
+from assistant_runtime.core.devices.tools import create_server
 from assistant_runtime.plugins.apple_home.bridge import RefreshBridge
 from assistant_runtime.plugins.apple_home.payload import normalize, parse_payload, parse_time
 from assistant_runtime.plugins.apple_home.plugin import AppleHomePlugin
 from assistant_runtime.plugins.apple_home.settings import AppleHomeSettings, endpoint_settings
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 
 
 def free_port():
@@ -228,11 +228,15 @@ class FakeBridge:
 class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        with socket.socket() as receiver, socket.socket() as bridge:
+            receiver.bind(("127.0.0.1", 0))
+            bridge.bind(("127.0.0.1", 0))
+            receiver_port, bridge_port = receiver.getsockname()[1], bridge.getsockname()[1]
         self.config = Config(
             root=Path(self.temp.name),
             plugins=["apple_home"],
             devices={"environment": spec()},
-            apple_home={"port": free_port(), "hap_port": free_port(), "refresh_timeout": 1},
+            apple_home={"port": receiver_port, "hap_port": bridge_port, "refresh_timeout": 1},
         )
         self.store = Store(self.config.state_dir / "assistant.db")
         self.client = ClientSession()
@@ -284,9 +288,11 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get("sensors.apple_home.environment"), saved)
         async with self.client.post(self.url, data="x" * 9000, headers=self.headers) as response:
             self.assertEqual(response.status, 413)
-        self.assertEqual(self.store.max_transcript(), 0)
-        self.assertEqual(self.store.recent(), [])
-        self.assertEqual(self.store.db.execute("SELECT count(*) FROM memory_jobs").fetchone()[0], 0)
+        # Sensor ingestion must not initialize unrelated conversation/execution/memory owners.
+        tables = {
+            row[0] for row in self.store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        self.assertFalse(tables & {"transcripts", "tasks", "memory_jobs"})
         events = []
         while not self.events.empty():
             events.append(self.events.get_nowait().kind)

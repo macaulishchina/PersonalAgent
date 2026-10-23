@@ -7,12 +7,12 @@ from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock
 
-from assistant_runtime.config import Config
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.kernel.contracts import DeviceObservation, DeviceQuery
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.api.contracts import DeviceObservation, DeviceQuery
 from assistant_runtime.kernel.runtime import Runtime, Manifest
 from assistant_runtime.plugins.pipewire.devices import PipeWireDevices, resolve
-from assistant_runtime.store import Store
+from assistant_runtime.app.store import Store
 from test_behavior import device_config
 
 
@@ -170,7 +170,7 @@ class DeviceConfigTest(unittest.TestCase):
 
 class DeviceNameTest(unittest.TestCase):
     def test_device_names_do_not_activate_voice_route_switching(self):
-        from assistant_runtime.assistant.commands import parse_command
+        from assistant_runtime.core.speech.commands import parse_command
 
         for text in ("切换到客厅音箱", "切换到客厅小爱音箱", "切换到客厅HomePod"):
             self.assertIsNone(parse_command(text))

@@ -74,3 +74,10 @@ class Access:
             self.db.execute(
                 "DELETE FROM web_sessions WHERE id=?", (hashlib.sha256(session.encode()).digest(),)
             )
+
+
+class AuthRepository(Access):
+    """Web-owned repository constructor for the framework's scoped store factory."""
+
+    def __init__(self, db, path, fingerprint):
+        super().__init__(path, db, approved_short_password_sha256=fingerprint)

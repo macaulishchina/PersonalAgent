@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
-from assistant_runtime.interaction.voice_control import VoiceControl
-from assistant_runtime.kernel.contracts import VoiceDecisionRequest, TaskRequest
-from assistant_runtime.plugins.pi.backend import PiBackend
+from assistant_runtime.core.speech.interaction.voice_control import VoiceControl
+from assistant_runtime.api.contracts import VoiceDecisionRequest, TaskRequest
+from assistant_runtime.core.pi.backend import PiBackend
 
 
 class VoiceControlTest(unittest.IsolatedAsyncioTestCase):

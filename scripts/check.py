@@ -25,8 +25,10 @@ GROUPS = {
         "job_lifecycle",
         "mcp",
         "pi_skeleton",
+        "pi_discovery",
         "pi_runtime",
         "execution_reset",
+        "execution_service",
     },
     "devices": {
         "audio_input_quality",
@@ -239,7 +241,9 @@ def display(result, verbose=False, *, tests=False):
 async def run_tests(root, selection, jobs, timeout, verbose=False):
     semaphore = asyncio.Semaphore(jobs)
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(root / "tests"), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(root / "src"), str(root / "tests"), env.get("PYTHONPATH")))
+    )
 
     async def run(module, targets):
         async with semaphore:

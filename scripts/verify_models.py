@@ -13,12 +13,12 @@ from pathlib import Path
 import tempfile
 import time
 from aiohttp import web, ClientSession, ClientTimeout
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.models.settings import ModelSettings, reasoning_effort
-from assistant_runtime.plugins.models.gateway import gateway_credential
-from assistant_runtime.plugins.models.client import GatewayClient
-from assistant_runtime.plugins.pi.rpc import PiClient
-from assistant_runtime.plugins.pi.accounts import NativeAccounts
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
+from assistant_runtime.core.models.gateway import gateway_credential
+from assistant_runtime.core.models.client import GatewayClient
+from assistant_runtime.core.pi.rpc import PiClient
+from assistant_runtime.core.pi.accounts import NativeAccounts
 
 
 async def verify(config, model, *, case="text", effort=None, max_requests=4, max_tokens=1024):
@@ -83,9 +83,10 @@ async def verify(config, model, *, case="text", effort=None, max_requests=4, max
             if case == "memory":
                 if not entry.get("structured"):
                     raise ValueError("Memory acceptance requires an explicit structured-output candidate")
-                from assistant_runtime.plugins.ai_usage.service import UsageService, metered
-                from assistant_runtime.plugins.ai_usage.settings import UsageSettings
-                from assistant_runtime.kernel.ai_usage import UsageScope
+                from assistant_runtime.core.ai_usage.service import UsageService
+                from assistant_runtime.api.ai_usage import metered
+                from assistant_runtime.core.ai_usage.settings import UsageSettings
+                from assistant_runtime.api.ai_usage import UsageScope
 
                 area = tempfile.TemporaryDirectory(prefix="memory-acceptance-")
                 usage = UsageService(Path(area.name) / "ai-usage", UsageSettings(max_requests=max_requests))
@@ -154,8 +155,8 @@ async def verify(config, model, *, case="text", effort=None, max_requests=4, max
             else:
                 with tempfile.TemporaryDirectory(prefix="pi-acceptance-") as folder:
                     root = Path(folder)
-                    from assistant_runtime.plugins.ai_usage.service import UsageService
-                    from assistant_runtime.plugins.ai_usage.settings import UsageSettings
+                    from assistant_runtime.core.ai_usage.service import UsageService
+                    from assistant_runtime.core.ai_usage.settings import UsageSettings
 
                     usage = UsageService(root / "ai-usage", UsageSettings(max_requests=max_requests))
                     await usage.start()

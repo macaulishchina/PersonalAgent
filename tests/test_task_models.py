@@ -9,11 +9,11 @@ import uuid
 import test_tasks as task_fixtures
 import test_job_lifecycle as provider_fixtures
 
-from assistant_runtime.kernel.contracts import TaskRequest
+from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.kernel.runtime import Runtime
-from assistant_runtime.plugins.notifications.plugin import NotificationsPlugin
-from assistant_runtime.plugins.tasks.plugin import TasksPlugin
-from assistant_runtime.plugins.tasks.selection import ModelPolicy
+from assistant_runtime.core.notifications.plugin import NotificationsPlugin
+from assistant_runtime.core.tasks.plugin import TasksPlugin
+from assistant_runtime.core.tasks.selection import ModelPolicy
 
 
 class SelectionTest(unittest.IsolatedAsyncioTestCase):
@@ -309,6 +309,8 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         self.host.runtime = self.runtime
         self.runtime.add(task_fixtures.Dummy("pi"))
         self.runtime.add(task_fixtures.Dummy("conversation"))
+        self.runtime.add(task_fixtures.Dummy("execution"))
+        self.runtime.add(task_fixtures.Dummy("workfiles"))
         self.runtime.add(NotificationsPlugin(self.host))
         self.plugin = TasksPlugin(self.host)
         self.runtime.add(self.plugin)

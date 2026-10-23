@@ -1,28 +1,27 @@
 """Authenticated HTTP/SSE entrance; conversation ownership stays in the host."""
 
+from .declaration import DECLARATION
+
 import asyncio
 import ipaddress
 import json
 from pathlib import Path
-import time
 from urllib.parse import urlsplit
 
 from aiohttp import web
 from PIL import UnidentifiedImageError
 
-from ...kernel.runtime import Manifest
-from .auth import Access
-from .settings import WebSettings
+from .auth import AuthRepository
 
 COOKIE = "personal_agent_session"
 
 
 class WebPlugin:
-    manifest = Manifest("web", ("conversation",))
+    manifest = DECLARATION.manifest
 
-    def __init__(self, host):
-        self.host = host
-        self.settings = WebSettings.parse(host.config.web)
+    def __init__(self, api):
+        self.api = api
+        self.settings = api.config
         self.runner = None
         self.streams = set()
         self.upload_lock = asyncio.Lock()
@@ -30,14 +29,11 @@ class WebPlugin:
     async def start(self, context):
         if not self.settings.enable:
             return
-        self.conversation = self.host.conversation
-        self.db = self.conversation.store.db
-        self.uploads = self.host.config.state_dir / "web-uploads"
-        self.uploads.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.auth = Access(
-            self.settings.credential_path(self.host.config.state_dir),
-            self.db,
-            approved_short_password_sha256=self.settings.approved_short_password_sha256,
+        self.conversation = self.api.resource("conversation")
+        self.auth = self.api.repository(
+            AuthRepository,
+            self.settings.credential_path(self.api.state_dir.parent),
+            self.settings.approved_short_password_sha256,
         )
         static = Path(__file__).with_name("static")
         if not (static / "index.html").exists():
@@ -138,23 +134,8 @@ class WebPlugin:
         return web.json_response(self.conversation.state())
 
     async def history(self, request):
-        store = self.conversation.store
         before = int(request.query["before"]) if request.query.get("before") else None
-        messages = store.history(self.conversation.session, before)
-        self.project_reports(messages)
-        return web.json_response(
-            {
-                "messages": messages,
-                "cursor": store.cursor(),
-                "state": self.conversation.state(),
-                "before": messages[0]["ordinal"] if len(messages) == 60 else None,
-            }
-        )
-
-    def project_reports(self, messages):
-        owner = getattr(self.host, "notifications", None)
-        if owner:
-            owner.project_chat(messages)
+        return web.json_response(self.conversation.history(before))
 
     async def send(self, request):
         data = await self.object_body(request)
@@ -168,12 +149,12 @@ class WebPlugin:
         return web.json_response(await self.conversation.control(data["action"]))
 
     async def notification_list(self, request):
-        from ...kernel.contracts import NotificationRequest
+        from assistant_runtime.api.contracts import NotificationRequest
 
-        if not getattr(self.host, "notifications", None):
+        if not self.api.resource("notifications_enabled"):
             return web.json_response({"items": [], "unread": 0, "before": None})
         return web.json_response(
-            await self.host.runtime.invoke(
+            await self.api.invoke(
                 NotificationRequest(
                     "groups" if request.query.get("grouped") == "true" else "list",
                     {
@@ -185,19 +166,19 @@ class WebPlugin:
         )
 
     async def notification_action(self, request):
-        from ...kernel.contracts import NotificationRequest
+        from assistant_runtime.api.contracts import NotificationRequest
 
         data = await self.object_body(request)
         if data.get("action") not in {"read", "read_all", "read_group", "group", "retry", "get"}:
             raise ValueError("Unsupported inbox action")
         return web.json_response(
-            await self.host.runtime.invoke(NotificationRequest(data["action"], data.get("arguments", {})))
+            await self.api.invoke(NotificationRequest(data["action"], data.get("arguments", {})))
         )
 
     async def task_list(self, request):
-        from ...kernel.contracts import TaskRequest
+        from assistant_runtime.api.contracts import TaskRequest
 
-        if "tasks" not in self.host.runtime.plugins:
+        if not self.api.resource("tasks_enabled"):
             return web.json_response({"tasks": [], "runs": [], "before": None})
         args = {
             key: request.query[key] for key in ("query", "view", "before", "task_id") if key in request.query
@@ -212,14 +193,14 @@ class WebPlugin:
         if "limit" in request.query:
             args["limit"] = int(request.query["limit"])
         action = "get" if "task_id" in args else "list"
-        return web.json_response(await self.host.runtime.invoke(TaskRequest(action, args)))
+        return web.json_response(await self.api.invoke(TaskRequest(action, args)))
 
     async def task_trace(self, request):
-        from ...kernel.contracts import TaskRequest
+        from assistant_runtime.api.contracts import TaskRequest
 
         if set(request.query) - {"after", "limit"}:
             raise ValueError("Unknown execution trace query")
-        result = await self.host.runtime.invoke(
+        result = await self.api.invoke(
             TaskRequest(
                 "trace",
                 {
@@ -238,25 +219,25 @@ class WebPlugin:
         )
 
     async def task_action(self, request):
-        from ...kernel.contracts import TaskRequest
+        from assistant_runtime.api.contracts import TaskRequest
 
         d = await self.object_body(request)
         return web.json_response(
-            await self.host.runtime.invoke(TaskRequest(d["action"], d.get("arguments", {})), timeout=90)
+            await self.api.invoke(TaskRequest(d["action"], d.get("arguments", {})), timeout=90)
         )
 
     async def task_artifact(self, request):
         import re
+        from assistant_runtime.api.contracts import TaskRequest
 
         name, ident = request.match_info["name"], request.match_info["run_id"]
         if not re.fullmatch(r"[a-f0-9]{32}", ident) or Path(name).name != name or name in {".", ".."}:
             raise web.HTTPNotFound()
-        plugin = self.host.runtime.plugins["tasks"]
-        run = plugin.repo.run(ident)
-        entries = self.host.workfiles.artifacts(plugin.owner(run))
-        if name not in {entry["name"] for entry in entries}:
-            raise web.HTTPNotFound()
-        path = self.host.workfiles.area(plugin.owner(run)) / "artifacts" / name
+        try:
+            result = await self.api.invoke(TaskRequest("artifact_path", {"run_id": ident, "name": name}))
+        except (ValueError, KeyError, FileNotFoundError):
+            raise web.HTTPNotFound() from None
+        path = Path(result["path"])
         response = web.FileResponse(path)
         response.headers["Content-Type"] = "application/octet-stream"
         response.headers["Content-Disposition"] = "attachment"
@@ -277,11 +258,10 @@ class WebPlugin:
         self.streams.add(response)
         try:
             while self.auth.valid(request.cookies.get(COOKIE)):
-                events = self.conversation.store.changes(self.conversation.session, cursor)
+                events = self.conversation.changes(cursor)
                 if events is None:
                     await response.write(b"event: reset\ndata: {}\n\n")
                     break
-                self.project_reports([e["data"] for e in events if e["kind"] == "message" and e["data"]])
                 payload = ""
                 for event in events:
                     cursor = event["seq"]
@@ -312,7 +292,7 @@ class WebPlugin:
                 if len(data) > 10 * 1024 * 1024:
                     raise ValueError("单张图片不能超过 10 MB")
 
-            media = await self.conversation.media.add_image(data, field.filename)
+            media = await self.conversation.upload(data, field.filename)
             ident = media["id"]
             return web.json_response(
                 {"id": ident, "name": media["name"], "url": f"/api/uploads/{ident}"}, status=201
@@ -322,20 +302,16 @@ class WebPlugin:
         ident = request.match_info["id"]
         if len(ident) != 32 or any(c not in "0123456789abcdef" for c in ident):
             raise web.HTTPNotFound()
-        row = self.db.execute("SELECT media_type FROM chat_uploads WHERE id=?", (ident,)).fetchone()
-        if not row or row[0] not in {"image/jpeg", "video/mp4"} or not (self.uploads / ident).is_file():
-            raise web.HTTPNotFound()
-        return web.FileResponse(self.uploads / ident, headers={"Content-Type": row[0]})
+        try:
+            path, media_type = self.conversation.attachment(ident)
+        except FileNotFoundError:
+            raise web.HTTPNotFound() from None
+        return web.FileResponse(path, headers={"Content-Type": media_type})
 
     async def cleanup_uploads(self):
         while True:
             async with self.upload_lock:
-                for (ident,) in self.db.execute(
-                    "SELECT id FROM chat_uploads WHERE attached=0 AND created<?", (time.time() - 86400,)
-                ).fetchall():
-                    (self.uploads / ident).unlink(missing_ok=True)
-                    with self.db:
-                        self.db.execute("DELETE FROM chat_uploads WHERE id=? AND attached=0", (ident,))
+                self.conversation.expire_uploads()
             await asyncio.sleep(3600)
 
     async def close(self):

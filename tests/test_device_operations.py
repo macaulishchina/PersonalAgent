@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock
 
 from fastmcp import Client
 
-from assistant_runtime.devices.directory import DeviceDirectory, DevicesPlugin
-from assistant_runtime.devices.cameras import CameraControls
-from assistant_runtime.devices.inputs import AudioInputs
-from assistant_runtime.devices.outputs import AudioOutputs
-from assistant_runtime.devices.operations import DeviceOperations
-from assistant_runtime.devices.resources import DeviceResources, DeviceBusy
-from assistant_runtime.devices.video import VideoInputs
-from assistant_runtime.kernel.contracts import (
+from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
+from assistant_runtime.core.devices.cameras import CameraControls
+from assistant_runtime.core.devices.inputs import AudioInputs
+from assistant_runtime.core.devices.outputs import AudioOutputs
+from assistant_runtime.core.devices.operations import DeviceOperations
+from assistant_runtime.core.devices.resources import DeviceResources, DeviceBusy
+from assistant_runtime.core.devices.video import VideoInputs
+from assistant_runtime.api.contracts import (
     AudioVolume,
     CameraMotion,
     DeviceOperationQuery,
@@ -29,8 +29,8 @@ from assistant_runtime.kernel.contracts import (
     VoiceBinding,
 )
 from assistant_runtime.kernel.runtime import Runtime, Manifest
-from assistant_runtime.mcp.device import create_server
-from assistant_runtime.store import Store
+from assistant_runtime.core.devices.tools import create_server
+from assistant_runtime.app.store import Store
 
 
 class OperationTest(unittest.IsolatedAsyncioTestCase):

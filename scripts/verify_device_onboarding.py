@@ -17,10 +17,10 @@ import numpy as np
 import miniaudio
 import soxr
 
-from assistant_runtime.assistant.service import AssistantService
-from assistant_runtime.cli import request, systemctl
-from assistant_runtime.config import Config
-from assistant_runtime.kernel.contracts import DeviceQuery
+from assistant_runtime.app.host import AssistantService
+from assistant_runtime.app.cli import request, systemctl
+from assistant_runtime.app.config import Config
+from assistant_runtime.api.contracts import DeviceQuery
 from assistant_runtime.plugins.pipewire.audio import command
 from assistant_runtime.plugins.pipewire.cues import wake_chime
 
@@ -199,7 +199,7 @@ async def verify(config, folder, disconnect, output_device=None, tail_seconds=3,
                         f"Codex did not inspect {ident}"
                     )
                 report["codex_tool_queries"] = queries
-                report["codex_result"] = service.store.recent(1)
+                report["codex_result"] = service.store.executions.recent(1)
                 report["passed"] = True
             finally:
                 if capture:

@@ -9,12 +9,12 @@ import unittest
 from unittest.mock import AsyncMock
 
 from pi_gateway import FakeResponsesGateway, sse_tool_call, sse_text_reply
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.models.settings import ModelSettings
-from assistant_runtime.plugins.pi.rpc import PiClient, RpcError
-from assistant_runtime.plugins.pi.backend import PiBackend
-from assistant_runtime.plugins.pi.voice import DisabledVoice
-from assistant_runtime.store import Store
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.models.settings import ModelSettings
+from assistant_runtime.core.pi.rpc import PiClient, RpcError
+from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.speech.disabled import DisabledVoice
+from assistant_runtime.app.store import Store
 
 
 def configuration(url):
@@ -47,7 +47,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.gateway = FakeResponsesGateway(lambda step, body: sse_text_reply(f"msg{step}", "已完成"))
         self.settings = ModelSettings.parse(configuration(self.gateway.base_url))
-        from assistant_runtime.plugins.ai_usage.service import UsageService
+        from assistant_runtime.core.ai_usage.service import UsageService
 
         self.usage = UsageService(self.root / "ai-usage")
         await self.usage.start()
@@ -104,6 +104,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         await self.client.request("session.resume", {"session_id": ident})
         state = await self.client.request("session.read", {"session_id": ident, "include_runs": True})
         self.assertEqual(len(state["session"]["runs"]), 2)
+        self.gateway.script_fn = lambda step, body: sse_text_reply("continued", "done")
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "continue"}]}
         )
@@ -192,7 +193,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.gateway.requests), 3)
 
     async def test_auxiliary_timeout_does_not_block_original_execution(self):
-        from assistant_runtime.kernel.ai_usage import UsageScope
+        from assistant_runtime.api.ai_usage import UsageScope
 
         scope = UsageScope("jev-timeout", "foreground")
         ticket = await self.usage.admit(scope, service="decision", provider="typesafe")
@@ -269,6 +270,91 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.completed())["error"]["code"], "ai_usage_blocked")
         self.assertEqual(len(self.gateway.requests), 0)
 
+    async def test_compaction_failure_is_explicit_but_never_overwrites_unknown_execution(self):
+        ident = await self.session()
+        worker = self.client.workers[ident]
+        await worker._handle_message({"type": "compaction_end", "errorMessage": "private upstream detail"})
+        await worker._finalize_turn("summary-failed", "completed")
+        result = await self.completed()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "context_compaction_failed")
+        self.assertNotIn("private upstream", str(result))
+        worker.compaction_error = True
+        await worker._finalize_turn("disconnected", "unknown")
+        self.assertEqual((await self.completed())["status"], "unknown")
+
+    async def test_large_tool_result_is_saved_and_bounded_without_reexecution(self):
+        self.gateway.script_fn = lambda step, body: (
+            sse_tool_call("large", "bash", {"command": "printf '%12000s' x"})
+            if step == 1
+            else sse_text_reply("done", "done")
+        )
+        ident = await self.session()
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "test"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        body = self.gateway.requests[1]
+        results = [item for item in body["input"] if item.get("type") == "function_call_output"]
+        self.assertEqual(len(results), 1)
+        preview = json.dumps(results[0], ensure_ascii=False)
+        self.assertLess(len(preview), 7500)
+        self.assertIn("Partial tool result preview", preview)
+        files = list(self.root.glob("tool-results/*.json"))
+        self.assertEqual(len(files), 1)
+        saved = json.loads(files[0].read_text())
+        self.assertGreater(len(saved["content"][0]["text"]), 11000)
+        self.assertFalse(saved["is_error"])
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+        self.assertEqual(len(self.gateway.requests), 2)
+
+    async def test_lost_compaction_can_be_retried_with_independent_timeout_and_budget(self):
+        from dataclasses import replace
+
+        self.client.settings = replace(self.settings, timeout_seconds=1, compaction_timeout_seconds=3)
+        ident = await self.session(budget_id="compact-recover")
+        folder = Path(self.client.workers[ident].meta["agent_dir"])
+        settings = json.loads((folder / "settings.json").read_text())
+        settings["compaction"]["keepRecentTokens"] = 100
+        (folder / "settings.json").write_text(json.dumps(settings))
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "context " * 100}]}
+        )
+        await self.completed()
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "more context " * 100}]}
+        )
+        await self.completed()
+        worker = self.client.workers[ident]
+
+        def incomplete(step, body):
+            # Authoritative stream start, no completion: lost summary only.
+            return [{"type": "response.created", "response": {"id": "lost", "status": "in_progress"}}]
+
+        self.gateway.script_fn = incomplete
+        with self.assertRaises(RpcError):
+            await worker.command({"type": "compact"})
+        snapshot = await self.usage.snapshot("compact-recover")
+        self.assertEqual(snapshot["unknown_requests"], 1)
+        self.assertEqual(snapshot["unknown_execution_requests"], 0)
+
+        def slow_summary(step, body):
+            import time
+
+            time.sleep(1.3)  # Beyond normal deadline, within separate compression deadline.
+            return sse_text_reply("summary", "Preserved original task context")
+
+        self.gateway.script_fn = slow_summary
+        await worker.command({"type": "compact"})
+        snapshot = await self.usage.snapshot("compact-recover")
+        self.assertEqual(snapshot["compactions"], 2)
+        self.assertEqual(snapshot["requests"], 4)
+        self.gateway.script_fn = lambda step, body: sse_text_reply("continued", "done")
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "continue"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+
     async def test_repeated_native_compaction_is_bounded(self):
         from dataclasses import replace
 
@@ -313,7 +399,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         (skill / "SKILL.md").write_text(
             "---\nname: synthetic-skill\ndescription: Synthetic local validation steps.\n---\nRead back the synthetic result.\n"
         )
-        from assistant_runtime.bootstrap import assistant_skill_paths
+        from assistant_runtime.app.bootstrap import assistant_skill_paths
 
         bundled = assistant_skill_paths(Config(root=self.root, plugins=["media"]))
         self.client.skill_paths = (*bundled, skill)
@@ -454,11 +540,15 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         inventory = await self.client.request("mcp.inspect", {"session_id": ident, "serverName": "sample"})
         self.assertIn("target", inventory["data"][0]["tools"]["ping"]["inputSchema"]["properties"])
-        self.gateway.script_fn = (
-            lambda step, body: sse_tool_call("ping", "mcp__sample__ping", {"target": "test"})
-            if step == 1
-            else sse_text_reply("done", "pong:test")
-        )
+
+        def discover_and_call(step, body):
+            if step == 1:
+                return sse_tool_call("search", "tool_search", {"query": "sample ping", "limit": 1})
+            if step == 2:
+                return sse_tool_call("ping", "mcp__sample__ping", {"target": "test"})
+            return sse_text_reply("done", "pong:test")
+
+        self.gateway.script_fn = discover_and_call
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic mcp test"}]}
         )
@@ -468,7 +558,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
     async def test_backend_ignores_old_codex_identity_and_restores_only_pi(self):
         store = Store(self.root / "state/assistant.sqlite3")
         store.set("thread_id", "old-codex")
-        store.transcript("user", "old dialogue must not be injected")
+        store.transcripts.append("user", "old dialogue must not be injected")
         (self.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
         cfg = Config(
             root=self.root,

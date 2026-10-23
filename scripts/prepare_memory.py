@@ -2,8 +2,8 @@
 
 import argparse
 import asyncio
-from assistant_runtime.config import Config
-from assistant_runtime.memory.mem0 import Mem0Memory
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.memory.mem0 import Mem0Memory
 
 
 async def prepare(config):

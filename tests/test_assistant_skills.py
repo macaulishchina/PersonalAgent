@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from assistant_runtime.bootstrap import assistant_skill_paths
-from assistant_runtime.config import Config
+from assistant_runtime.app.bootstrap import assistant_skill_paths
+from assistant_runtime.app.config import Config
 
 
 class AssistantSkillsTest(unittest.TestCase):

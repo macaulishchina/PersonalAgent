@@ -1,6 +1,6 @@
 # Local speech adapters
 
-These adapters implement the contracts in `kernel/speech.py` and are injected by the
+These adapters implement the contracts in `api/speech.py` and are injected by the
 composition root. They do not open microphones/speakers, create tasks or call cloud APIs.
 
 `LocalRecognition` uses sherpa-onnx streaming bilingual Paraformer int8. The model

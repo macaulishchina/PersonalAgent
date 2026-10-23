@@ -2,7 +2,7 @@
 
 import ipaddress
 from ..observations.polling import PollingSource
-from ..observations.schema import fields, interval, schema
+from assistant_runtime.api.observations import fields, interval, schema
 from .protocol import AdbTV
 from .snapshot import Snapshot
 

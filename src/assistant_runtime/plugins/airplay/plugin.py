@@ -1,14 +1,15 @@
 """AirPlay speaker family: standard inventory registration and PCM providers."""
 
+from .declaration import DECLARATION
+
 import asyncio
 
-from ...kernel.contracts import DeviceObservation
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import DeviceObservation
 from .output import AirPlayOutput
 
 
 class AirPlayPlugin:
-    manifest = Manifest("airplay")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config, directory, outputs, voice_io):
         self.directory, self.outputs = directory, outputs

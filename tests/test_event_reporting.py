@@ -7,9 +7,10 @@ import time
 from types import SimpleNamespace
 import unittest
 
-from assistant_runtime.kernel.contracts import EventRequest, ObservationRequest
+from assistant_runtime.app.bundled import context_for
+from assistant_runtime.api.contracts import EventRequest, ObservationRequest
 from assistant_runtime.kernel.runtime import Manifest, Runtime
-from assistant_runtime.plugins.events.plugin import EventsPlugin
+from assistant_runtime.core.events.plugin import EventsPlugin
 from assistant_runtime.plugins.observations.plugin import ObservationsPlugin
 
 
@@ -52,11 +53,12 @@ class ReportingTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.runtime = Runtime(None)
         self.host = SimpleNamespace(
+            assistant=None,
             runtime=self.runtime,
             config=SimpleNamespace(root=self.root, state_dir=self.root / "state", events={"queue_size": 8}),
         )
         self.events = EventsPlugin(self.host)
-        self.sources = ObservationsPlugin(self.host, {"push": PushProvider()})
+        self.sources = ObservationsPlugin(context_for(self.host, "observations"), {"push": PushProvider()})
         self.runtime.add(self.events)
         self.runtime.add(self.sources)
         await self.runtime.start()
@@ -165,7 +167,7 @@ class ReportingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.sources.instances["b"], old_b)
         self.assertTrue(old_b[1].offer(**dict(self.event, event_id="shutdown")).accepted)
         await self.runtime.close()
-        from assistant_runtime.plugins.events.storage import Storage
+        from assistant_runtime.core.events.storage import Storage
 
         storage = Storage(self.host.config.state_dir / "events", self.events.settings)
         await storage.start()
@@ -250,7 +252,7 @@ class ReportingTest(unittest.IsolatedAsyncioTestCase):
     async def test_recorder_alone_has_no_source_configuration_requirement(self):
         await self.runtime.close()
         runtime = Runtime(None)
-        host = SimpleNamespace(runtime=runtime, config=self.host.config)
+        host = SimpleNamespace(assistant=None, runtime=runtime, config=self.host.config)
         recorder = EventsPlugin(host)
         runtime.add(recorder)
         await runtime.start()

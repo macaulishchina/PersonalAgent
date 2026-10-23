@@ -1,10 +1,11 @@
 """Media capability owner. Tasks own plans; providers own auth and protocol IO."""
 
+from .declaration import DECLARATION
+
 import asyncio
 import time
 
-from ...kernel.contracts import MediaRequest, TaskRequest
-from ...kernel.runtime import Manifest
+from assistant_runtime.api.contracts import MediaRequest, TaskRequest
 from .providers import Providers, CAPABILITIES
 from .errors import MediaError
 from .downloads import Downloads
@@ -16,23 +17,23 @@ from .repository import MediaRepository, TERMINAL
 from .search import PanSou, share_id, share_provider, extraction_code
 from .search_history import SearchHistory
 from .search_candidates import DISCOVERY_PLATFORMS
-from .settings import MediaSettings, identifier
+from .settings import identifier
 from .library import Library, filename
 from .batches import Batches
 from .verification import cloud_binding, readback
 
 
 class MediaPlugin:
-    manifest = Manifest("media", ("notifications",))
+    manifest = DECLARATION.manifest
 
-    def __init__(self, host, providers=None):
-        self.host = host
-        self.settings = MediaSettings.parse(host.config.media)
-        self.repo = MediaRepository(host.store.db, self.settings)
-        self.search_history = SearchHistory(host.store.db)
+    def __init__(self, api, providers=None):
+        self.api = api
+        self.settings = api.config
+        self.repo = api.repository(MediaRepository, self.settings)
+        self.search_history = api.repository(SearchHistory)
         self.library = Library(self)
         self.batches = Batches(self)
-        self.root = host.config.state_dir / "media"
+        self.root = api.state_dir
         self.provider = Providers(self.root, self.settings, self.repo, providers)
         self.wakeup = asyncio.Event()
         self.accepting = False
@@ -89,7 +90,7 @@ class MediaPlugin:
     async def authorize(self, caller, target=None):
         if caller is None:
             return "assistant"
-        info = await self.host.runtime.invoke(TaskRequest("execution_info", {"run_ids": [caller]}))
+        info = await self.api.invoke(TaskRequest("execution_info", {"run_ids": [caller]}))
         run = info.get(caller)
         if not run or run["state"] not in {"running", "waiting_user"}:
             raise ValueError("Media tools require an active task execution")

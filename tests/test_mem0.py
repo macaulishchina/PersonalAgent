@@ -9,8 +9,8 @@ import time
 import unittest
 from unittest.mock import AsyncMock
 
-from assistant_runtime.memory.mem0 import Mem0Memory
-from assistant_runtime.memory.policy import validate_facts
+from assistant_runtime.core.memory.mem0 import Mem0Memory
+from assistant_runtime.core.memory.policy import validate_facts
 
 
 class ProvenanceTest(unittest.TestCase):

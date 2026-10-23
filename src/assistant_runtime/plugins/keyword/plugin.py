@@ -1,9 +1,9 @@
-from ...kernel.runtime import Manifest
+from .declaration import DECLARATION
 from .recognition import Recognizer
 
 
 class KeywordPlugin:
-    manifest = Manifest("keyword")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config):
         self.recognizer = Recognizer(config)

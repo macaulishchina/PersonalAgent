@@ -1,11 +1,11 @@
-from ...kernel.runtime import Manifest
+from .declaration import DECLARATION
 from .audio import AudioRoute
 from .stream_audio import StreamPlayer
 from .devices import PipeWireDevices
 
 
 class PipeWirePlugin:
-    manifest = Manifest("pipewire")
+    manifest = DECLARATION.manifest
 
     def __init__(self, config, store, directory, outputs, voice_io, inputs):
         self.outputs, self.inputs = outputs, inputs

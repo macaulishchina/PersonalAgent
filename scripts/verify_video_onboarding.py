@@ -12,12 +12,12 @@ import time
 
 from PIL import Image, ImageStat
 
-from assistant_runtime.cli import request, systemctl
-from assistant_runtime.config import Config
-from assistant_runtime.plugins.pi.backend import PiBackend
-from assistant_runtime.plugins.ai_usage.service import UsageService
-from assistant_runtime.plugins.ai_usage.settings import UsageSettings
-from assistant_runtime.store import Store
+from assistant_runtime.app.cli import request, systemctl
+from assistant_runtime.app.config import Config
+from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.ai_usage.service import UsageService
+from assistant_runtime.core.ai_usage.settings import UsageSettings
+from assistant_runtime.app.store import Store
 
 
 async def snapshot(config, ident):
@@ -201,7 +201,7 @@ async def verify(config, ident, save_frame, restart, execution, gateway_restart=
                         while backend.busy:
                             await asyncio.sleep(0.25)
                     report["execution_tools"] = calls
-                    report["execution_result"] = store.recent(1)
+                    report["execution_result"] = store.executions.recent(1)
                     assert not backend.last_error, backend.last_error
                     assert any(
                         call["server"] == "device"
@@ -209,7 +209,7 @@ async def verify(config, ident, save_frame, restart, execution, gateway_restart=
                         and "image" in call["content_types"]
                         for call in calls
                     ), "Actual Pi MCP result did not contain an image block"
-                    result = store.recent(1)
+                    result = store.executions.recent(1)
                     assert result and result[0]["status"] == "completed", result
                 finally:
                     try:

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.kernel.contracts import DecisionOutcome, DecisionQuery
+from assistant_runtime.api.contracts import DecisionOutcome, DecisionQuery
 from assistant_runtime.plugins.decisions.settings import DecisionSettings
 from assistant_runtime.plugins.decisions.audit import append, page
 import test_decisions as fixtures

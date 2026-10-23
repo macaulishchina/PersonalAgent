@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from assistant_runtime.devices.outputs import AudioOutputs
+from assistant_runtime.core.devices.outputs import AudioOutputs
 from assistant_runtime.plugins.pipewire.audio import AudioRoute
 from assistant_runtime.plugins.pipewire.playback import MirroredPlayback
-from assistant_runtime.assistant.commands import parse_command
+from assistant_runtime.core.speech.commands import parse_command
 from test_behavior import device_config
 
 

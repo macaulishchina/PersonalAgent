@@ -34,14 +34,14 @@ class EventReporter:
     """
 
     def __init__(self, context, source):
-        self.context, self.source = context, identifier(source)
+        self.__context, self.source = context, identifier(source)
         self.generation = context.generation
         self.closed = False
 
     def sink(self):
-        if self.closed or self.context.generation != self.generation:
+        if self.closed or self.__context.generation != self.generation:
             return None
-        return self.context.runtime.event_sink
+        return self.__context.runtime.event_sink
 
     def event(
         self,
@@ -99,7 +99,16 @@ class EventReporter:
         return await self.write("coverage", reason=reason, at=time.time() if at is None else at)
 
     async def close(self):
-        sink = self.context.runtime.event_sink
+        sink = self.__context.runtime.event_sink
         self.closed = True
         if sink is not None:
             await sink.drain(self.source)
+
+    async def finish(self, reason, *, at=None):
+        """Drain admitted events, then record the final coverage edge."""
+        sink = self.__context.runtime.event_sink
+        await self.close()
+        if sink is not None:
+            return await sink.write(
+                self.source, "coverage", reason=reason, at=time.time() if at is None else at
+            )
