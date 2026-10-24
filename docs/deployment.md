@@ -1,7 +1,7 @@
 # slim / standard 部署
 
-原生 Windows 的安装、服务及待验收边界见 [平台部署与验收](platforms.md)。以下 shell
-示例采用 Linux 路径；Windows 使用同一 CLI 和插件配置。
+首次正式部署请按 [Linux／Windows 正式部署指南](platforms.md) 完成安装、配置和服务管理。
+本文补充组合设计、发布包交付与已有实例转换；以下 shell 命令采用 Linux 路径。
 
 standard 实例包含网页文字/图片对话、模型接入、用量控制、后台任务和通知。
 两种安装组合都交付全部核心插件及其 Python 运行依赖；通过共同的 core 依赖组合锁定。
