@@ -21,6 +21,7 @@ class ConfigurationSpec:
     sensitive: tuple[str, ...] = ()
     read_only: tuple[str, ...] = ()
     resources: tuple[Mapping[str, Any], ...] = ()
+    supported_platforms: tuple[str, ...] = ("linux", "windows")
 
 
 def configuration_default(owner_file, key):
@@ -30,7 +31,7 @@ def configuration_default(owner_file, key):
 
 @lru_cache(maxsize=64)
 def _description(owner_file):
-    return json.loads(Path(owner_file).with_name("configuration.json").read_text())
+    return json.loads(Path(owner_file).with_name("configuration.json").read_text(encoding="utf-8"))
 
 
 def configuration_spec(owner_file):

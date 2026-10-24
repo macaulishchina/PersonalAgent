@@ -1,5 +1,7 @@
 """Operator file transaction invariants; no models, devices or running instance."""
 
+from platform_support import private_mode
+
 import json
 from pathlib import Path
 import tempfile
@@ -47,7 +49,7 @@ class ConfigurationTest(ConfigurationFixture, unittest.TestCase):
         self.assertIn("max_requests = 512 # shared work", (self.folder / "usage.toml").read_text())
         self.assertIn("# policy", (self.folder / "usage.toml").read_text())
         self.assertEqual(self.files.history()[0]["version"], changed["version"])
-        self.assertEqual((self.files.state / "versions").stat().st_mode & 0o777, 0o700)
+        self.assertEqual(private_mode(self.files.state / "versions"), 0o700)
 
     def test_invalid_configuration_writes_nothing(self):
         changed = self.change(-1)

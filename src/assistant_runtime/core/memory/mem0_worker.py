@@ -82,7 +82,9 @@ class Engine:
         config.embedder.provider = "local_fastembed"
         self.memory = Memory(config)
         self.receipt_path = root / "receipts.json"
-        self.receipts = json.loads(self.receipt_path.read_text()) if self.receipt_path.exists() else {}
+        self.receipts = (
+            json.loads(self.receipt_path.read_text(encoding="utf-8")) if self.receipt_path.exists() else {}
+        )
 
     @staticmethod
     def identity(scope, project=""):
@@ -226,7 +228,7 @@ class Engine:
         self.receipts[key] = receipt
         self.receipts = dict(list(self.receipts.items())[-128:])
         temporary = self.receipt_path.with_suffix(".partial")
-        temporary.write_text(json.dumps(self.receipts))
+        temporary.write_text(json.dumps(self.receipts), encoding="utf-8")
         temporary.replace(self.receipt_path)
         return {"records": self.export(), **receipt, "replayed": False}
 

@@ -1,5 +1,7 @@
 """Two bounded, connection-owning SQLite workers; commit precedes acknowledgements."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import concurrent.futures
 import hashlib
@@ -54,7 +56,7 @@ class Worker:
             if self.readonly:
                 db.execute("PRAGMA query_only=ON")
             else:
-                self.path.chmod(0o600)
+                system.private(self.path)
                 version = db.execute("PRAGMA user_version").fetchone()[0]
                 if version not in (0, 1, 2):
                     raise ValueError("Unsupported events database version")
@@ -142,7 +144,7 @@ class Storage:
 
     async def start(self):
         await asyncio.to_thread(self.directory.mkdir, parents=True, exist_ok=True, mode=0o700)
-        await asyncio.to_thread(self.directory.chmod, 0o700)
+        await asyncio.to_thread(system.private, self.directory, directory=True)
         path = self.directory / "events.sqlite3"
         self.writer = Worker(path, self.settings)
         await asyncio.wrap_future(self.writer.ready)

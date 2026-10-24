@@ -1,5 +1,7 @@
 """PipeWire PCM writer and optional reference mirror for an external output."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 from .audio import audio_env, PINNED_STREAM_ARGS
 
@@ -14,7 +16,7 @@ class PipeWirePlayback:
 
     @classmethod
     async def open(cls, sink, rate):
-        process = await asyncio.create_subprocess_exec(
+        process = await system.spawn(
             "pacat",
             "--playback",
             "--raw",

@@ -1,10 +1,9 @@
 """Account-scoped single-writer auth and owned, deadline-bound SDK subprocesses."""
 
 import asyncio
-import fcntl
+from assistant_runtime.api.system import system
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import sys
@@ -29,7 +28,7 @@ class Aliyun:
         self.closed = False
         self.barrier = self.credentials / "auth-blocked.json"
         try:
-            blocked = json.loads(self.barrier.read_text()) if self.barrier.exists() else None
+            blocked = json.loads(self.barrier.read_text(encoding="utf-8")) if self.barrier.exists() else None
             # A changed atomic credential file proves a save completed before a
             # crash. An unchanged file must never retry an uncertain rotation.
             self.auth_required = self.barrier.exists() and (
@@ -42,7 +41,7 @@ class Aliyun:
         path = self.credentials / "account.json"
         if not path.exists():
             return None
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         tokens = {key: value.get(key) for key in ("access_token", "refresh_token")}
         return hashlib.sha256(json.dumps(tokens, sort_keys=True).encode()).hexdigest()
 
@@ -68,9 +67,9 @@ class Aliyun:
         if self.lease is not None:
             return
         lease = (self.credentials / "owner.lock").open("a")
-        os.fchmod(lease.fileno(), 0o600)
+        system.private(lease.name)
         try:
-            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(lease, blocking=False)
         except OSError:
             lease.close()
             raise MediaError("aliyun_credentials_already_owned") from None
@@ -78,13 +77,13 @@ class Aliyun:
 
     def binding(self):
         path = self.credentials / "identity.json"
-        return json.loads(path.read_text())["identity"] if path.exists() else None
+        return json.loads(path.read_text(encoding="utf-8"))["identity"] if path.exists() else None
 
     async def run(self, action, arguments=None, *, directory=None, on_qr=None):
         self.claim()
         if self.closed:
             raise MediaError("media_stopping")
-        process = await asyncio.create_subprocess_exec(
+        process = await system.spawn(
             sys.executable,
             "-m",
             "assistant_runtime.plugins.media.aliyun_worker",
@@ -199,7 +198,7 @@ class Aliyun:
             async with self.lock:
                 if self.binding() and self.binding() != result["identity"]:
                     raise MediaError("account_mismatch")
-                token = await disk(lambda: json.loads((pending / "account.json").read_text()))
+                token = await disk(lambda: json.loads((pending / "account.json").read_text(encoding="utf-8")))
                 await disk(save, self.credentials / "identity.json", {"identity": result["identity"]})
                 await disk(save, self.credentials / "account.json", token)
                 await self.clear_auth()

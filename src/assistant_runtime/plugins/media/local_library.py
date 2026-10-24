@@ -1,7 +1,8 @@
 """Same-volume local library changes through no-follow directory descriptors."""
 
+from assistant_runtime.api.system import system
+
 import hashlib
-import os
 from pathlib import Path
 import stat
 
@@ -18,38 +19,37 @@ class LocalTree:
         mount = Path(self.binding["mount_path"])
         if not mount.is_mount():
             raise MediaError("download_mount_unavailable")
-        base = os.open(mount, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        base = system.directory(mount)
         try:
-            self.device = os.fstat(base).st_dev
+            self.device = base.stat().st_dev
             self.root = self.walk(base, Path(self.binding["path"]).relative_to(mount).parts)
             stage = self.walk(base, Path(self.binding["staging_path"]).relative_to(mount).parts)
             try:
                 self.trash = self.walk(stage, ["library-trash"], create=True)
             finally:
-                os.close(stage)
+                stage.close()
         finally:
-            os.close(base)
+            base.close()
         return self
 
     def walk(self, base, parts, create=False):
-        fd = os.dup(base)
+        fd = base.clone()
         try:
             for part in parts:
                 filename(part)
                 if create:
                     try:
-                        os.mkdir(part, 0o700, dir_fd=fd)
-                        os.fsync(fd)
+                        fd.mkdir(part, 0o700)
                     except FileExistsError:
                         pass
-                new = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-                os.close(fd)
+                new = fd.child(part)
+                fd.close()
                 fd = new
-                if os.fstat(fd).st_dev != self.device:
+                if fd.stat().st_dev != self.device:
                     raise MediaError("download_filesystem_changed")
             return fd
         except BaseException:
-            os.close(fd)
+            fd.close()
             raise
 
     def parent(self, path, trash=False):
@@ -61,7 +61,7 @@ class LocalTree:
     def info(self, path, trash=False):
         parent, name = self.parent(path, trash)
         try:
-            value = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            value = parent.stat(name)
             if not stat.S_ISREG(value.st_mode) and not stat.S_ISDIR(value.st_mode):
                 raise MediaError("unsafe_media_file")
             if value.st_dev != self.device:
@@ -75,24 +75,24 @@ class LocalTree:
                 "relative_path": path,
             }
         finally:
-            os.close(parent)
+            parent.close()
 
     def absent(self, path, trash=False):
         parent, name = self.parent(path, trash)
         try:
             try:
-                os.stat(name, dir_fd=parent, follow_symlinks=False)
+                parent.stat(name)
             except FileNotFoundError:
                 return
             raise MediaError("destination_name_conflict")
         finally:
-            os.close(parent)
+            parent.close()
 
     def listing(self, path="", marker=""):
         fd = self.walk(self.root, relative(path))
         try:
             names = []
-            with os.scandir(fd) as stream:
+            with fd.names() as stream:
                 for entry in stream:
                     if len(names) >= 10000:
                         raise MediaError("local_directory_listing_limit")
@@ -106,7 +106,7 @@ class LocalTree:
                 "coverage": {"relative_path": path, "recursive": False},
             }
         finally:
-            os.close(fd)
+            fd.close()
 
     def change(self, step):
         action = step["action"]
@@ -115,10 +115,9 @@ class LocalTree:
         if action == "mkdir":
             parent, name = self.parent(destination)
             try:
-                os.mkdir(name, 0o755, dir_fd=parent)
-                os.fsync(parent)
+                parent.mkdir(name, 0o755)
             finally:
-                os.close(parent)
+                parent.close()
             return self.info(destination)
         src_trash = action == "restore"
         dst_trash = action == "trash"
@@ -146,26 +145,24 @@ class LocalTree:
             dst, dn = self.parent(destination, dst_trash)
             try:
                 if not present:
-                    os.link(sn, dn, src_dir_fd=src, dst_dir_fd=dst, follow_symlinks=False)
-                    os.fsync(dst)
+                    src.link(sn, dst, dn)
                 if not matches(self.info(source, src_trash)) or not matches(
                     self.info(destination, dst_trash)
                 ):
                     raise MediaError("library_precondition_changed")
                 # A crash between link/unlink leaves both names with the same
                 # identity. Reconciliation only removes the captured source name.
-                os.unlink(sn, dir_fd=src)
-                os.fsync(src)
+                src.unlink(sn)
             finally:
-                os.close(src)
-                os.close(dst)
+                src.close()
+                dst.close()
         return self.info(destination, dst_trash)
 
     def close(self):
         for field in ("root", "trash"):
             fd = getattr(self, field)
             if fd is not None:
-                os.close(fd)
+                fd.close()
                 setattr(self, field, None)
 
 

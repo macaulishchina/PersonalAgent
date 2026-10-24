@@ -1,5 +1,7 @@
 """Validate an isolated file candidate through the same owners as application startup."""
 
+from assistant_runtime.api.system import system
+
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -33,7 +35,7 @@ def validate_candidate(entry_name, contents, *, root, management=None, entry_dir
                 document["root"] = str(root)
                 content = tomlkit.dumps(document).encode()
             path.write_bytes(content)
-            path.chmod(0o600)
+            system.private(path)
         config = Config.load(candidate / entry_name)
         config.root = Path(root).resolve()
         external = [name for name in config.enabled_plugins if name not in OWNERS]

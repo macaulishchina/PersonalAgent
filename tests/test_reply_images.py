@@ -1,5 +1,7 @@
 """Assistant images remain private, ordered, replayable and visible through HTTP."""
 
+from platform_support import private_mode
+
 import asyncio
 import base64
 from dataclasses import replace
@@ -112,7 +114,7 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         with Image.open(asset) as image:
             self.assertEqual(image.format, "JPEG")
             self.assertEqual(image.size, (64, 48))
-        self.assertEqual(asset.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(asset), 0o600)
         self.assertEqual(message["ordinal"], before["ordinal"])
         self.assertEqual(message["updated"], before["updated"])
         changes = c.store.changes(c.session, cursor)

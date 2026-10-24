@@ -21,7 +21,9 @@ class OpenList:
     async def authenticate(self):
         self.scope_checked = False
         try:
-            credentials = await asyncio.to_thread(lambda: json.loads(self.credentials.read_text()))
+            credentials = await asyncio.to_thread(
+                lambda: json.loads(self.credentials.read_text(encoding="utf-8"))
+            )
         except (OSError, ValueError):
             raise MediaError("openlist_not_configured") from None
         if not isinstance(credentials, dict) or not isinstance(credentials.get("base_path", ""), str):

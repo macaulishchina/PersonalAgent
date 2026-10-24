@@ -1,8 +1,8 @@
 """Versioned non-secret instances. Only registered adapters can be instantiated."""
 
+from assistant_runtime.api.system import system
+
 import json
-import os
-import tempfile
 from assistant_runtime.api import identifier
 
 
@@ -15,7 +15,7 @@ class Registry:
 
     def load(self):
         if self.path.exists():
-            raw = json.loads(self.path.read_text())
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
             if raw.get("version") != 1 or type(raw.get("revision")) is not int or len(raw["sources"]) > 64:
                 raise ValueError("Invalid event source registry")
             self.sources = {identifier(key): self.validate(value) for key, value in raw["sources"].items()}
@@ -64,26 +64,17 @@ class Registry:
             raise ValueError("Unknown source management action")
         self.validate_count(sources)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".sources-")
-        try:
-            with os.fdopen(fd, "w") as stream:
-                json.dump(
+        system.atomic_write(
+            self.path,
+            (
+                json.dumps(
                     {"version": 1, "revision": revision + 1, "sources": sources},
-                    stream,
                     ensure_ascii=False,
                     indent=2,
                 )
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
-            parent = os.open(self.path.parent, os.O_DIRECTORY)
-            try:
-                os.fsync(parent)
-            finally:
-                os.close(parent)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+                + "\n"
+            ).encode(),
+            prefix=".sources-",
+        )
         self.sources, self.revision = sources, revision + 1
         return self.describe()

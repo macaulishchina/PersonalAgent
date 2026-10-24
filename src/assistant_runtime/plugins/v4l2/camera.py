@@ -1,5 +1,7 @@
 """On-demand V4L2 acquisition through upstream FFmpeg, with no standby capture."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import io
 import os
@@ -76,7 +78,7 @@ class V4L2Camera:
         binary = await asyncio.to_thread(get_ffmpeg_exe)
         if self.closed:
             raise RuntimeError("Camera provider closed")
-        process = await asyncio.create_subprocess_exec(
+        process = await system.spawn(
             binary,
             "-hide_banner",
             "-nostdin",

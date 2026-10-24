@@ -24,6 +24,7 @@
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
 - Continue development on `main` by default; leave this workspace on `main` after merging and pushing.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
+- Keep OS mechanisms in `platforms/` or explicitly platform-specific hardware adapters. Business plugins use public `api.system` facilities; independent plugins declare the `system_io` resource. Never substitute POSIX mode assertions for Windows ACL checks, or claim Windows readiness from Linux mocks. Native acceptance commands and pending SCM/reboot checks live in `docs/platforms.md`.
 
 - Runtime foreground/background agents use registered `workfiles` scratch/artifact areas. Task state belongs to the tasks plugin; provider protocol stays in the Pi adapter; tasks owns goal policy and completion. Never steer a background task through the foreground turn or infer completion from memory.
 

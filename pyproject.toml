@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "personal-agent"
 version = "0.2.0"
-description = "Extensible personal assistant runtime for Linux"
+description = "Extensible personal assistant runtime for Linux and Windows"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = ["portalocker>=3.2,<4", "pywin32>=311; sys_platform == 'win32'", "tzdata>=2025.2; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 core = [
@@ -40,11 +40,14 @@ dev = ["ruff==0.14.0", "mypy==1.18.2", "setuptools==84.0.0"]
 [project.scripts]
 personal-agent = "assistant_runtime.app.cli:main"
 
+[tool.setuptools.data-files]
+"share/personal-agent/pi" = ["deploy/pi/package.json", "deploy/pi/package-lock.json"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["configuration.json"]
+"*" = ["configuration.json", "platform.json"]
 "assistant_runtime.app" = ["templates/*/*.toml"]
 "assistant_runtime.core.configuration" = ["static/*"]
 "assistant_runtime.plugins.media" = ["README.md", "skills/*/SKILL.md"]
@@ -73,6 +76,7 @@ prerelease = "allow"
 # Non-editable installs must rebuild when code or bundled resources change.
 cache-keys = [
     { file = "pyproject.toml" },
+    { file = "deploy/pi/package*.json" },
     { file = "src/**/*.py" },
     { file = "src/**/*.toml" },
     { file = "src/**/*.json" },

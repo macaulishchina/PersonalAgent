@@ -3,7 +3,9 @@
 from copy import deepcopy
 import re
 
-NATIVE_TOOLS = frozenset({"read", "write", "edit", "bash", "grep", "find", "ls", "request_user_input"})
+NATIVE_TOOLS = frozenset(
+    {"read", "write", "edit", "bash", "powershell", "grep", "find", "ls", "request_user_input"}
+)
 
 
 def names(value, label, maximum):

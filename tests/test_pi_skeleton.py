@@ -1,5 +1,8 @@
 """Real Pi subprocess acceptance against a private synthetic model endpoint."""
 
+from platform_support import private_mode
+from assistant_runtime.platforms.executables import command_tools
+
 import asyncio
 import json
 from pathlib import Path
@@ -17,6 +20,11 @@ from assistant_runtime.core.pi.backend import PiBackend
 from assistant_runtime.core.pi.conversation import task_event
 from assistant_runtime.core.speech.disabled import DisabledVoice
 from assistant_runtime.app.store import Store
+
+
+def shell_call(ident, bash, powershell=None):
+    tool = command_tools()
+    return sse_tool_call(ident, tool, {"command": (powershell or bash) if tool == "powershell" else bash})
 
 
 def configuration(url):
@@ -170,9 +178,11 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
     async def test_tool_only_messages_do_not_create_reply_placeholders_on_failure(self):
         def script(step, body):
             if step == 1:
-                return sse_tool_call("once", "bash", {"command": "echo once >> evidence.txt"})
+                return shell_call(
+                    "once", "echo once >> evidence.txt", "Add-Content -Encoding utf8 evidence.txt once"
+                )
             if step == 2:
-                return sse_tool_call("failed-tool", "bash", {"command": "exit 1"})
+                return shell_call("failed-tool", "exit 1")
             return (402, {"error": {"message": "synthetic rejection"}})
 
         self.gateway.script_fn = script
@@ -233,8 +243,8 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
 
         self.usage.settings = replace(self.usage.settings, max_requests=3)
         self.usage.ledger.settings = self.usage.settings
-        self.gateway.script_fn = lambda step, body: sse_tool_call(
-            f"repeat{step}", "bash", {"command": "printf checked"}
+        self.gateway.script_fn = lambda step, body: shell_call(
+            f"repeat{step}", "printf checked", "Write-Output checked"
         )
         ident = await self.session(budget_id="scheduled-run")
         await self.client.request(
@@ -304,7 +314,9 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_stream_failure_allows_new_user_request_without_replaying_tool(self):
         def script(step, body):
             if step == 1:
-                return sse_tool_call("write-once", "bash", {"command": "echo once >> evidence.txt"})
+                return shell_call(
+                    "write-once", "echo once >> evidence.txt", "Add-Content -Encoding utf8 evidence.txt once"
+                )
             if step == 2:
                 return sse_text_reply("truncated", "partial")[:-1]
             return sse_text_reply("new-request", "new answer")
@@ -400,7 +412,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_large_tool_result_is_saved_and_bounded_without_reexecution(self):
         self.gateway.script_fn = lambda step, body: (
-            sse_tool_call("large", "bash", {"command": "printf '%12000s' x"})
+            shell_call("large", "printf '%12000s' x", "Write-Output ('x' * 12000)")
             if step == 1
             else sse_text_reply("done", "done")
         )
@@ -420,7 +432,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         saved = json.loads(files[0].read_text())
         self.assertGreater(len(saved["content"][0]["text"]), 11000)
         self.assertFalse(saved["is_error"])
-        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(files[0]), 0o600)
         self.assertEqual(len(self.gateway.requests), 2)
 
     async def test_slow_first_response_and_stream_use_configured_total_deadline(self):
@@ -613,7 +625,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("scratch", json.dumps(self.gateway.requests[-1]))
 
     async def test_cancel_real_shell_waits_for_confirmed_end(self):
-        self.gateway.script_fn = lambda step, body: sse_tool_call("sleep", "bash", {"command": "sleep 30"})
+        self.gateway.script_fn = lambda step, body: shell_call("sleep", "sleep 30", "Start-Sleep -Seconds 30")
         ident = await self.session()
         result = await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic cancellation"}]}
@@ -628,7 +640,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.request("operations.list", {"session_id": ident}))["data"], [])
 
     async def test_full_event_queue_cannot_block_shutdown_or_leave_owned_process(self):
-        self.gateway.script_fn = lambda step, body: sse_tool_call("wait", "bash", {"command": "sleep 30"})
+        self.gateway.script_fn = lambda step, body: shell_call("wait", "sleep 30", "Start-Sleep -Seconds 30")
         ident = await self.session()
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic shutdown"}]}
@@ -648,7 +660,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(meta["pending_operations"])
 
     async def test_process_death_is_unknown_and_does_not_replay(self):
-        self.gateway.script_fn = lambda step, body: sse_tool_call("sleep", "bash", {"command": "sleep 30"})
+        self.gateway.script_fn = lambda step, body: shell_call("sleep", "sleep 30", "Start-Sleep -Seconds 30")
         ident = await self.session()
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic interruption"}]}

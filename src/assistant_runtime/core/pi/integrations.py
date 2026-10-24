@@ -23,7 +23,7 @@ class PiIntegrations:
             from assistant_runtime.core.integrations.configuration import validate_registry
 
             self.runtime_data = (
-                validate_registry(json.loads(frozen.read_text()))
+                validate_registry(json.loads(frozen.read_text(encoding="utf-8")))
                 if frozen.exists()
                 else {"revision": 0, "servers": {}, "removed": []}
             )

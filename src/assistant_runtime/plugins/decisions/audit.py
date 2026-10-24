@@ -1,5 +1,7 @@
 """Private date archives; all IO runs on the existing receipt worker thread."""
 
+from assistant_runtime.api.system import system
+
 from datetime import datetime, date
 import json
 import os
@@ -14,10 +16,18 @@ def append(directory, timezone, entry):
     raw = (json.dumps(entry, ensure_ascii=False, allow_nan=False) + "\n").encode()
     if len(raw) > 65536:
         raise ValueError("Decision archive entry too large")
-    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    directory = system.directory(folder)
+    try:
+        fd = directory.open_file(path.name, os.O_RDWR | os.O_APPEND | os.O_CREAT)
+    finally:
+        directory.close()
     with os.fdopen(fd, "ab") as out:
         size = os.fstat(fd).st_size
-        if size and os.pread(fd, 1, size - 1) != b"\n":
+        if size:
+            os.lseek(fd, size - 1, os.SEEK_SET)
+        tail = os.read(fd, 1) if size else b"\n"
+        os.lseek(fd, 0, os.SEEK_END)
+        if size and tail != b"\n":
             out.write(b"\n")  # Preserve a torn tail without corrupting the next complete record.
         out.write(raw)
         out.flush()

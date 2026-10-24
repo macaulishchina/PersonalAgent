@@ -1,5 +1,7 @@
 """Private chat media, shared by uploads, requested captures and recorded clips."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import hashlib
 import io
@@ -61,7 +63,7 @@ class MediaAttachments:
                 temporary = Path(f.name)
                 try:
                     f.write(normalized.getvalue())
-                    temporary.chmod(0o600)
+                    system.private(temporary)
                     temporary.replace(path)
                 finally:
                     temporary.unlink(missing_ok=True)
@@ -123,7 +125,7 @@ class MediaAttachments:
             raise
         filename = Path(name).name[:120]
         try:
-            destination.chmod(0o600)
+            system.private(destination)
             with self.db:
                 self.db.execute(
                     "INSERT INTO chat_uploads VALUES(?,?,?,?,?)",

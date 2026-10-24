@@ -20,7 +20,7 @@ def discover(button, root=Path("/sys/class/hidraw"), devices=Path("/dev")):
         try:
             fields = dict(
                 line.split("=", 1)
-                for line in (entry / "device/uevent").read_text().splitlines()
+                for line in (entry / "device/uevent").read_text(encoding="utf-8").splitlines()
                 if "=" in line
             )
             bus, vendor, product = (int(value, 16) for value in fields["HID_ID"].split(":"))

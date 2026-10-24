@@ -1,5 +1,7 @@
 """Model configuration, bounded admission and durable invocation receipts."""
 
+from platform_support import private_mode
+
 from usage_fixture import attach_usage
 
 import asyncio
@@ -604,8 +606,8 @@ class DeploymentTest(unittest.TestCase):
             self.assertEqual(gateway["ports"], ["127.0.0.1:4010:4000"])
             self.assertNotIn("UNRELATED_KEY", gateway["environment"])
             self.assertNotIn("never-export", path.read_text())
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(private_mode(path), 0o600)
+            self.assertEqual(private_mode(path.parent), 0o700)
             self.assertNotIn("synthetic-provider-secret", (path.parent / "gateway/config.yaml").read_text())
             self.assertEqual(
                 (path.parent / "revision").read_text().strip(),

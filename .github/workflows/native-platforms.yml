@@ -1,0 +1,46 @@
+name: Native platform acceptance
+
+# Explicit acceptance only; no credentials, production instances or paid models.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install locked runtime and Pi
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          def run(*args): subprocess.run(args, check=True)
+          run(sys.executable, '-m', 'pip', 'install', 'uv==0.10.9')
+          run('uv', 'sync', '--locked', '--extra', 'standard', '--extra', 'dev', '--no-editable')
+          python = str(pathlib.Path('.venv', 'Scripts/python.exe' if os.name == 'nt' else 'bin/python').resolve())
+          runtime = pathlib.Path(os.environ['RUNNER_TEMP']) / 'agent-pi'
+          run(python, 'scripts/setup_pi.py', str(runtime))
+          with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as stream:
+              stream.write(str(runtime / 'node_modules/.bin') + '\n')
+      - name: Native contracts, real Pi with synthetic model, isolated presets
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          python = str(pathlib.Path('.venv', 'Scripts/python.exe' if os.name == 'nt' else 'bin/python').resolve())
+          subprocess.run([python, 'scripts/check.py', '--test', 'test_platforms', '--test', 'test_pi_skeleton', '--test', 'test_composition_isolation'], check=True)
+          subprocess.run([python, 'scripts/verify_native_deployment.py'], check=True)

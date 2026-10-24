@@ -1,5 +1,7 @@
 """Durable, caller-owned snapshots for execution inputs."""
 
+from assistant_runtime.api.system import system
+
 import base64
 import hashlib
 import io
@@ -59,7 +61,7 @@ class InputFiles:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
                 with path.open("xb") as stream:
-                    path.chmod(0o600)
+                    system.private(path)
                     stream.write(raw)
                 with self.db:
                     self.db.execute(
@@ -134,7 +136,7 @@ class InputFiles:
             if path.is_symlink():
                 raise ValueError("Input destination cannot be a symlink")
             with path.open("xb") as stream:
-                path.chmod(0o600)
+                system.private(path)
                 stream.write(raw)
             if record["kind"] == "image":
                 inputs.append(

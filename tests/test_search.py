@@ -1,5 +1,7 @@
 """Independent HTTP search, lifecycle, privacy and MCP/IPC contracts; no external IO."""
 
+from assistant_runtime.platforms.ipc import serve as serve_control
+
 from assistant_runtime.app.bundled import context_for
 
 from usage_fixture import attach_usage
@@ -355,7 +357,7 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
         async def connection(reader, writer):
             await AssistantService._connection(service, reader, writer)
 
-        server = await asyncio.start_unix_server(connection, path=socket_path)
+        server = await serve_control(socket_path, connection)
         self.addAsyncCleanup(server.wait_closed)
         self.addCleanup(server.close)
         client = LocalRuntimeClient(socket_path)

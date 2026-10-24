@@ -1,5 +1,7 @@
 """One-time explicit composition candidate; never changes a running instance."""
 
+from assistant_runtime.api.system import system
+
 import json
 from pathlib import Path
 import re
@@ -57,11 +59,11 @@ def prepare(source, destination):
     for spec in definitions.values():
         graph.add(SimpleNamespace(manifest=spec.manifest))
     graph.order()  # Includes cycle and version checks, with no plugin construction.
-    entry = tomllib.loads(source.read_text())
+    entry = tomllib.loads(source.read_text(encoding="utf-8"))
     paths = [source, *(source.parent / name for name in entry.get("include", []))]
     if any(path.relative_to(source.parent).parts[0] == "original" for path in paths):
         raise ValueError("The candidate backup name 'original' conflicts with a source include")
-    contents = {path.relative_to(source.parent): path.read_text() for path in paths}
+    contents = {path.relative_to(source.parent): path.read_text(encoding="utf-8") for path in paths}
     for key, value in (("root", str(current.root)), ("plugins", selected)):
         owner = next(
             (path for path, text in contents.items() if key in tomllib.loads(text)), Path(source.name)
@@ -75,12 +77,12 @@ def prepare(source, destination):
             relative = path.relative_to(source.parent)
             for base, text in (
                 (destination, contents[relative]),
-                (destination / "original", path.read_text()),
+                (destination / "original", path.read_text(encoding="utf-8")),
             ):
                 output = base / relative
                 output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 with output.open("x") as stream:
-                    output.chmod(0o600)
+                    system.private(output)
                     stream.write(text)
         target = destination / source.name
         expected = {**original, "root": str(current.root), "plugins": selected}

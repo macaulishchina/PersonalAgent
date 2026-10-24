@@ -1,5 +1,7 @@
 """Actual Pi provider library, credential locks and agent processes; localhost only."""
 
+from platform_support import private_mode
+
 import asyncio
 from dataclasses import replace
 import json
@@ -218,8 +220,8 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             # The fixture's refresh request has no model; two model calls share one locked refresh.
             self.assertEqual(sum("model" not in p for p in self.gateway.requests), 1)
             self.assertEqual(sum("model" in p for p in self.gateway.requests), 2)
-            self.assertEqual((path / "auth.json").stat().st_mode & 0o777, 0o600)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(private_mode(path / "auth.json"), 0o600)
+            self.assertEqual(private_mode(path), 0o700)
         finally:
             await first.close()
             await second.close()

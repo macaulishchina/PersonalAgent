@@ -1,10 +1,11 @@
 """Async Mem0 provider. The worker owns indexes; inference uses the models capability."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import json
 import os
 from pathlib import Path
-import signal
 import sys
 
 
@@ -28,7 +29,7 @@ class Mem0Memory:
             }
             log = (self.root / "worker.log").open("a")
             try:
-                self.process = await asyncio.create_subprocess_exec(
+                self.process = await system.spawn(
                     sys.executable,
                     "-m",
                     "assistant_runtime.core.memory.mem0_worker",
@@ -109,12 +110,4 @@ class Mem0Memory:
 
     async def close(self):
         process, self.process = self.process, None
-        if process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                await asyncio.wait_for(process.wait(), 5)
-            except TimeoutError:
-                os.killpg(process.pid, signal.SIGKILL)
-                await process.wait()
-            except ProcessLookupError:
-                await process.wait()
+        await system.stop_process(process, timeout=5)

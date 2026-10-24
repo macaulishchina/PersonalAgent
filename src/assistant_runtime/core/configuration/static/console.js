@@ -493,6 +493,8 @@ function drawField(field) {
       check.type = "checkbox";
       check.value = plugin.id;
       check.checked = (value || []).includes(plugin.id);
+      if (plugin.platform_supported === false && !check.checked)
+        check.disabled = true;
       title.append(
         node("strong", plugin.configuration?.title || plugin.id),
         node("code", plugin.id),
@@ -502,7 +504,9 @@ function drawField(field) {
         title,
         node(
           "span",
-          plugin.kind === "unavailable"
+          plugin.platform_supported === false
+            ? "当前系统不支持"
+            : plugin.kind === "unavailable"
             ? "未安装"
             : plugin.kind === "core"
               ? "内核"

@@ -46,6 +46,7 @@ class PiBackend:
             skill_paths=skill_paths,
             usage=usage,
             accounts=accounts,
+            shell=getattr(config, "pi_shell", "auto"),
         )
         self.integrations = None
         if mcp_registry:

@@ -3,13 +3,13 @@
 import asyncio
 import contextlib
 import io
-import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 
 from scripts.check import execute, groups, run_tests, select
+from platform_support import process_alive
 
 
 class SelectionTest(unittest.TestCase):
@@ -57,12 +57,7 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
-                status = Path(f"/proc/{pid}/stat")
-                try:
-                    state = status.read_text().rsplit(")", 1)[1].split()[0]
-                except FileNotFoundError:
-                    state = None
-                self.assertIn(state, (None, "Z", "X"))
+                self.assertFalse(process_alive(pid))
                 self.assertIsNone(unrelated.returncode)
             finally:
                 if not task.done():
@@ -107,8 +102,7 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
             result = await execute("blocked", [sys.executable, "-c", code], root, 0.5)
             self.assertEqual(result.code, 124)
             pid = int((root / "pid").read_text())
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
+            self.assertFalse(process_alive(pid))
             (root / "pid").unlink()
             task = asyncio.create_task(execute("canceled", [sys.executable, "-c", code], root, 10))
             async with asyncio.timeout(5):
@@ -118,5 +112,4 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
+            self.assertFalse(process_alive(pid))

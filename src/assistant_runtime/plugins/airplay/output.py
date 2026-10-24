@@ -1,5 +1,7 @@
 """Bounded PCM -> FFmpeg MP3 -> pyatv public StreamReader streaming API."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import copy
 import ipaddress
@@ -126,7 +128,7 @@ class AirPlayPlayback:
     @classmethod
     async def open(cls, atv, rate, owner):
         executable = await asyncio.to_thread(get_ffmpeg_exe)
-        process = await asyncio.create_subprocess_exec(
+        process = await system.spawn(
             executable,
             "-hide_banner",
             "-loglevel",

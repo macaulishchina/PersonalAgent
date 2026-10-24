@@ -1,5 +1,7 @@
 """Bounded original-file downloads. Private staging and atomic, no-clobber publication."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import hashlib
 import os
@@ -39,33 +41,29 @@ class LocalFiles:
             path = Path(self.destination[key])
             if path.resolve() != path or not path.is_relative_to(mount):
                 raise MediaError("download_path_changed")
-            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptor = system.directory(path)
             setattr(self, field, descriptor)
-            if os.fstat(descriptor).st_dev != mount.stat().st_dev:
+            if descriptor.stat().st_dev != mount.stat().st_dev:
                 raise MediaError("download_filesystem_changed")
         for part in self.destination.get("relative_parts", []):
             filename(part)
             try:
-                os.mkdir(part, 0o755, dir_fd=self.library)
-                os.fsync(self.library)
+                self.library.mkdir(part, 0o755)
             except FileExistsError:
                 pass
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.library)
-            if os.fstat(child).st_dev != mount.stat().st_dev:
-                os.close(child)
+            child = self.library.child(part)
+            if child.stat().st_dev != mount.stat().st_dev:
+                child.close()
                 raise MediaError("download_filesystem_changed")
-            os.close(self.library)
+            self.library.close()
             self.library = child
-        self.fd = os.open(
-            self.partial, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=self.stage
-        )
+        self.fd = self.stage.open_file(self.partial, os.O_RDWR | os.O_CREAT)
         if not stat.S_ISREG(os.fstat(self.fd).st_mode) or os.fstat(self.fd).st_nlink not in {1, 2}:
             raise MediaError("unsafe_download_partial")
         return os.fstat(self.fd).st_size
 
     def space(self, remaining):
-        info = os.fstatvfs(self.stage)
-        if info.f_bavail * info.f_frsize < remaining + self.minimum_free:
+        if self.stage.free_bytes() < remaining + self.minimum_free:
             raise MediaError("local_capacity_exhausted")
 
     def write(self, block):
@@ -81,7 +79,7 @@ class LocalFiles:
 
     def final_descriptor(self):
         try:
-            fd = os.open(self.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.library)
+            fd = self.library.open_file(self.name, os.O_RDONLY)
         except FileNotFoundError:
             return None
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -100,18 +98,15 @@ class LocalFiles:
         # link but before the DB commit is recovered by hashing that final file.
         os.fsync(self.fd)
         try:
-            os.link(
-                self.partial, self.name, src_dir_fd=self.stage, dst_dir_fd=self.library, follow_symlinks=False
-            )
+            self.stage.link(self.partial, self.library, self.name)
         except FileExistsError:
             raise MediaError("destination_name_conflict") from None
-        os.fsync(self.library)
+        self.library.sync()
         self.remove_partial()
 
     def remove_partial(self):
         try:
-            os.unlink(self.partial, dir_fd=self.stage)
-            os.fsync(self.stage)
+            self.stage.unlink(self.partial)
         except FileNotFoundError:
             pass
 
@@ -119,7 +114,7 @@ class LocalFiles:
         for field in ("final", "fd", "stage", "library"):
             value = getattr(self, field)
             if value is not None:
-                os.close(value)
+                value.close() if field in {"stage", "library"} else os.close(value)
                 setattr(self, field, None)
 
 

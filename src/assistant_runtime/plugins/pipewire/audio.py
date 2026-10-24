@@ -1,3 +1,4 @@
+from assistant_runtime.api.system import system
 import asyncio
 import copy
 import json
@@ -29,7 +30,7 @@ def audio_env():
 
 
 async def command(*args, timeout=12):
-    p = await asyncio.create_subprocess_exec(
+    p = await system.spawn(
         *args, env=audio_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     try:
@@ -286,7 +287,7 @@ class AudioRoute:
         await self._unload()
 
     async def _record(self, source, name):
-        return await asyncio.create_subprocess_exec(
+        return await system.spawn(
             "pacat",
             "--record",
             "--raw",

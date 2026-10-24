@@ -1,5 +1,7 @@
 """Bounded private receipts and usage statistics on one owned IO thread."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -43,10 +45,10 @@ class Receipts:
 
     def _open(self):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.directory.chmod(0o700)
+        system.private(self.directory, directory=True)
         path = self.directory / "shadow.sqlite3"
         self.db = sqlite3.connect(path, timeout=1)
-        path.chmod(0o600)
+        system.private(path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA wal_autocheckpoint=128")
         self.db.execute("PRAGMA max_page_count=32768")

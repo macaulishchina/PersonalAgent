@@ -1,5 +1,7 @@
 """Private recording attachments appear live and serve authenticated seek ranges."""
 
+from platform_support import private_mode
+
 from dataclasses import replace
 import json
 import time
@@ -53,7 +55,7 @@ class ReplyVideoTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(c.store.get(message["id"])["ordinal"], message["ordinal"])
         path = c.media.folder / attachment["id"]
         self.assertTrue(path.is_file())
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(path), 0o600)
         url = self.web.base + "/api/uploads/" + attachment["id"]
         async with ClientSession() as guest:
             response = await guest.get(url)

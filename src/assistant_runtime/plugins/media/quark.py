@@ -5,11 +5,10 @@ task receipt immediately; the shared operation worker owns subsequent observatio
 """
 
 import asyncio
-import fcntl
+from assistant_runtime.api.system import system
 import hashlib
 from http.cookies import SimpleCookie
 import json
-import os
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -92,9 +91,9 @@ class Quark:
             raise MediaError("media_stopping")
         if self.lease is None:
             lease = (self.credentials / "owner.lock").open("a")
-            os.fchmod(lease.fileno(), 0o600)
+            system.private(lease.name)
             try:
-                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                system.lock(lease, blocking=False)
             except OSError:
                 lease.close()
                 raise MediaError("media_credentials_already_owned") from None
@@ -109,7 +108,9 @@ class Quark:
 
     async def load_auth(self):
         try:
-            value = await disk(lambda: json.loads((self.credentials / "account.json").read_text()))
+            value = await disk(
+                lambda: json.loads((self.credentials / "account.json").read_text(encoding="utf-8"))
+            )
             cookie = value["cookie"]
             if not isinstance(cookie, str) or len(cookie) > 32768 or "\n" in cookie or "\r" in cookie:
                 raise ValueError()
@@ -121,7 +122,9 @@ class Quark:
                 raise ValueError()
             identity = hashlib.sha256(uid.encode()).hexdigest()
             path = self.credentials / "identity.json"
-            bound = await disk(lambda: json.loads(path.read_text())["identity"] if path.exists() else None)
+            bound = await disk(
+                lambda: json.loads(path.read_text(encoding="utf-8"))["identity"] if path.exists() else None
+            )
             if bound and bound != identity:
                 raise MediaError("account_mismatch")
         except (OSError, ValueError, KeyError, TypeError):

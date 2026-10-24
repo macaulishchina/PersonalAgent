@@ -1,19 +1,21 @@
 """Small maintenance interface; importing it requires no audio, model or MCP packages."""
 
+from assistant_runtime.api.system import system
+from assistant_runtime.platforms.ipc import connect
+
 import argparse
 import asyncio
 import json
 import logging
 import os
 from pathlib import Path
-import subprocess
 import sys
 import base64
 from assistant_runtime.app.config import Config
 
 
 async def request(config, payload):
-    reader, writer = await asyncio.open_unix_connection(config.socket, limit=4 * 1024 * 1024)
+    reader, writer = await connect(config.socket, limit=4 * 1024 * 1024)
     try:
         writer.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
         await writer.drain()
@@ -35,10 +37,9 @@ async def request(config, payload):
 
 
 def systemctl(*args):
-    env = os.environ.copy()
-    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-    env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={env['XDG_RUNTIME_DIR']}/bus")
-    return subprocess.run(["systemctl", "--user", *args], env=env, check=True)
+    from assistant_runtime.platforms.services import linux_systemctl
+
+    return linux_systemctl(*args)
 
 
 def main():
@@ -47,6 +48,13 @@ def main():
         "--config", help="Entry TOML (supports include); otherwise PERSONAL_AGENT_CONFIG or XDG config"
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    install_pi = sub.add_parser("install-pi", help="Explicitly install the pinned Pi runtime")
+    install_pi.add_argument("destination", nargs="?")
+    service = sub.add_parser("service", help="Manage this instance's installed OS service")
+    service.add_argument(
+        "action", choices=["install", "start", "stop", "restart", "status", "logs", "uninstall"]
+    )
+    service.add_argument("--account", help="Explicit Windows service account")
     init = sub.add_parser("init", help="Create a private instance from a plugin preset")
     init.add_argument("destination")
     init.add_argument("--preset", choices=["slim", "standard"], default="standard")
@@ -301,7 +309,7 @@ def main():
                     with configuration_lock(settings.root):
                         atomic(path, (secrets.token_urlsafe(32) + "\n").encode())
                 AdminAccess(path)
-                print(path.read_text().strip())
+                print(path.read_text(encoding="utf-8").strip())
             return
         if args.command == "run" and os.environ.get("PERSONAL_AGENT_SUPERVISOR_PID") != str(os.getppid()):
             from .management import serve
@@ -310,7 +318,29 @@ def main():
 
             asyncio.run(serve(ManagementSettings.load(resolve_management(args.config))))
             return
+        if args.command == "install-pi":
+            from .install_pi import setup
+
+            print(setup(args.destination))
+            return
+        if args.command == "service" and args.action == "install":
+            from .install_service import main as install_service
+
+            if not args.config:
+                parser.error("service install requires --config")
+            argv = ["--config", args.config]
+            if args.account:
+                argv.extend(["--account", args.account])
+            install_service(argv)
+            return
         config = Config.load(args.config)
+        if args.command == "service":
+            from assistant_runtime.platforms.services import control
+
+            result = control(args.action, config)
+            if result is not None:
+                print(result)
+            return
         if args.command == "plugins":
             from .plugin_inventory import inventory
 
@@ -319,12 +349,10 @@ def main():
             from assistant_runtime.app.host import AssistantService
 
             asyncio.run(AssistantService(config, args.no_mic).run())
-        elif args.command in {"start", "restart", "halt"}:
-            systemctl("stop" if args.command == "halt" else args.command, config.unit_name)
-        elif args.command == "logs":
-            subprocess.run(
-                ["journalctl", "--user", "-u", config.unit_name, "-n", "60", "--no-pager"], check=True
-            )
+        elif args.command in {"start", "restart", "halt", "logs"}:
+            from assistant_runtime.platforms.services import control
+
+            control("stop" if args.command == "halt" else args.command, config)
         elif args.command == "ai-usage" and args.action == "check":
             from assistant_runtime.core.ai_usage.settings import UsageSettings
 
@@ -404,7 +432,7 @@ def main():
                     path = Path(output).expanduser().resolve()
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(image)
-                    path.chmod(0o600)
+                    system.private(path)
                     result["saved_to"] = str(path)
                 else:
                     result["saved_to"] = None
@@ -417,7 +445,7 @@ def main():
                 path = Path(output).expanduser().resolve()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(config.state_dir / "web-uploads" / ident, path)
-                path.chmod(0o600)
+                system.private(path)
                 result["saved_to"] = str(path)
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, RuntimeError, ValueError, TimeoutError, KeyError) as exc:

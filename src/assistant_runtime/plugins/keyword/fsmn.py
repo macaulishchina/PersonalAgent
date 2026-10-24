@@ -16,7 +16,7 @@ CHUNK = 1280  # 80 ms, the frozen streaming calibration point
 
 class Fsmn:
     def __init__(self, folder: Path, wake_words):
-        self.meta = json.loads((folder / "manifest.json").read_text())
+        self.meta = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
         expected = {"id": "fsmn-v2", "format": 1, "sample_rate": RATE, "chunk_ms": 80, "threads": 1}
         if any(self.meta.get(k) != v for k, v in expected.items()):
             raise ValueError("Unsupported FSMN runtime model manifest")
@@ -25,9 +25,12 @@ class Fsmn:
                 raise ValueError(f"FSMN asset checksum mismatch: {name}")
         if not wake_words or set(wake_words) - set(self.meta["wake_words"]):
             raise ValueError("Wake phrases must be supported by the trained FSMN model: 嘟嘟 / 你好嘟嘟")
-        tokens = (folder / "tokens.txt").read_text().splitlines()
+        tokens = (folder / "tokens.txt").read_text(encoding="utf-8").splitlines()
         self.decoder = KwsCtcPrefixDecoder(
-            None, ",".join(wake_words), tokens, json.loads((folder / "lexicon.json").read_text())
+            None,
+            ",".join(wake_words),
+            tokens,
+            json.loads((folder / "lexicon.json").read_text(encoding="utf-8")),
         )
         for entry in self.decoder.keywords_token.values():
             if not entry["token_id"] or any(tokens[i] in {"<unk>", "<blank>"} for i in entry["token_id"]):

@@ -2,13 +2,12 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-import fcntl
+from assistant_runtime.api.system import system
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import tempfile
 import time
 import tomllib
 import uuid
@@ -43,23 +42,7 @@ class Conflict(ValueError):
 
 
 def atomic(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, name = tempfile.mkstemp(prefix=".config-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            os.chmod(name, 0o600)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(name).unlink(missing_ok=True)
+    system.atomic_write(path, data, prefix=".config-")
 
 
 @dataclass
@@ -78,7 +61,7 @@ class ConfigurationFiles:
         self.retain = retain
         self.resources = resources
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.state.chmod(0o700)
+        system.private(self.state, directory=True)
 
     @contextmanager
     def locked(self):
@@ -90,8 +73,8 @@ class ConfigurationFiles:
                 yield
             return
         with (self.state / "lock").open("a+b") as stream:
-            os.chmod(stream.name, 0o600)
-            fcntl.flock(stream, fcntl.LOCK_EX)
+            system.private(stream.name)
+            system.lock(stream)
             self.recover()
             yield
 
@@ -135,7 +118,7 @@ class ConfigurationFiles:
             )
         index = self.state / "registered-files.json"
         names = list(contents)
-        if not index.exists() or json.loads(index.read_text()) != names:
+        if not index.exists() or json.loads(index.read_text(encoding="utf-8")) != names:
             atomic(index, json.dumps(names).encode())
         return Snapshot(digest.hexdigest(), contents, resources)
 
@@ -264,7 +247,7 @@ class ConfigurationFiles:
             ident = uuid.uuid4().hex
             backup = self.state / "versions" / ident
             backup.parent.mkdir(exist_ok=True, mode=0o700)
-            backup.parent.chmod(0o700)
+            system.private(backup.parent, directory=True)
             backup.mkdir(mode=0o700)
             for name, content in snapshot.contents.items():
                 atomic(backup / name, content)
@@ -325,19 +308,15 @@ class ConfigurationFiles:
 
     def _clear_journal(self):
         (self.state / "transaction.json").unlink(missing_ok=True)
-        fd = os.open(self.state, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        system.sync_directory(self.state)
 
     def recover(self):
         journal = self.state / "transaction.json"
         if not journal.exists():
             return
-        ident = json.loads(journal.read_text())["backup"]
+        ident = json.loads(journal.read_text(encoding="utf-8"))["backup"]
         backup = self._backup(ident)
-        metadata = json.loads((backup / "receipt.json").read_text())
+        metadata = json.loads((backup / "receipt.json").read_text(encoding="utf-8"))
         for name in metadata["files"]:
             atomic(self.path(name), (backup / name).read_bytes())
         if metadata.get("resource_paths"):
@@ -362,7 +341,7 @@ class ConfigurationFiles:
     def history(self):
         with self.locked():
             return [
-                json.loads(p.read_text())
+                json.loads(p.read_text(encoding="utf-8"))
                 for p in sorted(
                     (self.state / "versions").glob("*/receipt.json"),
                     key=lambda p: p.stat().st_mtime,
@@ -373,8 +352,10 @@ class ConfigurationFiles:
     def restore(self, ident, version):
         # Reuse save for conflict detection, validation, backup and audit.
         backup = self._backup(ident)
-        receipt = json.loads((backup / "receipt.json").read_text())
-        documents = {name: tomllib.loads((backup / name).read_text()) for name in receipt["files"]}
+        receipt = json.loads((backup / "receipt.json").read_text(encoding="utf-8"))
+        documents = {
+            name: tomllib.loads((backup / name).read_text(encoding="utf-8")) for name in receipt["files"]
+        }
         operations = []
         if self.resources:
             registered = self.resources.registered({n: (backup / n).read_bytes() for n in receipt["files"]})
@@ -416,7 +397,7 @@ class ConfigurationFiles:
     def _audit(self, record):
         path = self.state / "audit.jsonl"
         with path.open("ab") as stream:
-            os.chmod(path, 0o600)
+            system.private(path)
             stream.write(json.dumps(record, ensure_ascii=False).encode() + b"\n")
             stream.flush()
             os.fsync(stream.fileno())
@@ -428,11 +409,11 @@ class ConfigurationFiles:
         for name in ("applied.json", "confirmed.json"):
             applied = self.state / name
             if applied.exists():
-                version = json.loads(applied.read_text()).get("version")
+                version = json.loads(applied.read_text(encoding="utf-8")).get("version")
                 protected.update(
                     p.parent.name
                     for p in (self.state / "versions").glob("*/receipt.json")
-                    if json.loads(p.read_text())["version"] == version
+                    if json.loads(p.read_text(encoding="utf-8"))["version"] == version
                 )
         backups = sorted(
             (self.state / "versions").glob("*/receipt.json"), key=lambda p: p.stat().st_mtime, reverse=True
@@ -444,11 +425,11 @@ class ConfigurationFiles:
     def _repair_snapshot(self):
         index = self.state / "registered-files.json"
         if index.exists():
-            names = json.loads(index.read_text())
+            names = json.loads(index.read_text(encoding="utf-8"))
         else:
             names = [self.entry.name]
             try:
-                names += tomllib.loads(self.entry.read_text()).get("include", [])
+                names += tomllib.loads(self.entry.read_text(encoding="utf-8")).get("include", [])
             except (ValueError, OSError):
                 pass
         if not isinstance(names, list) or len(names) > 33 or self.entry.name not in names:

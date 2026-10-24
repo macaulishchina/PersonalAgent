@@ -2,9 +2,8 @@
 
 import asyncio
 import json
-import os
+from assistant_runtime.api.system import system
 from pathlib import Path
-import tempfile
 
 
 async def disk(function, *args):
@@ -20,11 +19,7 @@ async def disk(function, *args):
 def remove(path):
     path = Path(path)
     path.unlink(missing_ok=True)
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    system.sync_directory(path.parent)
 
 
 def save(path, data):
@@ -32,20 +27,4 @@ def save(path, data):
 
 
 def save_bytes(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, name = tempfile.mkstemp(prefix=".media-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(name).unlink(missing_ok=True)
+    system.atomic_write(path, data, prefix=".media-")

@@ -2,11 +2,10 @@
 
 import asyncio
 import uuid
-import fcntl
+from assistant_runtime.api.system import system
 import json
 import logging
 import os
-import signal
 import time
 
 
@@ -27,10 +26,10 @@ class AssistantService:
     def __init__(self, config, no_mic=False):
         self.config, self.no_mic = config, True  # TODO: independent voice acceptance
         config.state_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(config.state_dir, 0o700)
+        system.private(config.state_dir, directory=True)
         self.lock_file = (config.state_dir / "service.lock").open("w")
         try:
-            fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(self.lock_file, blocking=False)
             self.store = Store(config.state_dir / "assistant.sqlite3")
         except BaseException:
             self.lock_file.close()
@@ -152,6 +151,13 @@ class AssistantService:
                         + "\n"
                     ).encode()
                 )
+                await writer.drain()
+                return
+            if action == "shutdown":
+                if d.get("execution_session"):
+                    raise ValueError("Lifecycle control is operator-only")
+                self.stop_event.set()
+                writer.write(b'{"ok":true,"result":{"state":"stopping"}}\n')
                 await writer.drain()
                 return
             if self.intake.paused and not d.get("execution_session"):
@@ -459,8 +465,6 @@ class AssistantService:
                         self.assistant.voice.feed(pcm[offset : offset + 640])
                         self.assistant.last_activity = time.monotonic()
                         await asyncio.sleep(0.02)
-            elif action == "shutdown":
-                self.stop_event.set()
             elif action == "history" and "conversation" not in self.runtime.plugins:
                 raise ValueError("Conversation history is not enabled; query executions instead")
             elif action not in {"status", "history"}:
@@ -486,13 +490,10 @@ class AssistantService:
         server = None
         waiters = []
         try:
-            self.config.socket.unlink(missing_ok=True)
-            server = await asyncio.start_unix_server(
-                self._connection, path=self.config.socket, limit=4 * 1024 * 1024
-            )
-            os.chmod(self.config.socket, 0o600)
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                asyncio.get_running_loop().add_signal_handler(sig, self.stop_event.set)
+            from assistant_runtime.platforms.ipc import serve
+
+            server = await serve(self.config.socket, self._connection)
+            system.stop_signals(self.stop_event.set)
             await self.runtime.start()
             self.startup_complete = not self.runtime.fatal.is_set()
             if getattr(self, "backend", None) and self.backend.session_id:
@@ -517,6 +518,8 @@ class AssistantService:
                     await self.assistant.sleep()
             finally:
                 await self.runtime.close()
-                self.config.socket.unlink(missing_ok=True)
+                from assistant_runtime.platforms.ipc import cleanup
+
+                cleanup(self.config.socket)
                 self.store.db.close()
                 self.lock_file.close()

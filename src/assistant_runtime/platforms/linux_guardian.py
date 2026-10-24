@@ -16,7 +16,7 @@ def descendants():
         if not entry.name.isdecimal():
             continue
         try:
-            stat = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            stat = (entry / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
             rows[int(entry.name)] = (int(stat[1]), stat[19])
         except (OSError, ValueError, IndexError):
             continue
@@ -30,7 +30,7 @@ def descendants():
 
 def send(pid, birth, sig):
     try:
-        current = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        current = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[19]
         if current == birth:
             os.kill(pid, sig)
     except (OSError, IndexError):
@@ -60,12 +60,12 @@ def main():
             parent_lost = True
             break
     if parent_lost or (not stop and child.poll() not in {None, 0}):
-        from assistant_runtime.core.configuration.files import atomic
+        from assistant_runtime.api.system import system
         import json
 
         root = Path(os.environ["PERSONAL_AGENT_INSTANCE_ROOT"])
         try:
-            atomic(
+            system.atomic_write(
                 root / "state/configuration/unclean.json",
                 json.dumps({"reason": "manager_lost" if parent_lost else "worker_failed"}).encode(),
             )

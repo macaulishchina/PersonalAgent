@@ -1,11 +1,12 @@
 """Own only this instance's business process; no model, device or shell operations."""
 
+from assistant_runtime.platforms.ipc import connect
+
 import asyncio
 import base64
-import fcntl
+from assistant_runtime.api.system import system
 import json
 import os
-import signal
 import sys
 import time
 
@@ -35,7 +36,7 @@ class BusinessProcess:
         saved = self.state / "loaded-snapshot.json"
         if saved.exists():
             try:
-                data = json.loads(saved.read_text())
+                data = json.loads(saved.read_text(encoding="utf-8"))
                 self.loaded_snapshot = Snapshot(
                     data["version"],
                     {k: base64.b64decode(v, validate=True) for k, v in data["contents"].items()},
@@ -54,7 +55,9 @@ class BusinessProcess:
         self.apply_task = None
         receipt = self.state / "application.json"
         try:
-            self.application = json.loads(receipt.read_text()) if receipt.exists() else {"phase": "idle"}
+            self.application = (
+                json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {"phase": "idle"}
+            )
             if not isinstance(self.application, dict) or not isinstance(self.application.get("phase"), str):
                 raise ValueError("Invalid application receipt")
         except (ValueError, OSError):
@@ -121,7 +124,7 @@ class BusinessProcess:
 
     async def request(self, payload):
         async with asyncio.timeout(10):
-            reader, writer = await asyncio.open_unix_connection(self.settings.root / "state/control.sock")
+            reader, writer = await connect(self.settings.root / "state/control.sock")
             try:
                 writer.write(json.dumps(payload).encode() + b"\n")
                 await writer.drain()
@@ -152,7 +155,7 @@ class BusinessProcess:
                     # lazy configuration reads; original include names are preserved.
                     folder = self.state / "generations" / snapshot.version
                     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    folder.parent.chmod(0o700)
+                    system.private(folder.parent, directory=True)
                     for name, content in snapshot.contents.items():
                         if name == self.settings.entry.name:
                             document = tomlkit.parse(content.decode())
@@ -173,24 +176,32 @@ class BusinessProcess:
                 self.outcome, self.error = "starting", None
                 logfile = self.state / "business.log"
                 self.logfile = logfile.open("ab")
-                logfile.chmod(0o600)
+                system.private(logfile)
                 env = {
                     **os.environ,
                     "PERSONAL_AGENT_CONFIGURATION_VERSION": revision,
                     "PERSONAL_AGENT_INSTANCE_ROOT": str(self.settings.root),
                     "PERSONAL_AGENT_RESOURCE_MANIFEST": str(folder / "resources.json"),
+                    "PERSONAL_AGENT_OWNED_BUSINESS": "1",
                 }
-                self.process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "assistant_runtime.app.guardian",
-                    str(self.settings.shutdown_seconds),
-                    sys.executable,
-                    "-m",
-                    "assistant_runtime.app.cli",
-                    "--config",
-                    str(frozen_entry),
-                    "run",
+                # Durable ownership also survives termination of the entire Windows
+                # job, when no child can write a last-moment interruption receipt.
+                marker = self.state / "business-owner.json"
+                if marker.exists():
+                    atomic(self.state / "unclean.json", b'{"reason":"previous_owner_unconfirmed"}')
+                atomic(marker, json.dumps({"version": revision}).encode())
+                self.process = await system.spawn(
+                    *system.supervised_command(
+                        self.settings.shutdown_seconds,
+                        [
+                            sys.executable,
+                            "-m",
+                            "assistant_runtime.app.cli",
+                            "--config",
+                            str(frozen_entry),
+                            "run",
+                        ],
+                    ),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=self.logfile,
                     stderr=self.logfile,
@@ -440,39 +451,35 @@ class BusinessProcess:
         process = self.process
         if process and process.returncode is None:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
+                await self.request({"command": "shutdown"})
+            except (OSError, ValueError, TimeoutError):
                 pass
-            try:
-                await asyncio.wait_for(process.wait(), self.settings.shutdown_seconds + 5)
-            except TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+            await system.stop_process(process, timeout=self.settings.shutdown_seconds + 5, graceful=True)
+        if process is not None and process.returncode == 0:
+            (self.state / "business-owner.json").unlink(missing_ok=True)
+            system.sync_directory(self.state)
         if self.logfile:
             self.logfile.close()
             self.logfile = None
         self.outcome = "stopped"
 
 
-async def serve(settings):
+async def serve(settings, *, stop=None):
     from assistant_runtime.core.configuration.console import Console
 
     state = settings.root / "state/configuration"
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (state / "manager.lock").open("a+b") as lock:
-        os.chmod(lock.name, 0o600)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        system.private(lock.name)
+        system.lock(lock, blocking=False)
         # Refuse to supervise an instance already owned by a separately started worker.
         with (settings.root / "state/service.lock").open("a+b") as business_lock:
-            fcntl.flock(business_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(business_lock, blocking=False)
         business = BusinessProcess(settings)
         console = Console(business)
-        stop = asyncio.Event()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+        if stop is None:
+            stop = asyncio.Event()
+            system.stop_signals(stop.set)
         startup = None
         try:
             await console.start()

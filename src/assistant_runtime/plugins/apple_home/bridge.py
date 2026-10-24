@@ -1,5 +1,7 @@
 """Upstream HAP-python owns pairing/encryption/events; this owns refresh signals."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import json
 import logging
@@ -73,7 +75,7 @@ class RefreshBridge:
         # Persist identities: inserting/removing an endpoint must not redirect
         # an existing Apple Home automation to a different refresh accessory.
         path = self.root / "accessory-ids.json"
-        identities = json.loads(path.read_text()) if path.exists() else {}
+        identities = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if (
             not isinstance(identities, dict)
             or any(type(v) is not int or v < 2 or v == 7 for v in identities.values())
@@ -90,13 +92,13 @@ class RefreshBridge:
             bridge.add_accessory(lamp)
             self.lamps[ident] = lamp
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(identities))
-        temporary.chmod(0o600)
+        temporary.write_text(json.dumps(identities), encoding="utf-8")
+        system.private(temporary)
         temporary.replace(path)
         self.driver.add_accessory(bridge)
-        (self.root / "hap.state").chmod(0o600)
-        code.write_text(self.driver.state.pincode.decode() + "\n")
-        code.chmod(0o600)
+        system.private(self.root / "hap.state")
+        code.write_text(self.driver.state.pincode.decode() + "\n", encoding="utf-8")
+        system.private(code)
         try:
             await self.driver.async_start()
             self.started = True

@@ -1,5 +1,7 @@
 """Administrator credential changes are immediate, authenticated operator operations."""
 
+from platform_support import private_mode
+
 import asyncio
 import json
 from pathlib import Path
@@ -28,7 +30,7 @@ class AdminPasswordTest(unittest.TestCase):
         self.assertFalse(self.admin.valid(self.session))
         self.assertFalse(self.admin.valid(other))
         self.assertEqual(self.path.read_text(), password + "\n")
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(self.path), 0o600)
         fresh = AdminAccess(self.path)
         self.assertTrue(fresh.valid(fresh.login(password, "restarted")))
         with self.assertRaises(PermissionError):

@@ -1,3 +1,5 @@
+from pathlib import Path
+from assistant_runtime.api.plugins import plugin_platforms
 from assistant_runtime.api import PluginDefinition, Manifest
 
 
@@ -10,6 +12,7 @@ def create(api):
 DECLARATION = PluginDefinition(
     Manifest("v4l2", (), critical=False),
     create=create,
+    supported_platforms=plugin_platforms(Path(__file__).parent),
     resources=("directory", "video_inputs"),
     config_fields=(),
 )

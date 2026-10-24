@@ -16,6 +16,9 @@ from assistant_runtime.core.configuration.settings import ManagementSettings
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(
+        sys.platform == "linux", "Linux guardian-specific contract; Windows uses Job Object tests"
+    )
     async def test_guardian_pipe_loss_cleans_separate_session_and_marks_unclean(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -27,7 +30,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             guardian = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
-                "assistant_runtime.app.guardian",
+                "assistant_runtime.platforms.linux_guardian",
                 "0.15",
                 sys.executable,
                 str(script),

@@ -1,5 +1,7 @@
 """Independent local-owner authentication for the configuration console."""
 
+from assistant_runtime.api.system import system
+
 import hashlib
 import hmac
 from pathlib import Path
@@ -29,8 +31,8 @@ class AdminAccess:
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:
                 stream.write(secrets.token_urlsafe(32) + "\n")
-        self.path.chmod(0o600)
-        token = self.path.read_text().strip()
+        system.private(self.path)
+        token = self.path.read_text(encoding="utf-8").strip()
         if not self.MIN_PASSWORD_LENGTH <= len(token) <= self.MAX_PASSWORD_LENGTH:
             raise ValueError("Administrator credential is invalid; reset it locally")
         self.digest = hashlib.sha256(token.encode()).digest()
@@ -40,7 +42,7 @@ class AdminAccess:
     def refresh(self):
         if self.path.is_symlink():
             raise ValueError("Administrator credential cannot be a symlink")
-        token = self.path.read_text().strip()
+        token = self.path.read_text(encoding="utf-8").strip()
         if not self.MIN_PASSWORD_LENGTH <= len(token) <= self.MAX_PASSWORD_LENGTH:
             self.sessions.clear()
             raise ValueError("Administrator credential is invalid; reset it locally")

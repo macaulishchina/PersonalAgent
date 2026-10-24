@@ -1,5 +1,7 @@
 """Versioned MCP definitions; runtime state and credentials stay outside Git."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import copy
 import json
@@ -36,7 +38,7 @@ class McpRegistry:
             return
         if self.path.stat().st_size > 512 * 1024:
             raise ValueError("MCP registry exceeds 512 KiB")
-        data = json.loads(self.path.read_text())
+        data = json.loads(self.path.read_text(encoding="utf-8"))
         from .configuration import validate_registry
 
         data = validate_registry(data, self.settings.max_servers)
@@ -62,14 +64,16 @@ class McpRegistry:
         with configuration_lock(self.root):
             if (self.root / "state/configuration/transaction.json").exists():
                 raise ValueError("Configuration recovery is required before writing")
-            current = json.loads(self.path.read_text()) if self.path.exists() else {"revision": 0}
+            current = (
+                json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"revision": 0}
+            )
             if current["revision"] != self.revision:
                 raise ValueError("MCP registry changed; reload before writing")
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as handle:
                 temporary = Path(handle.name)
                 try:
-                    os.chmod(temporary, 0o600)
+                    system.private(temporary)
                     handle.write(raw)
                     handle.flush()
                     os.fsync(handle.fileno())

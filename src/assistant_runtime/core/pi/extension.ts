@@ -50,7 +50,7 @@ export default function (pi: any) {
     if (
       !pi
         .getActiveTools()
-        .some((name: string) => ["read", "bash"].includes(name))
+        .some((name: string) => ["read", "bash", "powershell"].includes(name))
     )
       return;
     const texts = event.content.filter((block: any) => block.type === "text");

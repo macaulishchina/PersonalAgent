@@ -1,5 +1,7 @@
 """Create a private instance without model requests or service changes."""
 
+from assistant_runtime.api.system import system
+
 from pathlib import Path
 import shutil
 
@@ -12,12 +14,14 @@ def initialize(destination, template=None, *, preset="standard"):
     if destination.exists():
         raise ValueError("Instance destination already exists")
     destination.mkdir(mode=0o700, parents=True)
+    system.private(destination, directory=True)
     try:
         shutil.copytree(template, destination / "config")
-        (destination / "config").chmod(0o700)
+        system.private(destination / "config", directory=True)
         for path in (destination / "config").rglob("*"):
-            path.chmod(0o700 if path.is_dir() else 0o600)
+            system.private(path, directory=path.is_dir())
         (destination / "state").mkdir(mode=0o700)
+        system.private(destination / "state", directory=True)
         (destination / ".env").touch(mode=0o600)
         import json
         from assistant_runtime.core.configuration.auth import AdminAccess
@@ -26,9 +30,10 @@ def initialize(destination, template=None, *, preset="standard"):
         management.write_text(
             "root = " + json.dumps(str(destination)) + "\n"
             "entry = " + json.dumps(str(destination / "config/config.toml")) + "\n"
-            'host = "0.0.0.0"\nport = 8047\n'
+            'host = "0.0.0.0"\nport = 8047\n',
+            encoding="utf-8",
         )
-        management.chmod(0o600)
+        system.private(management)
         private = destination / "state/configuration"
         private.mkdir(mode=0o700)
         AdminAccess(private / "admin-token")

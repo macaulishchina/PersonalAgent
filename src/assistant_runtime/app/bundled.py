@@ -56,7 +56,11 @@ def dependencies(host, name):
 def resources_for(host, name, keys):
     resources = {}
     for key in keys:
-        if key == "usage":
+        if key == "system_io":
+            from assistant_runtime.api.system import system
+
+            resources[key] = system
+        elif key == "usage":
             usage = host.ai_usage
             resources[key] = UsageAccess(usage.scope, usage.service.admit, usage.service.settle)
         elif key == "conversation":

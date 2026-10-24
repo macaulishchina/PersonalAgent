@@ -183,7 +183,7 @@ class Resources:
             data = tomllib.loads(text)
             original = resource.path
             if original.exists():
-                before = tomllib.loads(original.read_text())
+                before = tomllib.loads(original.read_text(encoding="utf-8"))
                 if any(data.get(key) != before.get(key) for key in ("root", "entry")):
                     raise ValueError("Bootstrap root and entry require local migration")
             if Path(data.get("root", "")).resolve() != self.root:
@@ -193,7 +193,7 @@ class Resources:
 
             with tempfile.TemporaryDirectory() as folder:
                 candidate = Path(folder) / original.name
-                candidate.write_text(text)
+                candidate.write_text(text, encoding="utf-8")
                 settings = ManagementSettings.load(candidate)
                 if not settings.entry.is_relative_to(self.root):
                     raise ValueError("Configuration entry migration requires local maintenance")

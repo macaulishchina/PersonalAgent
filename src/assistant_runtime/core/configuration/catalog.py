@@ -6,11 +6,12 @@ from functools import lru_cache
 from copy import deepcopy
 from importlib.metadata import entry_points
 from assistant_runtime.core.plugin_catalog import OWNERS
+from assistant_runtime.api.plugins import plugin_platforms
 
 
 @lru_cache(maxsize=128)
 def _read_description(path):
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     if len(content.encode()) > 256 * 1024:
         raise ValueError("Configuration description exceeds 256 KiB")
     description = json.loads(content)
@@ -31,6 +32,8 @@ def read_description(path):
 
 
 def installed_descriptions(names=None):
+    from assistant_runtime.api.system import system
+
     result = []
     seen = set()
     for entry in entry_points(group="personal_agent.plugins"):
@@ -71,24 +74,32 @@ def installed_descriptions(names=None):
                 "kind": "extension",
                 "configuration": description,
                 "description_available": description is not None,
+                "supported_platforms": (description or {}).get("supported_platforms", ["linux", "windows"]),
+                "platform_supported": system.name
+                in (description or {}).get("supported_platforms", ["linux", "windows"]),
             }
         )
     return result
 
 
 def catalog(*, external_names=None):
+    from assistant_runtime.api.system import system
+
     root = Path(__file__).resolve().parents[2]
     result = []
     for name, module in OWNERS.items():
         relative = module.removeprefix("assistant_runtime.").split(".")
         path = root.joinpath(*relative, "configuration.json")
         description = read_description(path) if path.is_file() else None
+        platforms = plugin_platforms(path.parent)
         result.append(
             {
                 "id": name,
                 "kind": "core" if module.startswith("assistant_runtime.core.") else "extension",
                 "configuration": description,
                 "description_available": description is not None,
+                "supported_platforms": list(platforms),
+                "platform_supported": system.name in platforms,
             }
         )
     installed = installed_descriptions(external_names)
@@ -123,6 +134,7 @@ def describe_definition(spec):
         "schema": dict(description.schema) if description else {"type": "object"},
         "requires": list(spec.manifest.requires),
         "optional": list(spec.manifest.optional),
+        "supported_platforms": list(spec.supported_platforms),
         "title": description.title if description else spec.manifest.name,
         "group": description.group if description else "extensions",
         "sensitive": list(description.sensitive) if description else [],

@@ -1,5 +1,22 @@
 # 插件开发规范
 
+## 平台基础设施
+
+`platforms/` 集中提供文件锁、私有文件、目录句柄、进程所有权、本地 IPC 和服务集成。
+公共契约位于 `api/system.py`，包启动时只绑定惰性后端；Portalocker、pywin32 等依赖
+在使用时加载。内核不导入平台实现。应用和执行适配器负责装配，事务恢复、执行状态、
+额度及重试仍由各自插件拥有，平台层不得实现业务策略或第二套 Agent 循环。
+
+独立插件声明 `resources=("system_io",)`，通过 `context.resource("system_io")` 使用
+公开设施；该资源不提供宿主、配置全集或插件注册表。文件须位于插件自己的私有目录
+或已授权工作资源中。文件锁持有期等于打开文件的生命周期；创建凭据应使用
+`atomic_write`，不能认为 Windows 的 `chmod(0600)` 已实现隔离。
+
+`PluginDefinition.supported_platforms` 默认为 Linux／Windows；硬件专用实现明确收窄。
+独立包的静态 `configuration.json` 同步声明平台范围，供管理页在不导入插件时显示。
+启用前校验支持范围，不支持时明确报错。Windows 适配完成度和实际验收状态分开记录，
+详见 [平台部署与验收](docs/platforms.md)。
+
 公共接口为 `assistant_runtime.api`：`PluginDefinition`、`Manifest`、
 `PluginContext`、`CallIdentity` 和 `Tool`。仓库内和独立包采用同一声明模型。
 

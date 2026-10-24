@@ -1,5 +1,7 @@
 """Single-owner login; no model credentials are exposed to the browser."""
 
+from assistant_runtime.api.system import system
+
 import hashlib
 import hmac
 import os
@@ -20,8 +22,8 @@ class Access:
                 f.write(secrets.token_urlsafe(32) + "\n")
         if path.is_symlink():
             raise ValueError("Web credential cannot be a symlink")
-        os.chmod(path, 0o600)
-        token = path.read_text().strip()
+        system.private(path)
+        token = path.read_text(encoding="utf-8").strip()
         digest = hashlib.sha256(token.encode()).digest()
         approved = len(token) >= 8 and hmac.compare_digest(digest.hex(), approved_short_password_sha256)
         if len(token) < 24 and not approved:

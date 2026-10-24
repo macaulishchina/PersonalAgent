@@ -1,5 +1,7 @@
 """Public plugin boundaries and lifecycle behavior, independent of model services."""
 
+from platform_support import private_mode
+
 import asyncio
 from pathlib import Path
 import tempfile
@@ -280,7 +282,7 @@ asyncio.run(main())
             self.assertNotIn("pipewire", config.plugins)
             self.assertFalse(config.memory_enabled)
             self.assertTrue(config.web["enable"])
-            self.assertEqual((root / ".env").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(root / ".env"), 0o600)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 initialize(root)
 
@@ -315,7 +317,7 @@ asyncio.run(main())
                 host.lock_file.close()
 
     async def test_composition_failure_closes_database_and_instance_lock(self):
-        import fcntl
+        from assistant_runtime.api.system import system
         import sqlite3
         from assistant_runtime.app.config import Config
         from assistant_runtime.app.host import AssistantService
@@ -332,7 +334,7 @@ asyncio.run(main())
             with self.assertRaises(sqlite3.ProgrammingError):
                 store.db.execute("SELECT 1")
             with (config.state_dir / "service.lock").open("w") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                system.lock(lock, blocking=False)
 
     async def test_all_bundled_extensions_use_public_boundaries(self):
         import ast

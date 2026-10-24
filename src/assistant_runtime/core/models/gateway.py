@@ -24,7 +24,7 @@ def gateway_credential(root, settings):
         path = configuration_path(Path(root) / "state/model-api/gateway.key")
         if not path.is_file():
             raise ValueError("Gateway key missing; run scripts.prepare_model_gateway") from None
-        value = path.read_text().strip()
+        value = path.read_text(encoding="utf-8").strip()
         if len(value) < 32 or any(c.isspace() for c in value):
             raise ValueError("Invalid private gateway key")
         return value

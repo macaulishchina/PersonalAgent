@@ -1314,6 +1314,11 @@ wheels = [
 name = "personal-agent"
 version = "0.2.0"
 source = { editable = "." }
+dependencies = [
+    { name = "portalocker" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
 
 [package.optional-dependencies]
 airplay = [
@@ -1469,11 +1474,13 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'models'", specifier = ">=12,<13" },
     { name = "pillow", marker = "extra == 'web'", specifier = ">=12,<13" },
     { name = "playwright", marker = "extra == 'voice'", specifier = "==1.63.0" },
+    { name = "portalocker", specifier = ">=3.2,<4" },
     { name = "pyatv", marker = "extra == 'airplay'", specifier = "==0.18.0" },
     { name = "python-dotenv", marker = "extra == 'core'", specifier = ">=1.2,<2" },
     { name = "python-dotenv", marker = "extra == 'decisions'", specifier = ">=1.2,<2" },
     { name = "python-dotenv", marker = "extra == 'models'", specifier = ">=1.2,<2" },
     { name = "pywebrtc-audio", marker = "extra == 'voice'", specifier = "==0.2.0" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
     { name = "pyyaml", marker = "extra == 'camera'", specifier = ">=6,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.0" },
     { name = "setuptools", marker = "extra == 'dev'", specifier = "==84.0.0" },
@@ -1481,6 +1488,7 @@ requires-dist = [
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "soxr", marker = "extra == 'voice'", specifier = ">=0.5" },
     { name = "tomlkit", marker = "extra == 'core'", specifier = "==0.13.3" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
 ]
 provides-extras = ["core", "slim", "standard", "voice", "tasks", "events", "models", "decisions", "media", "reyee", "integrations", "web", "airplay", "apple-home", "camera", "memory", "dev"]
 

@@ -1,5 +1,7 @@
 """Provider failures, refresh serialization, login identity and bounded HTTP IO."""
 
+from platform_support import private_mode
+
 import asyncio
 import base64
 import json
@@ -124,7 +126,7 @@ class ProviderProtocolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "private" / "account.json"
             save(path, {"token": "private"})
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(path), 0o600)
             save(path, {"token": "replacement"})
             self.assertEqual(json.loads(path.read_text()), {"token": "replacement"})
             self.assertEqual(list(path.parent.glob(".media-*")), [])

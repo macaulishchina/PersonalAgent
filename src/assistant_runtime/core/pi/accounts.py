@@ -1,11 +1,12 @@
 """Private Pi-native model accounts. No agent loop, global login files or automatic inference."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import json
 import os
 from pathlib import Path
 import shutil
-import sys
 import uuid
 
 from assistant_runtime.core.models.gateway import credential
@@ -17,12 +18,15 @@ async def installation(binary=None):
     if binary and not executable:
         raise RuntimeError("Configured Pi executable unavailable")
     if executable:
-        path = Path(executable).resolve()
+        from assistant_runtime.platforms.executables import pi_command
+
+        command = pi_command(executable)
+        path = Path(command[-1]).resolve()
         for parent in (path.parent, *path.parents):
             manifest = parent / "package.json"
             if manifest.is_file():
                 try:
-                    package = json.loads(manifest.read_text())
+                    package = json.loads(manifest.read_text(encoding="utf-8"))
                 except (ValueError, OSError):
                     continue
                 if package.get("name") == "@earendil-works/pi-coding-agent":
@@ -31,7 +35,7 @@ async def installation(binary=None):
                     return parent
         # A launcher wrapper has no package ancestry. Check its version before
         # using the same-version SDK from the explicitly selected Node/npm installation.
-        probe = await asyncio.create_subprocess_exec(executable, "--version", stdout=-1, stderr=-1)
+        probe = await system.spawn(*command, "--version", stdout=-1, stderr=-1)
         try:
             output, _ = await asyncio.wait_for(probe.communicate(), 10)
         except BaseException:
@@ -44,7 +48,7 @@ async def installation(binary=None):
     npm = shutil.which("npm")
     if not npm:
         raise RuntimeError("Native model accounts require the pinned npm Pi installation")
-    process = await asyncio.create_subprocess_exec(npm, "root", "-g", stdout=-1, stderr=-1)
+    process = await system.spawn(npm, "root", "-g", stdout=-1, stderr=-1)
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), 10)
     except BaseException:
@@ -54,7 +58,7 @@ async def installation(binary=None):
     root = Path(stdout.decode().strip()) / "@earendil-works/pi-coding-agent"
     if process.returncode or not root.is_dir():
         raise RuntimeError("Pinned Pi package unavailable; run scripts/setup_pi.sh")
-    if json.loads((root / "package.json").read_text())["version"] != "1.4.0":
+    if json.loads((root / "package.json").read_text(encoding="utf-8"))["version"] != "1.4.0":
         raise RuntimeError("Native accounts require accepted Pi version 1.4.0")
     return root
 
@@ -82,7 +86,7 @@ class AccountWorker:
                 if k in os.environ
             }
             environment.update(PI_TELEMETRY="0", PI_OFFLINE="1", PI_SKIP_VERSION_CHECK="1")
-            self.process = await asyncio.create_subprocess_exec(
+            self.process = await system.spawn(
                 shutil.which("node"),
                 str(Path(__file__).with_suffix(".mjs")),
                 str(package),
@@ -202,7 +206,7 @@ async def manage(root, settings, action, account=None, *, binary=None):
     try:
         if action == "providers":
             worker = AccountWorker(root, accounts.folder, {})
-            worker.process = await asyncio.create_subprocess_exec(
+            worker.process = await system.spawn(
                 shutil.which("node"),
                 str(Path(__file__).with_suffix(".mjs")),
                 str(await installation(binary)),
@@ -256,31 +260,4 @@ async def manage(root, settings, action, account=None, *, binary=None):
 
 
 async def terminal_input(*, secret):
-    """Cancellable input: browser completion must not leave a blocked input thread."""
-    import termios
-
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
-    fd = sys.stdin.fileno()
-    previous = termios.tcgetattr(fd) if secret and os.isatty(fd) else None
-    if previous:
-        hidden = list(previous)
-        hidden[3] &= ~termios.ECHO
-        termios.tcsetattr(fd, termios.TCSANOW, hidden)
-
-    def ready():
-        if not future.done():
-            value = sys.stdin.readline()
-            if not value:
-                future.set_exception(EOFError("Model login input closed"))
-            else:
-                future.set_result(value.rstrip("\n"))
-
-    try:
-        loop.add_reader(fd, ready)
-        return await future
-    finally:
-        loop.remove_reader(fd)
-        if previous:
-            termios.tcsetattr(fd, termios.TCSANOW, previous)
-            print(flush=True)
+    return await system.terminal_input(secret=secret)

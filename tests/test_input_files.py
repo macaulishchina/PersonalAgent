@@ -1,5 +1,7 @@
 """Registered input ownership, snapshots, bounds and execution tool scopes."""
 
+from platform_support import private_mode
+
 import base64
 from pathlib import Path
 import tempfile
@@ -49,7 +51,7 @@ class InputFilesTest(unittest.IsolatedAsyncioTestCase):
         images, files = reopened.inputs.materialize(records, area)
         self.assertEqual(images, [])
         self.assertEqual(Path(files[0]["path"]).read_text(), "original")
-        self.assertEqual(Path(files[0]["path"]).stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(Path(files[0]["path"])), 0o600)
         self.files.inputs.path(ref["id"]).write_text("modified")
         with self.assertRaisesRegex(ValueError, "changed"):
             self.files.inputs.materialize(records, area)

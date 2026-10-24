@@ -37,10 +37,14 @@ def discover(names, builtins=()):
             raise ValueError("Invalid plugin declaration: " + name)
         if definition.internal_factory is not None or definition.create is None:
             raise ValueError("Installed plugins require a public-context factory")
-        if definition.resources:
+        if set(definition.resources) - {"system_io"}:
             raise ValueError(
                 "Installed plugin requested unsupported direct resources; use declared capabilities"
             )
+        from assistant_runtime.api.system import system
+
+        if system.name not in definition.supported_platforms:
+            raise ValueError(f"Plugin {name} does not support {system.name}")
         if definition.manifest.critical:
             raise ValueError("Extensions cannot declare themselves critical")
         result[name] = definition
@@ -138,6 +142,10 @@ class InstalledPlugin:
         self.definition, self.config, self.root = definition, config, root
         self.credential, self.capabilities, self.tools = credential, capabilities, tools
         self.resources = resources or {}
+        if "system_io" in definition.resources:
+            from assistant_runtime.api.system import system
+
+            self.resources["system_io"] = system
 
     def maintenance_pause(self):
         callback = getattr(getattr(self, "instance", None), "maintenance_pause", None)

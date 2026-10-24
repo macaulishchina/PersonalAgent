@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-import fcntl
+from assistant_runtime.api.system import system
 import json
 import os
 from pathlib import Path
@@ -20,8 +20,8 @@ def configuration_lock(root):
     state = root / "state/configuration"
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (state / "lock").open("a+b") as stream:
-        os.chmod(stream.name, 0o600)
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        system.private(stream.name)
+        system.lock(stream)
         token = _held.set(_held.get() | {str(root)})
         try:
             yield
@@ -34,5 +34,5 @@ def configuration_path(path):
     if not manifest:
         return Path(path)
     if manifest not in _manifests:
-        _manifests[manifest] = json.loads(Path(manifest).read_text())
+        _manifests[manifest] = json.loads(Path(manifest).read_text(encoding="utf-8"))
     return Path(_manifests[manifest].get(str(Path(path).absolute()), str(path)))

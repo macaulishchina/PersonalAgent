@@ -1,5 +1,7 @@
 """Bounded local transport; no memory storage or hardware implementation."""
 
+from assistant_runtime.platforms.ipc import connect
+
 import asyncio
 from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 from dataclasses import asdict
@@ -136,7 +138,7 @@ class LocalRuntimeClient:
         writer = None
         try:
             async with asyncio.timeout(self.timeout):
-                reader, writer = await asyncio.open_unix_connection(self.socket, limit=4 * 1024 * 1024)
+                reader, writer = await connect(self.socket, limit=4 * 1024 * 1024)
                 writer.write(wire)
                 await writer.drain()
                 line = await reader.readline()

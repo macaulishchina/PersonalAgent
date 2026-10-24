@@ -1,5 +1,7 @@
 """MCP domains, live device discovery, precise schemas and bounded IPC failures."""
 
+from assistant_runtime.platforms.ipc import serve as serve_control
+
 import asyncio
 import base64
 import json
@@ -205,7 +207,7 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
                 writer.close()
                 await writer.wait_closed()
 
-            server = await asyncio.start_unix_server(serve, path=path)
+            server = await serve_control(path, serve)
             try:
                 client = LocalRuntimeClient(path)
                 with self.assertRaisesRegex(RuntimeError, "Unavailable"):
@@ -227,7 +229,7 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
                 await writer.wait_closed()
                 finished.set()
 
-            server = await asyncio.start_unix_server(serve, path=path)
+            server = await serve_control(path, serve)
             try:
                 with self.assertRaises(TimeoutError):
                     await LocalRuntimeClient(path, timeout=0.05).invoke(

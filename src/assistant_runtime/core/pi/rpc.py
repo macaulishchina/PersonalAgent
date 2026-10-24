@@ -1,5 +1,8 @@
 """Native Pi JSONL adapter; no provider emulation or agent loop in the host."""
 
+from assistant_runtime.platforms.executables import pi_command, command_tools
+from assistant_runtime.api.system import system
+
 import asyncio
 import base64
 import copy
@@ -9,8 +12,6 @@ import mimetypes
 import io
 import os
 import re
-import shutil
-import signal
 from pathlib import Path
 import uuid
 
@@ -134,7 +135,7 @@ class PiSessionWorker:
         model = self.meta["model"]
         thinking = THINKING_MAP[self.meta["reasoning_effort"]]
         args = [
-            self.parent.pi_binary,
+            *pi_command(self.parent.pi_binary),
             "--mode",
             "rpc",
             "--offline",
@@ -166,7 +167,7 @@ class PiSessionWorker:
         if not self.meta.get("mcp_enabled", True):
             args.append("--no-mcp")
 
-        self.process = await asyncio.create_subprocess_exec(
+        self.process = await system.spawn(
             *args,
             cwd=cwd,
             env=env,
@@ -594,18 +595,7 @@ class PiSessionWorker:
             try:
                 if self.process.returncode is None:
                     self.process.stdin.close()
-                    try:
-                        os.killpg(self.process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        await asyncio.wait_for(self.process.wait(), 5)
-                    except TimeoutError:
-                        try:
-                            os.killpg(self.process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        await asyncio.wait_for(self.process.wait(), 2)
+                    await system.stop_process(self.process, timeout=5)
             finally:
                 for task in drains:
                     task.cancel()
@@ -625,8 +615,10 @@ class PiClient:
         usage,
         skill_paths=(),
         accounts=None,
+        shell="auto",
     ):
         self.pi_binary = binary
+        self.shell = shell
         self.cwd = cwd
         self.skill_paths = tuple(Path(p).resolve() for p in skill_paths)
         self.settings = settings
@@ -647,8 +639,7 @@ class PiClient:
         self.transport = ExecutionTransport(self)
 
     async def start(self):
-        if not shutil.which(self.pi_binary):
-            raise RuntimeError("Pi executable not found; run scripts/setup_pi.sh and configure pi_binary")
+        pi_command(self.pi_binary)
         self.runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         if not Path(EXTENSION_PATH).is_file():
             raise RuntimeError("Pi extension missing from installation")
@@ -663,7 +654,7 @@ class PiClient:
 
     def _load_meta(self, ident):
         path = self._meta_path(ident)
-        return (json.loads(path.read_text()), path) if path.exists() else (None, None)
+        return (json.loads(path.read_text(encoding="utf-8")), path) if path.exists() else (None, None)
 
     def _save_meta(self, ident, meta=None):
         if meta is None:
@@ -864,16 +855,17 @@ class PiClient:
                     },
                     "compaction": {"enabled": True},
                     "cacheWarming": "off",
+                    "defaultTools": ["read", command_tools(self.shell), "edit", "write"],
                 },
             ),
         ):
             path = folder / name
-            path.write_text(json.dumps(data))
-            path.chmod(0o600)
+            path.write_text(json.dumps(data), encoding="utf-8")
+            system.private(path)
         if instructions is not None:
             path = folder / "SYSTEM.md"
-            path.write_text(instructions)
-            path.chmod(0o600)
+            path.write_text(instructions, encoding="utf-8")
+            system.private(path)
 
     def _session_reply(self, meta, active=False):
         return {

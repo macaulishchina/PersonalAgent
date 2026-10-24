@@ -1,5 +1,8 @@
 # slim / standard 部署
 
+原生 Windows 的安装、服务及待验收边界见 [平台部署与验收](platforms.md)。以下 shell
+示例采用 Linux 路径；Windows 使用同一 CLI 和插件配置。
+
 standard 实例包含网页文字/图片对话、模型接入、用量控制、后台任务和通知。
 两种安装组合都交付全部核心插件及其 Python 运行依赖；通过共同的 core 依赖组合锁定。
 核心插件是否运行由默认启用列表决定，不需要为了启用核心插件另装其代码或依赖。
@@ -23,7 +26,7 @@ scripts/setup_pi.sh /absolute/pi-runtime
 ```
 
 slim 不需要聊天前端构建；两种部署均默认提供独立配置网页 `0.0.0.0:8047`。
-slim 不启动聊天端口，本地执行 CLI 通过实例私有 Unix socket 调用能力。
+slim 不启动聊天端口，本地执行 CLI 通过实例私有控制通道调用能力。
 `executions submit|get|events|answer|supplement|cancel` 在两种组合中相同。
 模型未配置时可启动和查看状态，执行提交明确报错，不寻找其他付费模型。
 公共执行支持文字、登记文件／图片和单次工具／技能范围；`files put|get` 管理输入引用。
@@ -87,7 +90,8 @@ python3.12 -m venv /absolute/app-env
 /absolute/app-env/bin/personal-agent init /absolute/instance
 ```
 
-Pi 的 `deploy/pi` 锁文件也须随发布物保存；可预先按上面的脚本安装到明确目录。
+wheel 自带 Pi 的锁文件，安装后可使用 `personal-agent install-pi /absolute/pi-runtime`；
+也可预先按上面的脚本安装到明确目录。
 slim 安装改用 `requirements-slim.txt`，初始化加 `--preset slim`，无需构建前端。
 原生账号子进程使用收敛的环境变量，Node 本身须能直接启动，不依赖临时终端的动态库设置。
 
@@ -104,8 +108,9 @@ slim 安装改用 `requirements-slim.txt`，初始化加 `--preset slim`，无�
 覆盖网页图片输入、跨模型任务、回退额度、扩展工具、取消及重启恢复。
 
 保留现有配置、凭据、记忆证据、媒体与数据库。更换代码目录本身不迁移或恢复旧任务。
-当前生产使用可编辑源码，开发须放独立工作树；生产切换需另行核对在途操作、备份、
-更新服务入口及实例配置，再执行上线检查。不要用最小模板覆盖已有实例。
+日常开发在当前项目原位进行；生产运行安装后的发布包，不随源码修改变化。
+生产切换需另行核对在途操作、备份、更新服务入口及实例配置，再执行上线检查。
+不要用最小模板覆盖已有实例。
 
 ### 旧实例显式声明
 

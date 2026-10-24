@@ -20,7 +20,7 @@ class ManagementSettings:
     @classmethod
     def load(cls, path):
         path = Path(path).absolute()
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
         if set(data) - {
             "root",
             "entry",

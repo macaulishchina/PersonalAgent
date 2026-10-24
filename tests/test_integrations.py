@@ -1,5 +1,7 @@
 """Instance MCP ownership, explicit scopes, revisions, redaction and provider lifecycle."""
 
+from platform_support import private_mode
+
 import asyncio
 import copy
 import json
@@ -45,7 +47,7 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(r.work, self.root / "state/mcp/servers")
         r.configure("mobile", STDIO, 0)
         self.assertEqual(r.revision, 1)
-        self.assertEqual(r.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(r.path), 0o600)
         self.assertEqual(r.configure("mobile", STDIO, 0)["revision"], 1)
         with self.assertRaisesRegex(ValueError, "changed"):
             r.configure("other", HTTP, 0)

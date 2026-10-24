@@ -1,5 +1,7 @@
 """Decision policy, concurrent admission and archive/adoption evidence."""
 
+from platform_support import private_mode
+
 import asyncio
 from datetime import datetime
 import json
@@ -56,7 +58,7 @@ class PolicyTest(unittest.TestCase):
             second = page(path, "2026-10-20", offset=first["next_offset"])
             self.assertEqual([e["decision_id"] for e in first["items"] + second["items"]], ["0", "1", "2"])
             self.assertEqual(len(page(path, "2026-10-21", decision_id="1")["items"]), 1)
-            self.assertEqual((path / "archive/2026-10-20.jsonl").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(path / "archive/2026-10-20.jsonl"), 0o600)
             with self.assertRaises(ValueError):
                 page(path, "../../private")
 

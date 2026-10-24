@@ -1,5 +1,7 @@
 """Sensor contracts, Apple Home source failures and real upstream bridge lifecycle."""
 
+from platform_support import private_mode
+
 import asyncio
 from datetime import datetime, timezone
 import json
@@ -297,7 +299,7 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         while not self.events.empty():
             events.append(self.events.get_nowait().kind)
         self.assertEqual(events, ["sensor.updated"])
-        self.assertEqual((self.plugin.root / "ingest-token.txt").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(self.plugin.root / "ingest-token.txt"), 0o600)
 
     async def test_http_diagnostics_include_status_without_credentials_or_payload(self):
         with self.assertLogs("assistant_runtime.plugins.apple_home.plugin.http", level="INFO") as logs:
@@ -506,7 +508,7 @@ class UpstreamBridgeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(bridge.pulse("second"))
             finally:
                 await bridge.close()
-            self.assertEqual((root / "pairing-code.txt").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(root / "pairing-code.txt"), 0o600)
             with socket.socket() as sock:
                 sock.bind((settings.host, settings.hap_port))
             bridge = RefreshBridge(

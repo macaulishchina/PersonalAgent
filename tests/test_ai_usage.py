@@ -1,5 +1,7 @@
 """Durable metering and denial before dispatch; isolated local resources only."""
 
+from platform_support import private_mode
+
 import asyncio
 from dataclasses import replace
 from pathlib import Path
@@ -241,7 +243,7 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
         record = await self.admit(body=body)
         self.assertNotIn("PRIVATE", record["request_body"])
         await self.done(record)
-        self.assertEqual(self.usage.ledger.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(self.usage.ledger.path), 0o600)
 
     async def test_retention_prunes_details_once_preserves_counts_and_active_unknown(self):
         old = time.time() - 100 * 86400

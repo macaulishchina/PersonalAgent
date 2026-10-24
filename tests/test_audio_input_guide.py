@@ -1,5 +1,7 @@
 """Standalone guide ownership, subprocess cleanup, scene coverage and private evidence."""
 
+from platform_support import private_mode
+
 import asyncio
 import contextlib
 import io
@@ -207,14 +209,14 @@ class GuideTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(report["completed"])
             self.assertFalse(report["auto_restore"])
             self.assertFalse(report["audio_retained"])
-            self.assertEqual(paths[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(paths[0]), 0o600)
             self.assertEqual(list(value.state_dir.rglob("*.wav")), [])
 
     def test_explicit_wav_save_is_private_and_does_not_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "human.wav"
             write_wave(path, tone())
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(path), 0o600)
             with wave.open(str(path)) as audio:
                 self.assertEqual(audio.getnframes(), 320)
                 self.assertEqual(audio.getframerate(), 16000)

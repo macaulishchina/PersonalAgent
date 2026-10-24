@@ -1,5 +1,8 @@
 """Real MP4 finalization with a fake gateway: bounds, source changes and cleanup."""
 
+from assistant_runtime.platforms.ipc import serve as serve_control
+from platform_support import private_mode
+
 import asyncio
 from pathlib import Path
 import subprocess
@@ -126,7 +129,7 @@ class RecordingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((clip.width, clip.height), (160, 96))
         self.assertAlmostEqual(clip.duration_seconds, 2, delta=0.2)
         self.assertEqual(await asyncio.to_thread(inspect_clip, clip.path), (160, 96, clip.duration_seconds))
-        self.assertEqual(clip.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(clip.path), 0o600)
         self.assertFalse(self.aliases)
         self.assertEqual(len(self.deleted), 1)
         self.assertFalse(self.camera.lock.locked())
@@ -183,7 +186,7 @@ class RecordingTest(unittest.IsolatedAsyncioTestCase):
         service.runtime = SimpleNamespace(invoke=capture)
         service.conversation = SimpleNamespace(recording_reply=AsyncMock())
         socket = Path(self.temp.name) / "recording.sock"
-        server = await asyncio.start_unix_server(service._connection, path=socket)
+        server = await serve_control(socket, service._connection)
         try:
             task = asyncio.create_task(LocalRuntimeClient(socket).invoke(VideoRecord("camera", 2)))
             await asyncio.wait_for(started.wait(), 2)

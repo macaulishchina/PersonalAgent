@@ -1,5 +1,7 @@
 """PipeWire endpoint providers. No voice-session activation or device switching."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import copy
 import json
@@ -50,7 +52,7 @@ class PipeWireEndpoint:
         if self.spec["kind"] == "speaker":
             transport = await PipeWirePlayback.open(node["name"], rate)
         else:
-            process = await asyncio.create_subprocess_exec(
+            process = await system.spawn(
                 "pacat",
                 "--record",
                 "--raw",

@@ -2,7 +2,7 @@
 
 from dataclasses import asdict
 import json
-import fcntl
+from assistant_runtime.api.system import system
 import math
 import sqlite3
 import time
@@ -20,15 +20,15 @@ class Ledger:
     def open(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.owner = self.path.with_suffix(".lock").open("a+")
-        self.path.with_suffix(".lock").chmod(0o600)
+        system.private(self.path.with_suffix(".lock"))
         try:
-            fcntl.flock(self.owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(self.owner, blocking=False)
         except OSError:
             self.owner.close()
             self.owner = None
             raise
         self.db = sqlite3.connect(self.path)
-        self.path.chmod(0o600)
+        system.private(self.path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA secure_delete=ON")

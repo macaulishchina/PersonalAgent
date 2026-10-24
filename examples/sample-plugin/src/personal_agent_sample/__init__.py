@@ -21,6 +21,10 @@ class Notes:
         self.submissions = asyncio.Lock()
 
     async def start(self):
+        io = self.context.resource("system_io")
+        self.context.state_dir.mkdir(parents=True, exist_ok=True)
+        io.private(self.context.state_dir, directory=True)
+        io.atomic_write(self.context.state_dir / "runtime.json", json.dumps({"platform": io.name}).encode())
         policy = self.context.configuration_resource("policy")
         self.policy = json.loads(policy.read_text()) if policy.exists() else {}
         self.context.log.info("sample ready")
@@ -139,6 +143,7 @@ def definition():
         None,
         (Path(__file__).parent / "skills" / "sample-notes",),
         uses=(ExecutionRequest, FileRequest),
+        resources=("system_io",),
         configuration=ConfigurationSpec(
             **json.loads((Path(__file__).parent / "configuration.json").read_text())
         ),

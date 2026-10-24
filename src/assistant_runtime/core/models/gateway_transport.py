@@ -68,7 +68,7 @@ def callback():
     # LiteLLM is deliberately installed only in its own container.
     from litellm.integrations.custom_logger import CustomLogger
 
-    config = json.loads(Path(os.environ["ASSISTANT_GATEWAY_ROUTES"]).read_text())
+    config = json.loads(Path(os.environ["ASSISTANT_GATEWAY_ROUTES"]).read_text(encoding="utf-8"))
     routes = config["providers"]
 
     class Transport(CustomLogger):

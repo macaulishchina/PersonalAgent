@@ -1,6 +1,6 @@
 """State reset is explicit, backed up, idempotent and preserves memory evidence."""
 
-import fcntl
+from assistant_runtime.api.system import system
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -42,7 +42,7 @@ class ResetTest(unittest.TestCase):
             root = Path(folder)
             db = Store(root / "state/assistant.sqlite3")
             with (root / "state/service.lock").open("w") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                system.lock(lock, blocking=False)
                 with self.assertRaisesRegex(RuntimeError, "Stop the assistant"):
                     reset(root, apply=True, confirmed_stopped=True)
             db.db.close()

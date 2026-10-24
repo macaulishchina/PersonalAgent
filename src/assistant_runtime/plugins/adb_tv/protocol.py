@@ -1,5 +1,7 @@
 """Read-only device protocol; failures never mean an empty snapshot."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import re
 
@@ -31,7 +33,7 @@ class AdbTV:
         pass
 
     async def command(self, *args):
-        process = await asyncio.create_subprocess_exec(
+        process = await system.spawn(
             "adb", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
         )
         try:

@@ -12,6 +12,25 @@ from assistant_runtime.kernel.runtime import Manifest
 from .configuration import ConfigurationSpec
 
 
+def plugin_platforms(directory):
+    """Static owner metadata, usable without importing a plugin or its dependencies."""
+    import json
+
+    path = Path(directory) / "platform.json"
+    values = (
+        json.loads(path.read_text(encoding="utf-8"))["supported_platforms"]
+        if path.exists()
+        else ["linux", "windows"]
+    )
+    if (
+        not isinstance(values, list)
+        or not values
+        or any(value not in {"linux", "windows"} for value in values)
+    ):
+        raise ValueError("Invalid static plugin platform declaration")
+    return tuple(values)
+
+
 @dataclass(frozen=True)
 class CallIdentity:
     request_id: str
@@ -63,6 +82,11 @@ class PluginDefinition:
     task_context: bool = True
     background_tools: tuple[str, ...] | None = None
     configuration: ConfigurationSpec | None = None
+    supported_platforms: tuple[str, ...] = ("linux", "windows")
+
+    def __post_init__(self):
+        if not self.supported_platforms or set(self.supported_platforms) - {"linux", "windows"}:
+            raise ValueError("Plugin must declare supported platforms: linux and/or windows")
 
 
 class PluginContext:

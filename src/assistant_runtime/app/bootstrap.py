@@ -27,6 +27,13 @@ def compose(service):
     selected = config.enabled_plugins
     definitions = {name: declaration(name) for name in selected if name in OWNERS}
     definitions.update(discover([name for name in selected if name not in OWNERS], OWNERS))
+    from assistant_runtime.api.system import system
+
+    for name, spec in definitions.items():
+        if system.name not in spec.supported_platforms:
+            raise ValueError(
+                f"Plugin {name} does not support {system.name}; supported: {', '.join(spec.supported_platforms)}"
+            )
     graph = Runtime(store)
     for name, spec in definitions.items():
         graph.add(SimpleNamespace(manifest=spec.manifest))

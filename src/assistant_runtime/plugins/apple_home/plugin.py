@@ -1,5 +1,7 @@
 """Optional Apple Home source adapter; sensor data never enters task/memory input."""
 
+from assistant_runtime.api.system import system
+
 from .declaration import DECLARATION
 
 import asyncio
@@ -56,8 +58,8 @@ class AppleHomePlugin:
             fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(secrets.token_urlsafe(32) + "\n")
-        token_path.chmod(0o600)
-        self.token = token_path.read_text().strip()
+        system.private(token_path)
+        self.token = token_path.read_text(encoding="utf-8").strip()
         if len(self.token) < 24:
             raise ValueError("Sensor ingest token must have at least 24 characters")
         for ident, (metrics, _) in self.endpoints.items():

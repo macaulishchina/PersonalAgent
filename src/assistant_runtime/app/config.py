@@ -22,7 +22,7 @@ def _read_config(path, *, text=None):
 
     def parse(source, content=None):
         try:
-            return tomllib.loads(source.read_text() if content is None else content)
+            return tomllib.loads(source.read_text(encoding="utf-8") if content is None else content)
         except tomllib.TOMLDecodeError as exc:
             raise ValueError(f"Invalid TOML configuration: {source}") from exc
 
@@ -73,7 +73,7 @@ def read_config(path, *, text=None):
 
     path = Path(path).expanduser().resolve()
     try:
-        entry = tomllib.loads(path.read_text() if text is None else text)
+        entry = tomllib.loads(path.read_text(encoding="utf-8") if text is None else text)
     except tomllib.TOMLDecodeError:
         raise ValueError("Invalid entry configuration") from None
     root = Path(entry.get("root", path.parent)).expanduser()
@@ -93,6 +93,7 @@ class Config:
     backend: str = field(default_factory=lambda: configuration_default(__file__, "backend"))
     realtime_voice: str = field(default_factory=lambda: configuration_default(__file__, "realtime_voice"))
     workspace: str = field(default_factory=lambda: str(Path.cwd()))
+    pi_shell: str = field(default_factory=lambda: configuration_default(__file__, "pi_shell"))
     pi_binary: str = field(default_factory=lambda: configuration_default(__file__, "pi_binary"))
     instance_skills: list[str] = field(
         default_factory=lambda: configuration_default(__file__, "instance_skills")
@@ -184,6 +185,10 @@ class Config:
             if name not in OWNERS:
                 continue
             spec = declaration(name)
+            from assistant_runtime.api.system import system
+
+            if system.name not in spec.supported_platforms:
+                raise ValueError(f"Plugin {name} does not support {system.name}")
             if spec.validate and spec.config_key:
                 spec.validate(getattr(self, spec.config_key))
         if "search" in self.plugins and not self.search.get("providers"):

@@ -1,5 +1,7 @@
 """Candidate conversion preserves instance data paths and all unrelated values."""
 
+from platform_support import private_mode
+
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,7 +33,7 @@ class PrepareConfigTest(unittest.TestCase):
             self.assertEqual(source.read_text(), original)
             self.assertEqual(services.read_text(), service_text)
             self.assertEqual((root / "candidate/original/services.toml").read_text(), service_text)
-            self.assertEqual(candidate.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(private_mode(candidate), 0o600)
             self.assertEqual(Config.load(candidate).root, root)
             self.assertFalse(result["applied"])
             with self.assertRaisesRegex(ValueError, "must not exist"):

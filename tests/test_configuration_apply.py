@@ -87,6 +87,12 @@ class ApplyTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.business.process.pid, pid)
         self.assertEqual(self.business.loaded, saved["version"])
 
+    async def test_operator_shutdown_is_allowed_while_new_work_is_paused(self):
+        await self.business.request({"command": "management-pause"})
+        await asyncio.wait_for(self.business.stop(), 5)
+        self.assertEqual(self.business.process.returncode, 0)
+        self.assertFalse((self.business.state / "business-owner.json").exists())
+
     async def test_wait_has_no_timeout_and_withdrawal_resumes_same_worker(self):
         original = self.business.request
         paused = asyncio.Event()

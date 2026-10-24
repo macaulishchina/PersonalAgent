@@ -1,5 +1,7 @@
 """On-demand gateway H.264 clips, finalized using the maintained FFmpeg package."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 from pathlib import Path
 import subprocess
@@ -60,7 +62,7 @@ async def owned_write(handle, block):
 
 
 async def finalize(source, target, duration):
-    child = await asyncio.create_subprocess_exec(
+    child = await system.spawn(
         imageio_ffmpeg.get_ffmpeg_exe(),
         "-nostdin",
         "-hide_banner",
@@ -133,7 +135,7 @@ async def record_clip(camera, folder, duration):
                 recorded_at = time.time()
                 received = 0
                 with source_path.open("xb") as handle:
-                    source_path.chmod(0o600)
+                    system.private(source_path)
                     async for block in response.content.iter_chunked(65536):
                         received += len(block)
                         if received > MAX_VIDEO_BYTES:
@@ -142,7 +144,7 @@ async def record_clip(camera, folder, duration):
             if identity != await camera.source_identity() or epoch != camera.generation:
                 raise RuntimeError("Camera source changed; recording discarded")
             await finalize(source_path, target, duration)
-            target.chmod(0o600)
+            system.private(target)
             worker = asyncio.create_task(asyncio.to_thread(inspect_clip, target))
             try:
                 width, height, actual_duration = await asyncio.shield(worker)

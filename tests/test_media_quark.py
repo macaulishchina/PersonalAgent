@@ -1,5 +1,7 @@
 """Quark protocol fixtures and account-isolated acquisition lifecycle checks."""
 
+from platform_support import private_mode
+
 import asyncio
 import json
 from pathlib import Path
@@ -287,7 +289,7 @@ class QuarkProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret", json.dumps(result))
         path = self.adapter.credentials / "account.json"
         self.assertIn("rotated-secret", json.loads(path.read_text())["cookie"])
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(private_mode(path), 0o600)
         self.assertEqual(self.states[-1], "ready")
 
     async def test_async_copy_receipt_has_no_tokens_and_query_does_not_copy(self):
