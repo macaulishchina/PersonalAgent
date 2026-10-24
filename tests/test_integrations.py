@@ -5,6 +5,7 @@ from platform_support import private_mode
 import asyncio
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -421,12 +422,12 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.request.await_args.args[1]["cwd"], self.temp.name)
 
     async def test_relative_executable_preflight_uses_server_working_directory(self):
-        executable = Path(self.temp.name) / "server"
+        executable = Path(self.temp.name) / ("server.exe" if os.name == "nt" else "server")
         executable.write_text("fixture")
         executable.chmod(0o700)
         self.registry.configure(
             "mobile",
-            {"transport": {"type": "stdio", "command": "./server", "cwd": self.temp.name}},
+            {"transport": {"type": "stdio", "command": "./" + executable.name, "cwd": self.temp.name}},
             self.registry.revision,
         )
         self.assertEqual((await self.adapter.verify("mobile", "foreground"))["state"], "verified")

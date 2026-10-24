@@ -2,7 +2,7 @@
 
 import copy
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sqlite3
 import tempfile
 from types import SimpleNamespace
@@ -117,7 +117,7 @@ class OpenListTest(unittest.IsolatedAsyncioTestCase):
             all_rows = [
                 copy.deepcopy(row)
                 for p, row in sorted(self.rows.items())
-                if str(Path(p).parent) == path and p != path
+                if str(PurePosixPath(p).parent) == path and p != path
             ]
             if not self.hashes:
                 for r in all_rows:
@@ -134,18 +134,18 @@ class OpenListTest(unittest.IsolatedAsyncioTestCase):
             return web.json_response({"code": 200, "data": data})
         if action == "mkdir":
             path = absolute("path")
-            self.rows[path] = self.row(Path(path).name, folder=True)
+            self.rows[path] = self.row(PurePosixPath(path).name, folder=True)
         elif action in {"rename", "move"}:
             if action == "rename":
                 source = absolute("path")
-                destination = str(Path(source).with_name(body["name"]))
+                destination = str(PurePosixPath(source).with_name(body["name"]))
             else:
                 source = absolute("src_dir") + "/" + body["names"][0]
                 destination = absolute("dst_dir") + "/" + body["names"][0]
             self.assertFalse(body["overwrite"])
             if self.mode != "delayed":
                 self.rows[destination] = self.rows.pop(source)
-                self.rows[destination]["name"] = Path(destination).name
+                self.rows[destination]["name"] = PurePosixPath(destination).name
                 self.rows[destination]["modified"] = "2026-10-21T01:00:00Z"
         else:
             raise AssertionError(action)

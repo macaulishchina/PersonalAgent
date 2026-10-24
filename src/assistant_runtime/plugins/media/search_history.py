@@ -9,6 +9,12 @@ import weakref
 from .errors import MediaError
 
 
+class InspectionLock(asyncio.Lock):
+    def __init__(self):
+        super().__init__()
+        self.revision = 0
+
+
 class SearchHistory:
     def __init__(self, db):
         self.db = db
@@ -57,11 +63,15 @@ class SearchHistory:
         # Password changes and directory/page scopes must never reuse a different observation.
         identity = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
         requested = time.time()
-        async with self.locks.setdefault(identity, asyncio.Lock()):
+        # Refresh coalescing follows completed reads, not wall-clock resolution.
+        # The weak lock keeps a revision only while callers share this scope.
+        lock = self.locks.setdefault(identity, InspectionLock())
+        revision = lock.revision
+        async with lock:
             row = self.db.execute(
                 "SELECT observed,data FROM media_share_checks WHERE identity=?", (identity,)
             ).fetchone()
-            if row and requested - row[0] < 120 and (not refresh or row[0] >= requested):
+            if row and requested - row[0] < 120 and (not refresh or lock.revision != revision):
                 data = json.loads(row[1])
                 if data.get("error"):
                     raise MediaError(data["error"])
@@ -77,9 +87,11 @@ class SearchHistory:
                 ):
                     raise
                 self.save_check(identity, values["share_id"], time.time(), {"error": exc.code})
+                lock.revision += 1
                 raise
             observed = time.time()
             self.save_check(identity, values["share_id"], observed, data)
+            lock.revision += 1
             return {**result, "inspection": {"observed_at": observed, "cached": False}}
 
     def observation(self, share, password, *, account="aliyun"):

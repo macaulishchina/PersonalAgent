@@ -4,6 +4,26 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
+
+
+def python_command(args, env):
+    """Bypass the Windows venv redirector while retaining its site-packages.
+
+    Like multiprocessing.popen_spawn_win32, this keeps the reported child PID
+    and its actual parent relationship intact for supervision and cancellation.
+    """
+    args = list(args)
+    if (
+        os.name == "nt"
+        and args
+        and os.path.normcase(os.path.abspath(args[0])) == os.path.normcase(sys.executable)
+        and sys.prefix != sys.base_prefix
+    ):
+        env = dict(os.environ if env is None else env)
+        env["__PYVENV_LAUNCHER__"] = sys.executable
+        args[0] = getattr(sys, "_base_executable", sys.executable)
+    return args, env
 
 
 def pi_command(binary):

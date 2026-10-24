@@ -29,7 +29,7 @@ def check(config, *, native=True):
     settings = ModelSettings.parse(config.model_api)
 
     def execution():
-        required = {"pi", "models", "ai_usage", "voice_disabled"}
+        required = {"pi", "models", "ai_usage"}
         if config.backend != "pi" or not required <= set(config.plugins):
             raise ValueError("Missing required execution plugins")
         if {"codex", "keyword", "browser_speech", "sherpa_speech"} & set(config.plugins):

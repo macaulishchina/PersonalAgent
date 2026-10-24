@@ -1,6 +1,7 @@
 """Instance configuration. Hardware identities never belong in code defaults."""
 
 from assistant_runtime.api.configuration import configuration_default
+from .presets import default_plugins
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def default_root():
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "personal-agent"
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "personal-agent"
 
 
 def _read_config(path, *, text=None):
@@ -132,7 +133,7 @@ class Config:
     devices: dict[str, dict] = field(default_factory=lambda: configuration_default(__file__, "devices"))
     model_dir: str = field(default_factory=lambda: configuration_default(__file__, "model_dir"))
     unit_name: str = field(default_factory=lambda: configuration_default(__file__, "unit_name"))
-    plugins: list[str] = field(default_factory=lambda: configuration_default(__file__, "plugins"))
+    plugins: list[str] = field(default_factory=default_plugins)
     bindings: dict[str, str] = field(default_factory=lambda: configuration_default(__file__, "bindings"))
     plugin_settings: dict[str, dict] = field(default_factory=dict)
     external_mcp: dict = field(default_factory=dict)
@@ -179,16 +180,15 @@ class Config:
                 raise ValueError(
                     "Voice interaction is pending independent acceptance; disable interaction.enabled"
                 )
-        from assistant_runtime.core.plugin_catalog import OWNERS, declaration
+        from assistant_runtime.core.plugin_catalog import OWNERS, declaration, validate_platforms
+        from assistant_runtime.api.system import system
+
+        validate_platforms(self.plugins, system.name)
 
         for name in self.plugins:
             if name not in OWNERS:
                 continue
             spec = declaration(name)
-            from assistant_runtime.api.system import system
-
-            if system.name not in spec.supported_platforms:
-                raise ValueError(f"Plugin {name} does not support {system.name}")
             if spec.validate and spec.config_key:
                 spec.validate(getattr(self, spec.config_key))
         if "search" in self.plugins and not self.search.get("providers"):
@@ -279,7 +279,7 @@ class Config:
         p = (
             Path(configured).expanduser()
             if configured
-            else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+            else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
             / "personal-agent/config.toml"
         )
         p = p.resolve()
@@ -290,7 +290,8 @@ class Config:
         if not p.exists() and not configured:
             data["profile"] = "headless"
         # Moving configuration must not move instance state; relative root is entry-relative.
-        root = Path(data.pop("root", p.parent if p.exists() else default_root())).expanduser()
+        root = data.pop("root", None)
+        root = Path(root if root is not None else p.parent if p.exists() else default_root()).expanduser()
         root = (root if root.is_absolute() else p.parent / root).resolve()
         c = cls(root=root, **data)
         if c.profile not in {"voice", "headless"} or c.backend != "pi":

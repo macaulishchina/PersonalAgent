@@ -55,6 +55,8 @@ where = ["src"]
 "assistant_runtime.core.events" = ["README.md", "skills/*/SKILL.md"]
 "assistant_runtime.core.execution" = ["README.md"]
 "assistant_runtime.core.pi" = ["*.ts", "*.mjs"]
+"assistant_runtime.platforms" = ["*.mjs"]
+"assistant_runtime.plugins" = ["*.platform.json"]
 "assistant_runtime.plugins.keyword" = ["FUNASR_LICENSE.txt"]
 "assistant_runtime.plugins.web" = ["static/*", "static/assets/*"]
 

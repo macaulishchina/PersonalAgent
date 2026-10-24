@@ -32,7 +32,11 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        self.host.config = replace(self.host.config, web={"enable": True, "host": "127.0.0.1", "port": port})
+        self.host.config = replace(
+            self.host.config,
+            plugins=["tasks", "notifications"],
+            web={"enable": True, "host": "127.0.0.1", "port": port},
+        )
         self.context = Owned()
         await self.host.conversation.start(self.context)
         self.plugin = WebPlugin(context_for(self.host, "web"))

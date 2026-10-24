@@ -761,6 +761,13 @@ button.sidebar-link {
 .plugin-option > span {
   min-width: 0;
 }
+.plugin-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  max-width: 245px;
+}
 .plugin-option strong {
   display: block;
   font-weight: 500;

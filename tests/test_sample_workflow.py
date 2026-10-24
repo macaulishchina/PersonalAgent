@@ -27,6 +27,11 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             shutil.copytree(source, root / "package", ignore=shutil.ignore_patterns("build", "*.egg-info"))
+            # This temporary fixture tests the extension API on both systems;
+            # the shipped example's Linux-only certification is unchanged.
+            (root / "package/src/personal_agent_sample/platform.json").write_text(
+                '{"supported_platforms": ["linux", "windows"]}'
+            )
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",

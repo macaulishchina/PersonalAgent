@@ -117,13 +117,16 @@ class PanSou:
             if self.pending >= 8:
                 raise MediaError("search_busy")
             self.pending += 1
+            previous = self.latest.get(key)
             try:
                 async with self.locks.setdefault(key, asyncio.Lock()):
                     snapshot = self.snapshots.get(self.latest.get(key))
                     if (
                         not snapshot
                         or time.monotonic() - snapshot["created"] > 30
-                        or (refresh and snapshot["created"] < now)
+                        # Coalesce only a refresh completed while this caller waited.
+                        # Windows clock ticks can be equal across sequential requests.
+                        or (refresh and snapshot["id"] == previous)
                     ):
                         results = await asyncio.gather(*(self.query(q, platforms) for q in queries))
                         diagnostics = [

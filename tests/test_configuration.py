@@ -1,6 +1,6 @@
 """Operator file transaction invariants; no models, devices or running instance."""
 
-from platform_support import private_mode
+from platform_support import private_mode, symlink_or_skip
 
 import json
 from pathlib import Path
@@ -23,7 +23,9 @@ class ConfigurationFixture:
         self.folder = self.root / "config"
         self.folder.mkdir()
         self.entry = self.folder / "config.toml"
-        self.entry.write_text(f'# instance\nroot = "{self.root}"\nplugins = []\ninclude = ["usage.toml"]\n')
+        self.entry.write_text(
+            f'# instance\nroot = "{self.root.as_posix()}"\nplugins = []\ninclude = ["usage.toml"]\n'
+        )
         (self.folder / "usage.toml").write_text("# policy\n[ai_usage]\nmax_requests = 256 # shared work\n")
         self.files = ConfigurationFiles(self.entry, self.root / "private", self.validate)
 
@@ -147,7 +149,7 @@ class ConfigurationTest(ConfigurationFixture, unittest.TestCase):
         (self.folder / "usage.toml").unlink()
         target = self.root / "other.toml"
         target.write_bytes(original)
-        (self.folder / "usage.toml").symlink_to(target)
+        symlink_or_skip(self.folder / "usage.toml", target)
         with self.assertRaises(ValueError):
             self.documents()
 
@@ -255,14 +257,16 @@ class ManagementProcessTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text(f'root = "{root}"\nplugins = []\n')
+            entry.write_text(f'root = "{root.as_posix()}"\nplugins = []\n')
             business = BusinessProcess(
                 ManagementSettings(root, entry, startup_seconds=10, shutdown_seconds=10)
             )
             try:
                 await business.start()
                 self.assertEqual(business.outcome, "running", business.error)
-                self.assertTrue((root / "state/control.sock").exists())
+                self.assertTrue(
+                    (await business.request({"command": "management-status"}))["startup_complete"]
+                )
                 self.assertTrue((business.state / "applied.json").exists())
                 saved = business.files.read()
                 saved["files"]["config.toml"]["assistant_name"] = "new-name"
@@ -281,7 +285,7 @@ class ManagementProcessTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text(f'root = "{root}"\nplugins = []\nassistant_name="before"\n')
+            entry.write_text(f'root = "{root.as_posix()}"\nplugins = []\nassistant_name="before"\n')
             business = BusinessProcess(
                 ManagementSettings(root, entry, startup_seconds=10, shutdown_seconds=10)
             )
@@ -461,7 +465,7 @@ class MetadataIsolationTest(unittest.TestCase):
             entry = SimpleNamespace(
                 name="bad",
                 value="bad:declaration",
-                dist=SimpleNamespace(files=[Path("bad/configuration.json")], locate_file=lambda unused: path),
+                dist=SimpleNamespace(files=["bad/configuration.json"], locate_file=lambda unused: path),
             )
             with patch("assistant_runtime.core.configuration.catalog.entry_points", return_value=[entry]):
                 config = Config(root=Path(folder), plugins=[])

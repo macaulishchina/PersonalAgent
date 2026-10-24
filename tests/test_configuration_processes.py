@@ -103,7 +103,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text(f'root="{root}"\nplugins=[]\n')
+            entry.write_text(f'root="{root.as_posix()}"\nplugins=[]\n')
             state = root / "state/configuration"
             state.mkdir(parents=True)
             (state / "application.json").write_text(

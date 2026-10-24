@@ -4,16 +4,19 @@
 然后依次完成配置、前台启动和服务安装。全部使用正式目录；不另建测试安装，不把测试目录
 作为服务依赖。可选的临时平台验收放在文末，不属于部署必做步骤。
 
-Linux 已有运行与回归记录。Windows 11 x64、Server 2022／2025 x64 的适配已加入，
-但实机验收尚未完成；本文提供其正式安装流程，不代表这些系统已通过生产验收。
-语音仍停用；Windows 不支持现有 PipeWire、V4L2 和 Linux HID 插件。
+Linux 已有运行与回归记录。Windows 11 x64 与 Server 2022／2025 x64 共用 Windows 适配层。
+当前 Windows Server 2025 已通过下述核心本机验收；Windows 11、Server 2022 尚未实机验证。
+SCM 安装、注销后运行及系统重启验收仍待完成，不将核心验收等同于生产上线验收。
+语音仍停用。当前全部扩展插件仅认证 Linux，Windows（含 Server）禁止启用，包括
+`web`、`voice_disabled`、媒体、搜索及设备扩展。内核插件分类和版本不变。
 
 ## 1. 确定安装组合、账号和目录
 
 - **standard**：网页文字／图片对话、执行、模型、用量保护、后台任务、通知及外部 MCP 接入。
 - **slim**：执行、模型、用量保护、文件及外部 MCP 接入；默认没有聊天网页、任务调度和通知。
-- 两种组合都有独立系统配置网页和同一套 CLI。这里以 standard 为主；选择 slim 时，
-  仅将安装和初始化命令中的 `standard` 改为 `slim`，并省略聊天前端构建。
+- 两种组合都有独立系统配置网页和同一套 CLI。Linux 默认 standard；Windows 默认 slim，
+  显式选择 standard 会在创建目录前被拒绝。已有不支持的插件配置不会自动删除；
+  管理页仍可打开，取消不支持的插件并修正其依赖后才能应用。
 
 | 用途 | Windows | Linux |
 |---|---|---|
@@ -46,12 +49,9 @@ New-Item -ItemType Directory -Force C:\PersonalAgent | Out-Null
 git clone https://github.com/macaulishchina/PersonalAgent.git C:\PersonalAgent\app
 Set-Location C:\PersonalAgent\app
 $env:PYTHONUTF8 = '1'
-uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
-npm --prefix frontend ci
-npm --prefix frontend run build
-uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
+uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
 .\.venv\Scripts\python.exe -m assistant_runtime.app.cli install-pi C:\PersonalAgent\pi
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli init C:\PersonalAgent\instance --preset standard
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli init C:\PersonalAgent\instance --preset slim
 ```
 
 ### Linux：Shell
@@ -93,7 +93,8 @@ Linux 填写实际绝对路径，例如安装命令输出的 `/home/你的账号
 | 系统配置网页，两种组合都有 | `0.0.0.0:8047` | `instance/management.toml` 的 `host`、`port` | 独立管理员口令 |
 | 聊天网页，仅 standard 默认启用 | `127.0.0.1:8046` | `instance/config/services.toml` 的 `[web]` | 独立聊天口令 |
 
-本机浏览器使用 `http://127.0.0.1:8047` 和 `http://127.0.0.1:8046`。
+Windows 本机浏览器使用配置管理入口 `http://127.0.0.1:8047`；Linux standard
+另有聊天入口 `http://127.0.0.1:8046`。
 局域网使用服务器实际 IP；如需局域网聊天，将 `[web].host` 改为 `"0.0.0.0"`。
 主机防火墙按需放行所用端口，安装器不会自动修改防火墙。管理与聊天账号互不通用。
 公网访问另行配置 HTTPS 反向代理及受信来源，不直接套用局域网访问方式。
@@ -219,7 +220,7 @@ sudo loginctl enable-linger "$(id -un)"
 ## 6. 上线确认和日常操作
 
 服务启动后重新检查配置页面、运行状态和 standard 聊天页面。Windows 首次部署还需实际
-确认注销后运行及系统重启后启动；Windows 实机结果尚未验证，遇到失败应保留错误信息。
+确认注销后运行及系统重启后启动；这些服务生命周期项目尚未验证，遇到失败应保留错误信息。
 
 两种系统使用同一 `service` 子命令。在第 5 节命令中按需替换最后的动作：
 
@@ -270,11 +271,76 @@ Linux：
 .venv/bin/python scripts/verify_native_deployment.py --installed
 ```
 
-脚本在系统临时目录创建随机实例，使用回环随机端口，覆盖 slim／standard 的配置网页鉴权、
-业务启动、管理进程异常退出及重新启动。正常退出或捕获异常时自动清理；强制杀死验收脚本
+脚本在系统临时目录创建随机实例，使用回环随机端口；Linux 覆盖 slim／standard，
+Windows 覆盖 slim 的鉴权、业务启动、异常退出及重启，并验证 standard 被拒绝且不留下目录。
+正常退出或捕获异常时自动清理；强制杀死验收脚本
 可能留下临时文件，按报错中实际路径核对后处理，不删除正式目录。
 
 它不读取正式账号、不调用供应商、不操作媒体或设备、不安装服务，也不修改正式配置。
 它不等于完整 Windows 验收：真实 Pi 工具执行、ACL／文件锁专项、SCM 安装、注销／开机启动、
 配置恢复及进程树收尾仍需在目标 Windows 上核验。工程专项由仓库的
 `Native platform acceptance` 工作流及测试套件承担，不是正式部署的额外安装步骤。
+
+### Windows Server 2025 核心技术验证记录（2026-10-24，认证策略收紧前）
+
+以下保留此前的技术验证事实，不代表当前允许启用 standard 或任何扩展。新认证策略下，
+Windows 验收以 slim 成功和 standard 拒绝为准；历史合成模型／工具测试不授予扩展认证。
+
+本机环境为 Server 2025 Standard x64（26100）、NTFS、Python 3.12.15、Node 24.22.1、
+Pi 1.4.0、pywin32 312。验收使用当前账号、临时独立实例及本地合成模型服务。
+
+- 原生平台：私有 ACL、跨进程文件锁、目录／重解析点检查、命名管道并发及取消、
+  Job Object 所有权、父进程异常退出后的后代清理、主命令正常退出时回收持有输出管道的后台后代。
+- 虚拟环境：绕过 Windows Python 重定向启动器，保留 `.venv` 和真实父进程身份，
+  避免业务进程误启动第二个管理进程。
+- Pi：真实本地工具和 MCP、命令取消、未知结果不重放。Windows Shell 使用
+  Job Object 托管；取消和超时等待后代退出，不依赖 `taskkill /T` 的权限。
+  PowerShell／Git Bash 覆盖中文路径、环境、输出及退出码；不使用 WSL 作为原生命令后端。
+  合成模型覆盖前台委派后台任务、原生账号与网关混合执行及共享额度限制。
+- slim／standard：管理页面鉴权、业务就绪、管理进程强制退出及第二次启动。
+- 配置及文件：配置版本应用／恢复、MCP 注册表与图片附件的关闭后原子替换。
+- 时钟：同刻度的连续媒体刷新不会误用旧快照；语音完成判断的同刻度回归为逻辑测试，
+  不代表语音设备或停用中的语音功能已经验收。
+
+Windows 非 Server 本轮只做共享实现的逻辑兼容，不运行其本机测试。Linux 保留原有
+实现，并检查 Linux 类型分支；本轮没有额外 Linux 实机回归。
+
+最终全量门禁报告 979 项、17 项跳过，12 个模块因未安装的可选依赖
+（`pyhap`、`pyatv`、`imageio_ffmpeg`、`pywebrtc_audio`、`sherpa_onnx`）未通过。
+格式、lint、类型及前端构建通过。Linux 专用接口、当前账号缺少符号链接权限和
+未启用的可选能力均保留明确跳过记录；不能把核心定向通过表述成全量门禁通过。
+真实模型供应商、设备、SCM、注销和整机重启均不在此次已通过范围内。
+
+### 平台认证策略验收（2026-10-24）
+
+保持上述内核范围及现有版本号；14 个现有扩展全部声明 `supported_platforms = ["linux"]`。
+Windows 和 Windows Server 共享 `windows` 认证项，当前禁止启用这些扩展。
+旧实例的插件列表不自动修改；包含不支持插件的配置无法保存、应用或启动业务，
+独立管理页仍可读取并修复配置。取消扩展后还需修正依赖，不能以静默禁用跳过依赖错误。
+
+本次在同一 Windows Server 实机使用临时实例完成：
+
+- 源码版和非 editable 安装版的 slim 初始化、管理页鉴权、业务就绪、异常退出及第二次启动。
+- standard 在创建实例目录前明确拒绝，提示 `web`、`voice_disabled` 仅认证 Linux，并建议 slim。
+- 安装包包含全部 14 个扩展的认证文件，包括单文件 `gesture`；安装版 10 项认证回归全部通过。
+- 配置管理 HTTP 测试覆盖旧配置读取、拒绝不支持插件、取消后保存；外部插件测试覆盖
+  缺失／错误声明、静态与运行时不一致，以及正常认证。目录读取不导入扩展运行库，
+  启动拒绝发生在创建业务进程或插件实例之前。
+
+最终 `scripts/check.py --timeout 300`：989 项中 956 项通过、21 项跳过、12 项依赖错误，
+**全量门禁未通过**。格式、lint、仓库规定的内核类型检查及前端构建通过。
+下列缺失依赖保持报错，不计作通过或跳过：
+
+| 缺失依赖 | 未通过的测试模块 |
+| --- | --- |
+| `pyhap` | `test_environment` |
+| `pyatv` | `test_device_operations` 中的 AirPlay 用例 |
+| `imageio_ffmpeg` | `test_reply_videos`、`test_video_recording` |
+| `pywebrtc_audio` | `test_audio_input_guide`、`test_audio_input_quality`、`test_audio_outputs`、`test_behavior`、`test_devices`、`test_hardware_volume`、`test_voice_binding` |
+| `sherpa_onnx` | `test_wake_words` |
+
+21 项跳过包含 Linux 专用接口、权限／可选能力限制，以及依赖 Linux 扩展的完整会话宿主测试；
+允许在 Windows 启用的 slim 真实进程、Pi 工具、取消及重启测试保留。
+额外的 `mypy --platform linux src`／`--platform win32 src` 全源码扫描存在类型错误，未通过；
+这两项范围大于仓库规定的内核类型门禁。按仓库范围分别检查两个平台均通过。
+本轮未在普通 Windows 或 Linux 实机回归，也未验收真实供应商、设备、SCM、注销或整机重启。

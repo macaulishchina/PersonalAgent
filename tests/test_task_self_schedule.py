@@ -110,7 +110,8 @@ class SelfScheduleTest(unittest.IsolatedAsyncioTestCase):
         saved = self.plugin.repo.definition(definition["id"])
         self.assertEqual(saved["spec"], {**definition["spec"], "trigger": DAILY})
         self.assertEqual(saved["revision"], definition["revision"] + 1)
-        self.assertGreaterEqual(saved["next_at"], before + 86400)
+        # datetime schedule conversion rounds timestamps to microseconds.
+        self.assertGreaterEqual(saved["next_at"], before + 86400 - 0.000001)
         self.assertLess(saved["next_at"], time.time() + 86401)
         self.assertEqual(self.plugin.repo.run(run["id"])["data"], original)
         self.assertEqual(len(self.plugin.repo.runs(definition["id"])), 1)

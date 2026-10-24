@@ -2,12 +2,11 @@
 
 import json
 from pathlib import Path
-import re
 import tempfile
 import unittest
 import uuid
 
-from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
+from pi_gateway import FakeResponsesGateway, release_host_target, sse_text_reply, sse_tool_call
 from test_pi_skeleton import configuration
 from assistant_runtime.app.config import Config
 from scripts.verify_models import verify
@@ -25,7 +24,7 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
                 model = body["model"]
                 counts[model] = counts.get(model, 0) + 1
                 if target is None:
-                    target = re.search(r"/tmp/pi-release-host-[A-Za-z0-9_-]+/result.txt", json.dumps(body))[0]
+                    target = release_host_target(body)
                 if model == "model-a" and counts[model] == 1:
                     return sse_tool_call(
                         "discover",
@@ -60,6 +59,13 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
                     root = Path(folder)
                     (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
                     config = Config(root=root, model_api=configuration(gateway.base_url))
+                    from assistant_runtime.api.system import system
+
+                    if system.name == "windows":
+                        with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
+                            await verify_host(config, "model-a", "model-b", max_requests=cap)
+                        self.assertEqual(gateway.requests, [])
+                        continue
                     result = await verify_host(config, "model-a", "model-b", max_requests=cap)
                     self.assertFalse(result["production_changed"])
                     if cap == 6:

@@ -57,7 +57,9 @@ def main():
     service.add_argument("--account", help="Explicit Windows service account")
     init = sub.add_parser("init", help="Create a private instance from a plugin preset")
     init.add_argument("destination")
-    init.add_argument("--preset", choices=["slim", "standard"], default="standard")
+    init.add_argument(
+        "--preset", choices=["slim", "standard"], help="Default: slim on Windows, standard on Linux"
+    )
     prepare = sub.add_parser(
         "prepare-config", help="Prepare an explicit plugin configuration from an older assistant instance"
     )

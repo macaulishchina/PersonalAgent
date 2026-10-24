@@ -174,6 +174,12 @@ class CameraMotionTest(unittest.IsolatedAsyncioTestCase):
         fixed = self.spec()
         del fixed["connection"]["pan_tilt"]
         specs = {"camera": moving, "fixed": fixed}
+        from assistant_runtime.api.system import system
+
+        if system.name == "windows":
+            with self.assertRaisesRegex(ValueError, "go2rtc.*windows.*linux"):
+                Config(devices=specs, plugins=["go2rtc"])
+            return
         directory, video, controls = DeviceDirectory(specs), VideoInputs(specs), CameraControls(specs)
         plugin = Go2RTCPlugin(Config(devices=specs, plugins=["go2rtc"]), directory, video, controls)
         with tempfile.TemporaryDirectory() as tmp:

@@ -28,6 +28,16 @@ async def verify(preset, root):
     from assistant_runtime.app.config import Config
     from assistant_runtime.platforms.ipc import connect
 
+    if preset == "standard" and system.name == "windows":
+        try:
+            initialize(root, preset=preset)
+        except ValueError as exc:
+            assert all(word in str(exc) for word in ("web", "voice_disabled", "slim")), str(exc)
+        else:
+            raise AssertionError("Windows standard initialization must reject uncertified extensions")
+        assert not root.exists(), "Rejected initialization must not leave an instance directory"
+        print("standard: rejected on Windows as required by extension certification", flush=True)
+        return
     entry = initialize(root, preset=preset)
     config = Config.load(entry)
     if preset == "slim":
@@ -84,6 +94,14 @@ async def verify(preset, root):
                             pass
                         await asyncio.sleep(0.1)
                 print(f"{preset}: start {restart + 1}, console auth and business health passed", flush=True)
+            except TimeoutError as exc:
+                logs = [logpath, root / "state/configuration/business.log"]
+                details = "\n".join(
+                    f"{path.name}:\n{path.read_text(encoding='utf-8', errors='replace')[-6000:]}"
+                    for path in logs
+                    if path.is_file()
+                )
+                raise RuntimeError("Native startup timed out:\n" + details) from exc
             finally:
                 # Exercise abnormal owner loss, not only the application's stop hook.
                 system.signal_process(process, force=True)

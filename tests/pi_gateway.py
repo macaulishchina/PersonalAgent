@@ -1,8 +1,33 @@
 import asyncio
 import http.server
 import json
+from pathlib import Path
+import re
 import socketserver
+import tempfile
 import threading
+
+
+def release_host_target(body):
+    """Extract the real temporary host path from decoded protocol text on any OS."""
+    pattern = (
+        re.escape(str(Path(tempfile.gettempdir()) / "pi-release-host-")) + r"[A-Za-z0-9_-]+[/\\]result\.txt"
+    )
+
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from strings(item)
+
+    for value in strings(body):
+        if match := re.search(pattern, value):
+            return match[0]
+    raise AssertionError("Synthetic host target missing from request")
 
 
 class FakeResponsesGateway:

@@ -5,8 +5,18 @@ from pathlib import Path
 from functools import lru_cache
 from copy import deepcopy
 from importlib.metadata import entry_points
-from assistant_runtime.core.plugin_catalog import OWNERS
-from assistant_runtime.api.plugins import plugin_platforms
+from assistant_runtime.core.plugin_catalog import OWNERS, platforms
+from assistant_runtime.app.plugin_metadata import installed_platforms
+
+
+def platform_status(read):
+    from assistant_runtime.api.system import system
+
+    try:
+        certified = read()
+    except ValueError as exc:
+        return {"supported_platforms": [], "platform_supported": False, "platform_error": str(exc)}
+    return {"supported_platforms": list(certified), "platform_supported": system.name in certified}
 
 
 @lru_cache(maxsize=128)
@@ -32,8 +42,6 @@ def read_description(path):
 
 
 def installed_descriptions(names=None):
-    from assistant_runtime.api.system import system
-
     result = []
     seen = set()
     for entry in entry_points(group="personal_agent.plugins"):
@@ -43,7 +51,7 @@ def installed_descriptions(names=None):
             problem = {"error": "Ambiguous installed plugin identity"}
             previous = next((item for item in result if item["id"] == entry.name), None)
             if previous:
-                previous.update(configuration=problem, description_available=False)
+                previous.update(configuration=problem, description_available=False, platform_supported=False)
             else:
                 result.append(
                     {
@@ -51,6 +59,8 @@ def installed_descriptions(names=None):
                         "kind": "extension",
                         "configuration": problem,
                         "description_available": False,
+                        "supported_platforms": [],
+                        "platform_supported": False,
                     }
                 )
             continue
@@ -74,42 +84,45 @@ def installed_descriptions(names=None):
                 "kind": "extension",
                 "configuration": description,
                 "description_available": description is not None,
-                "supported_platforms": (description or {}).get("supported_platforms", ["linux", "windows"]),
-                "platform_supported": system.name
-                in (description or {}).get("supported_platforms", ["linux", "windows"]),
+                **platform_status(lambda: installed_platforms(entry)),
             }
         )
     return result
 
 
 def catalog(*, external_names=None):
-    from assistant_runtime.api.system import system
-
     root = Path(__file__).resolve().parents[2]
     result = []
     for name, module in OWNERS.items():
         relative = module.removeprefix("assistant_runtime.").split(".")
         path = root.joinpath(*relative, "configuration.json")
         description = read_description(path) if path.is_file() else None
-        platforms = plugin_platforms(path.parent)
         result.append(
             {
                 "id": name,
                 "kind": "core" if module.startswith("assistant_runtime.core.") else "extension",
                 "configuration": description,
                 "description_available": description is not None,
-                "supported_platforms": list(platforms),
-                "platform_supported": system.name in platforms,
+                **platform_status(lambda: platforms(name)),
             }
         )
     installed = installed_descriptions(external_names)
+    from assistant_runtime.app.presets import default_plugins
+
+    application = read_description(root / "app/configuration.json")
+    application["schema"]["properties"]["plugins"]["default"] = default_plugins()
     return {
-        "application": read_description(root / "app/configuration.json"),
+        "application": application,
         "plugins": result + [item for item in installed if item["id"] not in OWNERS],
         "issues": [
             {"id": item["id"], "error": item["configuration"]["error"]}
             for item in installed
             if item.get("configuration") and "error" in item["configuration"]
+        ]
+        + [
+            {"id": item["id"], "error": item["platform_error"]}
+            for item in result + installed
+            if item.get("platform_error")
         ],
     }
 

@@ -64,8 +64,10 @@ class MediaAttachments:
                 try:
                     f.write(normalized.getvalue())
                     system.private(temporary)
+                    f.close()  # Flush and release the handle before Windows rename.
                     temporary.replace(path)
                 finally:
+                    f.close()
                     temporary.unlink(missing_ok=True)
         return ident, created
 

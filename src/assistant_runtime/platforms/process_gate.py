@@ -8,6 +8,7 @@ import os
 def main():
     import win32con
     import win32event
+    from .executables import python_command
 
     gate = win32event.OpenEvent(win32con.SYNCHRONIZE, False, sys.argv[1])
     try:
@@ -18,7 +19,8 @@ def main():
     env = os.environ.copy()
     if env.pop("PERSONAL_AGENT_OWNED_BUSINESS", None) == "1":
         env["PERSONAL_AGENT_SUPERVISOR_PID"] = str(os.getpid())
-    return subprocess.call(sys.argv[2:], env=env)
+    command, env = python_command(sys.argv[2:], env)
+    return subprocess.call(command, env=env)
 
 
 if __name__ == "__main__":

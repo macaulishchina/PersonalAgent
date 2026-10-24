@@ -429,6 +429,17 @@ class HttpAdaptersTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "expired"):
                 await adapter.search("movie", search_id=first["search_id"])
 
+    async def test_sequential_refresh_does_not_depend_on_clock_resolution(self):
+        adapter = PanSou(None, "unused")
+        adapter.query = AsyncMock(return_value={"state": "response_received", "items": []})
+        adapter.health = AsyncMock(return_value={})
+        clock = SimpleNamespace(monotonic=lambda: 42, time=lambda: 42)
+        with patch("assistant_runtime.plugins.media.search.time", clock):
+            first = await adapter.search("movie")
+            second = await adapter.search("movie", refresh=True)
+        self.assertNotEqual(first["search_id"], second["search_id"])
+        self.assertEqual(adapter.query.await_count, 2)
+
     async def test_search_ranks_link_titles_without_hiding_ambiguous_candidates(self):
         app = web.Application()
 

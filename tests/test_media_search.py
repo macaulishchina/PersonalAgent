@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
 from aiohttp import web
@@ -205,6 +205,27 @@ class SearchHistoryTest(unittest.IsolatedAsyncioTestCase):
         await self.history.inspect(self.provider, self.values)
         self.assertEqual(self.provider.call.await_count, 6)
         self.assertFalse(self.history.observation("shared123", "")["content_identity_verified"])
+
+    async def test_equal_clock_refreshes_sequentially_but_coalesces_waiters(self):
+        with patch("assistant_runtime.plugins.media.search_history.time", SimpleNamespace(time=lambda: 42)):
+            await self.history.inspect(self.provider, self.values)
+            await self.history.inspect(self.provider, self.values, refresh=True)
+            self.assertEqual(self.provider.call.await_count, 2)
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def fetch(*args):
+                entered.set()
+                await release.wait()
+                return {"items": []}
+
+            self.provider.call.side_effect = fetch
+            first = asyncio.create_task(self.history.inspect(self.provider, self.values, True))
+            await entered.wait()
+            second = asyncio.create_task(self.history.inspect(self.provider, self.values, True))
+            await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(first, second)
+            self.assertEqual(self.provider.call.await_count, 3)
 
     async def test_definitive_negative_cache_does_not_poison_other_password_or_auth(self):
         self.provider.call.side_effect = MediaError("share_password_invalid")

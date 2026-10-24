@@ -12,9 +12,15 @@
 或已授权工作资源中。文件锁持有期等于打开文件的生命周期；创建凭据应使用
 `atomic_write`，不能认为 Windows 的 `chmod(0600)` 已实现隔离。
 
-`PluginDefinition.supported_platforms` 默认为 Linux／Windows；硬件专用实现明确收窄。
-独立包的静态 `configuration.json` 同步声明平台范围，供管理页在不导入插件时显示。
-启用前校验支持范围，不支持时明确报错。Windows 适配完成度和实际验收状态分开记录，
+扩展插件通过静态 `platform.json` 的 `supported_platforms` 声明平台认证，运行时声明
+从同一文件读取。单文件插件使用 `<模块名>.platform.json`。当前仓库全部扩展只认证
+Linux，包括 `web`、`voice_disabled`；内核范围及版本不变。`windows` 同时表示普通
+Windows 和 Windows Server。认证是随发布维护的支持声明，不是签名或在线认证服务。
+独立包必须在 entry point 模块对应路径打包上述元数据；缺失、无效或与运行时声明不一致
+均不能启用，不再对扩展自动假定跨平台支持。管理页无需导入扩展代码即可展示认证。
+配置保存和启动装配都检查当前平台，未认证时拒绝启用。Windows 默认使用 slim，
+显式选择 standard 会在创建实例目录前拒绝。已有显式配置不会自动删改。
+Windows 适配完成度和认证启用策略分开记录，
 详见 [平台部署与验收](docs/platforms.md)。
 
 公共接口为 `assistant_runtime.api`：`PluginDefinition`、`Manifest`、

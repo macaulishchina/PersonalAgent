@@ -489,31 +489,56 @@ function drawField(field) {
     for (const plugin of available.values()) {
       const line = node("label", undefined, "plugin-option"),
         check = node("input"),
-        title = node("span");
+        title = node("span"),
+        badges = node("span", undefined, "plugin-badges");
       check.type = "checkbox";
       check.value = plugin.id;
       check.checked = (value || []).includes(plugin.id);
-      if (plugin.platform_supported === false && !check.checked)
-        check.disabled = true;
+      const blocked =
+        plugin.platform_supported === false || plugin.kind === "unavailable";
+      if (blocked && !check.checked) check.disabled = true;
+      // An existing incompatible selection can be removed, but never re-enabled.
+      check.addEventListener("change", () => {
+        if (blocked && !check.checked) check.disabled = true;
+      });
       title.append(
         node("strong", plugin.configuration?.title || plugin.id),
         node("code", plugin.id),
       );
-      line.append(
-        check,
-        title,
+      badges.append(
         node(
           "span",
-          plugin.platform_supported === false
-            ? "当前系统不支持"
-            : plugin.kind === "unavailable"
-            ? "未安装"
-            : plugin.kind === "core"
-              ? "内核"
-              : "扩展",
+          plugin.platform_error
+            ? "未声明平台认证"
+            : plugin.platform_supported === false
+              ? "当前系统不支持"
+              : plugin.kind === "unavailable"
+                ? "未安装"
+                : plugin.kind === "core"
+                  ? "内核"
+                  : "扩展",
           "badge",
         ),
       );
+      line.append(check, title, badges);
+      if (plugin.kind === "extension") {
+        for (const [platform, label] of [
+          ["linux", "Linux"],
+          ["windows", "Windows"],
+        ]) {
+          const certified = (plugin.supported_platforms || []).includes(
+            platform,
+          );
+          badges.append(
+            node(
+              "span",
+              `${label} ${certified ? "已认证" : "未认证"}`,
+              "badge",
+            ),
+          );
+        }
+      }
+      if (plugin.platform_error) line.title = plugin.platform_error;
       input.append(line);
     }
     read = () =>

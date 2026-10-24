@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 import socket
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -118,6 +119,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
             await self.plugin.wake(self.button)
         self.runtime.invoke.assert_awaited_once()
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux hidraw/event descriptor lifecycle")
     async def test_read_only_event_path_disconnect_and_reader_cleanup(self):
         left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         left.setblocking(False)
@@ -157,6 +159,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.context.tasks)
             self.assertEqual(self.context.state, "stopped")
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux hidraw/event descriptor lifecycle")
     async def test_disconnect_reconnect_and_descriptor_close(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "device"
@@ -194,6 +197,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(OSError):
                     os.fstat(fd)
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux hidraw/event descriptor lifecycle")
     async def test_replaced_node_with_reused_device_number_is_not_read(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "device"

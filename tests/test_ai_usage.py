@@ -374,8 +374,13 @@ class TaskBudgetTest(unittest.IsolatedAsyncioTestCase):
     from test_tasks import TasksTest as Fixtures
 
     asyncSetUp = Fixtures.asyncSetUp
-    asyncTearDown = Fixtures.asyncTearDown
     create = Fixtures.create
+
+    async def asyncTearDown(self):
+        # unittest async cleanups run after tearDown; release the ledger before
+        # the shared fixture removes its instance directory (required on Windows).
+        await self.host.ai_usage.service.close()
+        await self.Fixtures.asyncTearDown(self)
 
     async def test_plan_pause_is_durable_before_next_scheduler_occurrence(self):
         from assistant_runtime.core.ai_usage.plugin import AIUsagePlugin

@@ -9,6 +9,17 @@ import uuid
 class OwnedProcess:
     def __init__(self, process, job, gate):
         self.process, self.job, self.gate = process, job, gate
+        self.reaper = asyncio.create_task(self.reap())
+
+    async def reap(self):
+        # asyncio wait()/communicate() can wait for pipe EOF after the leader
+        # exits. Descendants may still hold those pipes, so reap the job from
+        # the OS exit status independently of the pipe transport's completion.
+        try:
+            while self.process.returncode is None:
+                await asyncio.sleep(0.02)
+        finally:
+            self.close_job()
 
     def __getattr__(self, name):
         return getattr(self.process, name)
@@ -16,11 +27,13 @@ class OwnedProcess:
     async def wait(self):
         result = await self.process.wait()
         self.close_job()
+        await self.reaper
         return result
 
     async def communicate(self, input=None):
         result = await self.process.communicate(input)
         self.close_job()
+        await self.reaper
         return result
 
     def terminate(self):
@@ -47,7 +60,7 @@ async def spawn(*args, **kwargs):
     import win32event
     import win32job
     from .windows import security_attributes
-    from .executables import executable_command
+    from .executables import executable_command, python_command
 
     args = executable_command(args)
 
@@ -72,21 +85,30 @@ async def spawn(*args, **kwargs):
     # A unique named gate also works for console-less service processes. The
     # wrapper cannot spawn its target until AssignProcessToJobObject succeeds.
     gate_name = "Local\\PersonalAgent-" + uuid.uuid4().hex
-    gate = win32event.CreateEvent(security_attributes(), True, False, gate_name)
-    job = win32job.CreateJobObject(None, None)
-    limits = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
-    limits["BasicLimitInformation"]["LimitFlags"] = win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    win32job.SetInformationJobObject(job, win32job.JobObjectExtendedLimitInformation, limits)
+    gate = None
+    job = None
     process = None
     creation = None
     try:
-        creation = asyncio.create_task(
-            asyncio.create_subprocess_exec(
+        gate = win32event.CreateEvent(security_attributes(), True, False, gate_name)
+        # pywin32 requires a string; an empty name creates an unnamed job.
+        job = win32job.CreateJobObject(None, "")
+        limits = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
+        limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        win32job.SetInformationJobObject(job, win32job.JobObjectExtendedLimitInformation, limits)
+        command, kwargs["env"] = python_command(
+            [
                 sys.executable,
                 "-m",
                 "assistant_runtime.platforms.process_gate",
                 gate_name,
                 *map(os.fspath, args),
+            ],
+            kwargs.get("env"),
+        )
+        creation = asyncio.create_task(
+            asyncio.create_subprocess_exec(
+                *command,
                 **kwargs,
             )
         )
@@ -110,6 +132,8 @@ async def spawn(*args, **kwargs):
         if process is not None and process.returncode is None:
             process.kill()
             await process.wait()
-        job.Close()
-        gate.Close()
+        if job is not None:
+            job.Close()
+        if gate is not None:
+            gate.Close()
         raise

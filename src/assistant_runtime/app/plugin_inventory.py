@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from assistant_runtime.core.plugin_catalog import OWNERS, declaration
+from assistant_runtime.api.system import system
 from .extensions import discover
 
 
@@ -30,6 +31,8 @@ def inventory(config):
                 "api_version": spec.manifest.api_version,
                 "requires": list(spec.manifest.requires),
                 "optional": list(spec.manifest.optional),
+                "supported_platforms": list(spec.supported_platforms),
+                "platform_supported": system.name in spec.supported_platforms,
                 "distribution": {"name": distribution.metadata["Name"], "version": distribution.version}
                 if distribution
                 else None,
@@ -39,7 +42,7 @@ def inventory(config):
         application_version = version("personal-agent")
     except PackageNotFoundError:
         application_version = "source"
-    return {"application_version": application_version, "plugins": records}
+    return {"application_version": application_version, "platform": system.name, "plugins": records}
 
 
 def persist(config):

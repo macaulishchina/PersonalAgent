@@ -1,5 +1,7 @@
 """Application assets are explicit and isolated from Coding AI project configuration."""
 
+from platform_support import symlink_or_skip
+
 from pathlib import Path
 import tempfile
 import unittest
@@ -49,13 +51,13 @@ class AssistantSkillsTest(unittest.TestCase):
         coding = self.skill(".agents/skills/hsdd-epic")
         base = self.root / "config/skills"
         base.mkdir(parents=True)
-        (base / "coding").symlink_to(coding, target_is_directory=True)
+        symlink_or_skip(base / "coding", coding, target_is_directory=True)
         config = Config(root=self.root, plugins=[], instance_skills=["coding"])
         with self.assertRaisesRegex(ValueError, "inside config/skills"):
             assistant_skill_paths(config)
         folder = base / "private-device"
         folder.mkdir()
-        (folder / "SKILL.md").symlink_to(coding / "SKILL.md")
+        symlink_or_skip(folder / "SKILL.md", coding / "SKILL.md")
         config.instance_skills = ["private-device"]
         with self.assertRaisesRegex(ValueError, "inside config/skills"):
             assistant_skill_paths(config)

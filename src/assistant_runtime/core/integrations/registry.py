@@ -77,8 +77,10 @@ class McpRegistry:
                     handle.write(raw)
                     handle.flush()
                     os.fsync(handle.fileno())
+                    handle.close()  # Windows cannot rename an open temporary file.
                     os.replace(temporary, self.path)
                 finally:
+                    handle.close()
                     temporary.unlink(missing_ok=True)
             self.data = data
 

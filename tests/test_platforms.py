@@ -137,7 +137,7 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
 
         for name in ("pipewire", "v4l2", "hid_buttons"):
             self.assertEqual(declaration(name).supported_platforms, ("linux",))
-        self.assertEqual(declaration("search").supported_platforms, ("linux", "windows"))
+        self.assertEqual(declaration("search").supported_platforms, ("linux",))
         from assistant_runtime.core.configuration.catalog import catalog
 
         rows = {row["id"]: row for row in catalog()["plugins"]}
@@ -161,6 +161,89 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows Job Object, ACL and reparse contracts")
 class WindowsContracts(unittest.IsolatedAsyncioTestCase):
+    async def test_normal_exit_reaps_background_descendant_holding_output_pipe(self):
+        script = (
+            "import subprocess,sys; "
+            "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); "
+            "print(p.pid,flush=True)"
+        )
+        process = await system.spawn(sys.executable, "-c", script, stdout=-1, stderr=-1)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), 5)
+            self.assertEqual(process.returncode, 0)
+            self.assertFalse(process_alive(int(output)))
+        finally:
+            await system.stop_process(process, timeout=1)
+
+    async def test_venv_supervisor_pid_is_the_actual_parent(self):
+        child = (
+            "import os,sys,json; "
+            "print(json.dumps([os.getppid(),os.environ['PERSONAL_AGENT_SUPERVISOR_PID'],sys.prefix]))"
+        )
+        process = await system.spawn(
+            sys.executable,
+            "-c",
+            child,
+            env={**os.environ, "PERSONAL_AGENT_OWNED_BUSINESS": "1"},
+            stdout=-1,
+        )
+        output, _ = await process.communicate()
+        self.assertEqual(process.returncode, 0)
+        parent, supervisor, prefix = json.loads(output)
+        self.assertEqual(parent, process.pid)
+        self.assertEqual(supervisor, str(process.pid))
+        self.assertEqual(prefix, sys.prefix)
+
+    async def test_cancelled_pipe_read_can_be_reused_and_close_settles_pending_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "control.sock"
+            connected = asyncio.get_running_loop().create_future()
+            release = asyncio.Event()
+
+            async def handler(reader, writer):
+                connected.set_result(writer)
+                await release.wait()
+
+            server = await serve(path, handler)
+            reader, writer = await connect(path)
+            try:
+                peer = await asyncio.wait_for(connected, 3)
+                self.assertEqual(await reader.read(0), b"")
+                pending = asyncio.create_task(reader.read(1))
+                await asyncio.sleep(0.02)
+                pending.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(pending, 3)
+                peer.write(b"a")
+                await peer.drain()
+                self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"a")
+                pending = asyncio.create_task(reader.read(1))
+                await asyncio.sleep(0.02)
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), 3)
+                self.assertEqual(await asyncio.wait_for(pending, 3), b"")
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                release.set()
+                server.close()
+                await server.wait_closed()
+
+    async def test_failed_job_setup_releases_job_and_startup_gate(self):
+        from unittest.mock import Mock, patch
+        from assistant_runtime.platforms.windows_process import spawn
+
+        gate, job = Mock(), Mock()
+        with (
+            patch("win32event.CreateEvent", return_value=gate),
+            patch("win32job.CreateJobObject", return_value=job),
+            patch("win32job.QueryInformationJobObject", side_effect=OSError("job setup failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "job setup failed"):
+                await spawn(sys.executable, "-c", "pass")
+        gate.Close.assert_called_once_with()
+        job.Close.assert_called_once_with()
+
     async def test_owner_death_closes_child_and_grandchild_job(self):
         with tempfile.TemporaryDirectory(prefix="job 中文 ") as folder:
             pidfile = Path(folder) / "child.json"

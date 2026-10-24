@@ -4,6 +4,11 @@ Build and explicitly install this package into the application's environment.
 Enable `sample` in the instance's `plugins` list. The framework discovers the
 `personal_agent.plugins` entry point; no source registry edit is required.
 
+The shipped example is certified for Linux only. `platform.json` is included in
+the wheel and read by its `PluginDefinition`; static and runtime certifications
+must match. Windows and Windows Server refuse to enable this example. Certify a
+new platform through an explicit release change after appropriate validation.
+
 This example contributes a packaged skill, read/write tools, namespaced durable
 state and an event. It imports only the public plugin API. The note tools make no paid or device requests. The optional report workflow uses the
 configured execution model and its shared usage gate: `sample_report` registers bounded

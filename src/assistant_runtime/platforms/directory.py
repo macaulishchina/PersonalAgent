@@ -3,12 +3,13 @@
 import os
 from pathlib import Path
 import shutil
+import sys
 
 
 def component(name):
     if not isinstance(name, str) or name in {"", ".", ".."} or any(c in name for c in "/\\\x00"):
         raise ValueError("Expected one safe path component")
-    if os.name == "nt":
+    if sys.platform == "win32":
         stem = name.split(".")[0].upper()
         if (
             name[-1:] in {" ", "."}
@@ -32,7 +33,7 @@ class Directory:
     def __init__(self, path, *, parent=None, name=None):
         self.path = Path(path)
         self.fd, self.pins = None, []
-        if os.name == "nt":
+        if sys.platform == "win32":
             self._windows_open()
         else:
             self.fd = os.open(
@@ -58,7 +59,7 @@ class Directory:
                     win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
                     None,
                     win32con.OPEN_EXISTING,
-                    win32con.FILE_FLAG_BACKUP_SEMANTICS | win32con.FILE_FLAG_OPEN_REPARSE_POINT,
+                    win32con.FILE_FLAG_BACKUP_SEMANTICS | win32file.FILE_FLAG_OPEN_REPARSE_POINT,
                     None,
                 )
                 self.pins.append(handle)
@@ -74,8 +75,9 @@ class Directory:
             raise
 
     def clone(self):
-        if os.name == "nt":
+        if sys.platform == "win32":
             return Directory(self.path)
+        assert self.fd is not None
         result = object.__new__(Directory)
         result.path, result.fd, result.pins = self.path, os.dup(self.fd), []
         return result
@@ -87,16 +89,17 @@ class Directory:
     def stat(self, name=None):
         if name is not None:
             component(name)
-        if os.name == "nt":
+        if sys.platform == "win32":
             info = os.stat(self.path / name if name else self.path, follow_symlinks=False)
             if getattr(info, "st_file_attributes", 0) & 0x400:
                 raise ValueError("Reparse points are not managed files")
             return info
+        assert self.fd is not None
         return os.stat(name, dir_fd=self.fd, follow_symlinks=False) if name else os.fstat(self.fd)
 
     def mkdir(self, name, mode=0o700):
         component(name)
-        if os.name == "nt":
+        if sys.platform == "win32":
             os.mkdir(self.path / name)
         else:
             os.mkdir(name, mode, dir_fd=self.fd)
@@ -104,7 +107,7 @@ class Directory:
 
     def open_file(self, name, flags, mode=0o600):
         component(name)
-        if os.name != "nt":
+        if sys.platform != "win32":
             return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=self.fd)
         import msvcrt
         import win32con
@@ -125,7 +128,7 @@ class Directory:
                 win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
                 security_attributes(),
                 creation,
-                win32con.FILE_FLAG_OPEN_REPARSE_POINT,
+                win32file.FILE_FLAG_OPEN_REPARSE_POINT,
                 None,
             )
         except pywintypes.error as exc:
@@ -154,12 +157,12 @@ class Directory:
             handle.Close()
 
     def names(self):
-        return os.scandir(self.path if os.name == "nt" else self.fd)
+        return os.scandir(self.path if sys.platform == "win32" else self.fd)
 
     def link(self, source, destination, name):
         component(source)
         component(name)
-        if os.name == "nt":
+        if sys.platform == "win32":
             self.stat(source)  # Reject a reparse entry before linking.
             os.link(self.path / source, destination.path / name, follow_symlinks=False)
         else:
@@ -168,7 +171,7 @@ class Directory:
 
     def unlink(self, name):
         component(name)
-        if os.name == "nt":
+        if sys.platform == "win32":
             self.stat(name)
             os.unlink(self.path / name)
         else:
@@ -176,12 +179,14 @@ class Directory:
         self.sync()
 
     def sync(self):
-        if os.name != "nt":
+        if sys.platform != "win32":
+            assert self.fd is not None
             os.fsync(self.fd)
 
     def free_bytes(self):
-        if os.name == "nt":
+        if sys.platform == "win32":
             return shutil.disk_usage(self.path).free
+        assert self.fd is not None
         info = os.fstatvfs(self.fd)
         return info.f_bavail * info.f_frsize
 

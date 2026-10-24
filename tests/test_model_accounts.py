@@ -5,7 +5,6 @@ from platform_support import private_mode
 import asyncio
 from dataclasses import replace
 import json
-import re
 import uuid
 from pathlib import Path
 import tempfile
@@ -13,7 +12,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
+from pi_gateway import FakeResponsesGateway, release_host_target, sse_text_reply, sse_tool_call
 from assistant_runtime.core.models.settings import ModelSettings
 from assistant_runtime.core.pi.accounts import NativeAccounts, installation
 from assistant_runtime.core.pi.inference import complete, output_bound
@@ -491,7 +490,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         def script(step, body):
             model = body["model"]
             counts[model] = counts.get(model, 0) + 1
-            target = re.search(r"/tmp/pi-release-host-[A-Za-z0-9_-]+/result.txt", json.dumps(body))[0]
+            target = release_host_target(body)
             if model == "gpt-6.1-sol" and counts[model] == 1:
                 return sse_tool_call(
                     "discover", "tool_search", {"query": "create task request_id title prompt", "limit": 8}
@@ -528,6 +527,13 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             "TEST_MODEL_KEY=sk-synthetic-test\nASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n"
         )
         config = Config(root=self.root, model_api=raw)
+        from assistant_runtime.api.system import system
+
+        if system.name == "windows":
+            with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
+                await verify(config, "subscription", "model-b", effort="low", max_requests=6)
+            self.assertEqual(self.gateway.requests, [])
+            return
         result = await verify(config, "subscription", "model-b", effort="low", max_requests=6)
         self.assertEqual(result["state"], "completed", result)
         self.assertEqual(result["requests"], 5)

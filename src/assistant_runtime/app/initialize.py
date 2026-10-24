@@ -4,15 +4,27 @@ from assistant_runtime.api.system import system
 
 from pathlib import Path
 import shutil
+from .presets import default_preset
 
 
-def initialize(destination, template=None, *, preset="standard"):
+def initialize(destination, template=None, *, preset=None):
+    preset = preset or default_preset()
     if preset not in {"slim", "standard"}:
         raise ValueError("Unknown instance preset")
+    if preset == "standard" and system.name == "windows":
+        raise ValueError(
+            "standard does not support windows: web, voice_disabled are certified for linux only; "
+            "use --preset slim"
+        )
     destination = Path(destination).expanduser().resolve()
     template = Path(template).resolve() if template else Path(__file__).with_name("templates") / preset
     if destination.exists():
         raise ValueError("Instance destination already exists")
+    from assistant_runtime.app.config import _read_config
+    from assistant_runtime.core.plugin_catalog import validate_platforms
+
+    selected = _read_config(template / "config.toml").get("plugins", [])
+    validate_platforms(selected, system.name)
     destination.mkdir(mode=0o700, parents=True)
     system.private(destination, directory=True)
     try:

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import time
+import sys
 import unittest
 from unittest.mock import AsyncMock
 
@@ -115,6 +116,10 @@ class VideoRegistrationTest(unittest.IsolatedAsyncioTestCase):
                 VideoInputs(changed).register("go2rtc", "camera", provider)
 
     async def test_query_and_observation_do_not_capture_or_publish_images(self):
+        if sys.platform == "win32":
+            with self.assertRaisesRegex(ValueError, "go2rtc.*windows.*linux"):
+                Config(profile="headless", plugins=["go2rtc"], devices={"camera": camera_spec()})
+            return
         config = Config(profile="headless", plugins=["go2rtc"], devices={"camera": camera_spec()})
         directory, video = DeviceDirectory(config.devices), VideoInputs(config.devices)
         plugin = Go2RTCPlugin(config, directory, video)

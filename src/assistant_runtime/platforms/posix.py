@@ -7,6 +7,8 @@ import sys
 
 async def terminal_input(*, secret):
     """Cancellable input: browser completion must not leave a blocked input thread."""
+    if sys.platform == "win32":
+        raise RuntimeError("POSIX terminal input is not available on Windows")
     import termios
 
     loop = asyncio.get_running_loop()

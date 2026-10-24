@@ -208,7 +208,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(run["status"], "failed")
         self.assertEqual(run["error"]["status"], 402)
-        self.assertEqual((self.root / "evidence.txt").read_text(), "once\n")
+        self.assertEqual((self.root / "evidence.txt").read_text(encoding="utf-8-sig"), "once\n")
         self.assertEqual(len(self.gateway.requests), 3)
         self.assertFalse(any(item["type"] == "message" for item in run["items"]))
 
@@ -342,7 +342,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await self.completed())["status"], "completed")
         self.assertEqual(len(self.gateway.requests), 4)
-        self.assertEqual((self.root / "evidence.txt").read_text(), "once\n")
+        self.assertEqual((self.root / "evidence.txt").read_text(encoding="utf-8-sig"), "once\n")
         prior = await self.usage.snapshot(failed["id"])
         self.assertEqual(prior["requests"], 2)
         self.assertEqual(prior["unknown_execution_requests"], 1)
@@ -552,7 +552,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         from assistant_runtime.app.bootstrap import assistant_skill_paths
 
-        bundled = assistant_skill_paths(Config(root=self.root, plugins=["media"]))
+        bundled = assistant_skill_paths(Config(root=self.root, plugins=["tasks"]))
         self.client.skill_paths = (*bundled, skill)
         path = self.root / "test.png"
         path.write_bytes(
@@ -575,7 +575,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         encoded = json.dumps(self.gateway.requests[0])
         self.assertIn("data:image/png;base64,", encoded)
         self.assertIn("synthetic-skill", encoded)
-        self.assertIn("media-acquisition", encoded)
+        self.assertIn("event-driven-tasks", encoded)
         self.assertNotIn("CODING_AI_CONTEXT_MUST_NOT_LEAK", encoded)
         self.assertNotIn("CODING_AI_SKILL_MUST_NOT_LEAK", encoded)
         self.assertNotIn("hsdd-epic", encoded)

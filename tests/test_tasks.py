@@ -1,5 +1,7 @@
 """Durable tasks: duplicate dispatch, isolation, recovery and cleanup boundaries."""
 
+from platform_support import symlink_or_skip
+
 from assistant_runtime.app.bundled import context_for
 
 import asyncio
@@ -1260,7 +1262,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
             work.area("tasks/../../outside")
         outside = self.root / "outside"
         outside.mkdir()
-        (work.root / "tasks/link").symlink_to(outside, target_is_directory=True)
+        symlink_or_skip(work.root / "tasks/link", outside, target_is_directory=True)
         with self.assertRaises(ValueError):
             work.area("tasks/link/run")
 
@@ -1318,25 +1320,29 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         host.notification_output = False
         host.player = SimpleNamespace(manual_muted=False, playing=False, stop=AsyncMock())
         speaking = asyncio.Event()
+        clock = SimpleNamespace(monotonic=lambda: 42)
 
         async def say(text):
-            host.last_output = time.monotonic()
+            host.last_output = clock.monotonic()
             speaking.set()
 
         host.voice = SimpleNamespace(
             open=AsyncMock(), close=AsyncMock(), say=AsyncMock(side_effect=say), speech_completed=False
         )
-        job = asyncio.create_task(host.notify_task("synthetic result"))
-        try:
-            await speaking.wait()
-            await asyncio.sleep(1.7)
-            self.assertFalse(job.done(), "A quiet gap or startup audio must not finish speech")
-            host.voice.speech_completed = True
-            self.assertEqual(await asyncio.wait_for(job, 0.5), "played")
-            host.voice.say.assert_awaited_once()
-        finally:
-            job.cancel()
-            await asyncio.gather(job, return_exceptions=True)
+        with patch("assistant_runtime.core.speech.lifecycle.time", clock):
+            # Force first audio and notification start into the same clock tick.
+            job = asyncio.create_task(host.notify_task("synthetic result"))
+            try:
+                await speaking.wait()
+                clock.monotonic = lambda: 44
+                await asyncio.sleep(0.15)
+                self.assertFalse(job.done(), "A quiet gap or startup audio must not finish speech")
+                host.voice.speech_completed = True
+                self.assertEqual(await asyncio.wait_for(job, 0.5), "played")
+                host.voice.say.assert_awaited_once()
+            finally:
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
 
     async def test_real_scheduler_runs_without_manual_due_callback(self):
         d = await self.create(execution={"kind": "reminder"})

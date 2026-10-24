@@ -2,13 +2,13 @@
 
 本地 Agent 框架，使用 Pi 作为唯一执行骨架，支持通过 API 或原生账号接入模型，提供网页对话和可持久化的后台任务。设备、媒体、搜索、事件、通知与记忆等能力由独立插件提供。
 
-Linux 为现有运行平台；原生 Windows 适配与验收入口已加入，Windows 11／Server 2022／2025 的实机验收待完成，暂不视为已验证的生产平台。完整安装、配置与服务管理流程见 [Linux／Windows 正式部署指南](docs/platforms.md)。
+Linux 为现有运行平台。Windows 与 Windows Server 共用原生适配层，默认使用 slim。当前全部扩展插件（包括 web、voice_disabled）只认证 Linux，不能在 Windows 启用；standard 因包含这些扩展而被拒绝。Windows Server 2025 已有核心进程、IPC、Pi 和启动重启的本机验证；SCM、注销及系统重启仍待验收，Windows 11 与 Server 2022 尚未实机验证。完整流程见 [Linux／Windows 正式部署指南](docs/platforms.md)。
 
 语音输入、语音对话和播报目前停用，待独立验收后启用；现有 USB 音频绑定及独立音频测试工具继续保留。
 
 ## 安装与配置
 
-使用 Python 3.12。首次从仓库部署时，安装锁定依赖的 standard 组合并初始化私有实例。不要在正在运行的生产环境中同步依赖。
+使用 Python 3.12。以下命令用于 Linux standard；Windows 使用部署指南中的 slim 流程，仍提供独立配置管理网页。不要在正在运行的生产环境中同步依赖。
 
 ```sh
 uv sync --locked --extra standard --no-default-groups --no-editable

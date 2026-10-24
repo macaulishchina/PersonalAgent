@@ -35,6 +35,10 @@ def validate_stored(config, external_resolver):
             if not description or "error" in description:
                 raise ValueError("Installed plugin has no supported configuration description")
             resolve(ConfigurationSpec(**description), value)
+            if item["id"] not in config.enabled_plugins:
+                # Keep disabled extension settings without importing its runtime.
+                # Uncertified owners must be removable without deleting private settings.
+                continue
             # Explicitly configured owners must also satisfy their semantic validator.
             from .schema import resolve_definition
 

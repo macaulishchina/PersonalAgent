@@ -21,6 +21,11 @@ class CompositionIsolationTest(unittest.TestCase):
                 self.assertTrue((files("assistant_runtime") / relative / "declaration.py").is_file(), owner)
         with tempfile.TemporaryDirectory() as directory:
             for preset in ("slim", "standard"):
+                if sys.platform == "win32" and preset == "standard":
+                    with self.assertRaisesRegex(ValueError, "web, voice_disabled"):
+                        initialize(Path(directory) / preset, preset=preset)
+                    self.assertFalse((Path(directory) / preset).exists())
+                    continue
                 config = Config.load(initialize(Path(directory) / preset, preset=preset))
                 self.assertIn("integrations", config.plugins)
                 self.assertTrue({"memory", "events"}.isdisjoint(config.plugins))

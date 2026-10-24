@@ -8,7 +8,8 @@ from importlib.metadata import entry_points
 import re
 
 from assistant_runtime.api import CallIdentity, PluginContext, PluginDefinition
-from assistant_runtime.api.plugins import current_call
+from assistant_runtime.api.plugins import current_call, require_platform, PlatformCertificationError
+from .plugin_metadata import installed_platforms
 from assistant_runtime.core.configuration.schema import resolve_definition
 
 GROUP = "personal_agent.plugins"
@@ -31,6 +32,16 @@ def discover(names, builtins=()):
     for name in names:
         if name not in found:
             raise ValueError("Plugin not installed: " + name)
+        from assistant_runtime.api.system import system
+
+        try:
+            platforms = installed_platforms(found[name])
+        except ValueError as exc:
+            raise PlatformCertificationError(
+                f"Plugin {name} cannot enable on {system.name}; certified platforms: none "
+                "(missing or invalid static platform certification)"
+            ) from exc
+        require_platform(name, platforms, system.name)
         definition = found[name].load()
         definition = definition() if callable(definition) else definition
         if not isinstance(definition, PluginDefinition) or definition.manifest.name != name:
@@ -41,10 +52,11 @@ def discover(names, builtins=()):
             raise ValueError(
                 "Installed plugin requested unsupported direct resources; use declared capabilities"
             )
-        from assistant_runtime.api.system import system
-
-        if system.name not in definition.supported_platforms:
-            raise ValueError(f"Plugin {name} does not support {system.name}")
+        if set(definition.supported_platforms) != set(platforms):
+            raise PlatformCertificationError(
+                f"Plugin {name} cannot enable on {system.name}; certified platforms: {', '.join(platforms)}; "
+                "static and runtime platform certifications differ"
+            )
         if definition.manifest.critical:
             raise ValueError("Extensions cannot declare themselves critical")
         result[name] = definition

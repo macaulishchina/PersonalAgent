@@ -31,6 +31,8 @@ def security_attributes(*, directory=False):
 
 def file_error(exc, path=None):
     """Expose normal Python filesystem errors across the pywin32 boundary."""
+    if sys.platform != "win32":
+        raise RuntimeError("Windows file errors are not available on this platform")
     import ctypes
 
     error = ctypes.WinError(exc.winerror)
@@ -75,11 +77,13 @@ def private(path, *, directory=False):
 
 
 async def terminal_input(*, secret):
+    if sys.platform != "win32":
+        raise RuntimeError("Windows terminal input is not available on this platform")
     import msvcrt
 
     if not sys.stdin.isatty():
         raise RuntimeError("Account input requires an interactive Windows console")
-    value = []
+    value: list[str] = []
     try:
         while True:
             if not msvcrt.kbhit():

@@ -4,6 +4,11 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import {
+  createBashToolDefinition,
+  createPowerShellToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import { windowsShellOperations } from "../../platforms/windows_shell.mjs";
 
 interface PolicySpec {
   allowed_tools?: string[] | null;
@@ -32,6 +37,18 @@ function loadPolicy(): PolicySpec {
 }
 
 export default function (pi: any) {
+  if (process.platform === "win32") {
+    pi.registerTool(
+      createPowerShellToolDefinition(process.cwd(), {
+        operations: windowsShellOperations("powershell"),
+      }),
+    );
+    pi.registerTool(
+      createBashToolDefinition(process.cwd(), {
+        operations: windowsShellOperations("bash"),
+      }),
+    );
+  }
   const policy = loadPolicy();
   const discoveryEnabled = process.env.ASSISTANT_PI_DISCOVERY === "1";
   registerDiscovery(

@@ -18,7 +18,7 @@ class ReleasePreflightTest(unittest.TestCase):
             main_model="model-a",
             main_reasoning_effort="low",
             memory_enabled=True,
-            plugins=["ai_usage", "models", "pi", "voice_disabled", "tasks", "memory"],
+            plugins=["ai_usage", "models", "pi", "tasks", "memory"],
             tasks={
                 "model_policy": {
                     "profiles": {

@@ -11,6 +11,7 @@ import logging
 import mimetypes
 import io
 import os
+import sys
 import re
 from pathlib import Path
 import uuid
@@ -123,6 +124,8 @@ class PiSessionWorker:
         env["PI_OFFLINE"] = "1"
         env["PI_SKIP_VERSION_CHECK"] = "1"
         env["PI_TELEMETRY"] = "0"
+        if sys.platform == "win32":
+            env["ASSISTANT_RUNTIME_PYTHON"] = sys.executable
         env["ASSISTANT_TOOL_RESULT_MAX_CHARS"] = str(self.parent.settings.tool_result_max_chars)
         env["ASSISTANT_MAX_LOADED_TOOLS"] = str(self.parent.settings.max_loaded_tools)
         env["ASSISTANT_PI_DISCOVERY"] = "1" if self.meta.get("mcp_enabled", True) else "0"

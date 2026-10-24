@@ -1,5 +1,7 @@
 """Library change/recovery tests with protocol fixtures and real local filesystem IO."""
 
+from platform_support import symlink_or_skip
+
 import asyncio
 import copy
 import json
@@ -327,7 +329,7 @@ class LocalLibraryTest(unittest.IsolatedAsyncioTestCase):
         await self.library.process(self.repo.get(item["id"]))
         self.assertFalse(path.exists())
         self.assertEqual(path.with_name("renamed.mkv").read_bytes(), b"content")
-        (self.mount / "library" / "link").symlink_to(self.mount / "stage", target_is_directory=True)
+        symlink_or_skip(self.mount / "library" / "link", self.mount / "stage", target_is_directory=True)
         with self.assertRaises((OSError, MediaError)):
             local_call(self.binding, "listing", "link", "")
 

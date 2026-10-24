@@ -11,49 +11,47 @@ def pipe_name(path):
     return "\\\\.\\pipe\\personal-agent-" + hashlib.sha256(identity).hexdigest()
 
 
-async def operation(handle, start, *, eof=False):
-    import pywintypes
-    import win32event
-    import win32file
+async def operation(start, pending, *, eof=False):
+    # CPython's Windows wrapper owns the buffers/event and supports targeted
+    # CancelIoEx through cancel(); pywin32 does not expose that function.
+    import _overlapped
 
-    overlapped = pywintypes.OVERLAPPED()
-    overlapped.hEvent = win32event.CreateEvent(None, True, False, None)
-
+    overlapped = _overlapped.Overlapped(0)
     try:
-        buffer = start(overlapped)
-        if buffer is True:  # ConnectNamedPipe reported an already-connected client.
-            overlapped.hEvent.Close()
-            return None
-    except pywintypes.error as exc:
-        overlapped.hEvent.Close()
+        start(overlapped)
+    except OSError as exc:
         if eof and exc.winerror in {109, 232, 233, 995}:
             return b""
-        raise OSError(exc.winerror, "Local pipe operation failed") from exc
-    except BaseException:
-        overlapped.hEvent.Close()
         raise
 
     def work():
         try:
-            size = win32file.GetOverlappedResult(handle, overlapped, True)
-            return bytes(buffer[:size]) if buffer is not None else None
-        except pywintypes.error as exc:
+            return overlapped.getresult(True)
+        except OSError as exc:
             if eof and exc.winerror in {109, 232, 233, 995}:  # closed/cancelled peer
                 return b""
-            raise OSError(exc.winerror, "Local pipe operation failed") from exc
+            raise
 
     task = asyncio.create_task(asyncio.to_thread(work))
+    pending[overlapped] = task
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        try:
-            win32file.CancelIoEx(handle, overlapped)
-        except pywintypes.error:
-            pass
-        await asyncio.gather(task, return_exceptions=True)
+        overlapped.cancel()
+        # Cancellation requests completion; it does not complete the I/O.
+        # Repeated task cancellation must not release its buffer/handle early.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except OSError:
+                break
+        if not task.cancelled():
+            task.exception()
         raise
     finally:
-        overlapped.hEvent.Close()
+        pending.pop(overlapped, None)
 
 
 class Stream:
@@ -61,8 +59,25 @@ class Stream:
         self.handle, self.limit = handle, limit
         self.input, self.output = bytearray(), bytearray()
         self.closed = False
+        self.pending = {}
+        self.finished = asyncio.Event()
+
+    async def operate(self, start, *, eof=False):
+        if self.closed:
+            raise ConnectionError("Control pipe closed")
+        try:
+            return await operation(start, self.pending, eof=eof)
+        finally:
+            self.finish_close()
+
+    def finish_close(self):
+        if self.closed and not self.pending and not self.finished.is_set():
+            self.handle.Close()
+            self.finished.set()
 
     async def read(self, n=-1):
+        if n == 0:
+            return b""
         if self.input:
             count = len(self.input) if n < 0 else min(n, len(self.input))
             result = bytes(self.input[:count])
@@ -70,10 +85,8 @@ class Stream:
             return result
         if self.closed:
             return b""
-        import win32file
-
         size = min(n if n > 0 else 65536, 65536)
-        return await operation(self.handle, lambda ov: win32file.ReadFile(self.handle, size, ov)[1], eof=True)
+        return await self.operate(lambda ov: ov.ReadFile(int(self.handle), size), eof=True)
 
     async def readline(self):
         pending = bytearray()
@@ -102,30 +115,20 @@ class Stream:
         return self.closed
 
     async def drain(self):
-        import win32file
-
         data = bytes(self.output)
         self.output.clear()
         if data:
-            await operation(self.handle, lambda ov: (win32file.WriteFile(self.handle, data, ov), None)[1])
+            await self.operate(lambda ov: ov.WriteFile(int(self.handle), data))
 
     def close(self):
         if not self.closed:
             self.closed = True
-            import win32file
-
-            import pywintypes
-
-            try:
-                win32file.CancelIoEx(self.handle, None)
-            except pywintypes.error as exc:
-                if exc.winerror != 1168:  # no pending operation
-                    raise
-            finally:
-                self.handle.Close()
+            for overlapped in self.pending:
+                overlapped.cancel()
+            self.finish_close()
 
     async def wait_closed(self):
-        return
+        await self.finished.wait()
 
 
 async def connect(path, *, limit):
@@ -178,7 +181,6 @@ class Server:
             logging.getLogger(__name__).error("Local control handler failed", exc_info=task.exception())
 
     async def accept(self):
-        import pywintypes
         import win32con
         import win32pipe
         from .windows import security_attributes
@@ -198,20 +200,10 @@ class Server:
             if not self.ready.done():
                 self.ready.set_result(None)
             try:
-
-                def start(ov):
-                    try:
-                        win32pipe.ConnectNamedPipe(handle, ov)
-                    except pywintypes.error as exc:
-                        if exc.winerror == 535:  # client connected before ConnectNamedPipe
-                            return True
-                        elif exc.winerror != 997:
-                            raise
-                    return None
-
-                await operation(handle, start)
+                await stream.operate(lambda ov: ov.ConnectNamedPipe(int(handle)))
             except BaseException:
                 stream.close()
+                await stream.wait_closed()
                 raise
             if len(self.clients) >= 63:
                 stream.close()
@@ -225,6 +217,7 @@ class Server:
                     await self.callback(connection, connection)
                 finally:
                     connection.close()
+                    await connection.wait_closed()
 
             task = asyncio.create_task(client(stream))
             self.clients.add(task)

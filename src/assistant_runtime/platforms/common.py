@@ -21,7 +21,7 @@ class Platform:
         return component(name)
 
     def supervised_command(self, timeout, args):
-        if os.name == "nt":
+        if sys.platform == "win32":
             return args
         return [sys.executable, "-m", "assistant_runtime.platforms.linux_guardian", str(timeout), *args]
 
@@ -39,7 +39,7 @@ class Platform:
             raise BlockingIOError(errno.EAGAIN, "File is owned by another process") from exc
 
     def private(self, path, *, directory=False):
-        if os.name == "nt":
+        if sys.platform == "win32":
             from .windows import private
 
             private(path, directory=directory)
@@ -47,7 +47,7 @@ class Platform:
             os.chmod(path, 0o700 if directory else 0o600)
 
     def sync_directory(self, path):
-        if os.name == "nt":
+        if sys.platform == "win32":
             # Atomic replacement uses MOVEFILE_WRITE_THROUGH on Windows.
             # FlushFileBuffers on directory handles is not a portable equivalent.
             return
@@ -60,7 +60,7 @@ class Platform:
     def atomic_write(self, path, data, *, prefix=".private-"):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if os.name == "nt":
+        if sys.platform == "win32":
             self.private(path.parent, directory=True)
         fd, name = tempfile.mkstemp(prefix=prefix, dir=path.parent)
         try:
@@ -69,7 +69,7 @@ class Platform:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import win32file
                 import pywintypes
                 from .windows import file_error
@@ -85,7 +85,7 @@ class Platform:
             Path(name).unlink(missing_ok=True)
 
     async def spawn(self, *args, **kwargs):
-        if os.name == "nt":
+        if sys.platform == "win32":
             from .windows_process import spawn
 
             return await spawn(*args, **kwargs)
@@ -93,7 +93,7 @@ class Platform:
         return await asyncio.create_subprocess_exec(*args, **kwargs)
 
     def signal_process(self, process, *, force=False):
-        if os.name == "nt":
+        if sys.platform == "win32":
             process.kill() if force else process.terminate()
         else:
             try:
@@ -118,13 +118,13 @@ class Platform:
     def stop_signals(self, callback):
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            if os.name == "nt":
+            if sys.platform == "win32":
                 signal.signal(sig, lambda *_: loop.call_soon_threadsafe(callback))
             else:
                 loop.add_signal_handler(sig, callback)
 
     async def terminal_input(self, *, secret):
-        if os.name == "nt":
+        if sys.platform == "win32":
             from .windows import terminal_input
         else:
             from .posix import terminal_input

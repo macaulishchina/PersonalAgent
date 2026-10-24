@@ -1,6 +1,8 @@
 """Bundled owner identities only. Each owner declares its settings, skills and tools."""
 
 from importlib import import_module
+from pathlib import Path
+from assistant_runtime.api.plugins import plugin_platforms, require_platform
 
 OWNERS = {
     **{
@@ -44,7 +46,26 @@ OWNERS = {
 
 
 def declaration(name):
-    return import_module(OWNERS[name] + ("_declaration" if name == "gesture" else ".declaration")).DECLARATION
+    spec = import_module(OWNERS[name] + ("_declaration" if name == "gesture" else ".declaration")).DECLARATION
+    if set(spec.supported_platforms) != set(platforms(name)):
+        raise ValueError(f"Plugin {name}: static and runtime platform certifications differ")
+    return spec
+
+
+def platforms(name):
+    module = OWNERS[name]
+    root = Path(__file__).resolve().parents[1]
+    path = root.joinpath(*module.removeprefix("assistant_runtime.").split("."))
+    metadata = path.with_suffix(".platform.json") if name == "gesture" else path / "platform.json"
+    if module.startswith("assistant_runtime.core.") and not metadata.exists():
+        return ("linux", "windows")
+    return plugin_platforms(metadata)
+
+
+def validate_platforms(names, current):
+    for name in names:
+        if name in OWNERS:
+            require_platform(name, platforms(name), current)
 
 
 def services(enabled=None):

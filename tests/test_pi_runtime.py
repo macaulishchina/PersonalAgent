@@ -17,6 +17,9 @@ from assistant_runtime.app.config import Config
 from assistant_runtime.app.host import AssistantService
 
 
+@unittest.skipUnless(
+    sys.platform == "linux", "Full conversation host requires Linux-certified voice/web extensions"
+)
 class HostTest(unittest.IsolatedAsyncioTestCase):
     async def test_cli_headless_starts_real_web_models_and_metering(self):
         from aiohttp import ClientSession, CookieJar, FormData
@@ -423,9 +426,16 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         definition = PluginDefinition(Manifest("sample"), Sample, lambda value: value)
-        entry = SimpleNamespace(name="sample", load=lambda: definition)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            metadata = root / "sample.platform.json"
+            metadata.write_text('{"supported_platforms": ["linux", "windows"]}')
+            entry = SimpleNamespace(
+                name="sample",
+                value="sample:definition",
+                load=lambda: definition,
+                dist=SimpleNamespace(files=["sample.platform.json"], locate_file=lambda name: metadata),
+            )
 
             def discover_extension(step, body):
                 if step == 1:

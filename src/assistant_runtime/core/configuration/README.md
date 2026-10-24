@@ -35,7 +35,15 @@ Model providers, accounts and aliases have typed named-object forms, references 
 reasoning selections. Low-frequency maps/lists retain bounded structured editors.
 The module's packaged JSON Schema drives defaults, constraints and visibility; the browser
 has no second model registry or plugin-specific scripts. Disabled-owner settings are still
-validated. Missing validation dependencies block a save instead of skipping checks.
+schema-validated. Disabled external packages are not imported for semantic validation;
+their settings remain available when disabling an uncertified owner. Missing schema
+validation dependencies still block a save instead of skipping checks.
+
+Extension rows display Linux/Windows certification from packaged `platform.json`,
+without importing runtime code. Windows includes Windows Server. Missing or invalid
+metadata is shown as uncertified. An incompatible checked entry can be unchecked,
+but cannot be re-enabled. Saving, applying and startup enforce the same policy;
+the console remains available to repair an incompatible existing selection.
 
 The desktop console uses fixed category navigation, aligned label/control rows and a
 persistent save bar. Plugin activation has its own category. Named model/provider entries

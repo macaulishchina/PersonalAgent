@@ -1,6 +1,6 @@
 """Registered input ownership, snapshots, bounds and execution tool scopes."""
 
-from platform_support import private_mode
+from platform_support import symlink_or_skip, private_mode
 
 import base64
 from pathlib import Path
@@ -73,7 +73,7 @@ class InputFilesTest(unittest.IsolatedAsyncioTestCase):
             self.files.inputs.capture([ref["id"], ref["id"]])
         path = self.files.inputs.path(ref["id"])
         path.unlink()
-        path.symlink_to(self.root / "state.db")
+        symlink_or_skip(path, self.root / "state.db")
         with self.assertRaisesRegex(ValueError, "symlink"):
             self.files.inputs.get(ref["id"])
 
@@ -83,7 +83,7 @@ class InputFilesTest(unittest.IsolatedAsyncioTestCase):
         result = select(["read", "mcp__sample__read"], ["beta"], servers, paths)
         self.assertEqual(result["mcp_servers"]["sample"]["enabled_tools"], ["read"])
         self.assertEqual(servers["sample"]["enabled_tools"], ["read", "write"])
-        self.assertEqual(result["skill_paths"], ["/registered/beta"])
+        self.assertEqual(result["skill_paths"], [str(paths[1])])
         self.assertFalse(result["mcp_servers"]["off"]["enabled"])
         self.assertEqual(select([], [], servers, paths)["skill_paths"], [])
         for tools, skills in [

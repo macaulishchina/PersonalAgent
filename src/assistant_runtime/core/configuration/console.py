@@ -9,6 +9,7 @@ from aiohttp import web
 from .auth import AdminAccess, PasswordPolicyError
 from .files import Conflict
 from .catalog import catalog
+from assistant_runtime.api.plugins import PlatformCertificationError
 
 COOKIE = "personal_agent_admin"
 log = logging.getLogger(__name__)
@@ -65,6 +66,8 @@ class Console:
             response = web.json_response({"error": "登录失败或请求过于频繁"}, status=403)
         except PasswordPolicyError as exc:
             response = web.json_response({"error": str(exc)}, status=400)
+        except PlatformCertificationError as exc:
+            response = web.json_response({"error": str(exc), "code": "platform_not_certified"}, status=400)
         except (ValueError, TypeError, KeyError, OSError):
             # Parser and owner exception strings may contain credentials. Do not echo them.
             response = web.json_response(

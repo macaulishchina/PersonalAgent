@@ -137,12 +137,15 @@ class Notes:
 
 
 def definition():
+    from assistant_runtime.api.plugins import plugin_platforms
+
     return PluginDefinition(
         Manifest("sample", ("execution", "workfiles")),
         Notes,
         None,
         (Path(__file__).parent / "skills" / "sample-notes",),
         uses=(ExecutionRequest, FileRequest),
+        supported_platforms=plugin_platforms(Path(__file__).parent),
         resources=("system_io",),
         configuration=ConfigurationSpec(
             **json.loads((Path(__file__).parent / "configuration.json").read_text())

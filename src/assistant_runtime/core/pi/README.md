@@ -12,6 +12,16 @@ New state never imports Codex context. The current plugin consolidation preserve
 
 Tests: `.venv/bin/python scripts/check.py --group execution --group models --group tasks`. Real subprocess tests use a local synthetic Responses endpoint and cover actual tool writes, MCP execution, selection, clarification, cancellation and restart. They do not establish real-provider parity.
 
+On Windows, the native Pi Bash/PowerShell tool definitions use a platform-owned
+execution adapter. Each command runs in a Windows Job Object via the application's
+Python; cancellation and timeout close the helper's control pipe and wait for the
+owned process tree to settle. This does not require `taskkill /T` privileges. The
+Windows Bash backend uses native Git Bash/MSYS2, not the WSL launcher, whose Linux
+processes cannot be owned by the command's Windows Job Object. PowerShell remains
+the Windows default; explicit Bash requires a native Bash installation. The
+Linux tool implementation is unchanged. The platform helper is packaged with the
+application, so both source and installed-package acceptance must cover it.
+
 `transport.py` authenticates Pi traffic and adapts Responses streaming. Before dispatch it obtains a durable permit from the shared [ai_usage plugin](../ai_usage/README.md); that plugin owns all counters, policies, storage and statistics. Native compaction passes through the same gate and counts only when a request is actually sent. Missing token telemetry is distinct from a lost execution result. Task continuation/fallback/upgrade/restart preserve work identity. Pi automatic retries and paid cache warming remain disabled.
 
 

@@ -2,6 +2,16 @@
 
 import os
 from pathlib import Path
+import unittest
+
+
+def symlink_or_skip(link, target, *, target_is_directory=False):
+    try:
+        Path(link).symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as exc:
+        if os.name == "nt" and exc.winerror == 1314:
+            raise unittest.SkipTest("Windows symlink privilege is not available for this account") from exc
+        raise
 
 
 def private_mode(path):

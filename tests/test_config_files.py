@@ -1,5 +1,7 @@
 """Configuration composition preserves one instance and rejects ambiguous input."""
 
+from platform_support import symlink_or_skip
+
 import os
 from pathlib import Path
 import tempfile
@@ -95,7 +97,7 @@ class ConfigFilesTest(unittest.TestCase):
         (self.folder / "a.toml").unlink()
         outside = self.root / "outside.toml"
         outside.write_text('profile="headless"')
-        (self.folder / "a.toml").symlink_to(outside)
+        symlink_or_skip(self.folder / "a.toml", outside)
         with self.assertRaisesRegex(ValueError, "must stay inside"):
             read_config(self.entry)
 
@@ -122,9 +124,17 @@ class ConfigFilesTest(unittest.TestCase):
         self.assertEqual(self.entry.read_text(), before)
 
     def test_missing_implicit_xdg_config_remains_headless(self):
-        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=True):
+        with patch.dict(
+            os.environ, {"XDG_CONFIG_HOME": str(self.root), "XDG_STATE_HOME": str(self.root)}, clear=True
+        ):
             self.assertEqual(Config.load().profile, "headless")
 
     def test_checked_in_split_example_loads(self):
+        from assistant_runtime.api.system import system
+
         entry = Path(__file__).resolve().parents[1] / "config.example/config.toml"
+        if system.name == "windows":
+            with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
+                Config.load(entry)
+            return
         self.assertEqual(Config.load(entry).profile, "headless")

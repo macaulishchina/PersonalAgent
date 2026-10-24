@@ -466,6 +466,17 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 await gateway.aclose()
 
     async def test_real_pi_submission_through_shared_cli_transport_and_restart_receipt(self):
+        from assistant_runtime.api.system import system
+
+        if system.name == "windows":
+            from assistant_runtime.app.initialize import initialize
+
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder) / "standard"
+                with self.assertRaisesRegex(ValueError, "web, voice_disabled.*slim"):
+                    initialize(root, preset="standard")
+                self.assertFalse(root.exists())
+            return
         await self.exercise_host("standard")
 
     async def test_slim_preset_real_pi_cli_clarification_artifact_cancel_and_restart(self):

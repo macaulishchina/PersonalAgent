@@ -166,6 +166,7 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
                 (first["id"],),
             )
             db.execute("PRAGMA user_version=1")
+        db.close()
         self.storage = Storage(self.directory, EventSettings())
         await self.storage.start()
         self.assertTrue((await self.add())["deleted"])

@@ -78,7 +78,7 @@ class VoiceLifecycle:
                     if (
                         self.voice.speech_completed
                         and self.last_output
-                        and self.last_output > started
+                        and self.last_output >= started
                         and time.monotonic() - self.last_output > 1.5
                         and not self.player.playing
                     ):

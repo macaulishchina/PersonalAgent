@@ -83,7 +83,7 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
             root = Path(folder)
             path = root / "management.toml"
             path.write_text(
-                f'root="{root}"\nentry="{root}/config.toml"\npublic_origin="https://settings.example"\n'
+                f'root="{root.as_posix()}"\nentry="{root.as_posix()}/config.toml"\npublic_origin="https://settings.example"\n'
             )
             with self.assertRaises(ValueError):
                 ManagementSettings.load(path)

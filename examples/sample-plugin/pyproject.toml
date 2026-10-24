@@ -10,4 +10,4 @@ sample = "personal_agent_sample:definition"
 [tool.setuptools.packages.find]
 where = ["src"]
 [tool.setuptools.package-data]
-personal_agent_sample = ["skills/*/SKILL.md", "configuration.json"]
+personal_agent_sample = ["skills/*/SKILL.md", "configuration.json", "platform.json"]

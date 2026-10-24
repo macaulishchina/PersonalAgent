@@ -21,14 +21,14 @@ def compose(service):
     from types import SimpleNamespace
     from .bundled import create, resources_for
     from .extensions import discover, InstalledPlugin, ToolRegistry, extension_credential
-    from assistant_runtime.core.plugin_catalog import OWNERS, declaration
+    from assistant_runtime.core.plugin_catalog import OWNERS, declaration, validate_platforms
+    from assistant_runtime.api.system import system
 
     config, store = service.config, service.store
     selected = config.enabled_plugins
+    validate_platforms(selected, system.name)
     definitions = {name: declaration(name) for name in selected if name in OWNERS}
     definitions.update(discover([name for name in selected if name not in OWNERS], OWNERS))
-    from assistant_runtime.api.system import system
-
     for name, spec in definitions.items():
         if system.name not in spec.supported_platforms:
             raise ValueError(

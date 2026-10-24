@@ -4,6 +4,7 @@ from platform_support import private_mode
 
 import asyncio
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -133,7 +134,16 @@ class PluginFrameworkTest(unittest.IsolatedAsyncioTestCase):
             loaded.append(True)
             return PluginDefinition(Manifest("sample"), lambda c: None, lambda c: c)
 
-        entry = SimpleNamespace(name="sample", load=load)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        metadata = Path(temporary.name) / "platform.json"
+        metadata.write_text('{"supported_platforms": ["linux", "windows"]}')
+        entry = SimpleNamespace(
+            name="sample",
+            value="sample:definition",
+            load=load,
+            dist=SimpleNamespace(files=["sample/platform.json"], locate_file=lambda name: metadata),
+        )
         with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
             self.assertEqual(discover([]), {})
             self.assertFalse(loaded)
@@ -159,11 +169,16 @@ async def main():
             await asyncio.sleep(.05)
             assert all(s["state"] == "ready" for s in host.runtime.health().values()), host.runtime.health()
             assert not any(m in sys.modules for m in ("numpy", "miniaudio", "sherpa_onnx", "fastembed"))
-            assert host.conversation.state()["configuration_required"]
+            if sys.platform == "win32":
+                assert host.assistant is None
+                assert "web" not in host.runtime.plugins
+            else:
+                assert host.conversation.state()["configuration_required"]
             try:
                 await host.backend.submit("no request should be sent")
             except RuntimeError as error:
-                assert "configuration required" in str(error)
+                expected = "Conversation capability is not enabled" if sys.platform == "win32" else "configuration required"
+                assert expected in str(error), error
             else:
                 raise AssertionError("Unconfigured inference accepted")
         finally:
@@ -192,6 +207,10 @@ asyncio.run(main())
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             shutil.copytree(source, root / "source", ignore=shutil.ignore_patterns("build", "*.egg-info"))
+            # Certify this isolated synthetic fixture, not the shipped Linux-only example.
+            (root / "source/src/personal_agent_sample/platform.json").write_text(
+                '{"supported_platforms": ["linux", "windows"]}'
+            )
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",
@@ -281,7 +300,10 @@ asyncio.run(main())
             self.assertFalse(config.model_api["enabled"])
             self.assertNotIn("pipewire", config.plugins)
             self.assertFalse(config.memory_enabled)
-            self.assertTrue(config.web["enable"])
+            if sys.platform == "win32":
+                self.assertNotIn("web", config.plugins)
+            else:
+                self.assertTrue(config.web["enable"])
             self.assertEqual(private_mode(root / ".env"), 0o600)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 initialize(root)
@@ -291,6 +313,10 @@ asyncio.run(main())
         from assistant_runtime.app.host import AssistantService
 
         with tempfile.TemporaryDirectory() as folder:
+            if sys.platform == "win32":
+                with self.assertRaisesRegex(ValueError, "go2rtc.*windows.*linux"):
+                    Config(root=Path(folder), plugins=["devices", "go2rtc"])
+                return
             config = Config(
                 root=Path(folder),
                 plugins=["devices", "go2rtc"],
@@ -382,19 +408,40 @@ asyncio.run(main())
             package = Path(folder) / "runtime/node_modules/@earendil-works/pi-coding-agent"
             (package / "dist").mkdir(parents=True)
             (package / "package.json").write_text(
-                json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "1.4.0"})
+                json.dumps(
+                    {
+                        "name": "@earendil-works/pi-coding-agent",
+                        "version": "1.4.0",
+                        "bin": {"pi": "dist/cli.js"},
+                    }
+                )
             )
             script = package / "dist/cli.js"
             script.touch(mode=0o700)
-            binary = Path(folder) / "pi"
-            binary.symlink_to(script)
+            if sys.platform == "win32":
+                binary = package.parent.parent / ".bin/pi.cmd"
+                binary.parent.mkdir()
+                binary.touch()
+            else:
+                binary = Path(folder) / "pi"
+                binary.symlink_to(script)
             with patch(
                 "assistant_runtime.core.pi.accounts.shutil.which",
-                side_effect=lambda command: str(binary) if command == str(binary) else None,
+                side_effect=lambda command: str(binary)
+                if command == str(binary)
+                else "node.exe"
+                if command == "node"
+                else None,
             ):
                 self.assertEqual(await installation(str(binary)), package)
             (package / "package.json").write_text(
-                json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "1.5.0"})
+                json.dumps(
+                    {
+                        "name": "@earendil-works/pi-coding-agent",
+                        "version": "1.5.0",
+                        "bin": {"pi": "dist/cli.js"},
+                    }
+                )
             )
             with self.assertRaisesRegex(RuntimeError, "accepted Pi version"):
                 await installation(str(binary))

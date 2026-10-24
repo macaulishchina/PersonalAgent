@@ -3,20 +3,21 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import json
 from pathlib import Path
 import shutil
 import sqlite3
+
+from assistant_runtime.api.system import system
 
 
 @contextmanager
 def stopped_instance(root):
     lock = root / "state/service.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a+") as handle:
+    with lock.open("a+b") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(handle, blocking=False)
         except BlockingIOError:
             raise RuntimeError("Stop the assistant and verify in-flight operations before applying") from None
         yield
@@ -67,16 +68,18 @@ def reset(root, *, apply=False, confirmed_stopped=False):
                 / ("before-pi-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
             )
             backup.mkdir(parents=True, mode=0o700)
+            system.private(backup, directory=True)
             target = sqlite3.connect(backup / "assistant.sqlite3")
             try:
                 db.backup(target)
             finally:
                 target.close()
-            (backup / "assistant.sqlite3").chmod(0o600)
+            system.private(backup / "assistant.sqlite3")
             if (root / "config").is_dir():
                 shutil.copytree(root / "config", backup / "config")
+                system.private(backup / "config", directory=True)
                 for file in (backup / "config").rglob("*"):
-                    file.chmod(0o700 if file.is_dir() else 0o600)
+                    system.private(file, directory=file.is_dir())
             with db:
                 # Retire only task-linked notices; retain unrelated notifications.
                 names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

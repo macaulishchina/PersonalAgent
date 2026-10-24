@@ -1,5 +1,7 @@
 """Real HTTP Range/stream IO and filesystem recovery for the local media library."""
 
+from platform_support import symlink_or_skip
+
 import asyncio
 import hashlib
 import json
@@ -176,7 +178,7 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
         )
         await self.downloads.process(self.repo.get(item["id"]))
         self.assertEqual((self.library / "Series" / "Season 01" / "movie.mkv").read_bytes(), self.content)
-        (self.library / "escape").symlink_to(self.stage, target_is_directory=True)
+        symlink_or_skip(self.library / "escape", self.stage, target_is_directory=True)
         files = LocalFiles({**self.local, "relative_parts": ["escape"]}, "another", "test.mkv", 0)
         try:
             with self.assertRaises(OSError):
@@ -359,11 +361,12 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_filesystem_symlinks_are_rejected(self):
         item = self.create()
-        (self.stage / (item["id"] + ".part")).symlink_to(self.mount / "private")
+        symlink_or_skip(self.stage / (item["id"] + ".part"), self.mount / "private")
         with self.assertRaises(OSError):
             await self.downloads.process(item)
         self.assertFalse((self.mount / "private").exists())
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX filesystem FIFO test")
     async def test_fifo_destination_is_rejected_without_blocking_shutdown(self):
         item = self.create()
         os.mkfifo(self.library / "movie.mkv")

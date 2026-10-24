@@ -1,3 +1,5 @@
+from pathlib import Path
+from assistant_runtime.api.plugins import plugin_platforms
 from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, Manifest
 from .settings import AppleHomeSettings
@@ -10,6 +12,7 @@ def create(api):
 
 
 DECLARATION = PluginDefinition(
+    supported_platforms=plugin_platforms(Path(__file__).parent),
     configuration=configuration_spec(__file__),
     manifest=Manifest("apple_home", (), critical=False),
     create=create,

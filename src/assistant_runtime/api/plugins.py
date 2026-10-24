@@ -16,19 +16,33 @@ def plugin_platforms(directory):
     """Static owner metadata, usable without importing a plugin or its dependencies."""
     import json
 
-    path = Path(directory) / "platform.json"
-    values = (
-        json.loads(path.read_text(encoding="utf-8"))["supported_platforms"]
-        if path.exists()
-        else ["linux", "windows"]
-    )
+    path = Path(directory)
+    path = path if path.suffix == ".json" else path / "platform.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        values = data["supported_platforms"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError("Missing or invalid static plugin platform certification") from exc
     if (
         not isinstance(values, list)
         or not values
-        or any(value not in {"linux", "windows"} for value in values)
+        or any(not isinstance(value, str) or value not in {"linux", "windows"} for value in values)
+        or len(values) != len(set(values))
     ):
         raise ValueError("Invalid static plugin platform declaration")
     return tuple(values)
+
+
+class PlatformCertificationError(ValueError):
+    """Safe operator-facing platform refusal; contains no instance configuration."""
+
+
+def require_platform(name, platforms, current):
+    if current not in platforms:
+        certified = ", ".join(platforms) or "none"
+        raise PlatformCertificationError(
+            f"Plugin {name} does not support {current}; certified platforms: {certified}"
+        )
 
 
 @dataclass(frozen=True)

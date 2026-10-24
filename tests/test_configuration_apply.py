@@ -58,7 +58,7 @@ class ApplyTest(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.entry = self.root / "config.toml"
-        self.entry.write_text(f'root="{self.root}"\nplugins=[]\n')
+        self.entry.write_text(f'root="{self.root.as_posix()}"\nplugins=[]\n')
         self.business = BusinessProcess(
             ManagementSettings(self.root, self.entry, startup_seconds=10, shutdown_seconds=10)
         )
@@ -202,7 +202,7 @@ class MaintenanceEvidenceTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text(f'root="{root}"\nplugins=[]\n')
+            entry.write_text(f'root="{root.as_posix()}"\nplugins=[]\n')
             business = BusinessProcess(
                 ManagementSettings(root, entry, startup_seconds=10, shutdown_seconds=10)
             )
