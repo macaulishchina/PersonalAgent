@@ -24,6 +24,87 @@ const report = (id, overrides = {}) => ({
   ...overrides,
 });
 
+test("empty provider drafts do not multiply failure notices or hide successful tools and media", () => {
+  const message = (id, extra = {}) => ({
+    id,
+    role: "assistant",
+    kind: "message",
+    source: "task",
+    turn_id: "turn",
+    updated: 100,
+    text: "",
+    status: "failed",
+    ...extra,
+  });
+  const input = [
+    message("blank-before-tools"),
+    message("first-image", {
+      kind: "detail",
+      status: "complete",
+      attachments: [{ id: "a" }],
+    }),
+    message("blank-between-tools", { text: "\n " }),
+    message("second-image", {
+      kind: "detail",
+      status: "complete",
+      attachments: [{ id: "b" }],
+    }),
+    message("third-image", {
+      kind: "detail",
+      text: "获取画面",
+      status: "failed",
+    }),
+    message("blank-after-tools"),
+    message("outcome", {
+      text: "本轮回复失败，未自动重试。",
+      status: "complete",
+    }),
+  ];
+  const before = JSON.stringify(input);
+  const visible = groupMessages(input).flatMap((group) => group.messages);
+  assert.deepEqual(
+    visible.map((m) => m.id),
+    ["first-image", "second-image", "third-image", "outcome"],
+  );
+  assert.equal(visible.filter((m) => m.kind === "message").length, 1);
+  assert.equal(visible.find((m) => m.id === "third-image").status, "failed");
+  assert.equal(JSON.stringify(input), before);
+});
+
+test("only empty assistant replies are hidden; real partial content and other message kinds remain", () => {
+  const message = (id, extra = {}) => ({
+    id,
+    role: "assistant",
+    kind: "message",
+    source: "task",
+    updated: 100,
+    text: "",
+    ...extra,
+  });
+  for (const status of [
+    "streaming",
+    "complete",
+    "failed",
+    "unknown",
+    "interrupted",
+  ]) {
+    assert.deepEqual(groupMessages([message("empty", { status })]), []);
+    for (const extra of [
+      { text: "部分回复" },
+      { attachments: [{ id: "image" }] },
+      { tool_summary: { kind: "create_task" } },
+      { kind: "detail" },
+      { kind: "notification" },
+      { role: "user", attachments: [{ id: "input" }] },
+    ]) {
+      assert.equal(
+        groupMessages([message("visible", { status, ...extra })]).length,
+        1,
+      );
+    }
+  }
+});
+
 test("consecutive reports collapse without dropping details or counting completion", () => {
   const messages = Array.from({ length: 20 }, (_, i) => report(String(i)));
   messages[3].report_group.important = true;

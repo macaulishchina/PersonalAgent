@@ -317,23 +317,30 @@ class PiSessionWorker:
             message = msg.get("message") or {}
             if message.get("role") == "assistant":
                 msg_id = f"{turn_id}-msg-{len(self.turn_items) + 1}"
-                self.pending_msg = {"id": msg_id, "text": ""}
-                await self.parent.events.put(
-                    {
-                        "kind": "activity.started",
-                        "data": {
-                            "session_id": self.execution_session_id,
-                            "run_id": turn_id,
-                            "item": {"id": msg_id, "type": "message", "text": ""},
-                        },
-                    }
-                )
+                # A provider message may contain only reasoning/tool calls. Publish
+                # conversation activity only when it actually has visible text.
+                self.pending_msg = {"id": msg_id, "text": "", "published": False}
         elif mtype == "message_update":
             ame = msg.get("assistantMessageEvent") or {}
             if ame.get("type") == "text_delta" and self.pending_msg:
                 delta = ame.get("delta", "")
                 if delta:
                     self.pending_msg["text"] += delta
+                    if not self.pending_msg["published"]:
+                        if not self.pending_msg["text"].strip():
+                            return
+                        self.pending_msg["published"] = True
+                        delta = self.pending_msg["text"]
+                        await self.parent.events.put(
+                            {
+                                "kind": "activity.started",
+                                "data": {
+                                    "session_id": self.execution_session_id,
+                                    "run_id": turn_id,
+                                    "item": {"id": self.pending_msg["id"], "type": "message", "text": ""},
+                                },
+                            }
+                        )
                     await self.parent.events.put(
                         {
                             "kind": "message.delta",
@@ -426,7 +433,7 @@ class PiSessionWorker:
                 self.pending_msg["id"] if self.pending_msg else f"{turn_id}-msg-{len(self.turn_items) + 1}"
             )
             self.pending_msg = None
-            if text:
+            if text.strip():
                 phase = "commentary" if has_tools else "final"
                 item = {
                     "id": msg_id,

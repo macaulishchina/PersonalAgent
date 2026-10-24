@@ -4,6 +4,9 @@ export type MessageOrigin = {
   role: string;
   kind: string;
   source: string;
+  text?: string;
+  attachments?: readonly unknown[];
+  tool_summary?: unknown;
   task_id?: string | null;
   turn_id?: string | null;
   report_group?: {
@@ -44,6 +47,17 @@ export function groupMessages<T extends MessageOrigin & { updated: number }>(
   const reports = new Map<string, Group>();
   let last: Group | undefined;
   for (const message of messages) {
+    // Provider-only/empty drafts are not replies. Keep the durable record but
+    // suppress its bubble, including old failed drafts loaded from history.
+    if (
+      message.role === "assistant" &&
+      message.kind === "message" &&
+      typeof message.text === "string" &&
+      !message.text.trim() &&
+      !message.attachments?.length &&
+      !message.tool_summary
+    )
+      continue;
     const key = reportGroupKey(message);
     if (key) {
       const existing = reports.get(key);

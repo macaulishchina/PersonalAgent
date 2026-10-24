@@ -14,6 +14,7 @@ from assistant_runtime.app.config import Config
 from assistant_runtime.core.models.settings import ModelSettings
 from assistant_runtime.core.pi.rpc import PiClient, RpcError
 from assistant_runtime.core.pi.backend import PiBackend
+from assistant_runtime.core.pi.conversation import task_event
 from assistant_runtime.core.speech.disabled import DisabledVoice
 from assistant_runtime.app.store import Store
 
@@ -165,6 +166,67 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run["status"], "completed")
         self.assertEqual(target.read_text(), "verified")
         self.assertTrue(any(i["type"] == "file" for i in run["items"]))
+
+    async def test_tool_only_messages_do_not_create_reply_placeholders_on_failure(self):
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call("once", "bash", {"command": "echo once >> evidence.txt"})
+            if step == 2:
+                return sse_tool_call("failed-tool", "bash", {"command": "exit 1"})
+            return (402, {"error": {"message": "synthetic rejection"}})
+
+        self.gateway.script_fn = script
+        ident = await self.session()
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic"}]}
+        )
+        events = []
+        async with asyncio.timeout(20):
+            while True:
+                event = await self.client.events.get()
+                events.append(event)
+                if event["kind"] == "run.completed":
+                    run = event["data"]["run"]
+                    break
+        projected = [task_event(event["kind"], event["data"]) for event in events]
+        projected = [event for event in projected if event]
+        replies = [event for event in projected if event["kind"] == "message" and not event["detail"]]
+        self.assertEqual(replies, [])
+        tools = [event for event in projected if event["kind"] == "message" and event["detail"]]
+        self.assertEqual(
+            [event["status"] for event in tools], ["streaming", "complete", "streaming", "failed"]
+        )
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"]["status"], 402)
+        self.assertEqual((self.root / "evidence.txt").read_text(), "once\n")
+        self.assertEqual(len(self.gateway.requests), 3)
+        self.assertFalse(any(item["type"] == "message" for item in run["items"]))
+
+    async def test_reply_start_waits_for_text_and_retains_buffered_whitespace(self):
+        def script(step, body):
+            events = sse_text_reply("visible", "\n正文")
+            index = next(i for i, event in enumerate(events) if event["type"] == "response.output_text.delta")
+            events[index]["delta"] = "正文"
+            events.insert(index, events[index] | {"delta": "\n"})
+            return events
+
+        self.gateway.script_fn = script
+        ident = await self.session()
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic"}]}
+        )
+        events = []
+        async with asyncio.timeout(20):
+            while True:
+                event = await self.client.events.get()
+                events.append(event)
+                if event["kind"] == "run.completed":
+                    break
+        messages = [event for event in events if event["data"].get("item", {}).get("type") == "message"]
+        self.assertEqual([event["kind"] for event in messages], ["activity.started", "activity.completed"])
+        deltas = [event["data"]["delta"] for event in events if event["kind"] == "message.delta"]
+        self.assertEqual(deltas, ["\n正文"])
+        self.assertEqual(messages[-1]["data"]["item"]["text"], "\n正文")
 
     async def test_runaway_tool_loop_stops_before_next_upstream_call(self):
         from dataclasses import replace

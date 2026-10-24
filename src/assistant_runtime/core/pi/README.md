@@ -79,6 +79,17 @@ Restart never clears the shared-work guard or replays tool operations. A disconn
 cancellation cannot be relabeled as a known compaction failure. Logging records compaction
 outcome without summary content.
 
+## Conversation message lifecycle
+
+Native assistant messages may contain only reasoning or tool calls. Their start is
+not a visible reply: the adapter publishes message activity only on the first
+non-whitespace text delta, retaining any leading whitespace. Final text without
+deltas still produces its normal completion event. Tool activity and execution
+outcomes remain independent; a tool-only model step never creates a reply bubble.
+The web projection also suppresses empty assistant reply records from existing
+history without deleting evidence, media, tool activity or the turn's failure notice.
+The response indicator continues to follow execution state while no text is available.
+
 ## Native tool discovery and bounded declarations
 
 All entrances (foreground, background jobs, public execution/slim) use this adapter's
