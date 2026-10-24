@@ -1,5 +1,7 @@
 # Fast semantic decisions
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 `decisions` owns TypeSafe Jev transport, admission, policy and observations. It does
 not grant permissions, execute tools or certify effects. Exact controls, arithmetic
 and known rules remain local. Main/background agents and framework owners share the
@@ -167,24 +169,4 @@ expose a reliable boundary, retain advisory/unconfirmed behavior and document th
 limitation rather than reconstructing the native voice stack.
 
 
-### Acceptance evidence (2026-10-21)
-
-The reviewed implementation passed the full gate: 776 tests with no skips, including format/lint/types and the
-frontend build. Isolated Jev synthetic correction/takeover judgments passed after
-metadata warmup; a cold request also exercised the unchanged 3-second timeout and
-backoff. These few examples are not an accuracy estimate.
-
-A real isolated subscription thread accepted context-only injection both before
-and during a turn without creating another turn. Interrupt followed by provider
-readback reached a stopped checkpoint. This does not establish that native voice
-handoffs expose an approval gate, or that an issued external action can be undone.
-
-After idle restart, a synthetic request through the installed local capability
-transport returned `correct` in 258 ms and produced linked request/result/adoption
-archive records. Its outcome was explicitly rejected as `synthetic_no_effect`;
-no device action or audio playback was requested. Instance policy is 0.6 globally,
-0.2 for model review, concurrency 4 and a 3-second active deadline. The existing
-unknown historical task was retained, not replayed. By user choice, physical voice correction, supplement and takeover will be assessed
-through normal daily use and subsequent log/feedback review; no dedicated voice
-acceptance session is scheduled. The existing synthetic results do not establish
-real-world voice accuracy.
+Historical results are preserved in the [module acceptance archive](../../../../docs/archive/module-acceptance-2026-10.md).

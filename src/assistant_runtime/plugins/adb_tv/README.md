@@ -1,5 +1,7 @@
 # Television observations
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 The ADB protocol and power/display interpretation live here. Instance lifecycle and
 configuration use [observation sources](../observations/README.md).
 

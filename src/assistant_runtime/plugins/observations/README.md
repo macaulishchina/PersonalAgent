@@ -1,5 +1,7 @@
 # Observation sources
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 The optional `observations` plugin manages source instances; it never polls devices
 itself. It depends on `events` for durable recording. Add both to the enabled plugin
 list. Protocol providers are explicitly injected by the composition root; MCP input

@@ -1,17 +1,20 @@
 # AirPlay speaker integration
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Voice is currently disabled; adapter and device checks do not establish voice readiness.
+
 This optional adapter registers AirPlay/RAOP speakers in the same device directory as local microphones and Bluetooth speakers. It uses pyatv 0.18.0's public discovery, connect, audio and StreamReader APIs. MP3 encoding uses FFmpeg supplied by the imageio-ffmpeg wheel in the project's single environment. No receiver protocol, custom RTP clock or separate environment is implemented.
 
 ## Install and configure
 
 ```sh
-uv sync --locked --extra voice --extra airplay --extra memory --extra dev
+uv sync --locked --extra standard --extra voice --extra airplay --no-default-groups --no-editable
 ```
 
 Enable `airplay` in the top-level plugin list before any TOML tables. Add an enabled speaker definition and pin the discovered RAOP identifier, not merely a display name or address:
 
 ```toml
-plugins = ["pipewire", "airplay", "keyword", "codex", "memory", "gesture"]
+# Add airplay to the existing plugins list; preserve its core dependencies.
 
 [devices.homepod]
 adapter = "airplay"
@@ -32,7 +35,7 @@ UDP timing/control ports are configured explicitly. The deployment must already 
 
 ## Media contract and routing
 
-Startup registers the device descriptor/probe in `host.devices`, and an `AudioOutputProvider` in `host.audio_outputs`. The PipeWire audio owner still captures the configured microphone and maintains its existing local/AEC reference bus. For a registered external endpoint it opens the provider's `PlaybackTransport` rather than sending to a physical PipeWire sink. A reference-only mirror feeds the existing AEC bus without playing through another room speaker. No HomePod branch is added to assistant dialogue or Codex tools.
+Startup registers the device descriptor/probe in `host.devices`, and an `AudioOutputProvider` in `host.audio_outputs`. The PipeWire audio owner still captures the configured microphone and maintains its existing local/AEC reference bus. For a registered external endpoint it opens the provider's `PlaybackTransport` rather than sending to a physical PipeWire sink. A reference-only mirror feeds the existing AEC bus without playing through another room speaker. No HomePod branch is added to assistant dialogue or Pi tools.
 
 PCM input is clocked 20ms mono PCM16. A bounded 75-frame encoder queue feeds FFmpeg; idle silence keeps the open upstream stream valid. pyatv handles receiver conversion, session/authentication and RTP timing. Stop closes the encoder, clears queued PCM and tears down the receiver session; a following answer opens a new transport. Nothing is replayed to another output when the receiver is missing. Library/receiver buffering adds latency beyond the root player queue; quick, natural interruption and echo cancellation for that delay remain separate experience tests.
 
@@ -47,7 +50,7 @@ pa --config config/config.toml devices inspect homepod
 
 Adding a receiver does not alter `default_output` or the main conversation route. Queries through CLI/MCP remain available. To use this receiver as the fixed voice output, set its logical ID in `default_output` and restart; voice, MCP and CLI cannot switch it during the process. The acceptance command sets the receiver as the binding before starting its isolated test instance, without modifying the installed configuration.
 
-The explicit acceptance script requires an idle installed service, uses an isolated provider/state context, verifies registration/query/capture, plays the authored chime and optional short speech, checks a physical microphone signal and actual byte submission, and confirms real Codex tool queries. It closes the stream, retains private metrics and restores the installed service. PCM is processed in memory, not saved as a raw recording. A successful stream request or an online descriptor alone does not prove audible playback.
+The explicit acceptance script requires an idle installed service, uses an isolated provider/state context, verifies registration/query/capture, plays the authored chime and optional short speech, checks a physical microphone signal and actual byte submission, and confirms real Pi tool queries. It closes the stream, retains private metrics and restores the installed service. PCM is processed in memory, not saved as a raw recording. A successful stream request or an online descriptor alone does not prove audible playback.
 
 Evidence for the current receiver is under `state/acceptance/airplay-homepod/`. The original `homepod-assistant` directory supplied verified receiver/protocol/UDP settings and a Chinese speech fixture; it is not a runtime dependency.
 

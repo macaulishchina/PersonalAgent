@@ -1,5 +1,7 @@
 # Apple Home environment integration
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 The optional `apple_home` adapter registers temperature/humidity endpoints through the existing hardware onboarding standard. It supports sensor-equipped HomePod mini / HomePod (2nd generation) when those measurements are visible in Apple Home. Existing AirPlay/RAOP does not expose these measurements; the AirPlay speaker adapter remains separate. No HomePod firmware, Apple account credentials or receiver pairing are changed.
 
 Apple Home owns sensor access. A Home automation reads the real accessory state and POSTs it to this adapter. Upstream HAP-python 5.0.0 supplies an encrypted, paired virtual HomeKit bridge with one **Lightbulb** refresh trigger per endpoint. Turning that trigger on runs the Home automation; it resets off after one second. The assistant polls it and can request refresh during `inspect_device`. This needs one-time Apple Home setup; it is not automatic Linux access to HomePod sensors.
@@ -93,9 +95,9 @@ Refresh requests coalesce per endpoint, enforce a five-second minimum interval, 
 ```sh
 pa --config config/config.toml devices list
 pa --config config/config.toml devices inspect homepod_environment
-.venv/bin/python scripts/verify_environment.py --config config/config.toml --device homepod_environment --codex
+.venv/bin/python scripts/verify_environment.py --config config/config.toml --device homepod_environment --execution
 ```
 
-Device MCP needs no HomePod-specific tool: `list_devices` discovers `sensor.temperature` / `sensor.humidity`; `inspect_device` requests refresh and returns typed readings. The model must inspect each metric's validity/freshness before stating a current value. The acceptance entry uses an isolated provider thread with the installed device socket; it does not play, capture media, change output, save memory or disturb the shared conversation. Evidence is private under `state/acceptance/environment/`. `--restart` additionally checks installed-service recovery without replaying a user task. Synthetic acceptance can check the HTTP → directory → real stdio MCP → Codex path with `--synthetic`; that is expressly not real HomePod success.
+Device MCP needs no HomePod-specific tool: `list_devices` discovers `sensor.temperature` / `sensor.humidity`; `inspect_device` requests refresh and returns typed readings. The model must inspect each metric's validity/freshness before stating a current value. The acceptance entry uses an isolated provider thread with the installed device socket; it does not play, capture media, change output, save memory or disturb the shared conversation. Evidence is private under `state/acceptance/environment/`. `--restart` additionally checks installed-service recovery without replaying a user task. Synthetic acceptance can check the HTTP → directory → real stdio MCP → Pi path with `--synthetic`; that is expressly not real HomePod success.
 
 Primary references: [Apple HomePod sensor documentation](https://support.apple.com/en-gb/guide/homepod/apd8085c1032/homepod), [upstream Home automation readback pattern](https://github.com/gregbny/homepod-temp-logger/blob/main/TUTORIAL.md), [HAP-python](https://github.com/ikalchev/HAP-python).

@@ -1,5 +1,7 @@
 # 网页搜索
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 可选 `search` 插件提供公开网页搜索与正文读取，不调用大模型。
 Pi 通过统一 MCP 使用已配置的搜索供应商；搜索供应商与任务执行模型相互独立。
 网盘检索、转存和下载仍使用 media，浏览器操作不属于本插件。

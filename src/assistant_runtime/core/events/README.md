@@ -15,7 +15,7 @@ own source configuration. `events` can run without any source-management plugin.
 The optional `observations` plugin owns the revisioned non-secret registry and source
 lifecycle. Each registered producer owns protocol, subscription or polling, decoding,
 state comparison, recovery and read-only verification. See the
-[source guide](../observations/README.md). The event MCP remains a convenient facade:
+[source guide](../../plugins/observations/README.md). The event MCP remains a convenient facade:
 record operations use `EventRequest`; source operations forward to the separate
 `ObservationRequest` capability. The recorder never instantiates source drivers.
 

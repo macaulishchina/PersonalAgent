@@ -1,10 +1,10 @@
 # Personal Agent engineering guide
 
-- Read the relevant sections of `ARCHITECTURE.md` and the owning plugin README before changing a boundary. Each module owns one responsibility; use targeted reads instead of repeatedly loading unrelated modules.
+- Read the relevant sections of `docs/development/architecture.md` and the owning plugin README before changing a boundary. Each module owns one responsibility; use targeted reads instead of repeatedly loading unrelated modules.
 - `kernel/` imports only the standard library and its contracts. Never import plugins there.
 - Keep Pi protocol fields inside `core/pi/`; the kernel owns only provider-neutral execution contracts. Pi is the sole agent loop. Voice is disabled pending independent acceptance.
 - Add a capability contract and an adapter for a new device/provider. Do not add hardware branches to the assistant.
-- Before changing go2rtc deployment or adding cameras through it, read `deploy/go2rtc.md` for device mapping, stable identity, permissions, reconnection and acceptance.
+- Before changing go2rtc deployment or adding cameras through it, read `docs/guides/cameras.md` for device mapping, stable identity, permissions, reconnection and acceptance.
 - Only explicitly configured, bounded model fallbacks are allowed; never replay uncertain tool operations. No raw recording by default, automatic room fallback, or extra audio gain.
 - Wake word, assistant display name, output names and hardware identities are instance configuration.
 - Main voice input/output are frozen startup bindings (`input_device` / `default_output`). Never switch them through MCP, CLI, voice commands, saved state or shell during a process. Extra audio/video endpoints are device tools; adding or using them must not replace the main voice route. Change bindings through instance configuration and restart only.
@@ -24,7 +24,7 @@
 - Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
 - Continue development on `main` by default; leave this workspace on `main` after merging and pushing.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
-- Keep OS mechanisms in `platforms/` or explicitly platform-specific hardware adapters. Business plugins use public `api.system` facilities; independent plugins declare the `system_io` resource. Never substitute POSIX mode assertions for Windows ACL checks, or claim Windows readiness from Linux mocks. Native acceptance commands and pending SCM/reboot checks live in `docs/platforms.md`.
+- Keep OS mechanisms in `platforms/` or explicitly platform-specific hardware adapters. Business plugins use public `api.system` facilities; independent plugins declare the `system_io` resource. Never substitute POSIX mode assertions for Windows ACL checks, or claim Windows readiness from Linux mocks. Native acceptance commands live in `docs/development/testing.md`; dated results and pending SCM/reboot checks live in `docs/archive/platform-acceptance-2026-10.md`.
 
 - Runtime foreground/background agents use registered `workfiles` scratch/artifact areas. Task state belongs to the tasks plugin; provider protocol stays in the Pi adapter; tasks owns goal policy and completion. Never steer a background task through the foreground turn or infer completion from memory.
 

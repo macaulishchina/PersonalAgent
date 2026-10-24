@@ -1,5 +1,7 @@
 # 插件开发规范
 
+先阅读[架构](architecture.md)了解职责和数据流。本页维护公共接口与插件契约；可运行示例见[独立插件示例](../../examples/sample-plugin/README.md)。
+
 ## 平台基础设施
 
 `platforms/` 集中提供文件锁、私有文件、目录句柄、进程所有权、本地 IPC 和服务集成。
@@ -21,7 +23,7 @@ Windows 和 Windows Server。认证是随发布维护的支持声明，不是签
 配置保存和启动装配都检查当前平台，未认证时拒绝启用。Windows 默认使用 slim，
 显式选择 standard 会在创建实例目录前拒绝。已有显式配置不会自动删改。
 Windows 适配完成度和认证启用策略分开记录，
-详见 [平台部署与验收](docs/platforms.md)。
+操作步骤见[安装指南](../guides/deployment.md)，实测边界见[平台验收记录](../archive/platform-acceptance-2026-10.md)。
 
 公共接口为 `assistant_runtime.api`：`PluginDefinition`、`Manifest`、
 `PluginContext`、`CallIdentity` 和 `Tool`。仓库内和独立包采用同一声明模型。
@@ -66,7 +68,7 @@ Windows 适配完成度和认证启用策略分开记录，
 通过同一个公共上下文提交、查询、补充、回答澄清或取消执行。请求身份与共享用量
 由宿主绑定，不允许在请求参数中自行指定。支持文字及登记文件输入；slim 使用同一宿主，
 默认启用公共对话与 CLI，个人助手、设备、语音、任务和通知保持关闭。
-详细操作和验收范围见 `core/execution/README.md`。
+详细操作和验收范围见[执行模块](../../src/assistant_runtime/core/execution/README.md)。
 
 ## 公共对话与入口
 
@@ -81,7 +83,7 @@ Windows 适配完成度和认证启用策略分开记录，
 不按消息创建一次性执行器。退出终端或切换会话只改变入口，不取消已接收工作。
 网页绑定主会话；CLI 每个客户端拥有当前选择，同时保存该操作者下次连接的默认选择。
 自动启动与服务身份检查在 `platforms/`，业务与工具子进程仍由现有管理进程拥有。
-迁移和重启恢复禁止重放未知操作。详见 `core/conversation/README.md` 与 `core/cli/README.md`。
+迁移和重启恢复禁止重放未知操作。详见[对话模块](../../src/assistant_runtime/core/conversation/README.md)与 [CLI 模块](../../src/assistant_runtime/core/cli/README.md)。
 
 ## 工具、技能和安装记录
 
@@ -145,7 +147,7 @@ it explicitly in setuptools package data. The sample extension demonstrates this
 Default resolution fills declared properties only inside objects that already exist,
 unless the object itself has an explicit default. Optional features are not instantiated
 merely because their children have defaults. Semantic validation remains plugin-owned.
-Both presets include the independent operator console; see `core/configuration/README.md`.
+Both presets include the independent operator console; see the [configuration module](../../src/assistant_runtime/core/configuration/README.md).
 
 The generic operator form supports schema `title`, `description`, `enum`, numeric bounds,
 objects/lists, `readOnly`, `writeOnly`, `x-advanced` and `x-group`. The owner supplies these
@@ -211,4 +213,4 @@ through versioned private transactions. Saved files do not change a running work
 generation. The management process verifies readiness and version after explicit drain/force
 application. Linux guardian ownership closes escaped subprocesses after manager loss; unknown
 operations never replay. External gateway deployment remains an explicit operator step.
-See the [configuration guide](src/assistant_runtime/core/configuration/README.md).
+See the [configuration guide](../../src/assistant_runtime/core/configuration/README.md).

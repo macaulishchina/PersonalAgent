@@ -161,11 +161,4 @@ new references, removal, save/apply, repair and custom passwords. It does not lo
 production instance, credentials or task plans. Install validation dependencies separately
 from a running service. Mobile layout optimization is outside this desktop pass.
 
-Acceptance on 2026-10-23: the final full gate passed **1,022 tests, zero skips**, including
-format, lint, types and the chat frontend build. Independent environments verified both
-presets from a locked repository install and an installed wheel. A fresh hash-locked
-Python environment plus separately lock-installed Pi 1.4.0 passed the four synthetic
-host/image/tool/delegation/fallback tests. The installed console also passed desktop/mobile
-browser login, credential redaction and frozen reads, external sample configuration/resource
-save, confirmed restart and damaged-file repair, with zero JavaScript errors. No production
-cutover, paid provider request or real device/media operation was performed.
+Historical results are preserved in the [module acceptance archive](../../../../docs/archive/module-acceptance-2026-10.md).

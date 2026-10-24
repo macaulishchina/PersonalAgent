@@ -1,5 +1,7 @@
 # go2rtc Docker 设备接入指南
 
+适用平台：Linux。Windows／Server 当前不能启用 go2rtc 扩展。以下路径相对于仓库根目录；先完成[应用部署](deployment.md)，再按需接入摄像头。
+
 用于添加摄像头、处理 USB 插拔和迁移 Linux 主机。当前网关运行基于 go2rtc 1.9.14 的 `xiaomi-onvif 0.1.0-beta.2` 固定镜像，以提供已经实测的小米云台控制 API；源码版本为 `ea9d4153117ae612addc108870e372ec2289d4d2`，镜像摘要在 Compose 中固定。它沿用现有 go2rtc 进程、端口和授权配置，不额外启动 ONVIF 桥接服务。网络摄像头通过网关协议接入，USB 摄像头还需要显式的设备映射和访问权限。添加设备时分别验证容器可见性、设备发现、实际画面和 AI 调用。
 
 ## 配置位置与服务端口
@@ -120,7 +122,7 @@ curl --fail http://127.0.0.1:8553/api/ffmpeg/devices
 | 添加流时报错，但当前临时能播放 | 检查实际 `go2rtc.yaml` 是否保存了视频流；未保存的临时流可能在重启后消失 |
 | 容器健康，但摄像头不能使用 | 健康检查只验证 HTTP API 就绪，继续检查真实设备发现和取图 |
 
-当前绿联摄像头已通过容器读写权限、两个发现 API、真实网页列表、助手实际取图和 Codex 看图检查；网关停止与恢复、助手服务重启后的取图也已验证。新增设备仍需验证自己的实际画面与恢复行为，已有设备的成功不能代替新设备验收。
+新增设备需分别验证容器读写权限、发现 API、实际画面、模型取图，以及网关停止恢复和应用重启后的取图。历史设备验证见[早期验收记录](../archive/validation-2026-10.md)，不能替代新设备或当前执行器验收。
 
 ### 小米 CS2 握手超时与主机防火墙
 
@@ -178,6 +180,6 @@ sudo ufw allow in on LAN_INTERFACE proto udp from CAMERA_IP to SERVER_IP port EP
 请求，默认 10 秒、最长 60 秒；默认没有声音。`record_video` 返回附件引用，
 Web 沿用登录保护的媒体地址，视频文件不进入静态工作目录站点。
 
-go2rtc 负责视频协议和媒体访问，个人助手仍由原用户服务运行。当前 USB 映射只提供视频，不接管已有 PipeWire 麦克风。助手视频输入统一使用 [go2rtc 适配器](../src/assistant_runtime/plugins/go2rtc/README.md)，以网关地址和稳定视频流名绑定设备，并通过原有 `capture_image` 工具取图。网关列表中出现新设备后，还需要在个人助手的 `devices` 配置中声明该摄像头。接入时继续遵循 [硬件接入标准](../ARCHITECTURE.md#hardware-onboarding-standard)；已有 go2rtc 摄像头协议通常只需增加网关流和设备配置。
+go2rtc 负责视频协议和媒体访问，个人助手仍由原用户服务运行。当前 USB 映射只提供视频，不接管已有 PipeWire 麦克风。助手视频输入统一使用 [go2rtc 适配器](../../src/assistant_runtime/plugins/go2rtc/README.md)，以网关地址和稳定视频流名绑定设备，并通过 `capture_image` 工具取图。网关列表中出现新设备后，还需要在 `devices` 配置中声明该摄像头，并完成适配器文档中的验收；已有协议通常只需增加网关流和设备配置。
 
 参考：[Docker 设备映射](https://docs.docker.com/reference/compose-file/services/#devices)、[Compose 创建与重建](https://docs.docker.com/reference/cli/docker/compose/up/)、[go2rtc 固定版本文档](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/README.md)。

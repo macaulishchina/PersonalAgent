@@ -1,5 +1,8 @@
 # Local speech adapters
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Voice is currently disabled; adapter and device checks do not establish voice readiness.
+
 These adapters implement the contracts in `api/speech.py` and are injected by the
 composition root. They do not open microphones/speakers, create tasks or call cloud APIs.
 
@@ -20,5 +23,5 @@ outstanding. A timed-out native computation cannot be forcibly killed in a Pytho
 its result is fenced and the next render waits within its deadline for that work to finish. No unbounded
 queue or paid fallback is created. Model loading/generation stays off the event loop.
 
-Both are baseline adapters, not approved defaults. See `interaction/README.md` for actual
+Both are baseline adapters, not approved defaults. See the [interaction reference](../../core/speech/interaction/README.md) for actual
 evaluation, replacement requirements, configuration and rollout gates.

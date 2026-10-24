@@ -1,5 +1,7 @@
 # HID function buttons
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 Optional `hid_buttons` plugin translates explicitly configured USB HID reports into
 existing `Trigger(source, "wake")` requests. The assistant retains wake acceptance,
 quiet hours, connection and feedback ownership. No kernel or audio binding changes.

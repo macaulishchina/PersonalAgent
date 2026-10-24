@@ -13,8 +13,8 @@ Each `[model_api.entries.ALIAS]` identifies exactly one provider and upstream mo
 See [complete example](../../../../config.example/models.toml) and [key template](../../../../deploy/model-api.env.example). Secrets live in private `.env`, never TOML or logs. Config is composed by `Config.load()` and takes effect on restart.
 
 ```sh
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml models check
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml models list
+pa --config config/config.toml models check
+pa --config config/config.toml models list
 .venv/bin/python -m scripts.prepare_model_gateway --config config/config.toml
 ```
 
@@ -59,11 +59,11 @@ Native provider IDs and auth methods come from the installed, pinned Pi package,
 This table describes upstream implementation availability, not account eligibility or real-service acceptance. Other native providers can be inspected with the first command; ambient/IAM-specific configuration is not automatically synthesized. Account/model eligibility, quotas and terms remain supplier-specific. A successful login, bundled catalog and accepted model capability are separate states.
 
 ```sh
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml model-accounts providers
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml model-accounts login --account chatgpt
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml model-accounts status --account chatgpt
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml model-accounts catalog --account chatgpt
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml model-accounts logout --account chatgpt
+pa --config config/config.toml model-accounts providers
+pa --config config/config.toml model-accounts login --account chatgpt
+pa --config config/config.toml model-accounts status --account chatgpt
+pa --config config/config.toml model-accounts catalog --account chatgpt
+pa --config config/config.toml model-accounts logout --account chatgpt
 ```
 
 These are local operator commands, not model/MCP actions. Account management is available even while execution bindings need repair. On a remote server, forward the callback port shown by the native login (ChatGPT currently uses `127.0.0.1:1455`), or paste the final callback URL into the private terminal prompt; never paste credentials/callback codes into chat. Browser completion cancels terminal input. Credentials are in mode-0600 files under mode-0700 `state/model-accounts/<account>/`; main/auxiliary processes share the native file lock for refresh. Different named accounts remain separate even for the same supplier. Logout affects only that account and does not cancel an already dispatched action.

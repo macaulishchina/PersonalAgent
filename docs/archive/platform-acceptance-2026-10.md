@@ -1,0 +1,141 @@
+# Platform acceptance - 2026-10-24
+
+> 历史归档：保留当时的需求、设计或验收证据，不代表当前实现及部署状态。当前操作见[文档目录](../README.md)，实测结论仅在原记录范围内有效。
+
+## 附录：可选的临时平台验收
+
+这一步用于排查新平台启动问题，可以跳过。使用已经安装好的应用 Python，**不再安装
+测试环境或测试 Pi**。在应用目录运行所在系统对应的一条命令：
+
+Windows：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify_native_deployment.py --installed
+```
+
+Linux：
+
+```sh
+.venv/bin/python scripts/verify_native_deployment.py --installed
+```
+
+脚本在系统临时目录创建随机实例，使用回环随机端口；Linux 覆盖 slim／standard，
+Windows 覆盖 slim 的鉴权、业务启动、异常退出及重启，并验证 standard 被拒绝且不留下目录。
+正常退出或捕获异常时自动清理；强制杀死验收脚本
+可能留下临时文件，按报错中实际路径核对后处理，不删除正式目录。
+
+它不读取正式账号、不调用供应商、不操作媒体或设备、不安装服务，也不修改正式配置。
+它不等于完整 Windows 验收：真实 Pi 工具执行、ACL／文件锁专项、SCM 安装、注销／开机启动、
+配置恢复及进程树收尾仍需在目标 Windows 上核验。工程专项由仓库的
+`Native platform acceptance` 工作流及测试套件承担，不是正式部署的额外安装步骤。
+
+### Windows Server 2025 核心技术验证记录（2026-10-24，认证策略收紧前）
+
+以下保留此前的技术验证事实，不代表当前允许启用 standard 或任何扩展。新认证策略下，
+Windows 验收以 slim 成功和 standard 拒绝为准；历史合成模型／工具测试不授予扩展认证。
+
+本机环境为 Server 2025 Standard x64（26100）、NTFS、Python 3.12.15、Node 24.22.1、
+Pi 1.4.0、pywin32 312。验收使用当前账号、临时独立实例及本地合成模型服务。
+
+- 原生平台：私有 ACL、跨进程文件锁、目录／重解析点检查、命名管道并发及取消、
+  Job Object 所有权、父进程异常退出后的后代清理、主命令正常退出时回收持有输出管道的后台后代。
+- 虚拟环境：绕过 Windows Python 重定向启动器，保留 `.venv` 和真实父进程身份，
+  避免业务进程误启动第二个管理进程。
+- Pi：真实本地工具和 MCP、命令取消、未知结果不重放。Windows Shell 使用
+  Job Object 托管；取消和超时等待后代退出，不依赖 `taskkill /T` 的权限。
+  PowerShell／Git Bash 覆盖中文路径、环境、输出及退出码；不使用 WSL 作为原生命令后端。
+  合成模型覆盖前台委派后台任务、原生账号与网关混合执行及共享额度限制。
+- slim／standard：管理页面鉴权、业务就绪、管理进程强制退出及第二次启动。
+- 配置及文件：配置版本应用／恢复、MCP 注册表与图片附件的关闭后原子替换。
+- 时钟：同刻度的连续媒体刷新不会误用旧快照；语音完成判断的同刻度回归为逻辑测试，
+  不代表语音设备或停用中的语音功能已经验收。
+
+Windows 非 Server 本轮只做共享实现的逻辑兼容，不运行其本机测试。Linux 保留原有
+实现，并检查 Linux 类型分支；本轮没有额外 Linux 实机回归。
+
+最终全量门禁报告 979 项、17 项跳过，12 个模块因未安装的可选依赖
+（`pyhap`、`pyatv`、`imageio_ffmpeg`、`pywebrtc_audio`、`sherpa_onnx`）未通过。
+格式、lint、类型及前端构建通过。Linux 专用接口、当前账号缺少符号链接权限和
+未启用的可选能力均保留明确跳过记录；不能把核心定向通过表述成全量门禁通过。
+真实模型供应商、设备、SCM、注销和整机重启均不在此次已通过范围内。
+
+### 平台认证策略验收（2026-10-24）
+
+保持上述内核范围及现有版本号；14 个现有扩展全部声明 `supported_platforms = ["linux"]`。
+Windows 和 Windows Server 共享 `windows` 认证项，当前禁止启用这些扩展。
+旧实例的插件列表不自动修改；包含不支持插件的配置无法保存、应用或启动业务，
+独立管理页仍可读取并修复配置。取消扩展后还需修正依赖，不能以静默禁用跳过依赖错误。
+
+本次在同一 Windows Server 实机使用临时实例完成：
+
+- 源码版和非 editable 安装版的 slim 初始化、管理页鉴权、业务就绪、异常退出及第二次启动。
+- standard 在创建实例目录前明确拒绝，提示 `web`、`voice_disabled` 仅认证 Linux，并建议 slim。
+- 安装包包含全部 14 个扩展的认证文件，包括单文件 `gesture`；安装版 10 项认证回归全部通过。
+- 配置管理 HTTP 测试覆盖旧配置读取、拒绝不支持插件、取消后保存；外部插件测试覆盖
+  缺失／错误声明、静态与运行时不一致，以及正常认证。目录读取不导入扩展运行库，
+  启动拒绝发生在创建业务进程或插件实例之前。
+
+最终 `scripts/check.py --timeout 300`：989 项中 956 项通过、21 项跳过、12 项依赖错误，
+**全量门禁未通过**。格式、lint、仓库规定的内核类型检查及前端构建通过。
+下列缺失依赖保持报错，不计作通过或跳过：
+
+| 缺失依赖 | 未通过的测试模块 |
+| --- | --- |
+| `pyhap` | `test_environment` |
+| `pyatv` | `test_device_operations` 中的 AirPlay 用例 |
+| `imageio_ffmpeg` | `test_reply_videos`、`test_video_recording` |
+| `pywebrtc_audio` | `test_audio_input_guide`、`test_audio_input_quality`、`test_audio_outputs`、`test_behavior`、`test_devices`、`test_hardware_volume`、`test_voice_binding` |
+| `sherpa_onnx` | `test_wake_words` |
+
+21 项跳过包含 Linux 专用接口、权限／可选能力限制，以及依赖 Linux 扩展的完整会话宿主测试；
+允许在 Windows 启用的 slim 真实进程、Pi 工具、取消及重启测试保留。
+额外的 `mypy --platform linux src`／`--platform win32 src` 全源码扫描存在类型错误，未通过；
+这两项范围大于仓库规定的内核类型门禁。按仓库范围分别检查两个平台均通过。
+本轮未在普通 Windows 或 Linux 实机回归，也未验收真实供应商、设备、SCM、注销或整机重启。
+
+### 通用对话与 CLI 验收（2026-10-24）
+
+在上述 Windows Server 2025 环境，使用独立临时实例完成源码版及重新构建的非 editable
+安装版验收，未替换生产实例。包版本保持 `0.2.0`，扩展认证规则不变。
+
+- `verify_native_deployment.py` 及 `--installed`：slim 初始化、管理页认证、业务就绪、
+  第二次启动通过；Windows standard 在创建实例前明确拒绝。
+- `verify_native_chat.py` 及 `--installed`：两个真实 CLI 子进程并发连接只启动同一个后台，
+  退出后后台保留，重新连接成功；显式重启后台后保持原会话 ID。终端输入采用确定性驱动。
+- 源码与安装版的 `test_conversation_native`：真实 Pi + 本地合成模型验证多轮上下文、
+  会话隔离、同会话排队、重启恢复、实际文件工具、澄清、显式补充、共享并发及取消。
+- 额外原生检查确认管理端口被占用时明确失败并给出日志路径，不另找端口启动。
+- 回归覆盖网页显式回答/补充、旧附件归属、任务结果与通知按来源会话投递、去重、
+  队列上限、取消竞争、迁移备份/回滚/重复执行，以及 Ctrl+C 输入取消和 EOF 断开逻辑。
+
+最终 `scripts/check.py --timeout 300`：**1013 项，980 通过、21 跳过、12 依赖错误，
+新增失败 0**。格式、lint、仓库规定的类型门禁和前端构建通过；全量门禁仍未通过，
+原因仍为上一节列出的五类依赖缺失及对应十二个模块，不计作通过或跳过。
+第一轮发现的样例测试旧 slim 假设已修正：显式关闭 conversation/cli 后继续验证独立执行与任务，
+该测试和最终全量回归均已通过。
+
+21 项跳过分布：`test_mem0` 4、`test_assistant_skills` 1、`test_config_files` 1、
+`test_configuration` 1、`test_configuration_processes` 1、`test_tasks` 1、`test_hid_buttons` 3、
+`test_input_files` 1、`test_media_library` 1、`test_media_downloads` 3、`test_pi_runtime` 4。
+它们保留已有的平台、权限、可选能力和完整 Linux 宿主条件，不用于声称功能实测成功。
+
+普通 Windows 复用 Windows 平台逻辑，未实机测试；Linux 保留自动测试与原生验收流程，
+本轮未在 Linux 上运行。真实供应商、物理设备、交互式键盘、SCM 安装、注销和系统重启未验收。
+本地合成模型通过不代表真实供应商通过；CLI 自动启动不安装系统服务或申请提权。
+
+### 短命令与实例选择验收（2026-10-24）
+
+子项目正式入口改为 `pa`，外层 KeepFixCrash 提供 `kfc` 转调入口。
+`pa use <实例目录或配置文件>` 只保存选择，之后从任意目录运行 `pa` 默认聊天；
+`pa stop` 停止所选实例后台。记住的实例优先于当前目录，临时 `--config` 不改变记住的选择。
+发行包名称、版本、服务名称和实例数据目录保持原样，不需要迁移实例。
+
+本机已将原生启动器安装到 `%USERPROFILE%\bin\pa.exe`、`kfc.exe`（该目录已在 PATH），
+不需要每次激活虚拟环境。迁移或删除 Python 环境后须重新安装这些启动器。
+实际执行验证覆盖两个全局命令及仓库 `kfc.cmd`：跨目录恢复选择、带空格和 `&` 的路径、
+参数透传和错误退出码均通过。源码版、安装版原生聊天脚本改用 `pa use` 后无参数进入聊天，
+并发启动、重连、后台重启与原会话恢复通过；安装版 slim 启停及 Windows standard 拒绝通过。
+
+最终全量检查为 **1023 项：990 通过、21 跳过、12 项既有依赖错误，新增失败 0**。
+十项 CLI 入口测试全部通过。全量门禁仍因前述五类可选依赖缺失未通过。
+Linux 的配置路径选择逻辑与外层 shell 脚本语法已检查，本轮没有 Linux 或普通 Windows 实机验收。

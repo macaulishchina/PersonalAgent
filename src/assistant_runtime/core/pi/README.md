@@ -54,8 +54,9 @@ Provider catalogs are bundled metadata, not account entitlements. Actual images,
 Foreground conversation startup is separate from transport startup (`foreground=False`
 for standalone execution composition). This uses the same client, event dispatcher and
 usage transport, creates no foreground session, and rejects foreground submission.
-Personal-assistant instructions belong to `core/conversation/instructions.py` and are
-loaded by the conversation path. Executor disconnect settles public execution ownership
+Personal-assistant instructions belong to `core/speech/instructions.py` and are
+composed only when the assistant capability is enabled; slim uses generic conversation instructions.
+Executor disconnect settles public execution ownership
 before reporting the transport failure; it never replays queued or uncertain work.
 
 The declared Pi plugin can start without a foreground conversation and without speech

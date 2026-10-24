@@ -2,12 +2,12 @@
 
 Independent durable inbox and per-channel outbox. Enable `notifications` in `plugins`;
 `tasks` depends on it. No separate broker, paid API or phone push service is installed.
-The host's SQLite database owns notifications independently of Codex thread/session IDs.
+The host's SQLite database owns notifications independently of executor-native thread/session IDs.
 
 ```toml
 [notifications]
 channels = ["chat", "context"]
-voice_enabled = true
+voice_enabled = false
 voice_spacing_seconds = 60
 max_attempts = 5
 retry_seconds = 5
@@ -94,7 +94,7 @@ re-run the originating task. Inbox limits reject new work explicitly rather than
 throw away old notices; read history remains visible in the inbox.
 
 - `chat`: idempotent stable message ID in the shared timeline; reconnect uses existing SSE.
-- `context`: quiet Codex context injection at an idle boundary. No task/model turn is started.
+- `context`: quiet Pi context injection at an idle boundary. No task/model turn is started.
   Injection has no provider idempotency receipt; an uncertain attempt is shown for explicit retry.
 - `voice`: opt-in, idle-only, respects quiet hours and serializes announcements with spacing.
   No remote microphone input. Unknown playback is never automatically replayed. `delivered`

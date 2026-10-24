@@ -1,10 +1,12 @@
 # go2rtc camera integration
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 All deployed assistant video inputs use configured go2rtc streams. The gateway owns USB device identity, camera protocols, formats and transcoding. The assistant owns the logical device ID, bounded snapshot request and native MCP image delivery. The microphone remains on PipeWire.
 
 ## Configure
 
-Install the `camera` extra in the existing environment and enable `go2rtc` in the configured `plugins` list. Follow the [Docker device guide](../../../../deploy/go2rtc.md) to start the gateway and declare its source streams. A camera endpoint refers to an already registered stream:
+Install the `camera` extra in the existing environment and enable `go2rtc` in the configured `plugins` list. Follow the [Docker device guide](../../../../docs/guides/cameras.md) to start the gateway and declare its source streams. A camera endpoint refers to an already registered stream:
 
 ```toml
 [devices.office_camera]
@@ -80,8 +82,8 @@ attachment route with HTTP Range support. Unrequested continuous recording,
 camera microphone capture and video uploads/model video analysis are not added.
 
 ```sh
-.venv/bin/pa --config config/config.toml devices record office_camera --duration 10
-.venv/bin/pa --config config/config.toml devices record office_camera --duration 5 --output state/clip.mp4
+pa --config config/config.toml devices record office_camera --duration 10
+pa --config config/config.toml devices record office_camera --duration 5 --output state/clip.mp4
 ```
 
 ### Optional pan/tilt
@@ -112,20 +114,20 @@ move. Concurrent moves are rejected. A delivered command does not establish a
 measured angle, exact return position, or disable vendor automatic tracking.
 
 ```sh
-.venv/bin/pa --config config/config.toml devices move office_camera --direction left
-.venv/bin/pa --config config/config.toml devices stop-camera office_camera
-.venv/bin/python scripts/verify_camera_control.py --device office_camera --fixed-device office_fixed --codex
+pa --config config/config.toml devices move office_camera --direction left
+pa --config config/config.toml devices stop-camera office_camera
+.venv/bin/python scripts/verify_camera_control.py --device office_camera --fixed-device office_fixed --execution
 ```
 
 The adapter registers `video.snapshot` with `DeviceDirectory` and a `VideoInputProvider` with `host.video_inputs`. CLI and `device` MCP reuse the existing `VideoCapture` route:
 
 ```sh
-.venv/bin/pa --config config/config.toml devices inspect office_camera
-.venv/bin/pa --config config/config.toml devices snapshot office_camera
-.venv/bin/pa --config config/config.toml devices snapshot office_camera --output state/preview.jpg
+pa --config config/config.toml devices inspect office_camera
+pa --config config/config.toml devices snapshot office_camera
+pa --config config/config.toml devices snapshot office_camera --output state/preview.jpg
 ```
 
-Codex calls `capture_image(device_id="office_camera")` and receives native image content. Web/voice keep the same conversation and logical camera identity. Explicit image replies use the existing private chat attachment path; no raw video recorder is added.
+Pi calls `capture_image(device_id="office_camera")` and receives native image content. Web uses the same logical camera identity. Voice is currently disabled. Explicit image replies use the existing private chat attachment path; no raw video recorder is added.
 
 ## Availability and failure behavior
 
@@ -141,10 +143,10 @@ Go2rtc releases the snapshot consumer after producing a frame. Other configured 
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/pa --config config/config.toml restart
+pa --config config/config.toml restart
 .venv/bin/python scripts/verify_video_onboarding.py --device living_camera --restart --restart-gateway
-# When sending an image to Codex/OpenAI is authorized:
-.venv/bin/python scripts/verify_video_onboarding.py --device living_camera --codex
+# When sending an image to the configured model provider is authorized:
+.venv/bin/python scripts/verify_video_onboarding.py --device living_camera --execution
 ```
 
 The reusable acceptance checks repeated nonblank JPEGs through the installed socket, unknown-device errors, microphone/output coexistence, actual device MCP image delivery, gateway outage/recovery and assistant restart. `--save-frame` explicitly retains one private preview. Evidence stays under ignored `state/acceptance/video/`; no HTML report is generated. Physical hotplug and whole-machine reboot are separate operator checks.

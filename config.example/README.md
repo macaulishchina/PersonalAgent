@@ -1,47 +1,42 @@
-# 配置目录
+# 配置目录参考
 
-首次安装将整个 `config.example/` 复制为实例的 `config/`。修改 `config/`，不要
-修改模板。入口为 `config/config.toml`，私有配置不进入 Git。
+新实例使用 `pa init <实例目录> --preset slim`（Linux 也可选 standard）生成配置及私有权限。此目录提供字段示例，**不要整体复制覆盖已有实例**；部署流程见[安装指南](../docs/guides/deployment.md)。
+
+## 文件与入口
 
 | 文件 | 内容 |
 | --- | --- |
-| `config.toml` | include 文件清单、实例 root、运行模式、插件、工作目录与执行策略 |
-| `voice.toml` | 助手名称、唤醒、交互、主音频绑定、静默时段 |
-| `devices.toml` | 各设备协议、地址和硬件参数 |
-| `models.toml` | 主会话订阅模型、API 供应商/模型、Jev |
-| `tasks.toml` | 后台并发、fast/balanced/deep/ultra、工作文件和通知 |
-| `memory.toml` | 记忆开关、提取模型和可选 model_api.memory |
-| `media.toml` | 影视搜索、转存、下载 |
-| `services.toml` | Web、Apple Home、事件服务、第三方 MCP 框架设置 |
+| `config.toml` | include 清单、实例 root、启用插件、工作目录及执行策略 |
+| `voice.toml` | 助手名称、固定音频绑定及交互设置；语音当前停用 |
+| `devices.toml` | 设备协议、地址和硬件参数 |
+| `models.toml` | 主对话、模型别名、供应商和原生账号 |
+| `ai-usage.toml` | AI 用量策略与限制 |
+| `tasks.toml` | 任务并发、模型档位、工作文件和通知 |
+| `memory.toml` | 记忆开关、提取模型与用途绑定 |
+| `media.toml` | 媒体搜索、转存和下载 |
+| `services.toml` | 网页、Apple Home、事件及第三方 MCP 设置 |
 
-入口明确列出文件，不扫描目录；只有入口允许 `include`。文件必须位于入口目录
-内，不能通过 `..` 或软链接包含外部文件。最多 32 个文件，不能重复引用。
-单文件 TOML 仍可直接加载，不要求所有测试实例都拆分。
+实际文件以初始化模板和入口 `include` 为准，不要求每个实例都包含全部示例片段。
 
-相同表的不同字段可以分布在不同文件，例如 `models.toml` 的
-`model_api.enabled` 和 `memory.toml` 的 `model_api.memory`。同一字段重复定义
-会报错，即使值相同也不允许；数组整体视作一个字段，不拼接。没有加载顺序覆盖规则。
-错误会标明文件/字段，不输出配置值。缺失文件或错误配置不会静默使用默认值启动。
+## 组合与路径规则
 
-`root` 决定 `.env`、数据库、凭据、模型和运行数据所在实例目录。相对 `root`
-以入口所在目录解析，不依赖启动命令的工作目录。模板 `root=".."` 适合
-`实例/config/config.toml` 布局；迁移已有实例时建议填写原来的绝对 root。
-其他插件路径保持各自现有语义，不随它们所在的片段文件改变。
+只有入口允许 `include`，不递归扫描目录。片段必须位于入口目录内，不能通过 `..` 或软链接包含外部文件；最多 32 个文件，不得重复引用。单文件 TOML 也可直接加载。
+
+同一表的不同字段可分散在多个片段；同一字段重复定义会报错，即使值相同。数组作为整体字段，不拼接，也没有后加载覆盖规则。
+
+`root` 决定 `.env`、数据库、凭据、模型和业务数据的位置。相对 root 以入口目录解析，不依赖终端工作目录；`root=".."` 对应 `实例/config/config.toml` 布局。移动配置时保持其指向原数据目录，不改变插件路径的既有语义。
+
+密钥存放在实例 `.env` 或专用私有凭据存储，普通 TOML 只引用变量名。配置及实例数据不提交 Git。
+
+## 校验与生效
+
+选定实例后执行：
 
 ```sh
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml doctor
-.venv/bin/python -m assistant_runtime.app.cli --config config/config.toml models check
-.venv/bin/python scripts/install_service.py --config "$PWD/config/config.toml"
+pa doctor
+pa models check
 ```
 
-`doctor` 检查本机依赖和配置，`models check` 校验模型配置；安装脚本更新并启用
-自启单元，不启动或重启服务。实际配置变更仍需显式重启。API 供应商变化还需重新生成网关配置。
-固定主音频绑定、正在执行的任务应按原部署规则处理，不通过迁移配置强制中断。
+`doctor` 检查本机依赖与配置；模型检查不代表供应商实测通过。配置修改通过管理页“保存 → 应用”加载；API 网关变更需完成独立部署步骤。系统服务安装见[日常维护](../docs/guides/operations.md#安装系统服务)。
 
-API 的 `model_api.enabled` 控制总开关，供应商的 `enabled` 控制单独接入。
-密钥放实例根目录 `.env`，模型配置只引用变量名。供应商开关不是数据分类过滤器。
-
-每个 API 模型必须用 `reasoning_efforts` 声明有效档位，`default_reasoning_effort` 指定默认值。
-辅助推理和后台任务可明确选择其中一档；未指定的任务选型沿用 Jev 与原策略。
-`model_api.max_output_tokens` 控制辅助推理预算，`execution_max_output_tokens` 控制后台执行预算；
-两者都包含思考 token，模型条目可以单独覆盖。
+模型能力、思考档位、任务选型与输出限制由[模型模块](../src/assistant_runtime/core/models/README.md)和[任务模块](../src/assistant_runtime/core/tasks/README.md)维护。本页不另复制字段默认值。

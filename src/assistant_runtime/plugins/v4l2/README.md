@@ -1,5 +1,7 @@
 # V4L2 camera integration
 
+Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+
 The current composition root does not register this adapter. Use the [go2rtc integration](../go2rtc/README.md) for camera onboarding; the implementation below is inactive in the deployed assistant.
 
 Linux UVC cameras with an exact `/dev/v4l/by-id/*-video-index0` or
@@ -48,19 +50,17 @@ time and connection generation. Pixels never enter the generic event bus or
 long-term memory; `device.captured` publishes metadata only.
 
 ```sh
-.venv/bin/pa --config config/config.toml devices list
-.venv/bin/pa --config config/config.toml devices inspect office_camera
-.venv/bin/pa --config config/config.toml devices snapshot office_camera
+pa --config config/config.toml devices list
+pa --config config/config.toml devices inspect office_camera
+pa --config config/config.toml devices snapshot office_camera
 # Saving requires an explicit output path:
-.venv/bin/pa --config config/config.toml devices snapshot office_camera \
+pa --config config/config.toml devices snapshot office_camera \
   --output state/camera-preview.jpg
 ```
 
-Without `--output`, CLI prints metadata and discards pixels. Codex uses the same
-capability through `device(action="snapshot", value="office_camera")`; the tool
-returns native MCP image content rather than a filename or JSON pixels. Voice
-delegates user-requested visual questions to Codex and speaks its actual result,
-using the existing subscription/task thread.
+Without `--output`, CLI prints metadata and discards pixels. Pi uses the same
+capability through `capture_image(device_id="office_camera")`; the tool
+returns native MCP image content rather than a filename or JSON pixels. Voice is currently disabled; image requests use the configured conversation/execution path.
 
 ## Limits and privacy
 
@@ -79,7 +79,7 @@ using the existing subscription/task thread.
   video features require an explicit bounded consumer and trigger policy.
 - `captured_at` is host acquisition completion time, not sensor exposure time.
   Camera exposure/warm-up may affect the first frame.
-- Explicit visual requests transmit images to Codex/OpenAI. The application does
+- Explicit visual requests transmit images to the configured model provider. The application does
   not save them locally by default; provider conversation retention is separate.
   Explicitly saved acceptance images stay under ignored `state/`.
 
@@ -87,16 +87,16 @@ using the existing subscription/task thread.
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/pa --config config/config.toml restart
+pa --config config/config.toml restart
 .venv/bin/python -m scripts.verify_video_onboarding --device living_camera \
   --save-frame --restart
-# Only with explicit authorization to send test images to Codex/OpenAI:
-.venv/bin/python -m scripts.verify_video_onboarding --device living_camera --codex
+# Only with explicit authorization to send test images to the configured model provider:
+.venv/bin/python -m scripts.verify_video_onboarding --device living_camera --execution
 ```
 
 Real acceptance checks installed directory/socket routing, repeated fresh JPEGs,
 independent decoding/nonblank pixels, microphone coexistence, unknown-ID errors,
-service restart recovery, and (with --codex) actual Codex list/inspect/snapshot. It never plays
+service restart recovery, and (with --execution) actual Pi list/inspect/snapshot. It never plays
 audio or changes output selection. Tests cover invalid identity/configuration,
 unavailable devices, permission/transport errors, unsupported formats, malformed
 images, concurrency, generation changes, timeout, oversized output, cancellation
