@@ -393,7 +393,7 @@ An optional `--import-aliyun-auth PRIVATE_FILE` imports an existing aligo Web se
 once. Never import an OpenList OAuth refresh token. Credentials must stay out of Git.
 
 Login uses `begin_media_login` then `get_media_login(login_id)` for a native QR image.
-CLI: `personal-agent --config config/config.toml media login`, followed by `login_status`
+CLI: `pa --config config/config.toml media login`, followed by `login_status`
 with the returned login ID. CLI saves the QR privately at `state/media/login-qr.png`.
 Tokens never cross MCP. The session expires; starting again replaces only a terminal
 login. An account identity binding prevents accidental account switching.

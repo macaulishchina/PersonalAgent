@@ -13,19 +13,25 @@ SCM 安装、注销后运行及系统重启验收仍待完成，不将核心验�
 ## 1. 确定安装组合、账号和目录
 
 - **standard**：网页文字／图片对话、执行、模型、用量保护、后台任务、通知及外部 MCP 接入。
-- **slim**：执行、模型、用量保护、文件及外部 MCP 接入；默认没有聊天网页、任务调度和通知。
+- **slim**：连续对话、CLI、执行、模型、用量保护、文件及外部 MCP 接入；默认没有个人助手、设备、语音、聊天网页、任务调度和通知。
 - 两种组合都有独立系统配置网页和同一套 CLI。Linux 默认 standard；Windows 默认 slim，
   显式选择 standard 会在创建目录前被拒绝。已有不支持的插件配置不会自动删除；
   管理页仍可打开，取消不支持的插件并修正其依赖后才能应用。
 
 | 用途 | Windows | Linux |
 |---|---|---|
-| 应用仓库及 Python `.venv` | `C:\PersonalAgent\app` | `$HOME/PersonalAgent/app` |
-| 固定版本 Pi 及 Node 依赖 | `C:\PersonalAgent\pi` | `$HOME/PersonalAgent/pi` |
-| 配置、凭据、状态与业务数据 | `C:\PersonalAgent\instance` | `$HOME/PersonalAgent/instance` |
+| 应用仓库及 Python `.venv` | `$HOME\PersonalAgent\app` | `$HOME/PersonalAgent/app` |
+| 固定版本 Pi 及 Node 依赖（默认） | `%LOCALAPPDATA%\personal-agent\pi` | `${XDG_DATA_HOME:-$HOME/.local/share}/personal-agent/pi` |
+| 配置、凭据、状态与业务数据（示例） | `$HOME\PersonalAgent\instance` | `$HOME/PersonalAgent/instance` |
 
-三个目录都长期保留。服务引用 `app` 中的 Python，配置引用 `pi` 中的执行器；
-`instance` 必须备份。安装、启动和验收命令不会自动删除这些目录。
+最简部署不指定 Python 或 Pi 安装位置：`uv sync` 在当前项目创建 `.venv`，
+`install-pi` 在当前用户的数据目录安装 Pi 并记录绝对路径。默认 `pi_binary = "pi"`
+自动使用该安装，无需修改 `PATH` 或复制路径到实例配置。
+Linux 的 `XDG_DATA_HOME` 仅在设为绝对路径时生效；Windows 未设置 `LOCALAPPDATA`
+时使用用户主目录下的 `AppData\Local`。
+
+上述目录都长期保留。服务引用当前 Python 环境和已安装的 Pi；`instance` 必须备份。
+安装、启动和验收命令不会自动删除这些目录。自定义环境位置见第 2 节末尾。
 
 从开始就使用最终运行账号。Windows 服务安装要求此账号与实例拥有者一致，并具备
 “作为服务登录”权限；不能使用 LocalSystem。Linux 使用普通账号的 systemd 用户服务。
@@ -45,27 +51,25 @@ SCM 安装、注销后运行及系统重启验收仍待完成，不将核心验�
 ### Windows：PowerShell
 
 ```powershell
-New-Item -ItemType Directory -Force C:\PersonalAgent | Out-Null
-git clone https://github.com/macaulishchina/PersonalAgent.git C:\PersonalAgent\app
-Set-Location C:\PersonalAgent\app
+git clone https://github.com/macaulishchina/PersonalAgent.git "$HOME\PersonalAgent\app"
+Set-Location "$HOME\PersonalAgent\app"
 $env:PYTHONUTF8 = '1'
 uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli install-pi C:\PersonalAgent\pi
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli init C:\PersonalAgent\instance --preset slim
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli install-pi
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli init "$HOME\PersonalAgent\instance"
 ```
 
 ### Linux：Shell
 
 ```sh
-mkdir -p "$HOME/PersonalAgent"
 git clone https://github.com/macaulishchina/PersonalAgent.git "$HOME/PersonalAgent/app"
 cd "$HOME/PersonalAgent/app"
 uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
 npm --prefix frontend ci
 npm --prefix frontend run build
 uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
-.venv/bin/python -m assistant_runtime.app.cli install-pi "$HOME/PersonalAgent/pi"
-.venv/bin/python -m assistant_runtime.app.cli init "$HOME/PersonalAgent/instance" --preset standard
+.venv/bin/python -m assistant_runtime.app.cli install-pi
+.venv/bin/python -m assistant_runtime.app.cli init "$HOME/PersonalAgent/instance"
 ```
 
 第二次 `uv sync` 将构建后的聊天前端资源装入应用包。slim 省略两条 npm 命令及第二次
@@ -74,19 +78,37 @@ uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editabl
 若 CLI 提示没有 `install-pi` 或 `service` 子命令，先确认使用的是本目录的 `.venv`，
 且锁定安装已经成功完成；仅拉取源码不会更新此前安装的应用包。
 
-## 3. 设置执行器和访问地址
+### 可选：自定义环境位置
 
-编辑正式实例的 `config/config.toml`，将已有的 `pi_binary` 改为安装命令输出的绝对路径。
-Windows 对应：
+默认流程无需执行本节。Python 环境使用 uv 的 `UV_PROJECT_ENVIRONMENT` 指定，
+必须在 `uv sync` 前设置；之后运行命令中的 `.venv` 路径也应换成该环境路径。
+Python 解释器本体由 uv 管理，不复制到实例目录。
 
-```toml
-pi_binary = 'C:\PersonalAgent\pi\node_modules\.bin\pi.cmd'
-pi_shell = "auto"
+```powershell
+# Windows 示例：可分别选择 Python 和 Pi 的位置
+$env:UV_PROJECT_ENVIRONMENT = 'D:\AgentEnvironments\personal-agent'
+uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
+& "$env:UV_PROJECT_ENVIRONMENT\Scripts\python.exe" -m assistant_runtime.app.cli install-pi 'D:\AgentRuntimes\pi'
 ```
 
-Linux 填写实际绝对路径，例如安装命令输出的 `/home/你的账号/PersonalAgent/pi/node_modules/.bin/pi`；
-**TOML 中不展开 `$HOME`**。`pi_shell = "auto"` 在 Linux 选择 Bash、Windows 选择 PowerShell。
-不要重复添加已经存在的字段。
+```sh
+# Linux 示例：可分别选择 Python 和 Pi 的位置
+export UV_PROJECT_ENVIRONMENT="$HOME/agent-environments/personal-agent"
+uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
+"$UV_PROJECT_ENVIRONMENT/bin/python" -m assistant_runtime.app.cli install-pi "$HOME/agent-runtimes/pi"
+```
+
+Pi 自定义路径也会记录在用户数据目录的 `personal-agent/pi-installation.json` 中，
+无需手动配置。记录只在安装成功后更新；同一用户使用 `pi_binary = "pi"` 的实例
+共享最近一次成功记录的安装。安装失败保留上一记录；记录损坏或目标被移动时明确报错，
+不会悄悄换用其他 Pi。未存在安装记录时，仍可发现默认目录或已有 `PATH` 中的 Pi。
+
+如需为不同实例固定不同的 Pi，显式将该实例已有的 `pi_binary` 改为安装输出的绝对路径；
+显式路径优先于用户安装记录。**TOML 中不展开 `$HOME`**，不要重复添加字段。
+
+## 3. 设置访问地址
+
+默认执行器无需手工设置。`pi_shell = "auto"` 在 Linux 选择 Bash、Windows 选择 PowerShell。
 
 | 入口 | 初始地址 | 配置位置 | 登录口令 |
 |---|---|---|---|
@@ -106,7 +128,7 @@ Windows 本机浏览器使用配置管理入口 `http://127.0.0.1:8047`；Linux 
 Windows：
 
 ```powershell
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config C:\PersonalAgent\instance\config\config.toml run
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config "$HOME\PersonalAgent\instance\config\config.toml" run
 ```
 
 Linux：
@@ -121,7 +143,7 @@ Linux：
 Windows：
 
 ```powershell
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli configuration token --management C:\PersonalAgent\instance\management.toml
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli configuration token --management "$HOME\PersonalAgent\instance\management.toml"
 ```
 
 Linux：
@@ -167,7 +189,7 @@ standard 再确认聊天页可以加载；slim 使用 CLI 查询运行状态。�
 Windows：
 
 ```powershell
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config C:\PersonalAgent\instance\config\config.toml status
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config "$HOME\PersonalAgent\instance\config\config.toml" status
 ```
 
 Linux：
@@ -179,6 +201,34 @@ Linux：
 这些状态检查不调用模型。模型可用性由操作者在完成授权后，通过实际使用确认；不要把
 “服务已启动”当作供应商实测通过。slim 的执行提交、过程、回答和取消接口见
 [公共执行说明](../src/assistant_runtime/core/execution/README.md)。
+
+### 终端连续对话
+
+两种组合均默认启用 `conversation`、`cli`。Windows／Server 仍使用 slim。
+安装环境的可执行目录加入 PATH 后，首次绑定已有实例，再进入聊天：
+
+```powershell
+pa use "$HOME\PersonalAgent\instance"
+pa
+```
+
+Linux 同样使用 `pa use "$HOME/PersonalAgent/instance"`、`pa`。
+若未配置 PATH，Windows 使用 `.\.venv\Scripts\pa.exe`，Linux 使用 `.venv/bin/pa`。
+绑定后在任意目录直接运行 `pa`；`pa chat --session ID` 选择已有会话；
+首次连接创建独立 CLI 会话，此后恢复同一操作者上次选择，网页主会话不变。
+普通消息排队；`/supplement 内容` 补充当前执行，`/answer 问题ID 内容` 回答澄清，
+`/queue` 查询、`/cancel [请求ID]` 取消。完整命令见[CLI 说明](../src/assistant_runtime/core/cli/README.md)。
+
+实例未运行时，CLI 通过私有启动锁连接或启动同一管理入口。已安装且归属匹配的服务
+使用原服务管理器；否则启动脱离终端的管理进程，Windows 后台不显示窗口。
+不安装服务、不申请管理员权限、不创建新实例；端口冲突或权限错误直接报错，
+日志在 `state/configuration/manager.log` 和 `business.log`。
+模型未配置时仅提示配置入口，不发模型请求。
+
+关闭终端、`/exit`、EOF 或切换会话不会取消后台工作；Ctrl+C 仅清除当前输入。
+要停止后台，执行 `pa stop`；重启使用 `pa restart`，两者沿用选中的实例。
+此前若由 `chat` 自动启动了管理进程，安装系统服务前也须先执行 `service stop`，
+不能以关闭聊天终端代替停服。
 
 ## 5. 安装为系统服务
 
@@ -192,9 +242,9 @@ Linux：
 
 ```powershell
 $ServiceAccount = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config C:\PersonalAgent\instance\config\config.toml service install --account $ServiceAccount
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config C:\PersonalAgent\instance\config\config.toml service start
-.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config C:\PersonalAgent\instance\config\config.toml service status
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config "$HOME\PersonalAgent\instance\config\config.toml" service install --account $ServiceAccount
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config "$HOME\PersonalAgent\instance\config\config.toml" service start
+.\.venv\Scripts\python.exe -m assistant_runtime.app.cli --config "$HOME\PersonalAgent\instance\config\config.toml" service status
 ```
 
 安装设置开机自动启动，但不立即启动，因此上面单独执行 `start`。权限校验失败时先修正
@@ -344,3 +394,50 @@ Windows 和 Windows Server 共享 `windows` 认证项，当前禁止启用这些
 额外的 `mypy --platform linux src`／`--platform win32 src` 全源码扫描存在类型错误，未通过；
 这两项范围大于仓库规定的内核类型门禁。按仓库范围分别检查两个平台均通过。
 本轮未在普通 Windows 或 Linux 实机回归，也未验收真实供应商、设备、SCM、注销或整机重启。
+
+### 通用对话与 CLI 验收（2026-10-24）
+
+在上述 Windows Server 2025 环境，使用独立临时实例完成源码版及重新构建的非 editable
+安装版验收，未替换生产实例。包版本保持 `0.2.0`，扩展认证规则不变。
+
+- `verify_native_deployment.py` 及 `--installed`：slim 初始化、管理页认证、业务就绪、
+  第二次启动通过；Windows standard 在创建实例前明确拒绝。
+- `verify_native_chat.py` 及 `--installed`：两个真实 CLI 子进程并发连接只启动同一个后台，
+  退出后后台保留，重新连接成功；显式重启后台后保持原会话 ID。终端输入采用确定性驱动。
+- 源码与安装版的 `test_conversation_native`：真实 Pi + 本地合成模型验证多轮上下文、
+  会话隔离、同会话排队、重启恢复、实际文件工具、澄清、显式补充、共享并发及取消。
+- 额外原生检查确认管理端口被占用时明确失败并给出日志路径，不另找端口启动。
+- 回归覆盖网页显式回答/补充、旧附件归属、任务结果与通知按来源会话投递、去重、
+  队列上限、取消竞争、迁移备份/回滚/重复执行，以及 Ctrl+C 输入取消和 EOF 断开逻辑。
+
+最终 `scripts/check.py --timeout 300`：**1013 项，980 通过、21 跳过、12 依赖错误，
+新增失败 0**。格式、lint、仓库规定的类型门禁和前端构建通过；全量门禁仍未通过，
+原因仍为上一节列出的五类依赖缺失及对应十二个模块，不计作通过或跳过。
+第一轮发现的样例测试旧 slim 假设已修正：显式关闭 conversation/cli 后继续验证独立执行与任务，
+该测试和最终全量回归均已通过。
+
+21 项跳过分布：`test_mem0` 4、`test_assistant_skills` 1、`test_config_files` 1、
+`test_configuration` 1、`test_configuration_processes` 1、`test_tasks` 1、`test_hid_buttons` 3、
+`test_input_files` 1、`test_media_library` 1、`test_media_downloads` 3、`test_pi_runtime` 4。
+它们保留已有的平台、权限、可选能力和完整 Linux 宿主条件，不用于声称功能实测成功。
+
+普通 Windows 复用 Windows 平台逻辑，未实机测试；Linux 保留自动测试与原生验收流程，
+本轮未在 Linux 上运行。真实供应商、物理设备、交互式键盘、SCM 安装、注销和系统重启未验收。
+本地合成模型通过不代表真实供应商通过；CLI 自动启动不安装系统服务或申请提权。
+
+### 短命令与实例选择验收（2026-10-24）
+
+子项目正式入口改为 `pa`，外层 KeepFixCrash 提供 `kfc` 转调入口。
+`pa use <实例目录或配置文件>` 只保存选择，之后从任意目录运行 `pa` 默认聊天；
+`pa stop` 停止所选实例后台。记住的实例优先于当前目录，临时 `--config` 不改变记住的选择。
+发行包名称、版本、服务名称和实例数据目录保持原样，不需要迁移实例。
+
+本机已将原生启动器安装到 `%USERPROFILE%\bin\pa.exe`、`kfc.exe`（该目录已在 PATH），
+不需要每次激活虚拟环境。迁移或删除 Python 环境后须重新安装这些启动器。
+实际执行验证覆盖两个全局命令及仓库 `kfc.cmd`：跨目录恢复选择、带空格和 `&` 的路径、
+参数透传和错误退出码均通过。源码版、安装版原生聊天脚本改用 `pa use` 后无参数进入聊天，
+并发启动、重连、后台重启与原会话恢复通过；安装版 slim 启停及 Windows standard 拒绝通过。
+
+最终全量检查为 **1023 项：990 通过、21 跳过、12 项既有依赖错误，新增失败 0**。
+十项 CLI 入口测试全部通过。全量门禁仍因前述五类可选依赖缺失未通过。
+Linux 的配置路径选择逻辑与外层 shell 脚本语法已检查，本轮没有 Linux 或普通 Windows 实机验收。

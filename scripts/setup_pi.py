@@ -12,7 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", nargs="?")
     args = parser.parse_args()
-    print("Set pi_binary to", setup(args.destination))
+    print(setup(args.destination))
 
 
 if __name__ == "__main__":

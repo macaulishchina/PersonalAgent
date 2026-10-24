@@ -52,6 +52,7 @@ class WebPlugin:
                 web.post("/api/messages", self.send),
                 web.get("/api/events", self.events),
                 web.post("/api/control", self.control),
+                web.post("/api/conversation", self.conversation_action),
                 web.get("/api/notifications", self.notification_list),
                 web.post("/api/notifications", self.notification_action),
                 web.get("/api/tasks", self.task_list),
@@ -151,6 +152,16 @@ class WebPlugin:
     async def control(self, request):
         data = await self.object_body(request)
         return web.json_response(await self.conversation.control(data["action"]))
+
+    async def conversation_action(self, request):
+        from assistant_runtime.api.conversation import ConversationRequest
+
+        data = await self.object_body(request)
+        action = data.pop("action", None)
+        if action not in {"supplement", "answer", "cancel", "queue"} or "session_id" in data:
+            raise ValueError("Unsupported web conversation operation")
+        data["session_id"] = self.conversation.state()["session_id"]
+        return web.json_response(await self.api.invoke(ConversationRequest(action, data)))
 
     async def notification_list(self, request):
         from assistant_runtime.api.contracts import NotificationRequest

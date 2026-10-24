@@ -10,8 +10,9 @@ standard 实例包含网页文字/图片对话、模型接入、用量控制、�
 音频引擎、云盘客户端、搜索、家庭设备等扩展依赖仍按需安装和启用。
 
 slim 与 standard 使用同一宿主、执行器、插件协议及 CLI；preset 仅生成初始配置。
-slim 默认启用 ai_usage、models、workfiles、pi、execution、integrations，不启动网页、对话、任务调度、
-通知、设备或语音对象。standard 在公共执行底座上提供网页、主对话、任务和通知。
+slim 默认启用 ai_usage、models、workfiles、pi、execution、integrations、conversation、cli，
+提供终端连续对话，不启动聊天网页、任务调度、通知、个人助手、设备或语音对象。
+standard 在公共对话底座上提供个人助手、网页、任务和通知，同样包含 cli。
 两者都可以通过修改显式插件列表并重启调整启用状态；不提供运行中热切换。
 未启用的核心插件不导入、不构造、不启动后台工作。运行时不检查 preset 名称。
 integrations 在两者中默认启用，但初始外部 MCP 注册表为空，不继承个人 Coding AI 配置。
@@ -20,13 +21,15 @@ integrations 在两者中默认启用，但初始外部 MCP 注册表为空，�
 
 ```sh
 uv sync --locked --extra slim --no-default-groups --no-editable
-scripts/setup_pi.sh /absolute/pi-runtime
+.venv/bin/python -m assistant_runtime.app.cli install-pi
 .venv/bin/python -m assistant_runtime.app.cli init /absolute/slim-instance --preset slim
 .venv/bin/python -m assistant_runtime.app.cli --config /absolute/slim-instance/config/config.toml run
 ```
 
 slim 不需要聊天前端构建；两种部署均默认提供独立配置网页 `0.0.0.0:8047`。
 slim 不启动聊天端口，本地执行 CLI 通过实例私有控制通道调用能力。
+`pa --config /absolute/slim-instance/config/config.toml chat` 连接已有实例；
+未运行时自动启动其既有管理入口，不创建实例或安装系统服务。
 `executions submit|get|events|answer|supplement|cancel` 在两种组合中相同。
 模型未配置时可启动和查看状态，执行提交明确报错，不寻找其他付费模型。
 公共执行支持文字、登记文件／图片和单次工具／技能范围；`files put|get` 管理输入引用。
@@ -34,6 +37,20 @@ slim、standard 都包含核心图片输入所需的 Pillow，是否启用网页
 主对话、任务和直接执行共用执行准入与单次执行记录；任务计划、长期目标和通知归属
 仍由各自模块管理。slim 按需启用 tasks／notifications 时，可用 inbox
 通知渠道独立运行后台任务，不需要添加对话、设备或语音。
+
+## 对话升级与恢复
+
+已有实例的插件列表不会自动修改。使用 `prepare-config` 生成显式配置候选，
+审阅新增的 `conversation`、`cli` 及依赖后再应用；Windows 保持 slim 与扩展认证限制。
+升级前核对在途工作，停服并备份完整实例。首次业务启动在数据库旁生成
+`conversation-before-migration-<ID>.sqlite3`，再事务性补齐会话目录和网页绑定。
+转换保留原会话 ID、消息、附件、执行关联与任务回执；失败回滚，可重复执行。
+若历史包含多个会话且不能确定网页主会话，转换会停止，须恢复明确的旧 `session_id` 后重试。
+不清空数据库，不重置 Pi 状态；恢复旧版本时应同时恢复停服备份，而非手工删表。
+
+会话身份独立于 Pi 进程。重新连接恢复历史和入口选择，模型上下文继续使用 Pi 的持久化与压缩。
+实例重启将未派发消息标记为中断、结果未确认的执行标记为未知，均不自动重做。
+任务创建时保存来源会话，结果回到该会话，不随终端切换或退出改投其他会话。
 
 ## standard 仓库安装
 
@@ -44,12 +61,14 @@ slim、standard 都包含核心图片输入所需的 Pillow，是否启用网页
 uv sync --locked --extra standard --no-default-groups --no-editable
 npm --prefix frontend ci
 npm --prefix frontend run build
-scripts/setup_pi.sh /absolute/pi-runtime
+.venv/bin/python -m assistant_runtime.app.cli install-pi
 .venv/bin/python -m assistant_runtime.app.cli init /absolute/instance
 .venv/bin/python -m assistant_runtime.app.cli --config /absolute/instance/config/config.toml plugins
 ```
 
-将实例的 `pi_binary` 填为安装脚本输出的绝对路径；模型启用前按需设置独立 workspace。
+默认 Python 环境位于项目内 `.venv`，Pi 安装到当前用户的专用数据目录并记录位置。
+保留默认 `pi_binary = "pi"` 即可，无需修改 `PATH`；模型启用前按需设置独立 workspace。
+自定义 Python／Pi 目录见[部署指南](platforms.md#可选自定义环境位置)。
 Pi 安装使用 `deploy/pi/package-lock.json`，锁定执行器及传递依赖，启动不自动安装。
 原生账号库优先从配置的 Pi 可执行文件解析包位置，本地安装无需全局 npm 包。
 如果使用启动包装器，则检查版本，并从已选 Node/npm 安装解析同版本 SDK。
@@ -87,11 +106,11 @@ uv build --wheel
 python3.12 -m venv /absolute/app-env
 /absolute/app-env/bin/python -m pip install --require-hashes -r /absolute/release/requirements-standard.txt
 /absolute/app-env/bin/python -m pip install --no-deps /absolute/release/personal_agent-0.2.0-py3-none-any.whl
-/absolute/app-env/bin/personal-agent init /absolute/instance
+/absolute/app-env/bin/pa init /absolute/instance
 ```
 
-wheel 自带 Pi 的锁文件，安装后可使用 `personal-agent install-pi /absolute/pi-runtime`；
-也可预先按上面的脚本安装到明确目录。
+wheel 自带 Pi 的锁文件，安装后使用当前环境的 `pa install-pi`，默认安装到用户专用目录；
+仅在需要自定义位置时添加目录参数，成功后同样自动记录和发现。
 slim 安装改用 `requirements-slim.txt`，初始化加 `--preset slim`，无需构建前端。
 原生账号子进程使用收敛的环境变量，Node 本身须能直接启动，不依赖临时终端的动态库设置。
 
@@ -123,7 +142,7 @@ standard 交互状态使用，不属于 slim。
 对旧助手配置使用一次性候选生成命令：
 
 ```sh
-personal-agent --config /absolute/old/config/config.toml prepare-config /absolute/candidate-config
+pa --config /absolute/old/config/config.toml prepare-config /absolute/candidate-config
 ```
 
 它显式加入对话、公共执行及所需依赖，保留其它配置值、TOML 分片与原实例绝对 root；
@@ -137,8 +156,8 @@ personal-agent --config /absolute/old/config/config.toml prepare-config /absolut
 业务重启不关闭配置页面；模型待配置、业务配置损坏或可选插件失败时仍可管理。
 
 ```sh
-personal-agent configuration token --management /absolute/instance/management.toml
-personal-agent configuration reset-token --management /absolute/instance/management.toml
+pa configuration token --management /absolute/instance/management.toml
+pa configuration reset-token --management /absolute/instance/management.toml
 ```
 
 在 8047 端口使用独立管理员口令登录。编辑保存只修改文件，确认应用才会等待或

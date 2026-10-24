@@ -48,11 +48,11 @@ time and connection generation. Pixels never enter the generic event bus or
 long-term memory; `device.captured` publishes metadata only.
 
 ```sh
-.venv/bin/personal-agent --config config/config.toml devices list
-.venv/bin/personal-agent --config config/config.toml devices inspect office_camera
-.venv/bin/personal-agent --config config/config.toml devices snapshot office_camera
+.venv/bin/pa --config config/config.toml devices list
+.venv/bin/pa --config config/config.toml devices inspect office_camera
+.venv/bin/pa --config config/config.toml devices snapshot office_camera
 # Saving requires an explicit output path:
-.venv/bin/personal-agent --config config/config.toml devices snapshot office_camera \
+.venv/bin/pa --config config/config.toml devices snapshot office_camera \
   --output state/camera-preview.jpg
 ```
 
@@ -87,7 +87,7 @@ using the existing subscription/task thread.
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/personal-agent --config config/config.toml restart
+.venv/bin/pa --config config/config.toml restart
 .venv/bin/python -m scripts.verify_video_onboarding --device living_camera \
   --save-frame --restart
 # Only with explicit authorization to send test images to Codex/OpenAI:

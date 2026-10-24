@@ -42,7 +42,7 @@ def prepare(source, destination):
     source, destination = Path(source).expanduser().resolve(), Path(destination).expanduser().absolute()
     original = read_config(source)
     current = Config.load(source)
-    selected = list(dict.fromkeys([*current.plugins, "conversation", "execution"]))
+    selected = list(dict.fromkeys([*current.plugins, "conversation", "cli", "execution"]))
     definitions = {}
     pending = list(selected)
     while pending:

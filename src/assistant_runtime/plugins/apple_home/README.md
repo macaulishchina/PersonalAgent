@@ -91,8 +91,8 @@ Refresh requests coalesce per endpoint, enforce a five-second minimum interval, 
 ## Query and acceptance
 
 ```sh
-personal-agent --config config/config.toml devices list
-personal-agent --config config/config.toml devices inspect homepod_environment
+pa --config config/config.toml devices list
+pa --config config/config.toml devices inspect homepod_environment
 .venv/bin/python scripts/verify_environment.py --config config/config.toml --device homepod_environment --codex
 ```
 

@@ -566,7 +566,8 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 if preset == "standard":
                     self.assertFalse(host.store.executions.recent())
                 else:
-                    self.assertNotIn("executions", host.store.__dict__)
+                    self.assertFalse(host.store.executions.recent())
+                    self.assertIn("conversation", host.runtime.plugins)
                     self.assertIsNone(host.assistant)
                     self.assertNotIn("devices", host.runtime.plugins)
                 from unittest.mock import AsyncMock, patch

@@ -19,7 +19,7 @@ Pi 通过统一 MCP 使用已配置的搜索供应商；搜索供应商与任务
   65 秒覆盖配置允许的最大 60 秒总截止时间；默认业务截止时间为 20 秒。
 - MCP：`search_capabilities`、`search_web`、`fetch_webpage`，均为读取工具。
   统一服务目录将其暴露给主会话和 Pi 后台执行器。
-- CLI：`personal-agent --config config/config.toml search capabilities`；
+- CLI：`pa --config config/config.toml search capabilities`；
   `search search '{"query":"Python TaskGroup","allowed_domains":["docs.python.org"],"count":5}'`；
   `search fetch '{"url":"https://example.com","max_chars":20000}'`；
   `search history '{"limit":20}'`。history 返回分页游标 `before`，每页最多 100 条。

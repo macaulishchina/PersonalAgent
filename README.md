@@ -15,17 +15,34 @@ uv sync --locked --extra standard --no-default-groups --no-editable
 npm --prefix frontend ci
 npm --prefix frontend run build
 uv sync --locked --extra standard --no-default-groups --no-editable
-scripts/setup_pi.sh /absolute/pi-runtime
-.venv/bin/python -m assistant_runtime.app.cli init /absolute/instance
+.venv/bin/python -m assistant_runtime.app.cli install-pi
+.venv/bin/python -m assistant_runtime.app.cli init "$HOME/PersonalAgent/instance"
 ```
 
-如果只需要本地执行底座，安装时使用 `--extra slim`，初始化时使用 `init /absolute/instance --preset slim`，无需构建聊天前端。
+如果需要本地执行与终端连续对话，安装时使用 `--extra slim`，初始化时使用 `init /absolute/instance --preset slim`，无需构建聊天前端。
+
+命令入口为 `pa`。安装环境的可执行目录加入 PATH 后，只需首次绑定已有实例：
+
+```text
+pa use <实例目录>
+pa
+```
+
+之后在任意目录直接运行 `pa` 即进入聊天；`pa status`、`pa stop`、`pa restart`
+分别查看状态、停止后台、重启后台。`pa chat --session <会话ID>` 选择特定会话。
+临时指定其他实例使用 `pa --config <配置路径>`，不会改写记住的选择。
+默认恢复当前操作者上次选择的 CLI 会话，与网页主会话分开。
+未运行的实例会自动启动既有管理进程或已安装且归属匹配的服务；不会创建实例、安装服务或提权。
+`/new`、`/sessions`、`/switch ID`、`/history` 管理会话；普通消息排队，
+`/supplement 内容`、`/answer 问题ID 内容` 明确回应当前执行。
+`/queue`、`/cancel [请求ID]` 查询和取消；`/exit`、EOF 或关闭终端只断开入口，已接收工作继续。
+Ctrl+C 清除输入，取消执行须显式使用 `/cancel`。详见[CLI 入口](src/assistant_runtime/core/cli/README.md)。
 
 slim 和 standard 通过共享的 `core` 依赖组合包含全部核心插件代码及其运行依赖。两者的区别是默认启用哪些插件，而不是是否具备这些核心能力。它们使用同一套 CLI 和运行时，并默认启用 `integrations`，初始外部 MCP 注册表为空。未启用的插件不会加载；修改插件列表并重启即可启用。模型权重与外部服务不会自动安装或调用。
 
 两种组合默认都提供独立配置网页，监听 `0.0.0.0:8047`，地址和端口可配置。slim 默认不启动聊天端口；本地执行 CLI 使用实例私有控制通道（Linux Unix socket、Windows 命名管道）。配置网页不依赖模型授权或业务插件启动成功，保存配置后需要明确应用并重启才能生效。详见[系统配置说明](src/assistant_runtime/core/configuration/README.md)。
 
-将实例的 `pi_binary` 设置为安装脚本输出的绝对路径。standard 的最小网页入口可以在没有模型凭据、没有音频依赖的情况下启动，展示“待配置模型”状态；显式启用模型调用路径前，不允许发起推理。
+默认 Python 环境位于项目的 `.venv`；Pi 安装到用户专用数据目录（Linux 为 `$XDG_DATA_HOME/personal-agent/pi`，未设置时使用 `~/.local/share/personal-agent/pi`；Windows 为 `%LOCALAPPDATA%\personal-agent\pi`）。安装器记录位置，默认 `pi_binary = "pi"` 自动使用该安装，无需修改 `PATH`。Python 和 Pi 都支持自定义安装位置，见部署指南。standard 的最小网页入口可以在没有模型凭据、没有音频依赖的情况下启动，展示“待配置模型”状态；显式启用模型调用路径前，不允许发起推理。
 
 部署组合详见[部署指南](docs/deployment.md)，插件扩展详见[插件开发指南](docs/plugin-development.md)。
 

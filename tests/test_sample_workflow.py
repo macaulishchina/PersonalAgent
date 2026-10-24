@@ -22,7 +22,7 @@ from test_pi_skeleton import configuration
 
 
 class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
-    async def test_slim_installed_report_and_optional_tasks_without_conversation(self):
+    async def test_installed_report_and_optional_tasks_with_conversation_disabled(self):
         source = Path(__file__).resolve().parents[1] / "examples/sample-plugin"
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -67,7 +67,12 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
             config = replace(
                 config,
                 workspace=str(root),
-                plugins=[*config.plugins, "sample", "tasks", "notifications"],
+                plugins=[
+                    *(name for name in config.plugins if name not in {"conversation", "cli"}),
+                    "sample",
+                    "tasks",
+                    "notifications",
+                ],
                 notifications={"channels": ["inbox"], "voice_enabled": False},
                 model_api=configuration(gateway.base_url),
                 main_model="model-a",

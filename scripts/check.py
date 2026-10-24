@@ -19,7 +19,17 @@ GROUPS = {
     "models": {"ai_usage", "models", "models_transport", "model_fallbacks", "model_accounts"},
     "speech": {"interaction"},
     "search": {"search"},
-    "core": {"behavior", "conversation", "quiet", "runtime", "voice_binding", "wake_words"},
+    "core": {
+        "behavior",
+        "conversation",
+        "conversation_sessions",
+        "conversation_native",
+        "cli_entry",
+        "quiet",
+        "runtime",
+        "voice_binding",
+        "wake_words",
+    },
     "execution": {
         "integrations",
         "job_lifecycle",

@@ -8,6 +8,6 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("assistant", ("pi", "devices", "voice_disabled"), critical=True),
+    Manifest("assistant", ("conversation", "devices", "voice_disabled"), critical=True),
     internal_factory=build,
 )

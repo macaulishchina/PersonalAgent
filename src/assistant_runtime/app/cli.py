@@ -43,11 +43,17 @@ def systemctl(*args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Personal Agent — local assistant runtime")
+    parser = argparse.ArgumentParser(prog="pa", description="Personal Agent — run pa to chat")
     parser.add_argument(
-        "--config", help="Entry TOML (supports include); otherwise PERSONAL_AGENT_CONFIG or XDG config"
+        "--config", help="Use this config for this invocation; otherwise local or remembered instance"
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
+    use = sub.add_parser("use", help="Remember an existing instance for future commands")
+    use.add_argument("instance", help="Instance directory or entry TOML")
+    chat = sub.add_parser(
+        "chat", help="Chat with this instance; start its existing background manager if necessary"
+    )
+    chat.add_argument("--session", help="Select an existing stable conversation ID")
     install_pi = sub.add_parser("install-pi", help="Explicitly install the pinned Pi runtime")
     install_pi.add_argument("destination", nargs="?")
     service = sub.add_parser("service", help="Manage this instance's installed OS service")
@@ -89,7 +95,6 @@ def main():
         "history",
         "start",
         "restart",
-        "halt",
         "shutdown",
         "logs",
     ]:
@@ -246,8 +251,21 @@ def main():
     accounts.add_argument("action", choices=["providers", "status", "catalog", "login", "logout"])
     accounts.add_argument("--account")
     args = parser.parse_args()
+    args.command = args.command or "chat"
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
+        from .instance_selection import resolve, select
+
+        if args.command == "use":
+            if args.config:
+                raise ValueError("Use pa use <instance>, without --config")
+            print(f"Selected {select(args.instance)}\nRun pa to chat.")
+            return
+        if args.command not in {"init", "install-pi", "configuration"}:
+            entry = resolve(
+                args.config, required=not (args.command == "model-accounts" and args.action == "providers")
+            )
+            args.config = str(entry) if entry else None
         if args.command == "model-accounts":
             from assistant_runtime.app.config import read_config, default_root
             from assistant_runtime.core.models.settings import ModelSettings
@@ -330,7 +348,7 @@ def main():
 
             if not args.config:
                 parser.error("service install requires --config")
-            argv = ["--config", args.config]
+            argv = ["--config", str(args.config)]
             if args.account:
                 argv.extend(["--account", args.account])
             install_service(argv)
@@ -343,7 +361,11 @@ def main():
             if result is not None:
                 print(result)
             return
-        if args.command == "plugins":
+        if args.command == "chat":
+            from .chat import chat as enter_chat
+
+            asyncio.run(enter_chat(config, args.config, getattr(args, "session", None)))
+        elif args.command == "plugins":
             from .plugin_inventory import inventory
 
             print(json.dumps(inventory(config), ensure_ascii=False, indent=2))
@@ -351,10 +373,10 @@ def main():
             from assistant_runtime.app.host import AssistantService
 
             asyncio.run(AssistantService(config, args.no_mic).run())
-        elif args.command in {"start", "restart", "halt", "logs"}:
+        elif args.command in {"start", "restart", "stop", "logs"}:
             from assistant_runtime.platforms.services import control
 
-            control("stop" if args.command == "halt" else args.command, config)
+            control(args.command, config)
         elif args.command == "ai-usage" and args.action == "check":
             from assistant_runtime.core.ai_usage.settings import UsageSettings
 
@@ -451,7 +473,7 @@ def main():
                 result["saved_to"] = str(path)
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, RuntimeError, ValueError, TimeoutError, KeyError) as exc:
-        print(f"personal-agent: {exc}", file=sys.stderr)
+        print(f"pa: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

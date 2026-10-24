@@ -3,7 +3,6 @@
 import argparse
 import json
 from pathlib import Path
-import shutil
 import subprocess
 
 from assistant_runtime.app.bootstrap import assistant_skill_paths
@@ -107,10 +106,11 @@ def check(config, *, native=True):
         return {"sources": len(registry.sources), "revision": registry.revision}
 
     def version():
-        binary = shutil.which(config.pi_binary)
-        if not binary:
-            raise FileNotFoundError("Pi executable missing")
-        result = subprocess.run([binary, "--version"], capture_output=True, timeout=10, check=True)
+        from assistant_runtime.platforms.executables import pi_command
+
+        result = subprocess.run(
+            [*pi_command(config.pi_binary), "--version"], capture_output=True, timeout=10, check=True
+        )
         if result.stdout.decode().strip() != "1.4.0":
             raise ValueError("Pi differs from the accepted pinned version")
         return "1.4.0"

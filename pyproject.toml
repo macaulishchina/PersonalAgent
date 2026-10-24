@@ -38,7 +38,7 @@ memory = [
 dev = ["ruff==0.14.0", "mypy==1.18.2", "setuptools==84.0.0"]
 
 [project.scripts]
-personal-agent = "assistant_runtime.app.cli:main"
+pa = "assistant_runtime.app.cli:main"
 
 [tool.setuptools.data-files]
 "share/personal-agent/pi" = ["deploy/pi/package.json", "deploy/pi/package-lock.json"]
@@ -54,6 +54,8 @@ where = ["src"]
 "assistant_runtime.core.tasks" = ["README.md", "skills/*/SKILL.md"]
 "assistant_runtime.core.events" = ["README.md", "skills/*/SKILL.md"]
 "assistant_runtime.core.execution" = ["README.md"]
+"assistant_runtime.core.conversation" = ["README.md"]
+"assistant_runtime.core.cli" = ["README.md"]
 "assistant_runtime.core.pi" = ["*.ts", "*.mjs"]
 "assistant_runtime.platforms" = ["*.mjs"]
 "assistant_runtime.plugins" = ["*.platform.json"]

@@ -2,13 +2,12 @@ from assistant_runtime.api import PluginDefinition, Manifest
 
 
 def build(host):
-    from .service import Conversation
+    from .plugin import Conversations
 
-    host.conversation = Conversation(host.assistant)
-    return host.conversation
+    return Conversations(host)
 
 
 DECLARATION = PluginDefinition(
-    Manifest("conversation", ("assistant", "workfiles", "execution"), critical=True),
+    Manifest("conversation", ("workfiles", "execution"), critical=True),
     internal_factory=build,
 )

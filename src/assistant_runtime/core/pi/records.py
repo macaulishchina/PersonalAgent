@@ -20,14 +20,14 @@ class ExecutionRecords:
         with self.db:
             self.db.execute("UPDATE tasks SET execution_id=? WHERE id=?", (execution_id, ident))
 
-    def create_task(self, ident, prompt):
+    def create_task(self, ident, prompt, session=None):
         with self.db:
             self.db.execute(
                 "INSERT INTO tasks(id,prompt,status,updated) VALUES(?,?,?,?)",
                 (ident, prompt, "dispatching", time.time()),
             )
 
-        session = self.store.get("session_id")
+        session = session or self.store.get("session_id")
         if session:
             with self.db:
                 self.db.execute("INSERT OR REPLACE INTO task_sessions VALUES(?,?)", (ident, session))
@@ -39,9 +39,11 @@ class ExecutionRecords:
                 (status, turn_id, result, time.time(), ident),
             )
 
-    def unfinished(self):
+    def unfinished(self, session=None):
         return self.db.execute(
-            "SELECT id,turn_id,status FROM tasks WHERE status IN ('dispatching','running','unknown')"
+            "SELECT id,turn_id,status FROM tasks WHERE status IN ('dispatching','running','unknown') "
+            "AND (? IS NULL OR id IN (SELECT task_id FROM task_sessions WHERE session_id=?))",
+            (session, session),
         ).fetchall()
 
     def recent(self, limit=5):

@@ -6,7 +6,7 @@ import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
 import test_tasks as tasks
-from assistant_runtime.core.conversation.service import Conversation
+from assistant_runtime.core.speech.conversation import AssistantConversation as Conversation
 from assistant_runtime.api.contracts import ConversationFeedbackRequest, TaskRequest
 from assistant_runtime.core.notifications.channels import ChatChannel
 from assistant_runtime.core.tasks.feedback import TaskFeedback
@@ -86,6 +86,28 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current["data"]["completion_feedback"]["route"], "notification")
         self.assertEqual(len(self.host.notifications.repo.list()["items"]), 1)
 
+    async def test_task_origin_survives_feedback_recreation_and_routes_notification(self):
+        from types import SimpleNamespace
+        from assistant_runtime.api.conversation import current_conversation
+        from assistant_runtime.core.conversation.service import Conversation as PublicConversation
+
+        token = current_conversation.set("cli-origin")
+        try:
+            run = await self.new_run()
+        finally:
+            current_conversation.reset(token)
+        self.plugin.feedback = TaskFeedback(self.plugin)
+        target = PublicConversation(self.host, SimpleNamespace(session_id="cli-origin"))
+        self.host.conversations = SimpleNamespace(get=AsyncMock(return_value=target))
+        self.complete(run)
+        await self.settled(run)
+        item = self.host.notifications.repo.list()["items"][0]
+        self.assertEqual(item["payload"]["origin"]["conversation_id"], "cli-origin")
+        await ChatChannel(self.host).deliver(item)
+        self.host.conversations.get.assert_awaited_with("cli-origin")
+        self.assertTrue(target.store.history("cli-origin"))
+        self.assertFalse(self.c.store.history("main"))
+
     async def test_explicit_conversation_result_is_immediate_without_model_reply(self):
         run = self.complete(await self.new_run("conversation"))
         current = await self.settled(run)
@@ -111,14 +133,14 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         current = await self.settled(run)
         self.assertEqual(current["data"]["completion_feedback"]["route"], "notification")
 
-    async def test_finished_turn_releases_undelivered_result(self):
+    async def test_finished_text_turn_retains_result_in_original_conversation(self):
         run = await self.new_run("conversation")
         await self.c.task_done("foreground", "稍后告诉你结果", "completed")
         self.complete(run)
         current = await self.settled(run)
-        self.assertEqual(current["data"]["completion_feedback"]["route"], "notification")
+        self.assertEqual(current["data"]["completion_feedback"]["route"], "conversation")
 
-    async def test_new_input_and_restart_release_stale_conversation(self):
+    async def test_new_binding_releases_but_restart_retains_text_conversation(self):
         for restart in (False, True):
             turn = "turn-" + str(restart)
             self.host.backend.active_turn = turn
@@ -130,7 +152,9 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
                 self.c.feedback.accept_input("new-input", turn, "main", 1, 1, "web")
             self.complete(run)
             current = await self.settled(run)
-            self.assertEqual(current["data"]["completion_feedback"]["route"], "notification")
+            self.assertEqual(
+                current["data"]["completion_feedback"]["route"], "conversation" if restart else "notification"
+            )
 
     async def test_delivered_result_cannot_be_recalled_or_reissued(self):
         run = self.complete(await self.new_run())
@@ -258,7 +282,7 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
             run = await self.new_run("conversation")
         self.assertEqual(self.plugin.feedback.describe(run)["context"]["turn"], "foreground")
         self.complete(run)
-        self.assertEqual((await self.settled(run))["data"]["completion_feedback"]["route"], "notification")
+        self.assertEqual((await self.settled(run))["data"]["completion_feedback"]["route"], "conversation")
 
     async def test_voice_result_uses_existing_output_once(self):
         self.host.voice.opened = True

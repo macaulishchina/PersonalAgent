@@ -14,6 +14,7 @@ OWNERS = {
             "execution",
             "workfiles",
             "conversation",
+            "cli",
             "memory",
             "tasks",
             "notifications",

@@ -294,13 +294,13 @@ execution pause/cancel/continue/supplement, terminate/archive and artifact listi
 capabilities; CLI examples:
 
 ```sh
-personal-agent --config config/config.toml tasks list
-personal-agent --config config/config.toml tasks models
-personal-agent --config config/config.toml tasks get '{"task_id":"ID"}'
-personal-agent --config config/config.toml tasks pause '{"task_id":"ID"}'
-personal-agent --config config/config.toml tasks supplement '{"run_id":"ID","text":"补充要求"}'
-personal-agent --config config/config.toml tasks workfiles
-personal-agent --config config/config.toml tasks workfiles '{"apply":true}'
+pa --config config/config.toml tasks list
+pa --config config/config.toml tasks models
+pa --config config/config.toml tasks get '{"task_id":"ID"}'
+pa --config config/config.toml tasks pause '{"task_id":"ID"}'
+pa --config config/config.toml tasks supplement '{"run_id":"ID","text":"补充要求"}'
+pa --config config/config.toml tasks workfiles
+pa --config config/config.toml tasks workfiles '{"apply":true}'
 ```
 
 Creation/manual runs require a stable UUID request_id; reuse it on uncertain transport
@@ -561,8 +561,8 @@ invalidated/lifecycle-discard counters. `get_task_execution_trace(run_id, after,
 links trigger references to run state, provider thread/turn and tool metadata. CLI:
 
 ```sh
-personal-agent --config config/config.toml tasks event_inbox '{"task_id":"..."}'
-personal-agent --config config/config.toml tasks trace '{"run_id":"...","limit":50}'
+pa --config config/config.toml tasks event_inbox '{"task_id":"..."}'
+pa --config config/config.toml tasks trace '{"run_id":"...","limit":50}'
 ```
 
 Trace stores at most 500 entries per run, paged 50 by default, maximum 100. Repeated

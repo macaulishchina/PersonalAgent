@@ -108,7 +108,7 @@ stored in change cursors. Never reuse a source ID for a different logical device
 
 ## Tools and authorization
 
-CLI: `personal-agent --config <path> events <action> '<JSON>'`.
+CLI: `pa --config <path> events <action> '<JSON>'`.
 Actions: capabilities, sources, status, query, get, changes, stats, record, correct,
 delete, configure, enable, remove, verify. Independent named MCP tools map directly to
 these operations. Main session and background registration share the enabled owners’ MCP service declarations.

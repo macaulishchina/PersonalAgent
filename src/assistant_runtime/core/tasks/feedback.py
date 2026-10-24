@@ -17,6 +17,8 @@ class TaskFeedback:
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS job_result_claims (
           task_id TEXT PRIMARY KEY, context TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS job_conversation_origins (
+          task_id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS job_result_feedback (
           run_id TEXT NOT NULL, round INTEGER NOT NULL, owner TEXT NOT NULL,
           context TEXT NOT NULL, version INTEGER NOT NULL, state TEXT NOT NULL,
@@ -37,6 +39,18 @@ class TaskFeedback:
         return context
 
     def bind(self, task_id, context):
+        from assistant_runtime.api.conversation import current_conversation
+        from assistant_runtime.api.ai_usage import current_usage
+
+        origin = current_conversation.get()
+        scope = current_usage.get()
+        if not origin and scope and scope.task_id:
+            row = self.db.execute(
+                "SELECT session_id FROM job_conversation_origins WHERE task_id=?", (scope.task_id,)
+            ).fetchone()
+            origin = row[0] if row else None
+        if origin:
+            self.db.execute("INSERT OR IGNORE INTO job_conversation_origins VALUES(?,?)", (task_id, origin))
         if context:
             # Called in the definition creation transaction, before scheduling.
             self.db.execute(

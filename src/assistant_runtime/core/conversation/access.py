@@ -43,12 +43,21 @@ class ConversationAccess:
         return events
 
     async def upload(self, data, name):
-        return await self.__conversation.media.add_image(data, name)
+        conversation = self.__conversation
+        reference = await conversation.media.add_image(data, name)
+        with conversation.store.db:
+            conversation.store.db.execute(
+                "INSERT INTO conversation_uploads VALUES(?,?)", (reference["id"], conversation.session)
+            )
+        return reference
 
     def attachment(self, ident):
         if not re.fullmatch(r"[a-f0-9]{32}", ident):
             raise FileNotFoundError()
-        media = self.__conversation.media
+        conversation = self.__conversation
+        if conversation.session not in conversation.store.attachment_sessions(ident):
+            raise FileNotFoundError()
+        media = conversation.media
         row = media.db.execute("SELECT media_type FROM chat_uploads WHERE id=?", (ident,)).fetchone()
         path = media.folder / ident
         if not row or row[0] not in {"image/jpeg", "video/mp4"} or not path.is_file():

@@ -41,7 +41,8 @@ async def verify(preset, root):
     entry = initialize(root, preset=preset)
     config = Config.load(entry)
     if preset == "slim":
-        assert not set(config.plugins) & {"web", "conversation", "tasks", "devices", "memory"}
+        assert {"conversation", "cli"} <= set(config.plugins)
+        assert not set(config.plugins) & {"web", "assistant", "voice_disabled", "tasks", "devices", "memory"}
     assert not config.model_api.get("enabled", False)
     management = root / "management.toml"
     data = tomlkit.parse(management.read_text(encoding="utf-8"))

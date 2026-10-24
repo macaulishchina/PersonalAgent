@@ -46,6 +46,8 @@ jobs:
               'test_platforms', 'test_plugin_certification', 'test_plugin_framework',
               'test_sample_workflow', 'test_windows_shell', 'test_pi_skeleton',
               'test_composition_isolation', 'test_execution_reset',
+              'test_conversation_sessions', 'test_conversation_native',
+              'test_cli_entry',
               'test_config_files', 'test_configuration', 'test_configuration_apply',
               'test_integrations', 'test_model_acceptance', 'test_model_accounts',
               'test_media_providers', 'test_media_search', 'test_media_openlist', 'test_tasks',
@@ -53,3 +55,5 @@ jobs:
           subprocess.run([python, 'scripts/check.py', *[arg for name in modules for arg in ('--test', name)]], check=True)
           subprocess.run([python, 'scripts/verify_native_deployment.py'], check=True)
           subprocess.run([python, 'scripts/verify_native_deployment.py', '--installed'], check=True)
+          subprocess.run([python, 'scripts/verify_native_chat.py'], check=True)
+          subprocess.run([python, 'scripts/verify_native_chat.py', '--installed'], check=True)

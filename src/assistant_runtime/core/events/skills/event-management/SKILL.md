@@ -5,7 +5,7 @@ description: Query and manage this assistant's durable device and activity event
 
 # Event records and sources
 
-Use the independent `events` MCP, or `personal-agent --config <instance> events <action> '<JSON>'`. Begin with `event_capabilities`, `list_event_sources` and `event_status`. Record tools require the events plugin; managed source tools also require observations. Implementation/protocol details: [events README](../../README.md).
+Use the independent `events` MCP, or `pa --config <instance> events <action> '<JSON>'`. Begin with `event_capabilities`, `list_event_sources` and `event_status`. Record tools require the events plugin; managed source tools also require observations. Implementation/protocol details: [events README](../../README.md).
 
 ## Interpret and query
 

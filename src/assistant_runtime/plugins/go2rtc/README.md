@@ -80,8 +80,8 @@ attachment route with HTTP Range support. Unrequested continuous recording,
 camera microphone capture and video uploads/model video analysis are not added.
 
 ```sh
-.venv/bin/personal-agent --config config/config.toml devices record office_camera --duration 10
-.venv/bin/personal-agent --config config/config.toml devices record office_camera --duration 5 --output state/clip.mp4
+.venv/bin/pa --config config/config.toml devices record office_camera --duration 10
+.venv/bin/pa --config config/config.toml devices record office_camera --duration 5 --output state/clip.mp4
 ```
 
 ### Optional pan/tilt
@@ -112,17 +112,17 @@ move. Concurrent moves are rejected. A delivered command does not establish a
 measured angle, exact return position, or disable vendor automatic tracking.
 
 ```sh
-.venv/bin/personal-agent --config config/config.toml devices move office_camera --direction left
-.venv/bin/personal-agent --config config/config.toml devices stop-camera office_camera
+.venv/bin/pa --config config/config.toml devices move office_camera --direction left
+.venv/bin/pa --config config/config.toml devices stop-camera office_camera
 .venv/bin/python scripts/verify_camera_control.py --device office_camera --fixed-device office_fixed --codex
 ```
 
 The adapter registers `video.snapshot` with `DeviceDirectory` and a `VideoInputProvider` with `host.video_inputs`. CLI and `device` MCP reuse the existing `VideoCapture` route:
 
 ```sh
-.venv/bin/personal-agent --config config/config.toml devices inspect office_camera
-.venv/bin/personal-agent --config config/config.toml devices snapshot office_camera
-.venv/bin/personal-agent --config config/config.toml devices snapshot office_camera --output state/preview.jpg
+.venv/bin/pa --config config/config.toml devices inspect office_camera
+.venv/bin/pa --config config/config.toml devices snapshot office_camera
+.venv/bin/pa --config config/config.toml devices snapshot office_camera --output state/preview.jpg
 ```
 
 Codex calls `capture_image(device_id="office_camera")` and receives native image content. Web/voice keep the same conversation and logical camera identity. Explicit image replies use the existing private chat attachment path; no raw video recorder is added.
@@ -141,7 +141,7 @@ Go2rtc releases the snapshot consumer after producing a frame. Other configured 
 
 ```sh
 .venv/bin/python scripts/check.py
-.venv/bin/personal-agent --config config/config.toml restart
+.venv/bin/pa --config config/config.toml restart
 .venv/bin/python scripts/verify_video_onboarding.py --device living_camera --restart --restart-gateway
 # When sending an image to Codex/OpenAI is authorized:
 .venv/bin/python scripts/verify_video_onboarding.py --device living_camera --codex

@@ -204,6 +204,10 @@ class AssistantService:
                         execution_version=worker.active_turn,
                     )
                 )
+                from assistant_runtime.api.conversation import current_conversation
+
+                conversation = self.backend.conversations.get(d["execution_session"])
+                current_conversation.set(conversation.session_id if conversation else None)
             if action == "plugin-tools":
                 if d.get("execution_session") and d["execution_session"] not in self.backend.client.workers:
                     raise ValueError("Unknown execution session")
@@ -424,6 +428,15 @@ class AssistantService:
                 await writer.drain()
                 writer.close()
                 await writer.wait_closed()
+                return
+            elif action == "conversation":
+                if d.get("execution_session") or "cli" not in self.runtime.plugins:
+                    raise ValueError("CLI conversation entrance is not enabled for this caller")
+                from assistant_runtime.api.conversation import ConversationRequest
+
+                result = await self.runtime.invoke(ConversationRequest(d["action"], d.get("arguments", {})))
+                writer.write((json.dumps({"ok": True, "result": result}, ensure_ascii=False) + "\n").encode())
+                await writer.drain()
                 return
             elif action == "text":
                 if "conversation" not in self.runtime.plugins:

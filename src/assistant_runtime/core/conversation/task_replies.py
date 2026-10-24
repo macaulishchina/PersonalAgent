@@ -22,7 +22,7 @@ class TaskReplies:
 
     def current(self):
         c = self.conversation
-        turn = c.host.backend.active_turn
+        turn = c.backend.active_turn
         receipt = c.feedback.get(turn) if turn else None
         if not receipt or receipt["state"] != "bound":
             return None
@@ -49,9 +49,17 @@ class TaskReplies:
         if saved:
             # Interrupted RPC/output is never permission to speak again.
             return {"state": "unknown" if saved[0] == "submitting" else saved[0], "message_id": saved[1]}
-        if request.context != self.current():
+        context = request.context or {}
+        receipt = c.feedback.get(context.get("turn"))
+        durable = bool(
+            receipt
+            and receipt["source"] != "voice"
+            and context.get("session") == c.session
+            and context.get("binding")
+            == json.dumps([receipt["source"], receipt["epoch"], receipt["revision"]])
+        )
+        if not durable and request.context != self.current():
             return {"state": "released"}
-        context = request.context
         receipt = c.feedback.get(context["turn"])
         voice = receipt["source"] == "voice"
         payload = result["payload"]

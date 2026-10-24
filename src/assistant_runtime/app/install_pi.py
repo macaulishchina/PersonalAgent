@@ -5,14 +5,13 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from assistant_runtime.platforms.pi_installation import default_directory, remember
+
 
 def setup(destination=None):
-    base = (
-        Path(os.environ.get("LOCALAPPDATA", Path.home()))
-        if os.name == "nt"
-        else Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    )
-    destination = Path(destination) if destination else base / "personal-agent/pi"
+    destination = (
+        Path(destination).expanduser() if destination is not None else default_directory()
+    ).resolve()
     import sys
 
     source = Path(sys.prefix) / "share/personal-agent/pi"
@@ -34,4 +33,7 @@ def setup(destination=None):
         shutil.copyfile(source / filename, destination / filename)
     subprocess.run([*command, "--prefix", str(destination), "ci", "--no-audit", "--no-fund"], check=True)
     binary = destination / "node_modules/.bin" / ("pi.cmd" if os.name == "nt" else "pi")
-    return binary.absolute()
+    if not binary.is_file():
+        raise RuntimeError("Pi installation did not produce its executable; installation was not recorded")
+    remember(binary, node)
+    return binary

@@ -177,7 +177,7 @@ async def main():
             try:
                 await host.backend.submit("no request should be sent")
             except RuntimeError as error:
-                expected = "Conversation capability is not enabled" if sys.platform == "win32" else "configuration required"
+                expected = "configuration required"
                 assert expected in str(error), error
             else:
                 raise AssertionError("Unconfigured inference accepted")

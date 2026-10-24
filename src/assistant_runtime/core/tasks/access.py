@@ -9,7 +9,13 @@ def notification_origin(db, caller):
         import json
 
         run_data = json.loads(row[1])
+        origin = None
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='job_conversation_origins'").fetchone():
+            origin = db.execute(
+                "SELECT session_id FROM job_conversation_origins WHERE task_id=?", (row[0],)
+            ).fetchone()
         return "task:" + row[0], {
+            **({"conversation_id": origin[0]} if origin else {}),
             "task_id": row[0],
             "run_id": caller,
             "task_title": run_data["spec"]["title"],

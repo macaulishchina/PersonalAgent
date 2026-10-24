@@ -176,12 +176,12 @@ operation/batch receipts in bounded startup batches through this contract. No ti
 matching, historical content rewriting or delivery replay occurs.
 
 ```
-personal-agent --config config/config.toml notifications groups
-personal-agent --config config/config.toml notifications group '{"group_id":"GROUP_ID","limit":20}'
-personal-agent --config config/config.toml notifications list
-personal-agent --config config/config.toml notifications get '{"id":"ID"}'
-personal-agent --config config/config.toml notifications read '{"id":"ID","revision":1}'
-personal-agent --config config/config.toml notifications retry '{"id":"ID","revision":1,"channel":"chat"}'
+pa --config config/config.toml notifications groups
+pa --config config/config.toml notifications group '{"group_id":"GROUP_ID","limit":20}'
+pa --config config/config.toml notifications list
+pa --config config/config.toml notifications get '{"id":"ID"}'
+pa --config config/config.toml notifications read '{"id":"ID","revision":1}'
+pa --config config/config.toml notifications retry '{"id":"ID","revision":1,"channel":"chat"}'
 ```
 
 ## Future channels

@@ -26,10 +26,27 @@ def python_command(args, env):
     return args, env
 
 
+def pi_executable(binary):
+    """Resolve both the selected Pi and its recorded Node, if installed by this app."""
+    node = None
+    if str(binary) == "pi":
+        from .pi_installation import installed
+
+        installation = installed()
+        if installation:
+            binary, node = installation
+    return shutil.which(str(binary)), node
+
+
+def pi_node(binary=None):
+    _, node = pi_executable(binary or "pi")
+    return str(node) if node else shutil.which("node")
+
+
 def pi_command(binary):
-    executable = shutil.which(binary)
+    executable, node = pi_executable(binary)
     if not executable:
-        raise RuntimeError("Pi executable not found; run scripts/setup_pi.py and configure pi_binary")
+        raise RuntimeError("Pi executable not found; run python -m assistant_runtime.app.cli install-pi")
     path = Path(executable).resolve()
     if os.name != "nt" or path.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
         return [str(path)]
@@ -37,7 +54,7 @@ def pi_command(binary):
         path.parent.parent / "@earendil-works/pi-coding-agent",
         path.parent / "node_modules/@earendil-works/pi-coding-agent",
     ]
-    node = shutil.which("node")
+    node = str(node) if node else shutil.which("node")
     for package in candidates:
         manifest = package / "package.json"
         if not manifest.is_file():

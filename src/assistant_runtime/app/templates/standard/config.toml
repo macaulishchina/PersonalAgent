@@ -7,6 +7,6 @@ main_model = "unconfigured"
 main_reasoning_effort = "medium"
 memory_enabled = false
 instance_skills = []
-plugins = ["workfiles", "devices", "assistant", "conversation", "execution", "ai_usage", "models", "voice_disabled", "pi", "notifications", "tasks", "integrations", "web"]
+plugins = ["workfiles", "devices", "assistant", "conversation", "cli", "execution", "ai_usage", "models", "voice_disabled", "pi", "notifications", "tasks", "integrations", "web"]
 include = ["models.toml", "ai-usage.toml", "services.toml"]
 # Device, memory, media, search and decision fragments are optional examples.

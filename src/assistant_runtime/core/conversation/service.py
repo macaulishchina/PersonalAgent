@@ -1,83 +1,85 @@
 """One durable conversation; provider events and entrances share this owner."""
 
 from assistant_runtime.api.lifecycle import admits_work
+from assistant_runtime.api.conversation import ConversationCancelled
 
 import asyncio
 import base64
 from dataclasses import asdict
 import hashlib
 import json
-import time
 import uuid
 
 from assistant_runtime.kernel.runtime import Manifest
 from assistant_runtime.api.contracts import Control, NotificationRequest, ConversationFeedbackRequest
 from assistant_runtime.core.conversation.store import ConversationStore
 from assistant_runtime.core.workfiles.media import MediaAttachments, MAX_BYTES
-from assistant_runtime.core.conversation.feedback import Feedback, spoken_result
+from assistant_runtime.core.conversation.feedback import Feedback
 from assistant_runtime.core.conversation.task_replies import TaskReplies
-from assistant_runtime.api.speech import FeedbackIntent, RequestRef
 
 
 class Conversation:
-    manifest = Manifest("conversation", ("assistant", "workfiles", "execution"), critical=True)
+    manifest = Manifest("conversation", ("workfiles", "execution"), critical=True)
 
-    def __init__(self, host):
+    def __init__(self, host, backend=None):
         self.host = host
+        self.backend = backend or host.backend
+        self.completed = asyncio.Event()
+        self.pending = asyncio.Event()
+        self.dispatch_lock = asyncio.Lock()
+        self.cancel_pending = set()
+        self.last_completion = None
+        self.source = "web"
         self.store = ConversationStore(host.store)
         self.media = MediaAttachments(host.config.state_dir, self.store.db)
         self.image_queue = asyncio.Queue(maxsize=8)
         self.image_pending = set()
         self.context = None
         self.submit_lock = asyncio.Lock()
-        self.voice_pending = asyncio.Event()
         self.sync_error = None
         self.dispatch_message = None
-        self.voice_context_lock = asyncio.Lock()
         self.web_turns = set()
         self.web_dispatching = False
         self.last_state = None
         self.tasks = set()
         self.feedback = Feedback(self.store.db)
         self.task_replies = TaskReplies(self)
-        self.feedback_lock = asyncio.Lock()
-        self.voice_revision = 0
-        self.spoken_focus = None
-        self.voice_reply_focus = {}
-        host.backend.on_conversation = self.provider_event
-        host.voice.on_conversation = self.media_event
-        host.backend.on_conversation_done = self.task_done
-        host.backend.on_conversation_notice = self.provider_notice
+        self.backend.on_conversation = self.provider_event
+        self.backend.on_conversation_done = self.task_done
+        self.backend.on_conversation_notice = self.provider_notice
 
     async def maintenance_cancel(self):
-        if self.host.backend.busy:
-            await self.host.backend.cancel()
+        if self.backend.busy:
+            await self.backend.cancel()
 
     def maintenance_pending(self):
         return [
             {"id": row[0], "state": row[1]}
             for row in self.store.db.execute(
-                "SELECT id,state FROM chat_requests WHERE state='sending'"
+                "SELECT id,state FROM chat_requests WHERE state='sending' AND session_id=?", (self.session,)
             ).fetchall()
         ]
 
     @property
     def session(self):
-        return self.host.backend.session_id
+        return self.backend.session_id
 
-    async def start(self, context):
+    async def start(self, context, *, register=True):
         self.context = context
-        context.register(ConversationFeedbackRequest, self.task_replies.request)
+        if register:
+            context.register(ConversationFeedbackRequest, self.task_replies.request)
         context.spawn(self.save_images(), "reply-images")
         self.store.recover(self.session)
         self.feedback.recover(self.session)
         self.web_turns = {
             row[0]
             for row in self.store.db.execute(
-                "SELECT DISTINCT turn_id FROM chat_messages WHERE source='web' AND turn_id IS NOT NULL"
+                "SELECT DISTINCT turn_id FROM chat_messages WHERE session_id=? "
+                "AND source IN ('web','cli','operator') AND turn_id IS NOT NULL",
+                (self.session,),
             )
         }
-        for event in self.host.backend.restored_conversation_events():
+        for event in self.backend.restored_conversation_events():
             ident = event.get("message_id")
             if ident:
                 old = self.store.get(f"task:{self.session}:{ident}")
@@ -95,28 +97,36 @@ class Conversation:
             if self.image_queue.full():
                 await self.image_queue.join()
         context.spawn(self.watch_state(), "state")
-        if getattr(self.host.voice, "available", True):
-            context.spawn(self.sync_loop(), "voice-context")
-            self.voice_pending.set()
+        context.spawn(self.drain(), "conversation-queue")
+        await self.start_presentation()
 
     def state(self):
         h = self.host
+        worker = getattr(self.backend.client, "workers", {}).get(
+            getattr(self.backend, "execution_session_id", None)
+        )
+        budget = worker.meta.get("budget_id") if worker else None
+        question = getattr(self.backend, "pending_question", None)
         return {
-            "ai_usage": getattr(getattr(h.backend, "client", None), "usage", None).snapshots.get(
-                getattr(h.backend.client, "last_work_id", "")
-            )
-            if getattr(getattr(h.backend, "client", None), "usage", None)
+            "ai_usage": getattr(getattr(self.backend, "client", None), "usage", None).snapshots.get(budget)
+            if getattr(getattr(self.backend, "client", None), "usage", None)
             else None,
             "session_id": self.session,
-            "name": h.config.assistant_name,
-            "voice": h.mode if getattr(h.voice, "available", True) else "disabled",
-            "speaking": h.player.playing if h.player else False,
-            "configuration_required": not getattr(
-                getattr(h.backend.client, "settings", None), "enabled", True
+            "active_request_id": next(
+                (r["id"] for r in self.queue() if r["state"] in {"sending", "running"}), None
             ),
-            "task_running": h.backend.busy,
-            "quiet": h.quiet_active(),
-            "backend_ready": h.backend.client.started,
+            "queue": self.queue(),
+            "question_id": question["id"] if question else None,
+            "questions": question["data"].get("questions", []) if question else [],
+            "name": h.config.assistant_name,
+            "voice": "disabled",
+            "speaking": False,
+            "configuration_required": not getattr(
+                getattr(self.backend.client, "settings", None), "enabled", True
+            ),
+            "task_running": self.backend.busy,
+            "quiet": False,
+            "backend_ready": self.backend.client.started,
             "web_dispatching": self.web_dispatching,
             "sync_error": self.sync_error,
             "notifications_unread": self.host.notifications.repo.unread_count()
@@ -135,155 +145,15 @@ class Conversation:
     def spawn(self, coro, label):
         return self.context.spawn(coro, label)
 
-    def media_event(self, data, epoch):
-        kind = data.get("kind")
-        if kind == "closed":
-            # Startup can fail before the provider establishes a logical session.
-            # Cleanup must not emit a session event or mask the original failure.
-            if self.session is None:
-                return
-            self.feedback.close(self.session, epoch)
-            self.voice_revision += 1
-            for (mid,) in self.store.db.execute(
-                "SELECT id FROM chat_messages WHERE session_id=? AND source='voice' AND status='streaming'",
-                (self.session,),
-            ).fetchall():
-                message = self.store.get(mid)
-                self.store.put(
-                    mid,
-                    self.session,
-                    role=message["role"],
-                    source="voice",
-                    text=message["text"],
-                    status="interrupted",
-                )
-            return
-        ident = data.get("message_id")
-        if not ident:
-            return
-        message_id = f"voice:{self.session}:{epoch}:{ident}"
-        old = self.store.get(message_id)
-        if data.get("role") == "user" and old is None:
-            self.voice_revision += 1
-        if kind == "interrupted":
-            if old:
-                self.store.put(
-                    message_id,
-                    self.session,
-                    role=old["role"],
-                    source="voice",
-                    text=old["text"],
-                    status="interrupted",
-                )
-            return
-        role = data.get("role") or (old["role"] if old else None)
-        if role not in ("user", "assistant"):
-            return
-        if role == "assistant" and old is None:
-            self.voice_reply_focus[message_id] = (epoch, self.voice_revision)
-            if len(self.voice_reply_focus) > 128:
-                del self.voice_reply_focus[next(iter(self.voice_reply_focus))]
-        text = (
-            data.get("text", "")
-            if kind != "message_delta"
-            else (old["text"] if old else "") + data.get("delta", "")
-        )
-        self.store.put(
-            message_id,
-            self.session,
-            role=role,
-            source="voice",
-            text=text,
-            status=data["status"],
-        )
-        if data["status"] == "complete" and text:
-            if role == "assistant":
-                focus = self.voice_reply_focus.pop(message_id, None)
-                if focus == (epoch, self.voice_revision):
-                    self.spoken_focus = focus
-            self.voice_pending.set()
-
-    async def sync_loop(self):
-        while True:
-            await self.voice_pending.wait()
-            self.voice_pending.clear()
-            try:
-                await self.sync_voice_to_task()
-                self.sync_error = None
-            except Exception:
-                self.sync_error = "语音上下文同步暂时中断，正在恢复。"
-                await asyncio.sleep(5)
-                self.voice_pending.set()
-
-    async def sync_voice_to_task(self):
-        if not getattr(self.host.voice, "available", True):
-            return
-        async with self.voice_context_lock:
-            while True:
-                ids = self.store.db.execute(
-                    "SELECT id FROM chat_messages WHERE session_id=? AND source='voice' "
-                    "AND status='complete' AND id NOT IN (SELECT message_id FROM chat_context) "
-                    "ORDER BY ordinal LIMIT 20",
-                    (self.session,),
-                ).fetchall()
-                if not ids:
-                    return
-                pending = [self.store.get(row[0]) for row in ids]
-                await self.host.backend.import_voice_messages(pending)
-                with self.store.db:
-                    self.store.db.executemany("INSERT OR IGNORE INTO chat_context VALUES(?)", ids)
-
     def provider_event(self, event, *, restored=False):
-        if not getattr(self.host.backend, "session_id", None):
+        if not getattr(self.backend, "session_id", None):
             return
         kind, turn = event["kind"], event.get("turn_id")
-        if kind == "turn_started" and not restored:
-            self.feedback.bind(
-                turn,
-                self.session,
-                getattr(self.host.voice, "epoch", 0),
-                self.voice_revision,
-                "web"
-                if not getattr(self.host.voice, "available", True)
-                or self.web_dispatching
-                or turn in self.web_turns
-                else "voice",
-            )
-        if kind == "turn_started" and self.web_dispatching:
-            self.web_turns.add(turn)
-            if self.dispatch_message:
-                m = self.store.get(self.dispatch_message)
-                self.store.put(
-                    m["id"],
-                    self.session,
-                    role="user",
-                    source="web",
-                    text=m["text"],
-                    status=m["status"],
-                    attachments=m["attachments"],
-                    turn_id=turn,
-                )
+        if kind == "question":
+            self.store.emit(self.session, "question", event)
+            return
+        self.event_context(event, restored)
         ident = event.get("message_id")
-        if kind == "execution_input" and not restored and turn == self.host.backend.active_turn:
-            renewed = self.feedback.accept_input(
-                f"{self.session}:{ident}",
-                turn,
-                self.session,
-                getattr(self.host.voice, "epoch", 0),
-                self.voice_revision,
-                "web"
-                if not getattr(self.host.voice, "available", True)
-                or self.web_dispatching
-                or getattr(self.host.voice, "web_silent", False)
-                else "voice",
-            )
-            if renewed:
-                self.host.voice.execution_started(turn)
-            receipt = self.feedback.get(turn)
-            if receipt and event.get("text"):
-                focus = (receipt["epoch"], receipt["revision"])
-                if self.ack_allowed(turn, focus):
-                    self.spawn(self.acknowledge_input(turn, focus, event["text"]), "voice-acceptance")
         if kind == "message_delta" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
@@ -297,18 +167,6 @@ class Conversation:
         elif kind == "message" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
-            summary = event.get("tool_summary") or {}
-            binding = self.feedback.get(turn) if turn else None
-            if (
-                not restored
-                and summary.get("kind") == "create_task"
-                and summary.get("outcome") == "completed"
-                and binding
-                and binding.get("source") == "voice"
-                and binding.get("epoch") == self.host.voice.epoch
-                and hasattr(self.host, "voice_control")
-            ):
-                self.host.voice_control.bind(turn, summary["task_id"])
             references = self.media.resolve(event.get("attachments", []))
             self.store.put(
                 mid,
@@ -478,122 +336,41 @@ class Conversation:
         self.store.put(
             "notice:" + uuid.uuid4().hex, self.session, text=text, status="complete", turn_id=turn_id
         )
-        if self.feedback_allowed(turn_id) and turn_id not in self.web_turns and not self.web_dispatching:
-            await self.host.voice.say(text)
-
-    def ack_allowed(self, turn, focus):
-        receipt = self.feedback.get(turn)
-        return bool(
-            self.feedback_allowed(turn)
-            and receipt["source"] == "voice"
-            and focus == (receipt["epoch"], receipt["revision"])
-            and focus != self.spoken_focus
-            and not self.web_dispatching
-            and not getattr(self.host.voice, "web_silent", False)
-            and not getattr(self.host.player, "manual_muted", False)
-        )
-
-    async def deliver_ack(self, turn, focus, text):
-        # Only speech delivery waits here; provider events and device work continue.
-        async with self.feedback_lock:
-            if not self.ack_allowed(turn, focus):
-                self.feedback.acknowledge(turn, *focus, "skipped")
-                return
-            try:
-                await self.speech_feedback(turn, focus, "accepted", text)
-            except asyncio.CancelledError:
-                self.feedback.acknowledge(turn, *focus, "unknown")
-                raise
-            except Exception:
-                self.feedback.acknowledge(turn, *focus, "unknown")
-                self.sync_error = "接单说明的语音交付未确认，任务继续执行；未自动重播。"
-                self.store.emit(self.session, "notice", {"text": self.sync_error})
-            else:
-                self.feedback.acknowledge(turn, *focus, "submitted")
-
-    async def acknowledge_input(self, turn, focus, text):
-        # Structured provider acceptance, independent of web commentary. Fast
-        # completion closes the receipt before this delay and needs no extra ack.
-        await asyncio.sleep(0.8)
-        if self.ack_allowed(turn, focus) and self.feedback.acknowledge(turn, *focus, "dispatching"):
-            spoken = "我来处理“" + text + "”。" if len(text) <= 65 else "请求已收到，我先核对具体操作。"
-            await self.deliver_ack(turn, focus, spoken)
-
-    async def speech_feedback(self, turn, focus, kind, text, *, delivery_id=None):
-        interaction = getattr(self.host, "interaction", None)
-        if interaction and interaction.ready:
-            if len(text) > 240:
-                text = "这次返回的结果比较长，需要我展开说明吗？"
-            intent = FeedbackIntent(
-                RequestRef(delivery_id or turn, focus[1]), kind, text, time.monotonic() + 30
-            )
-            result = await interaction.output.say(intent, lambda: self.feedback_allowed(turn))
-            if result != "completed":
-                raise RuntimeError("Speech delivery " + result)
-        else:
-            await self.host.voice.say(
-                text, execution_id=turn, **({"interim": True} if kind == "accepted" else {})
-            )
 
     async def task_done(self, turn_id, text, status):
-        self.task_replies.close(turn_id)
-        if not getattr(self.host.voice, "available", True):
-            self.feedback.finish(turn_id, "context")
-            return
-        try:
-            await self.deliver_result(turn_id, text, status)
-        except Exception:
-            self.sync_error = "任务结果已保存，语音交付未确认；未自动重播，可在网页查看结果。"
-            self.store.emit(self.session, "notice", {"text": self.sync_error})
-        finally:
-            receipt = self.feedback.get(turn_id)
-            if receipt and receipt["state"] != "unknown":
-                self.host.voice.finish_execution(turn_id)
+        self.last_completion = (turn_id, status)
+        with self.store.db:
+            self.store.db.execute(
+                "UPDATE conversation_queue SET state=? WHERE session_id=? AND turn_id=? AND state='running'",
+                (status, self.session, turn_id),
+            )
+        self.completed.set()
+        await self.finish_presentation(turn_id, text, status)
 
-    async def deliver_result(self, turn_id, text, status):
-        async with self.feedback_lock:
-            receipt = self.feedback.get(turn_id)
-            if not receipt or receipt["state"] != "bound":
-                return
-            if not self.feedback_allowed(turn_id):
-                self.feedback.finish(turn_id, "superseded")
-                return
-            spoken = spoken_result(text, status)
-            if not spoken:
-                self.feedback.finish(turn_id, "empty" if not text.strip() else "interrupted")
-                return
-            # Commit intent BEFORE the RPC: a lost acknowledgement is uncertain,
-            # never a reason to speak the same result again.
-            self.feedback.finish(turn_id, "dispatching")
-            try:
-                if receipt["source"] == "web":
-                    await self.host.voice.append_context(
-                        "网页任务的实际回复（仅同步上下文，无需播报）：\n" + text
-                    )
-                else:
-                    await self.speech_feedback(
-                        turn_id, (receipt["epoch"], receipt["revision"]), "result", spoken
-                    )
-            except Exception:
-                self.feedback.finish(turn_id, "unknown")
-                raise
-            self.feedback.finish(turn_id, "context" if receipt["source"] == "web" else "submitted")
+    async def finish_presentation(self, turn_id, text, status):
+        self.feedback.finish(turn_id, "context")
+
+    async def start_presentation(self):
+        pass
+
+    async def prepare_dispatch(self, text):
+        pass
 
     def feedback_allowed(self, turn):
-        receipt = self.feedback.get(turn)
-        voice = self.host.voice
-        return bool(
-            receipt
-            and receipt["state"] in {"bound", "dispatching"}
-            and voice.opened
-            and not getattr(voice, "closing", False)
-            and not self.host.quiet_active()
-            and receipt["epoch"] == getattr(voice, "epoch", 0)
-            and receipt["revision"] == self.voice_revision
-        )
+        return False
+
+    def event_context(self, event, restored=False):
+        turn = event.get("turn_id")
+        if event["kind"] == "turn_started" and not restored:
+            self.feedback.bind(turn, self.session, 0, 0, self.source)
+            self.web_turns.add(turn)
 
     @admits_work()
-    async def submit(self, request_id, text, attachments, notification_id=None):
+    async def submit(self, request_id, text, attachments, notification_id=None, *, source="web"):
+        if source not in {"web", "cli", "operator"}:
+            raise ValueError("Unknown conversation entrance")
+        if not getattr(getattr(self.backend.client, "settings", None), "enabled", True):
+            raise ValueError("Model configuration required; configure this instance before chatting")
         if not isinstance(request_id, str):
             raise ValueError("发送标识必须是 UUID")
         uuid.UUID(request_id)
@@ -607,9 +384,7 @@ class Conversation:
             or any(not isinstance(a, str) for a in attachments)
         ):
             raise ValueError("每次最多发送四张图片")
-        fingerprint_input = (
-            [text, attachments] if notification_id is None else [text, attachments, notification_id]
-        )
+        fingerprint_input = [self.session, source, text, attachments, notification_id]
         fingerprint = hashlib.sha256(json.dumps(fingerprint_input, ensure_ascii=False).encode()).hexdigest()
         async with self.submit_lock:
             db = self.store.db
@@ -620,6 +395,14 @@ class Conversation:
                 if existing[0] != fingerprint:
                     raise ValueError("发送标识已用于其他消息")
                 return {"message": self.store.get(existing[1]), "state": existing[2]}
+            maximum = self.host.config.execution.get("queue_size", 64)
+            if (
+                db.execute(
+                    "SELECT count(*) FROM conversation_queue WHERE state IN ('queued','sending')"
+                ).fetchone()[0]
+                >= maximum
+            ):
+                raise ValueError("Conversation queue is full")
             notification_context = ""
             if notification_id is not None:
                 if not isinstance(notification_id, str) or not getattr(self.host, "notifications", None):
@@ -633,6 +416,9 @@ class Conversation:
                 text = "关于通知「" + notice["payload"]["title"] + "」：\n" + text
             media = []
             for ident in attachments:
+                owners = self.store.attachment_sessions(ident)
+                if owners and self.session not in owners:
+                    raise ValueError("Attachment belongs to another conversation")
                 row = db.execute(
                     "SELECT filename,media_type FROM chat_uploads WHERE id=?", (ident,)
                 ).fetchone()
@@ -641,66 +427,197 @@ class Conversation:
                 if row[1] != "image/jpeg":
                     raise ValueError("当前仅支持发送图片附件")
                 media.append({"id": ident, "name": row[0], "type": row[1]})
-            mid = f"web:{request_id}"
-            self.store.put(
-                mid, self.session, role="user", source="web", text=text, status="sending", attachments=media
-            )
+            mid = f"{source}:{request_id}"
             with db:
+                self.store.put(
+                    mid,
+                    self.session,
+                    role="user",
+                    source=source,
+                    text=text,
+                    status="queued",
+                    attachments=media,
+                    commit=False,
+                )
                 db.execute(
                     "INSERT INTO chat_requests VALUES(?,?,?,?,?)",
-                    (request_id, self.session, fingerprint, "sending", mid),
+                    (request_id, self.session, fingerprint, "queued", mid),
+                )
+                db.execute(
+                    "INSERT INTO conversation_queue(id,session_id,source,payload,state) VALUES(?,?,?,?,'queued')",
+                    (
+                        request_id,
+                        self.session,
+                        source,
+                        json.dumps(
+                            {
+                                "mid": mid,
+                                "text": text,
+                                "media": media,
+                                "notification_context": notification_context,
+                            }
+                        ),
+                    ),
                 )
                 for ident in attachments:
                     db.execute("UPDATE chat_uploads SET attached=1 WHERE id=?", (ident,))
-            self.host.store.transcripts.append("user", text)
-            self.spawn(self.dispatch(request_id, mid, text, media, notification_context), "web-message")
-            return {"message": self.store.get(mid), "state": "sending"}
+                    db.execute(
+                        "INSERT OR IGNORE INTO conversation_uploads VALUES(?,?)", (ident, self.session)
+                    )
+            self.pending.set()
+            return {"message": self.store.get(mid), "state": "queued"}
+
+    def queue(self):
+        return [
+            {"id": row[0], "state": row[1], "turn_id": row[2]}
+            for row in self.store.db.execute(
+                "SELECT id,state,turn_id FROM conversation_queue WHERE session_id=? AND state IN ('queued','sending','running') ORDER BY ordinal",
+                (self.session,),
+            )
+        ]
+
+    async def drain(self):
+        while True:
+            await self.pending.wait()
+            self.pending.clear()
+            while True:
+                row = self.store.db.execute(
+                    "SELECT id,source,payload FROM conversation_queue WHERE session_id=? AND state='queued' ORDER BY ordinal LIMIT 1",
+                    (self.session,),
+                ).fetchone()
+                if row is None:
+                    break
+                self.completed.clear()
+                while self.backend.busy:
+                    await self.completed.wait()
+                    self.completed.clear()
+                # A cancellation may have arrived while waiting for the prior turn.
+                with self.store.db:
+                    changed = self.store.db.execute(
+                        "UPDATE conversation_queue SET state='sending' WHERE id=? AND state='queued'",
+                        (row[0],),
+                    ).rowcount
+                    if not changed:
+                        continue
+                    self.store.db.execute("UPDATE chat_requests SET state='sending' WHERE id=?", (row[0],))
+                self.source = row[1]
+                await self.dispatch(row[0], **json.loads(row[2]))
+                if self.backend.busy:
+                    await self.completed.wait()
+                state = self.store.db.execute(
+                    "SELECT state FROM conversation_queue WHERE id=?", (row[0],)
+                ).fetchone()[0]
+                if state == "unknown":
+                    # Uncertain context must not dispatch the queued follow-up automatically.
+                    for pending in list(self.queue()):
+                        if pending["state"] == "queued":
+                            self.finish_pending(pending["id"], "interrupted")
+                    break
+
+    def finish_pending(self, ident, status):
+        with self.store.db:
+            self.store.db.execute("UPDATE conversation_queue SET state=? WHERE id=?", (status, ident))
+            self.store.db.execute("UPDATE chat_requests SET state=? WHERE id=?", (status, ident))
+            message = self.store.db.execute(
+                "SELECT message_id FROM chat_requests WHERE id=?", (ident,)
+            ).fetchone()[0]
+            old = self.store.get(message)
+            self.store.put(
+                message,
+                self.session,
+                role="user",
+                source=old["source"],
+                text=old["text"],
+                attachments=old["attachments"],
+                status=status,
+                commit=False,
+            )
+
+    async def cancel_request(self, ident=None):
+        if ident is None:
+            row = self.store.db.execute(
+                "SELECT id FROM conversation_queue WHERE session_id=? AND state IN ('sending','running') ORDER BY ordinal LIMIT 1",
+                (self.session,),
+            ).fetchone()
+            if not row:
+                return {"cancelled": False}
+            ident = row[0]
+        row = self.store.db.execute(
+            "SELECT state,turn_id FROM conversation_queue WHERE id=? AND session_id=?", (ident, self.session)
+        ).fetchone()
+        if row is None:
+            raise ValueError("Request does not belong to this conversation")
+        if row[0] == "queued":
+            self.finish_pending(ident, "cancelled")
+            return {"cancelled": True}
+        if row[0] == "sending":
+            self.cancel_pending.add(ident)
+            if self.backend.busy:
+                await self.backend.cancel(row[1])
+            return {"cancelled": True}
+        if row[0] in {"sending", "running"}:
+            return {"cancelled": await self.backend.cancel(row[1])}
+        return {"cancelled": False, "state": row[0]}
 
     async def dispatch(self, request_id, mid, text, media, notification_context=""):
-        # Serialize dispatch only, not a whole model turn. Further messages steer it.
-        async with self.submit_lock:
+        async with self.dispatch_lock:
             self.web_dispatching = True
             self.dispatch_message = mid
             try:
-                if self.host.memory:
+                if getattr(self.host, "memory", None):
                     self.host.memory.preempt()
-                await self.sync_voice_to_task()
-                if self.host.voice.opened:
-                    self.host.voice.silence_web_reply()
-                    await self.host.runtime.invoke(Control("stop"))
-                    await self.host.voice.append_context(
-                        "用户刚从网页发来消息，正在由同一助手处理。仅同步，不要再次执行或播报：\n" + text
-                    )
+                await self.prepare_dispatch(text)
+                if request_id in self.cancel_pending:
+                    self.finish_pending(request_id, "cancelled")
+                    return
                 images = [str(self.host.config.state_dir / "web-uploads" / m["id"]) for m in media]
-                await self.host.backend.submit(notification_context + text, images=images)
-                turn_id = self.host.backend.active_turn or self.host.backend.last_turn
+                await self.backend.submit(
+                    notification_context + text,
+                    images=images,
+                    cancelled=lambda: request_id in self.cancel_pending,
+                )
+                turn_id = self.backend.active_turn or self.backend.last_turn
+                if request_id in self.cancel_pending and self.backend.busy:
+                    await self.backend.cancel(turn_id)
                 if turn_id:
                     self.web_turns.add(turn_id)
                 self.store.put(
                     mid,
                     self.session,
                     role="user",
-                    source="web",
+                    source=self.source,
                     text=text,
                     status="complete",
                     turn_id=turn_id,
                     attachments=media,
                 )
                 with self.store.db:
+                    state = "running" if self.backend.busy else "completed"
+                    if self.last_completion and self.last_completion[0] == turn_id:
+                        state = self.last_completion[1]
+                    self.store.db.execute(
+                        "UPDATE conversation_queue SET state=?,turn_id=? WHERE id=?",
+                        (state, turn_id, request_id),
+                    )
                     self.store.db.execute(
                         "UPDATE chat_requests SET state='accepted' WHERE id=?", (request_id,)
                     )
+            except ConversationCancelled:
+                self.finish_pending(request_id, "cancelled")
             except Exception:
                 self.store.put(
                     mid,
                     self.session,
                     role="user",
-                    source="web",
+                    source=self.source,
                     text=text,
                     status="unknown",
                     attachments=media,
                 )
                 with self.store.db:
+                    self.store.db.execute(
+                        "UPDATE conversation_queue SET state='unknown' WHERE id=?", (request_id,)
+                    )
                     self.store.db.execute(
                         "UPDATE chat_requests SET state='unknown' WHERE id=?", (request_id,)
                     )
@@ -710,11 +627,15 @@ class Conversation:
                     {"text": "消息提交未能确认。请先核对任务状态，系统不会自动重复执行。"},
                 )
             finally:
+                self.cancel_pending.discard(request_id)
                 self.web_dispatching = False
                 self.dispatch_message = None
 
     async def control(self, action):
         if action not in ("stop", "cancel"):
             raise ValueError("Unsupported conversation control")
-        await self.host.runtime.invoke(Control(action))
+        if action == "cancel":
+            await self.backend.cancel(self.backend.active_turn)
+        elif getattr(self.host, "voice", None):
+            await self.host.runtime.invoke(Control(action))
         return self.state()

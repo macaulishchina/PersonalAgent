@@ -6,11 +6,11 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, ANY
 import uuid
 
 from assistant_runtime.app.config import Config
-from assistant_runtime.core.conversation.service import Conversation
+from assistant_runtime.core.speech.conversation import AssistantConversation as Conversation
 from assistant_runtime.core.conversation.store import ConversationStore
 from assistant_runtime.core.pi.conversation import task_event
 from assistant_runtime.core.pi.tool_display import tool_display
@@ -275,7 +275,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         ident = str(uuid.uuid4())
         results = await asyncio.gather(c.submit(ident, "只做一次", []), c.submit(ident, "只做一次", []))
         await asyncio.sleep(0.05)
-        self.host.backend.submit.assert_awaited_once_with("只做一次", images=[])
+        self.host.backend.submit.assert_awaited_once_with("只做一次", images=[], cancelled=ANY)
         self.assertEqual(results[0]["message"]["id"], results[1]["message"]["id"])
         with self.assertRaises(ValueError):
             await c.submit(ident, "不同任务", [])

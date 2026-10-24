@@ -59,7 +59,7 @@ async def main():
                 assert "configuration required" in str(error), error
             else:
                 raise AssertionError("Unconfigured inference accepted")
-            forbidden = ("assistant_runtime.core.conversation", "assistant_runtime.core.memory",
+            forbidden = ("assistant_runtime.core.memory",
                          "assistant_runtime.core.speech", "assistant_runtime.core.devices",
                          "assistant_runtime.core.tasks", "assistant_runtime.core.notifications",
                          "assistant_runtime.plugins.", "apscheduler", "numpy", "miniaudio")

@@ -195,6 +195,7 @@
           "devices",
           "assistant",
           "conversation",
+          "cli",
           "execution",
           "models",
           "voice_disabled",

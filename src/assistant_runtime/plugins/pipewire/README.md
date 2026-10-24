@@ -72,9 +72,9 @@ Microphones declare `audio.capture`; state includes whether the bound capture pr
 CLI and Codex's device tool use the same directory:
 
 ```sh
-personal-agent --app/config app/config/app/config.toml core/devices list
-personal-agent --app/config app/config/app/config.toml core/devices inspect office_microphone
-personal-agent --app/config app/config/app/config.toml core/devices inspect office
+pa --config /absolute/instance/config/config.toml devices list
+pa --config /absolute/instance/config/config.toml devices inspect office_microphone
+pa --config /absolute/instance/config/config.toml devices inspect office
 ```
 
 Device MCP exposes `list_core/devices()` and `inspect_device(device_id="office")`. Connection addresses/selectors remain private adapter app/configuration; AI receives logical identity, capabilities and actual state. Passive observations never start a core/conversation.
@@ -94,7 +94,7 @@ resampler is ignored before delivery and cannot reset the remote quiet interval.
 Stop the assistant explicitly before testing, then run from the repository:
 
 ```sh
-.venv/bin/personal-agent --app/config app/config/app/config.toml stop
+.venv/bin/pa --app/config app/config/app/config.toml stop
 .venv/bin/python -m scripts.check_audio_input --app/config app/config/app/config.toml --guided --save-audio
 ```
 

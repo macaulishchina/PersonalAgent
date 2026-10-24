@@ -35,18 +35,18 @@ Pi runs with isolated settings and an explicit MCP snapshot; it does not import 
 
 ## Definition and use
 
-Use the `integrations` MCP or `personal-agent mcp` CLI. Both dispatch the typed
+Use the `integrations` MCP or `pa mcp` CLI. Both dispatch the typed
 `IntegrationRequest` to the same plugin. The manager exposes list, inspect,
 configure, enable/disable, remove, verify, apply and reload. Interactive OAuth is unsupported in the Pi adapter; login requests return an error without a fabricated URL.
 Read the current global `revision` before editing. Identical configure retries are
 idempotent; stale changes fail rather than overwrite someone else's configuration.
 
 ```sh
-personal-agent mcp list
-personal-agent mcp configure '{"name":"example","revision":0,"changes":{"transport":{"type":"stdio","command":"/absolute/path/to/server","args":[]},"contexts":["foreground","background"],"allow_tools":["search"],"approval":"approve"}}'
-personal-agent mcp verify '{"name":"example","context":"foreground"}'
-personal-agent mcp verify '{"name":"example","context":"background"}'
-personal-agent mcp apply
+pa mcp list
+pa mcp configure '{"name":"example","revision":0,"changes":{"transport":{"type":"stdio","command":"/absolute/path/to/server","args":[]},"contexts":["foreground","background"],"allow_tools":["search"],"approval":"approve"}}'
+pa mcp verify '{"name":"example","context":"foreground"}'
+pa mcp verify '{"name":"example","context":"background"}'
+pa mcp apply
 ```
 
 `transport` is one of:

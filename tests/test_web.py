@@ -58,6 +58,7 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
     async def test_auth_origin_and_restart_cookie(self):
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)
+
         r = await self.client.post(
             self.base + "/api/login", json={"token": self.token}, headers={"Origin": "http://evil.test"}
         )
@@ -73,6 +74,34 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         await self.client.post(self.base + "/api/logout", json={})
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)
+
+    async def test_explicit_input_is_bound_to_web_and_cannot_switch_session(self):
+        from unittest.mock import AsyncMock
+
+        await self.login()
+        self.host.runtime.invoke = AsyncMock(return_value={"state": "answered"})
+        response = await self.client.post(
+            self.base + "/api/conversation",
+            json={
+                "action": "answer",
+                "request_id": "request",
+                "question_id": "question",
+                "text": "answer",
+            },
+        )
+        self.assertEqual(response.status, 200)
+        request = self.host.runtime.invoke.await_args.args[0]
+        self.assertEqual(request.arguments["session_id"], self.host.conversation.session)
+        self.assertEqual(request.arguments["question_id"], "question")
+        response = await self.client.post(
+            self.base + "/api/conversation",
+            json={
+                "action": "cancel",
+                "session_id": "another",
+                "request_id": "request",
+            },
+        )
+        self.assertEqual(response.status, 400)
 
     async def test_task_pages_use_owner_filter_cursor_and_details(self):
         from types import SimpleNamespace

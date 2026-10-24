@@ -141,10 +141,10 @@ separate cohorts, not evidence of normal household accuracy. Status statistics d
 retained indexes, not lifetime accuracy or task success.
 
 ```sh
-personal-agent --config config/config.toml decisions status
-personal-agent --config config/config.toml decisions list '{"limit":20}'
-personal-agent --config config/config.toml decisions archive '{"day":"2026-10-21","limit":50}'
-personal-agent --config config/config.toml decisions archive '{"day":"2026-10-21","kind":"voice_intent","status":"adopted"}'
+pa --config config/config.toml decisions status
+pa --config config/config.toml decisions list '{"limit":20}'
+pa --config config/config.toml decisions archive '{"day":"2026-10-21","limit":50}'
+pa --config config/config.toml decisions archive '{"day":"2026-10-21","kind":"voice_intent","status":"adopted"}'
 ```
 
 Archive filters also include `decision_id` and `operation_id`; `next_offset` is passed

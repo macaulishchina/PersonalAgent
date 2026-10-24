@@ -2,11 +2,19 @@
 
 Pi is the only agent harness. The host uses the provider-neutral `api/execution.py` contract; this adapter owns native JSONL, processes, session files and normalized events. Main conversation and task execution use the same implementation. Native subscription accounts are model providers, not separate executors; no Codex execution path is retained.
 
+The conversation registry owns stable public session IDs. `PiBackend.open_conversation`
+creates a per-session view with its own active turn, lock, callbacks, question and MCP
+refresh state, sharing the root Pi client, execution admission and usage protection.
+Native events route by engine session ID; entrances never receive or select that ID.
+Repeated turns resume the same native model context; Pi compression and retained chat
+history remain separate. Generic instructions include only enabled capabilities;
+personal-assistant presentation and instructions remain owned by `core/speech`.
+
 `catalog.py` derives the model definitions from `ModelSettings`. Actual model and thinking level are checked before each new run. Gateway and Pi automatic retries are disabled. Checkpointed model changes belong to tasks. MCP definitions and Skill paths are explicit; main and task contexts have different server-bound identities. MCP discovery returns real schemas without executing tools.
 
 Execution is full-permission; no OS sandbox is claimed. MCP tool policy remains enforced. Voice remains an unavailable placeholder owned by `core/speech/disabled.py`, pending independent acceptance. Pi owns no voice object and has no device-plugin dependency. Interactive MCP OAuth is not implemented; no login URL is fabricated.
 
-Install the pinned runtime with `scripts/setup_pi.sh`; the Python wheel includes `extension.ts`. Configure `pi_binary`, `main_model`, `main_reasoning_effort`, `model_api` and task profiles. Secrets remain in private storage. Derived execution folders are mode 0700 and metadata/config files mode 0600.
+Install the pinned runtime with `python -m assistant_runtime.app.cli install-pi` using the application's Python environment. No destination is required: Pi lives in the user's data directory, and a successful installation records its absolute Pi and Node paths. The default `pi_binary="pi"` uses that record without adding Pi to PATH; a destination argument selects and records a custom location, while an explicit `pi_binary` path overrides the record. The wheel includes `extension.ts`. Configure `main_model`, `main_reasoning_effort`, `model_api` and task profiles. Secrets remain in private storage. Derived execution folders are mode 0700 and metadata/config files mode 0600.
 
 New state never imports Codex context. The current plugin consolidation preserves existing Pi data; do not reset it at cutover. New Pi sessions survive clean restart; unconfirmed execution never automatically replays. Each session is closed through plugin ownership.
 

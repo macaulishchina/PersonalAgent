@@ -152,7 +152,7 @@ if __name__ == "__main__":
     import servicemanager
 
     if len(sys.argv) != 3 or sys.argv[1] != "--service":
-        raise SystemExit("Use personal-agent service install")
+        raise SystemExit("Use pa service install")
     AgentService._svc_name_ = sys.argv[2]
     servicemanager.Initialize()
     servicemanager.PrepareToHostSingle(AgentService)

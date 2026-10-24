@@ -10,17 +10,16 @@ import shutil
 import uuid
 
 from assistant_runtime.core.models.gateway import credential
+from assistant_runtime.platforms.executables import pi_command, pi_executable, pi_node
 
 
 async def installation(binary=None):
     """Resolve the explicitly installed pinned npm runtime; never install on startup."""
-    executable = shutil.which(binary or "pi")
+    executable, _ = pi_executable(binary or "pi")
     if binary and not executable:
         raise RuntimeError("Configured Pi executable unavailable")
     if executable:
-        from assistant_runtime.platforms.executables import pi_command
-
-        command = pi_command(executable)
+        command = pi_command(binary or "pi")
         path = Path(command[-1]).resolve()
         for parent in (path.parent, *path.parents):
             manifest = parent / "package.json"
@@ -87,7 +86,7 @@ class AccountWorker:
             }
             environment.update(PI_TELEMETRY="0", PI_OFFLINE="1", PI_SKIP_VERSION_CHECK="1")
             self.process = await system.spawn(
-                shutil.which("node"),
+                pi_node(self.binary),
                 str(Path(__file__).with_suffix(".mjs")),
                 str(package),
                 stdin=-1,
@@ -207,7 +206,7 @@ async def manage(root, settings, action, account=None, *, binary=None):
         if action == "providers":
             worker = AccountWorker(root, accounts.folder, {})
             worker.process = await system.spawn(
-                shutil.which("node"),
+                pi_node(binary),
                 str(Path(__file__).with_suffix(".mjs")),
                 str(await installation(binary)),
                 stdin=-1,

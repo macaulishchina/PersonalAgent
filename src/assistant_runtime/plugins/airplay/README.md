@@ -41,7 +41,7 @@ Queries describe network availability, fixed voice binding, stream state, encode
 ## Query, bind and test
 
 ```sh
-personal-agent --config config/config.toml devices inspect homepod
+pa --config config/config.toml devices inspect homepod
 .venv/bin/python -m scripts.verify_device_onboarding --output-device homepod --tail-seconds 10 --speech-sample /path/to/short-test.wav
 ```
 

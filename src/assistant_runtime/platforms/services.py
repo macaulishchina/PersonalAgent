@@ -17,6 +17,41 @@ def name(unit):
 
 
 def control(action, config):
+    owner = Path(config.state_dir) / "configuration/detached-manager.json"
+    if owner.is_file() and action in {"stop", "restart", "status", "logs"}:
+        import json
+        from .daemon import installed, running, launch, stop
+
+        record = json.loads(owner.read_text())
+        management = Path(record["management"])
+        if not installed(config, management):
+            if action == "logs":
+                print((owner.parent / "manager.log").read_text(encoding="utf-8", errors="replace")[-65536:])
+                return
+            if action == "status":
+                active = running(record)
+                return {"state": "running" if active else "stopped", "pid": record["pid"]}
+            stop(owner, management)
+            if action == "restart":
+                import time
+                from assistant_runtime.api.system import system
+
+                deadline = time.monotonic() + 75
+                while True:
+                    try:
+                        with (
+                            (owner.parent / "manager.lock").open("a+b") as lock,
+                            (Path(config.state_dir) / "service.lock").open("a+b") as worker,
+                        ):
+                            system.lock(lock, blocking=False)
+                            system.lock(worker, blocking=False)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Previous instance has not stopped")
+                        time.sleep(0.1)
+                launch(management, owner.parent / "manager.log", owner)
+            return
     if os.name != "nt":
         if action == "logs":
             return subprocess.run(

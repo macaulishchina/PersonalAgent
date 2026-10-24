@@ -14,8 +14,8 @@ queue_size = 64
 ```
 
 The application now assembles only the declared plugins. `init --preset slim` enables
-this capability with models, Pi, usage and workfiles; no assistant state, conversation,
-device service or TCP listener is created. `standard` enables the same capability plus
+this capability with models, Pi, usage, workfiles, conversation and CLI; no personal
+assistant, device or voice service or chat TCP listener is created. `standard` enables the same capability plus
 the existing assistant entrance. Conversation, scheduled tasks and direct submissions
 share the same bounded admission, attempt receipts, cancellation and terminal-event rules.
 Every production `run.start` passes the execution plugin's coordinator before the native
@@ -28,9 +28,9 @@ task scheduling and Goal policy are not confused with the completion of a single
 Both deployment compositions use the same CLI. The implemented command is:
 
 ```sh
-personal-agent --config /absolute/instance/config/config.toml executions submit \
+pa --config /absolute/instance/config/config.toml executions submit \
   '{"request_id":"7a45c50b-54b3-40b7-a9b3-0b4fdad87102","text":"Summarize the supplied instructions"}'
-personal-agent --config /absolute/instance/config/config.toml executions get \
+pa --config /absolute/instance/config/config.toml executions get \
   '{"id":"7a45c50b-54b3-40b7-a9b3-0b4fdad87102"}'
 ```
 

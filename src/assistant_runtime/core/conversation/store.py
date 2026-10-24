@@ -2,6 +2,7 @@
 
 import json
 import time
+from contextlib import nullcontext
 
 
 class ConversationStore:
@@ -24,6 +25,12 @@ class ConversationStore:
                 state TEXT NOT NULL, message_id TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS chat_context (message_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS conversation_uploads (id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conversation_queue (
+                ordinal INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL,
+                state TEXT NOT NULL, turn_id TEXT
+            );
         """)
         if "tool_summary" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN tool_summary TEXT")
@@ -54,6 +61,17 @@ class ConversationStore:
         result["tool_summary"] = json.loads(result["tool_summary"]) if result["tool_summary"] else None
         return result
 
+    def attachment_sessions(self, ident):
+        return {
+            row[0]
+            for row in self.db.execute(
+                "SELECT session_id FROM conversation_uploads WHERE id=? UNION "
+                "SELECT DISTINCT session_id FROM chat_messages,json_each(chat_messages.attachments) "
+                "WHERE json_extract(json_each.value,'$.id')=?",
+                (ident, ident),
+            )
+        }
+
     def emit(self, session, kind, data, message_id=None):
         with self.db:
             cur = self.db.execute(
@@ -80,6 +98,7 @@ class ConversationStore:
         updated_at=None,
         tool_summary=None,
         task_id=None,
+        commit=True,
     ):
         old = self.get(ident)
         if old and old["session_id"] != session:
@@ -104,7 +123,7 @@ class ConversationStore:
             )
         ):
             return old
-        with self.db:
+        with self.db if commit else nullcontext():
             seq = self.db.execute(
                 "INSERT INTO chat_events(session_id,message_id,kind,data) VALUES(?,?,?,?)",
                 (session, ident, "message", "{}"),
@@ -156,8 +175,20 @@ class ConversationStore:
         ]
 
     def recover(self, session):
+        for (message,) in self.db.execute(
+            "SELECT r.message_id FROM chat_requests r JOIN conversation_queue q ON q.id=r.id "
+            "WHERE q.session_id=? AND q.state IN ('sending','running')",
+            (session,),
+        ).fetchall():
+            m = self.get(message)
+            self.put(
+                message,
+                session,
+                **{k: m[k] for k in ("role", "source", "kind", "text", "turn_id", "attachments")},
+                status="unknown",
+            )
         for (ident,) in self.db.execute(
-            "SELECT id FROM chat_messages WHERE session_id=? AND status IN ('sending','streaming')",
+            "SELECT id FROM chat_messages WHERE session_id=? AND status IN ('queued','sending','streaming')",
             (session,),
         ).fetchall():
             m = self.get(ident)
@@ -165,7 +196,19 @@ class ConversationStore:
                 ident,
                 session,
                 **{k: m[k] for k in ("role", "source", "kind", "text", "turn_id", "attachments")},
-                status="unknown",
+                status="interrupted" if m["status"] == "queued" else "unknown",
             )
         with self.db:
-            self.db.execute("UPDATE chat_requests SET state='unknown' WHERE state='sending'")
+            self.db.execute(
+                "UPDATE chat_requests SET state='unknown' WHERE session_id=? AND "
+                "(state='sending' OR id IN (SELECT id FROM conversation_queue WHERE state='running'))",
+                (session,),
+            )
+            self.db.execute(
+                "UPDATE chat_requests SET state='interrupted' WHERE state='queued' AND session_id=?",
+                (session,),
+            )
+            self.db.execute(
+                "UPDATE conversation_queue SET state=CASE WHEN state='queued' THEN 'interrupted' ELSE 'unknown' END WHERE session_id=? AND state IN ('queued','sending','running')",
+                (session,),
+            )

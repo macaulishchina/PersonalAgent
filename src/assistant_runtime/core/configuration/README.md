@@ -8,10 +8,10 @@ restart the current production service.
 ## Use
 
 ```sh
-personal-agent init /absolute/instance --preset slim # or standard
-personal-agent --config /absolute/instance/config/config.toml run
-personal-agent configuration token --management /absolute/instance/management.toml
-personal-agent configuration reset-token --management /absolute/instance/management.toml
+pa init /absolute/instance --preset slim # or standard
+pa --config /absolute/instance/config/config.toml run
+pa configuration token --management /absolute/instance/management.toml
+pa configuration reset-token --management /absolute/instance/management.toml
 ```
 
 Open port **8047**, listening on `0.0.0.0` by default. The random administrator token is

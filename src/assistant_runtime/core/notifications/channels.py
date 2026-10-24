@@ -36,6 +36,8 @@ class ChatChannel:
         origin = item["payload"].get("origin", {})
         task_id = origin.get("task_id")
         trusted = isinstance(task_id, str) and item["source"] == "task:" + task_id
+        if trusted and origin.get("conversation_id"):
+            chat = await self.host.conversations.get(origin["conversation_id"])
         result = kind(item["payload"]) == "result" or (
             "kind" not in item["payload"] and item["event_key"].startswith("task-result:")
         )  # Preserve registered attachments on pending pre-type execution receipts.
@@ -92,9 +94,13 @@ class ContextChannel:
         self.host = host
 
     async def deliver(self, item):
-        if getattr(self.host.backend, "busy", False):
+        backend = self.host.backend
+        origin = item["payload"].get("origin", {})
+        if origin.get("conversation_id") and item["source"] == "task:" + str(origin.get("task_id")):
+            backend = (await self.host.conversations.get(origin["conversation_id"])).backend
+        if getattr(backend, "busy", False):
             raise Deferred("等待当前对话处理完成")
-        await self.host.backend.import_voice_messages(
+        await backend.import_voice_messages(
             [
                 {
                     "role": "assistant",

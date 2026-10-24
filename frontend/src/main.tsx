@@ -65,6 +65,10 @@ type State = {
   notifications_unread?: number;
   sync_error?: string;
   configuration_required?: boolean;
+  active_request_id?: string;
+  question_id?: string | number;
+  questions?: { id: string; question: string }[];
+  queue?: { id: string; state: string }[];
 };
 const initial: State = {
   name: "个人助理",
@@ -271,6 +275,7 @@ function MessageEntry({
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
     sending: "正在发送",
+    queued: "排队中",
     unknown: "状态待确认",
     interrupted: "已取消",
     failed: "未完成",
@@ -832,6 +837,32 @@ function App() {
       fail(e);
     }
   }
+  async function conversationAction(
+    action: string,
+    requestId = state.active_request_id,
+  ) {
+    if (!requestId || sending) return;
+    setSending(true);
+    const text = draft.trim();
+    try {
+      await api("conversation", {
+        method: "POST",
+        body: JSON.stringify({
+          action,
+          request_id: requestId,
+          ...(action === "cancel" ? {} : { text }),
+          ...(action === "answer" ? { question_id: state.question_id } : {}),
+        }),
+      });
+      if (action !== "cancel")
+        setDraft((current) => (current.trim() === text ? "" : current));
+      setState(await api("session"));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSending(false);
+    }
+  }
   async function copy(id: string, text: string) {
     try {
       await clipboard(text);
@@ -845,17 +876,17 @@ function App() {
     ? "连接已断开"
     : state.configuration_required
       ? "待配置模型"
-    : state.task_running
-      ? "正在处理"
-      : state.speaking
-        ? "正在说话"
-        : state.voice === "active"
-          ? "语音已连接"
-          : state.voice === "disabled"
-            ? "已连接"
-            : state.quiet
-            ? "语音静音中"
-            : "已连接";
+      : state.task_running
+        ? "正在处理"
+        : state.speaking
+          ? "正在说话"
+          : state.voice === "active"
+            ? "语音已连接"
+            : state.voice === "disabled"
+              ? "已连接"
+              : state.quiet
+                ? "语音静音中"
+                : "已连接";
   return (
     <>
       <header className="header">
@@ -1001,7 +1032,7 @@ function App() {
                 </button>
               )}
               {state.task_running && (
-                <button onClick={() => control("cancel")}>
+                <button onClick={() => conversationAction("cancel")}>
                   <X size={14} />
                   取消任务
                 </button>
@@ -1014,7 +1045,9 @@ function App() {
               )}
             </div>
             {state.configuration_required && (
-              <p className="error">请先在实例配置中选择模型并完成授权，然后重启服务。</p>
+              <p className="error">
+                请先在实例配置中选择模型并完成授权，然后重启服务。
+              </p>
             )}
             {state.sync_error && (
               <div className="notice" role="status">
@@ -1038,6 +1071,45 @@ function App() {
                 void upload(e.dataTransfer.files);
               }}
             >
+              {state.questions?.map((q) => (
+                <div className="notice" key={q.id}>
+                  {q.question}
+                </div>
+              ))}
+              {state.active_request_id && (
+                <div className="controls">
+                  <span>普通发送将排队；使用下列操作回应当前执行。</span>
+                  <button
+                    type="button"
+                    disabled={
+                      sending || !draft.trim() || attachments.length > 0
+                    }
+                    onClick={() =>
+                      conversationAction(
+                        state.question_id != null ? "answer" : "supplement",
+                      )
+                    }
+                  >
+                    {state.question_id != null
+                      ? "回答当前问题"
+                      : "补充当前执行"}
+                  </button>
+                </div>
+              )}
+              {state.queue
+                ?.filter((r) => r.state === "queued")
+                .map((r) => (
+                  <div className="controls" key={r.id}>
+                    <span>排队中：{r.id}</span>
+                    <button
+                      type="button"
+                      disabled={sending}
+                      onClick={() => conversationAction("cancel", r.id)}
+                    >
+                      取消排队
+                    </button>
+                  </div>
+                ))}
               {notificationContext && (
                 <div className="notification-reference">
                   <Quote size={13} aria-hidden="true" />
@@ -1188,7 +1260,9 @@ function App() {
               <div className="composer-caption-info">
                 {state.task_running
                   ? "可以继续补充要求，任务会继续进行。"
-                  : (state.voice === "disabled" ? "支持文字、图片和任务委派" : "与语音入口实时同步")}
+                  : state.voice === "disabled"
+                    ? "支持文字、图片和任务委派"
+                    : "与语音入口实时同步"}
                 <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
             </div>
