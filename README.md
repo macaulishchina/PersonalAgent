@@ -27,6 +27,6 @@ pa
 
 实例目录存放配置、凭据和会话数据；`pa use` 只记住选择。以后运行 `pa` 即可聊天，未运行的实例会自动启动。退出聊天不停止后台；查看、停止和重启使用 `pa status`、`pa stop`、`pa restart`。
 
-命令需要在安装环境的可执行目录已加入 PATH 后使用，设置方法见[安装指南](docs/guides/deployment.md)。外层 KeepFixCrash 项目提供 `kfc` 别名，独立安装本项目使用 `pa`。
+命令入口为 `pa`，需要将安装环境的可执行目录加入 PATH，设置方法见[安装指南](docs/guides/deployment.md)。
 
 贡献代码前阅读 [AGENTS.md](AGENTS.md)；修改文档参照[文档维护约定](docs/development/documentation.md)。

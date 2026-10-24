@@ -25,8 +25,7 @@ and explicit `pa init`; it does not create an instance automatically.
 The private selection file is `%LOCALAPPDATA%/personal-agent/cli.json` on Windows and
 `$XDG_CONFIG_HOME/personal-agent/cli.json` (default `~/.config`) on Linux. It contains only
 the config path. Package identity, service names and instance data paths remain unchanged.
-The outer KeepFixCrash checkout owns the `kfc` alias and forwards arguments to `pa`;
-the independently installed PersonalAgent package exports only `pa`.
+Personal Agent exports the `pa` command for independent installation and use.
 
 | Command | Behavior |
 | --- | --- |
