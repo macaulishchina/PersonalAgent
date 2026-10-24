@@ -8,6 +8,7 @@ state/
 config.toml
 /config/
 /management.toml
+/instance/
 !/config.example/config.toml
 !/src/assistant_runtime/app/templates/*/config.toml
 .ruff_cache/

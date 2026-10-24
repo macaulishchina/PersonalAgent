@@ -20,18 +20,18 @@ pa restart
 
 ### Windows SCM
 
-以实例拥有者账号打开管理员 PowerShell，重新设置安装环境 PATH 并选择实例。账号需要实际密码及“作为服务登录”权限，不能使用 LocalSystem 或仅凭 Windows Hello PIN。
+以实例拥有者账号打开管理员 PowerShell，进入仓库根目录，重新设置安装环境 PATH 并选择实例。账号需要实际密码及“作为服务登录”权限，不能使用 LocalSystem 或仅凭 Windows Hello PIN。
 
 ```powershell
-$env:PATH = "$HOME\PersonalAgent\.venv\Scripts;$env:PATH"
-pa use "$HOME\PersonalAgent-instance"
+$env:PATH = "$PWD\.venv\Scripts;$env:PATH"
+pa use "$PWD\instance"
 $ServiceAccount = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 pa service install --account $ServiceAccount
 pa service start
 pa service status
 ```
 
-若安装目录不同，替换上述路径。安装时会询问密码并校验权限；登记为开机自动启动，需单独执行 `start`。
+若已有实例位于其他目录，`pa use` 指向原实例路径。安装时会询问密码并校验权限；登记为开机自动启动，需单独执行 `start`。
 
 Windows Server 2025 的核心进程已验证，SCM 安装、注销和整机重启仍待实机验收。部署为服务后需检查这些生命周期行为；详见[平台记录](../archive/platform-acceptance-2026-10.md)。
 

@@ -20,26 +20,30 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 安装后重新打开终端，执行 `uv --version` 确认可用。
 
-全程使用最终运行账号，将实例放在本地磁盘；Windows 使用 NTFS。以下示例直接克隆为 `$HOME/PersonalAgent` 仓库，实例数据另放在 `$HOME/PersonalAgent-instance`。已有仓库就在原仓库目录安装，跳过示例中的克隆和切换目录两行。
+全程使用最终运行账号，在选定的本地目录执行；Windows 使用 NTFS。新安装将仓库克隆到当前空目录 `.`，已有仓库跳过克隆命令。后续命令均在仓库根目录执行，实例放在 `$PWD/instance`，该目录已被 Git 忽略。
 
 ## 2. 安装应用
 
 选择所在平台的一组命令，每条成功后再执行下一条。
+
+`uv sync` 输出提示：
+
+- `Failed to hardlink files; falling back to full copy` 表示已自动改用文件复制，常见于缓存与安装目录位于不同磁盘，不影响安装结果。若希望固定使用复制模式，在同步命令末尾加 `--link-mode=copy`。
+- 同步会按所选依赖组合调整环境；部署命令未启用开发工具，已有的 `mypy`、`ruff`、`setuptools` 等可能被卸载，属于正常现象。后续需要开发检查时，在同步命令中加 `--extra dev`。
 
 ### Windows / Windows Server
 
 Windows 使用 slim，提供 CLI 和独立配置网页。
 
 ```powershell
-git clone git@github.com:macaulishchina/PersonalAgent.git "$HOME\PersonalAgent"
-Set-Location "$HOME\PersonalAgent"
+git clone git@github.com:macaulishchina/PersonalAgent.git .
 $env:PYTHONUTF8 = '1'
 uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 pa install-pi
-pa init "$HOME\PersonalAgent-instance" --preset slim
-pa use "$HOME\PersonalAgent-instance"
-pa configuration token --management "$HOME\PersonalAgent-instance\management.toml"
+pa init "$PWD\instance" --preset slim
+pa use "$PWD\instance"
+pa configuration token --management "$PWD\instance\management.toml"
 ```
 
 ### Linux
@@ -47,17 +51,16 @@ pa configuration token --management "$HOME\PersonalAgent-instance\management.tom
 以下安装 standard，提供 CLI、配置网页和聊天网页。
 
 ```sh
-git clone git@github.com:macaulishchina/PersonalAgent.git "$HOME/PersonalAgent"
-cd "$HOME/PersonalAgent"
+git clone git@github.com:macaulishchina/PersonalAgent.git .
 uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
 npm --prefix frontend ci
 npm --prefix frontend run build
 uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
 export PATH="$PWD/.venv/bin:$PATH"
 pa install-pi
-pa init "$HOME/PersonalAgent-instance" --preset standard
-pa use "$HOME/PersonalAgent-instance"
-pa configuration token --management "$HOME/PersonalAgent-instance/management.toml"
+pa init "$PWD/instance" --preset standard
+pa use "$PWD/instance"
+pa configuration token --management "$PWD/instance/management.toml"
 ```
 
 Linux 只需 CLI 时，将两处 `--extra standard` 和 `--preset standard` 改为 slim，省略两条 npm 命令及第二次 `uv sync`。
