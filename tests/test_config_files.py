@@ -22,7 +22,7 @@ class ConfigFilesTest(unittest.TestCase):
 
     def write(self, name, text):
         path = self.folder / name
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         return path
 
     def test_split_config_equals_single_file_and_preserves_root_from_other_cwd(self):

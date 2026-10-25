@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "记忆",
+  "group": "resources",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "memory_enabled": {
+        "type": "boolean",
+        "title": "启用记忆",
+        "default": false,
+        "x-group": "resources"
+      },
+      "memory_auto_capture": {
+        "type": "boolean",
+        "title": "自动提取记忆",
+        "default": true,
+        "x-group": "resources"
+      }
+    }
+  },
+  "application": {
+    "*": "boundary",
+    "memory_enabled": "restart"
+  },
+  "requires": []
+}

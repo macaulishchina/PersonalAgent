@@ -169,10 +169,10 @@ class PiIntegrations:
         if self.applied_revision is None:
             raise RuntimeError("MCP provider context is unconfirmed; no new input started")
 
-    async def apply(self, force=False):
+    async def apply(self, force=False, *, staged=False):
         backend = self.backend
         async with backend.submit_lock:
-            if self.runtime_data is not None and self.applied_revision is not None:
+            if not staged and self.runtime_data is not None and self.applied_revision is not None:
                 return {
                     "state": "restart_required"
                     if self.applied_revision != self.registry.revision

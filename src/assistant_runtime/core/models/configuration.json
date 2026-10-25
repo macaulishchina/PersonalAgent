@@ -75,14 +75,16 @@
         "title": "辅助推理输出预算",
         "default": 8192,
         "minimum": 1,
-        "maximum": 16384
+        "maximum": 16384,
+        "x-advanced": true
       },
       "execution_max_output_tokens": {
         "type": "integer",
         "title": "执行输出预算",
         "default": 16384,
         "minimum": 1,
-        "maximum": 131072
+        "maximum": 131072,
+        "x-advanced": true
       },
       "providers": {
         "type": "object",
@@ -122,11 +124,13 @@
                 "openai_chat",
                 "anthropic",
                 "gemini"
-              ]
+              ],
+              "x-advanced": true
             },
             "base_url": {
               "type": "string",
-              "title": "自定义接口地址"
+              "title": "自定义接口地址",
+              "x-advanced": true
             },
             "key_env": {
               "type": "string",
@@ -177,7 +181,8 @@
               "enum": [
                 "request",
                 "model"
-              ]
+              ],
+              "x-advanced": true
             }
           },
           "required": [
@@ -218,7 +223,8 @@
                   "max",
                   "ultra"
                 ]
-              }
+              },
+              "x-advanced": true
             },
             "default_reasoning_effort": {
               "type": "string",
@@ -250,19 +256,22 @@
               "type": "integer",
               "minimum": 8192,
               "maximum": 2000000,
-              "title": "上下文窗口"
+              "title": "上下文窗口",
+              "x-advanced": true
             },
             "max_output_tokens": {
               "type": "integer",
               "minimum": 1,
               "maximum": 16384,
-              "title": "辅助调用输出上限"
+              "title": "辅助调用输出上限",
+              "x-advanced": true
             },
             "execution_max_output_tokens": {
               "type": "integer",
               "minimum": 1,
               "maximum": 131072,
-              "title": "执行输出上限"
+              "title": "执行输出上限",
+              "x-advanced": true
             },
             "fallbacks": {
               "type": "array",
@@ -270,7 +279,8 @@
               "items": {
                 "type": "string",
                 "x-reference": "model_api.entries"
-              }
+              },
+              "x-advanced": true
             }
           },
           "additionalProperties": false
@@ -283,5 +293,98 @@
         "x-reference": "model_api.entries"
       }
     }
+  },
+  "interface": {
+    "title": "模型与账号",
+    "fields": {
+      "accounts": {
+        "title": "1. 账号与认证",
+        "order": 0
+      },
+      "providers": {
+        "title": "2. 连接供应商",
+        "order": 1
+      },
+      "entries": {
+        "title": "3. 可用模型",
+        "order": 2
+      },
+      "enabled": {
+        "title": "启用模型服务",
+        "order": 3
+      },
+      "memory": {
+        "title": "记忆使用的模型",
+        "order": 4
+      },
+      "gateway_url": {
+        "advanced": true,
+        "order": 20
+      },
+      "gateway_key_env": {
+        "advanced": true,
+        "order": 20
+      },
+      "concurrency": {
+        "advanced": true,
+        "order": 20
+      },
+      "queue_size": {
+        "advanced": true,
+        "order": 20
+      },
+      "timeout_seconds": {
+        "advanced": true,
+        "order": 20
+      },
+      "compaction_timeout_seconds": {
+        "advanced": true,
+        "order": 20
+      },
+      "tool_result_max_chars": {
+        "advanced": true,
+        "order": 20
+      },
+      "max_loaded_tools": {
+        "advanced": true,
+        "order": 20
+      },
+      "max_output_tokens": {
+        "advanced": true,
+        "order": 20
+      },
+      "execution_max_output_tokens": {
+        "advanced": true,
+        "order": 20
+      }
+    },
+    "actions": {
+      "connection": {
+        "title": "检查模型网关连接",
+        "read_only": true,
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reachable": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reachable",
+            "message"
+          ]
+        }
+      }
+    }
+  },
+  "requires": [
+    "ai_usage"
+  ],
+  "application": {
+    "*": "boundary"
   }
 }

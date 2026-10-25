@@ -67,5 +67,11 @@
         "default": 1073741824
       }
     }
+  },
+  "requires": [
+    "notifications"
+  ],
+  "application": {
+    "*": "boundary"
   }
 }

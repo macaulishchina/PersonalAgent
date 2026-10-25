@@ -25,6 +25,28 @@ class EventsPlugin:
             else []
         )
 
+    async def prepare_configuration(self, config):
+        import asyncio
+        from assistant_runtime.api.configuration import ConfigurationUpdate
+
+        settings = EventSettings.parse(config.events)
+        previous = self.settings
+
+        async def update(value):
+            for worker in (self.storage.writer, self.storage.reader):
+                await asyncio.wrap_future(worker.submit("configure", {"settings": value}))
+            self.settings = self.storage.settings = value
+            self.ingress.capacity = value.queue_size
+            self.ingress.queue._maxsize = value.queue_size
+
+        async def commit():
+            await update(settings)
+
+        async def rollback():
+            await update(previous)
+
+        return ConfigurationUpdate(commit, rollback)
+
     async def start(self, context):
         self.context = context
         context.own(self.close)

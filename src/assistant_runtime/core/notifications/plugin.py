@@ -22,6 +22,7 @@ class NotificationsPlugin:
         self.repo = Notifications(host.store.db, self.settings)
         self.channels = {}
         self.context = None
+        self.voice_host = voice_host or getattr(host, "assistant", None)
         host.notifications = self
         from .channels import InboxChannel
 
@@ -46,6 +47,34 @@ class NotificationsPlugin:
         ).fetchall()
         return [{"id": row[0], "state": "finalizing"} for row in rows]
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationPending, ConfigurationError
+        from assistant_runtime.core.configuration.updates import attributes
+
+        if self.maintenance_pending():
+            raise ConfigurationPending()
+        settings = NotificationSettings.parse(config.notifications)
+        channels = dict(self.channels)
+        if settings.voice_enabled:
+            if self.voice_host is None:
+                raise ConfigurationError(
+                    ["notifications", "voice_enabled"], "dependency", "语音通知需要个人助手能力"
+                )
+            if "voice" not in channels:
+                channels["voice"] = VoiceChannel(self.voice_host, settings)
+        else:
+            channels.pop("voice", None)
+        if set(settings.channels) - channels.keys():
+            raise ConfigurationError(["notifications", "channels"], "unavailable", "所选通知通道尚未注册")
+        changes = [
+            (self, "settings", settings),
+            (self.repo, "settings", settings),
+            (self, "channels", channels),
+        ]
+        if "voice" in channels:
+            changes.append((channels["voice"], "settings", settings))
+        return attributes(changes, ready=lambda: not self.maintenance_pending())
+
     async def start(self, context):
         if set(self.settings.channels) - self.channels.keys():
             raise ValueError("Configured notification channel is not registered")
@@ -54,7 +83,8 @@ class NotificationsPlugin:
         context.register(NotificationLink, self.link)
         for name, channel in self.channels.items():
             self.repo.recover(name, channel.replay_safe)
-            context.spawn(self.worker(name, channel), "delivery:" + name)
+        for name in self.channels.keys() | {"voice"}:
+            context.spawn(self.worker(name), "delivery:" + name)
 
     def source(self, caller):
         from assistant_runtime.core.tasks.access import notification_origin
@@ -322,9 +352,13 @@ class NotificationsPlugin:
             self.repo.finish(item, name, "delivered")
         return True
 
-    async def worker(self, name, channel):
+    async def worker(self, name):
+        from assistant_runtime.api.lifecycle import configuration_boundary
+
         while True:
-            delivered = await self.deliver_once(name, channel)
+            await configuration_boundary(self.context)
+            channel = self.channels.get(name)
+            delivered = await self.deliver_once(name, channel) if channel else False
             await asyncio.sleep(0.05 if delivered else 0.5)
 
     def diagnostics(self):

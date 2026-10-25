@@ -198,6 +198,7 @@ def display(result, verbose=False, *, tests=False):
 async def run_tests(root, selection, jobs, timeout, verbose=False):
     semaphore = asyncio.Semaphore(jobs)
     env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, (str(root / "src"), str(root / "tests"), env.get("PYTHONPATH")))
     )
@@ -269,6 +270,9 @@ async def check(args):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--group", choices=GROUPS, action="append", default=[], help="Affected domain; repeat to combine"

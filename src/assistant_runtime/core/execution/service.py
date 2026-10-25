@@ -58,7 +58,8 @@ class ExecutionService:
         self.client.admission = self.admission
         context.register(ExecutionRequest, self.request)
         context.own(self.close)
-        for number in range(self.concurrency):
+        # Worker count is bounded by the supported maximum; admission owns the live limit.
+        for number in range(8):
             context.spawn(self.worker(), f"execution-{number}")
 
     @staticmethod
@@ -212,6 +213,9 @@ class ExecutionService:
         while not self.stopping:
             ident = await self.queue.get()
             try:
+                from assistant_runtime.api.lifecycle import configuration_boundary
+
+                await configuration_boundary(self.context)
                 if self.records.get(ident)["state"] == "queued":
                     await self.execute(ident)
             finally:

@@ -68,11 +68,68 @@ class WebPlugin:
         self.runner = web.AppRunner(self.app, access_log=None, shutdown_timeout=2)
         context.own(self.close)
         await self.runner.setup()
-        await web.TCPSite(self.runner, self.settings.host, self.settings.port).start()
-        context.spawn(self.cleanup_uploads(), "upload-retention")
+        self.site = web.TCPSite(self.runner, self.settings.host, self.settings.port)
+        await self.site.start()
+        self.cleanup_task = context.spawn(self.cleanup_uploads(), "upload-retention")
+
+    async def prepare_configuration(self, settings):
+        from assistant_runtime.api.configuration import ConfigurationUpdate
+
+        previous = self.settings
+        previous_site = getattr(self, "site", None)
+        previous_auth = getattr(self, "auth", None)
+        previous_runner = self.runner
+        new_site = None
+        auth = (
+            self.api.repository(
+                AuthRepository,
+                settings.credential_path(self.api.state_dir.parent),
+                settings.approved_short_password_sha256,
+            )
+            if settings.enable
+            else previous_auth
+        )
+
+        async def commit():
+            nonlocal new_site
+            self.settings, self.auth = settings, auth
+            if settings.enable and not previous.enable:
+                if self.runner is None:
+                    await self.start(self.api)
+                    new_site = self.site
+                else:
+                    new_site = web.TCPSite(self.runner, settings.host, settings.port)
+                    await new_site.start()
+                    self.site = new_site
+            elif not settings.enable and previous.enable:
+                await previous_site.stop()
+            elif settings.enable and (settings.host, settings.port) != (previous.host, previous.port):
+                new_site = web.TCPSite(self.runner, settings.host, settings.port)
+                await new_site.start()
+                self.site = new_site
+                await previous_site.stop()
+
+        async def rollback():
+            self.settings, self.auth = previous, previous_auth
+            if new_site:
+                await new_site.stop()
+            if previous_runner is None and self.runner:
+                await self.runner.cleanup()
+                self.runner = None
+                if getattr(self, "cleanup_task", None):
+                    self.cleanup_task.cancel()
+                    await asyncio.gather(self.cleanup_task, return_exceptions=True)
+            if previous_site and previous.enable:
+                self.site = previous_site
+                if previous_site not in self.runner.sites:
+                    await previous_site.start()
+
+        return ConfigurationUpdate(commit, rollback)
 
     @web.middleware
     async def guard(self, request, handler):
+        if not self.settings.enable:
+            raise web.HTTPServiceUnavailable(text="网页入口已关闭")
         try:
             # Numeric hosts prevent arbitrary domain DNS-rebinding. localhost is for tunnels.
             hostname = urlsplit("//" + request.host).hostname
@@ -272,7 +329,7 @@ class WebPlugin:
         await response.prepare(request)
         self.streams.add(response)
         try:
-            while self.auth.valid(request.cookies.get(COOKIE)):
+            while self.settings.enable and self.auth.valid(request.cookies.get(COOKIE)):
                 events = self.conversation.changes(cursor)
                 if events is None:
                     await response.write(b"event: reset\ndata: {}\n\n")

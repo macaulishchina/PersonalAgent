@@ -214,7 +214,11 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
             )
             console = object.__new__(Console)
             console.files = files
-            console.business = SimpleNamespace(application={}, loaded_snapshot=None)
+            console.business = SimpleNamespace(
+                application={},
+                loaded_snapshot=None,
+                update=lambda version: {"phase": "pending_start", "version": version},
+            )
             console.access = AdminAccess(root / "admin")
             console.writes = asyncio.Lock()
             app = web.Application(middlewares=[console.guard])

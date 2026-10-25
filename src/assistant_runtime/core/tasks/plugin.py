@@ -994,8 +994,11 @@ class TasksPlugin:
             self.launching.discard(ident)
 
     async def worker(self):
+        from assistant_runtime.api.lifecycle import configuration_boundary
+
         await self.context.ready.wait()
         while True:
+            await configuration_boundary(self.context)
             runs = self.repo.pending()
             for r in runs:
                 if (
@@ -1270,6 +1273,31 @@ class TasksPlugin:
             and d["next_at"] is not None
             and d["spec"]["trigger"]["kind"] == "immediate"
         }
+
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationPending
+        from assistant_runtime.core.configuration.updates import attributes
+
+        from dataclasses import replace
+
+        settings = TaskSettings.parse(config.tasks)
+        capacity_only = replace(self.settings, concurrency=settings.concurrency) == settings
+
+        def ready():
+            return capacity_only or not (
+                self.launching
+                or self.delivering_results
+                or any(
+                    run["state"] in {"dispatching", "running", "waiting_user"} for run in self.repo.pending()
+                )
+            )
+
+        if not ready():
+            raise ConfigurationPending()
+        return attributes(
+            [(self, "settings", settings), (self, "model_policy", ModelPolicy.parse(settings.model_policy))],
+            ready=ready,
+        )
 
     def maintenance_resume(self):
         self.draining = False

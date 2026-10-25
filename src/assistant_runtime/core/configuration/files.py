@@ -136,7 +136,9 @@ class ConfigurationFiles:
         from .fields import present
 
         with self.locked():
-            return present(self.snapshot(), self.entry.name)
+            return present(
+                self.snapshot(), self.entry.name, root=self.resources.root if self.resources else None
+            )
 
     def patch(self, version, patches, *, actor="administrator", resource_changes=None):
         from .fields import patch_documents

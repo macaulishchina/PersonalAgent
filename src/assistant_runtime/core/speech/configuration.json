@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "个人助手",
+  "group": "execution",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "realtime_voice": {
+        "type": "string",
+        "title": "realtime_voice",
+        "default": "juniper",
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "assistant_name": {
+        "type": "string",
+        "title": "助手名称",
+        "default": "个人助理",
+        "x-group": "conversation"
+      },
+      "wake_words": {
+        "type": "array",
+        "title": "wake_words",
+        "default": [
+          "嘟嘟"
+        ],
+        "items": {},
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "idle_seconds": {
+        "type": "integer",
+        "title": "idle_seconds",
+        "default": 60,
+        "x-advanced": true,
+        "x-group": "conversation",
+        "minimum": 1
+      },
+      "voice_follow_up_seconds": {
+        "type": "integer",
+        "title": "voice_follow_up_seconds",
+        "default": 8,
+        "x-advanced": true,
+        "x-group": "conversation"
+      },
+      "quiet_hours": {
+        "type": "object",
+        "title": "静默时段",
+        "default": {},
+        "additionalProperties": {},
+        "x-group": "conversation"
+      },
+      "interaction": {
+        "type": "object",
+        "title": "interaction",
+        "default": {},
+        "additionalProperties": {},
+        "x-advanced": true,
+        "x-group": "conversation"
+      }
+    }
+  },
+  "application": {
+    "*": "boundary"
+  },
+  "requires": [
+    "conversation",
+    "devices",
+    "voice_disabled"
+  ]
+}

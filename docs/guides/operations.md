@@ -10,7 +10,7 @@ pa stop
 pa restart
 ```
 
-退出 CLI 不停止后台。普通配置修改在网页“保存 → 应用”，只重启业务；`pa restart` 重启整个后台，配置网页会暂时断开。未知执行不会因重启自动重做。
+退出 CLI 不停止后台。配置页“保存并生效”优先在线更新；结构性变更才提示显式重启。`pa restart` 重启整个后台，配置网页会暂时断开。未知执行不会因重启自动重做，失败的在线更新候选也不会随重启自动重试。
 
 日志位于实例的 `state/configuration/manager.log` 和 `business.log`。`pa service logs` 可查询服务日志；Windows SCM 启动故障还需查看 Windows 事件查看器。
 
@@ -83,7 +83,7 @@ sudo loginctl enable-linger "$(id -un)"
 | 业务配置损坏，聊天无法启动 | 执行 `pa configuration serve --management <实例目录>/management.toml` 打开独立管理页修复；已有管理进程时直接访问原页面 |
 | 模型未配置／调用失败 | 检查账号授权、供应商开关、模型绑定和网页待部署步骤 |
 | 端口被占用／后台启动失败 | 检查日志和原有进程；明确修改监听地址，不另起重复实例 |
-| 配置保存后未生效 | 在配置页执行“应用”，等待业务就绪 |
+| 配置保存后未生效 | 查看“生效状态与维护”：等待安全边界、修复后重试，或按提示显式重启／完成外部部署 |
 | 服务状态正常但不能聊天 | 同时检查 `pa status`、业务日志和模型实际调用 |
 
 配置修复边界见[配置模块](../../src/assistant_runtime/core/configuration/README.md)；命令用法见 [CLI 指南](cli.md)。

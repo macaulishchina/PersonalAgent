@@ -128,6 +128,18 @@ class WorkFilesMaintenance:
     def __init__(self, files):
         self.files = files
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationError
+        from assistant_runtime.core.configuration.updates import attributes
+
+        root = Path(config.work_files.get("root", config.state_dir / "work")).expanduser().absolute()
+        if root != self.files.root:
+            raise ConfigurationError(["work_files", "root"], "migration", "工作文件目录变更需要本地迁移")
+        days = config.work_files.get("retention_days", 7)
+        if type(days) is not int or not 1 <= days <= 365:
+            raise ConfigurationError(["work_files", "retention_days"], "range", "保留时间必须为 1–365 天")
+        return attributes([(self.files, "days", days)])
+
     async def start(self, context):
         from assistant_runtime.api.files import FileRequest
 

@@ -54,5 +54,11 @@
         "maximum": 100
       }
     }
+  },
+  "requires": [
+    "ai_usage"
+  ],
+  "application": {
+    "*": "boundary"
   }
 }

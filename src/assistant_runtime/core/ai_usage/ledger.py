@@ -17,6 +17,10 @@ class Ledger:
         self.path, self.settings, self.db = path, settings, None
         self.owner = None
 
+    def configure(self, settings):
+        """Executed by the ledger worker; existing counters/reservations stay intact."""
+        self.settings = settings
+
     def open(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.owner = self.path.with_suffix(".lock").open("a+")

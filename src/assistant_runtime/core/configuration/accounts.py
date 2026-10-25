@@ -13,12 +13,19 @@ class Accounts:
         self.flows = {}
 
     def configured(self):
+        from types import SimpleNamespace
+        import tomllib
+        from .fields import merge
+
         with self.business.files.locked():
             snapshot = self.business.files.snapshot()
-            config = self.business.files.validate(snapshot.contents)
+            raw = {}
+            for content in snapshot.contents.values():
+                merge(raw, tomllib.loads(content.decode()))
         from assistant_runtime.core.models.settings import ModelSettings
 
-        return config, ModelSettings.parse(config.model_api)
+        config = SimpleNamespace(root=self.business.settings.root, pi_binary=raw.get("pi_binary", "pi"))
+        return config, ModelSettings.parse({"accounts": raw.get("model_api", {}).get("accounts", {})})
 
     def public(self):
         _, settings = self.configured()

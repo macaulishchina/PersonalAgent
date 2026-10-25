@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "设备",
+  "group": "connections",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "input_device": {
+        "type": "string",
+        "title": "input_device",
+        "default": "",
+        "x-advanced": true
+      },
+      "default_output": {
+        "type": "string",
+        "title": "default_output",
+        "default": "",
+        "x-advanced": true
+      },
+      "minimum_volume": {
+        "type": "integer",
+        "title": "minimum_volume",
+        "default": 80,
+        "x-advanced": true,
+        "minimum": 0,
+        "maximum": 100
+      },
+      "echo_cancel": {
+        "type": "boolean",
+        "title": "echo_cancel",
+        "default": true,
+        "x-advanced": true
+      },
+      "devices": {
+        "type": "object",
+        "title": "设备资源",
+        "default": {},
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "adapter": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "connection": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "max_age_seconds": {
+              "type": "number",
+              "default": 15,
+              "minimum": 0.001,
+              "maximum": 3600
+            },
+            "physical_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "adapter",
+            "kind",
+            "label",
+            "connection"
+          ]
+        },
+        "x-group": "resources"
+      }
+    }
+  },
+  "application": {
+    "*": "boundary",
+    "input_device": "restart",
+    "default_output": "restart",
+    "echo_cancel": "restart"
+  },
+  "requires": []
+}

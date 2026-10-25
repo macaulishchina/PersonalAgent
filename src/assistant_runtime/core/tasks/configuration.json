@@ -49,5 +49,14 @@
         "additionalProperties": {}
       }
     }
+  },
+  "requires": [
+    "execution",
+    "pi",
+    "notifications",
+    "workfiles"
+  ],
+  "application": {
+    "*": "boundary"
   }
 }

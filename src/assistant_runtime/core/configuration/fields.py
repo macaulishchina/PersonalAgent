@@ -36,6 +36,10 @@ def described_schema(spec):
 
 
 def declared_fields(inventory=None):
+    from .catalog import catalog
+    from .interface import field_interface
+
+    inventory = inventory or catalog()
     fields = []
     for spec in specifications(inventory):
         namespace = spec.get("namespace", "")
@@ -47,6 +51,7 @@ def declared_fields(inventory=None):
             rule = rule if isinstance(rule, dict) else {}
             fields.append(
                 {
+                    **field_interface(spec, key, rule, inventory),
                     "path": [*prefix, key],
                     "schema": rule,
                     "group": rule.get("x-group", spec.get("group", "extensions")),
@@ -121,7 +126,7 @@ def redact_declared(value, rule):
     return value
 
 
-def present(snapshot, entry_name, inventory=None):
+def present(snapshot, entry_name, inventory=None, *, root=None):
     from .files import redact
 
     documents = {n: tomllib.loads(raw.decode()) for n, raw in snapshot.contents.items()}
@@ -142,6 +147,8 @@ def present(snapshot, entry_name, inventory=None):
         explicit = value is not MISSING
         if not explicit:
             value = field["schema"].get("default", MISSING)
+            if field["path"] == ["workspace"] and root is not None:
+                value = str(root)
         item = {
             **field,
             "explicit": explicit,

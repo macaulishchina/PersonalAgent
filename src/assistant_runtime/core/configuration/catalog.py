@@ -84,6 +84,7 @@ def installed_descriptions(names=None):
                 "kind": "extension",
                 "configuration": description,
                 "description_available": description is not None,
+                "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: installed_platforms(entry)),
             }
         )
@@ -103,6 +104,7 @@ def catalog(*, external_names=None):
                 "kind": "core" if module.startswith("assistant_runtime.core.") else "extension",
                 "configuration": description,
                 "description_available": description is not None,
+                "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: platforms(name)),
             }
         )
@@ -111,7 +113,7 @@ def catalog(*, external_names=None):
 
     application = read_description(root / "app/configuration.json")
     application["schema"]["properties"]["plugins"]["default"] = default_plugins()
-    return {
+    inventory = {
         "application": application,
         "plugins": result + [item for item in installed if item["id"] not in OWNERS],
         "issues": [
@@ -125,6 +127,10 @@ def catalog(*, external_names=None):
             if item.get("platform_error")
         ],
     }
+    from .interface import describe
+
+    inventory["pages"] = describe(inventory)
+    return inventory
 
 
 def specifications(inventory=None):

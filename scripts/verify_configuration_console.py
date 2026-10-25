@@ -75,7 +75,7 @@ async def main():
             "init",
             str(root),
             "--preset",
-            "standard",
+            "slim",
             env=env,
             stdout=-1,
             stderr=-1,
@@ -83,9 +83,14 @@ async def main():
         out, err = await setup.communicate()
         assert setup.returncode == 0, err.decode()
         entry = root / "config/config.toml"
-        entry.write_text(entry.read_text().replace('"web"]', '"web", "sample"]'))
-        services = root / "config/services.toml"
-        services.write_text(services.read_text().replace("8046", str(port())))
+        import tomlkit
+
+        document = tomlkit.parse(entry.read_text())
+        if sys.platform == "linux":
+            document["plugins"].append("sample")
+        else:
+            document["plugin_settings"] = {"sample": {}}
+        entry.write_text(tomlkit.dumps(document))
         models = root / "config/models.toml"
         models.write_text(
             models.read_text()
@@ -149,7 +154,7 @@ default_reasoning_effort = "none"
                 )
                 await page.get_by_role("button", name="登录", exact=True).click()
                 await expect(page.locator("#editor")).to_be_visible()
-                await expect(page.locator("#navigation button")).to_have_count(9)
+                await expect(page.get_by_role("button", name="模型与账号", exact=True)).to_be_visible()
                 async with asyncio.timeout(25):
                     while (initial := await (await page.request.get(origin + "/api/status")).json())[
                         "state"
@@ -160,17 +165,25 @@ default_reasoning_effort = "none"
                 await expect(page.locator("#health")).to_have_text("业务运行中")
                 assert not errors, errors
                 await capture(page, "configuration-desktop-access.png")
-                await page.get_by_role("button", name="插件管理", exact=True).click()
+                await page.get_by_role("button", name="插件", exact=True).click()
                 sample = page.locator(".plugin-option").filter(has_text="示例笔记").locator("input")
-                await sample.uncheck()
-                await sample.check()
+                if sys.platform == "linux":
+                    await sample.uncheck()
+                    await sample.check()
+                    await page.get_by_role("button", name="放弃修改", exact=True).click()
+                else:
+                    await expect(sample).to_be_disabled()
                 await capture(page, "configuration-desktop-plugins.png")
-                await page.get_by_role("button", name="扩展插件", exact=True).click()
+                await (
+                    page.locator(".plugin-option")
+                    .filter(has_text="示例笔记")
+                    .get_by_role("button", name="配置", exact=True)
+                    .click()
+                )
                 maximum = page.get_by_label("笔记长度上限", exact=True)
                 await maximum.fill("0")
                 await expect(page.locator("#save")).to_be_disabled()
-                await page.get_by_role("button", name="基础与访问", exact=True).click()
-                await page.get_by_role("button", name="扩展插件", exact=True).click()
+                await page.get_by_role("button", name="实例管理", exact=True).click()
                 await expect(maximum).to_have_value("0")
                 await maximum.fill("1200")
                 await page.get_by_label("报告风格", exact=True).select_option("detailed")
@@ -181,15 +194,17 @@ default_reasoning_effort = "none"
                     and r.request.method == "POST"
                     and r.status == 200
                 ):
-                    await page.get_by_role("button", name="校验并保存", exact=True).click()
-                await expect(page.locator("#notice")).to_have_text("已保存，待重启生效。")
+                    await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#notice")).to_have_text(
+                    "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
+                )
                 config = tomllib.loads(entry.read_text())
                 assert config["plugin_settings"]["sample"]["report"]["style"] == "detailed"
                 assert config["plugin_settings"]["sample"]["max_length"] == 1200
                 assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == pid
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
                 providers = page.locator(selector(["model_api", "providers"]))
-                await providers.get_by_role("textbox", name="服务供应商 · 新条目名称", exact=True).fill(
+                await providers.get_by_role("textbox", name="2. 连接供应商 · 新条目名称", exact=True).fill(
                     "testing"
                 )
                 await providers.get_by_role("button", name="添加条目", exact=True).click()
@@ -199,7 +214,7 @@ default_reasoning_effort = "none"
                     .first
                 )
                 await testing.get_by_label("预设接口", exact=True).select_option("deepseek")
-                await providers.get_by_role("textbox", name="服务供应商 · 新条目名称", exact=True).fill(
+                await providers.get_by_role("textbox", name="2. 连接供应商 · 新条目名称", exact=True).fill(
                     "discard_me"
                 )
                 await providers.get_by_role("button", name="添加条目", exact=True).click()
@@ -219,6 +234,7 @@ default_reasoning_effort = "none"
                 await primary.locator(":scope > summary").click()
                 await primary.get_by_label("供应商", exact=True).select_option("testing")
                 await expect(primary.get_by_label("供应商", exact=True)).to_have_value("testing")
+                await primary.get_by_text("高级设置", exact=True).click()
                 efforts = primary.get_by_role("group", name="模型支持的思考深度", exact=True)
                 await efforts.locator("input[value=none]").check()
                 await efforts.locator("input[value=high]").uncheck()
@@ -231,8 +247,10 @@ default_reasoning_effort = "none"
                     and r.request.method == "POST"
                     and r.status == 200
                 ):
-                    await page.get_by_role("button", name="校验并保存", exact=True).click()
-                await expect(page.locator("#notice")).to_have_text("已保存，待重启生效。")
+                    await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#notice")).to_have_text(
+                    "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
+                )
                 saved = tomllib.loads(models.read_text())["model_api"]
                 assert saved["entries"]["primary"]["provider"] == "testing"
                 assert saved["entries"]["primary"]["fallbacks"] == ["fast"]
@@ -241,7 +259,7 @@ default_reasoning_effort = "none"
                     await page.set_viewport_size({"width": width, "height": height})
                     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 await page.set_viewport_size({"width": 1440, "height": 1000})
-                await page.get_by_role("button", name="应用配置", exact=True).click()
+                await page.get_by_role("button", name="生效状态与维护", exact=True).click()
                 await expect(page.locator("#apply-dialog")).to_be_visible()
                 await capture(page, "configuration-desktop-apply.png")
                 async with page.expect_response(lambda r: r.url.endswith("/api/apply") and r.status == 202):
@@ -262,7 +280,7 @@ default_reasoning_effort = "none"
                 assert await page.locator("#new-password").get_attribute("minlength") == "7"
                 await page.keyboard.press("Escape")
                 await expect(page.locator("#password-dialog")).not_to_be_visible()
-                await page.get_by_role("button", name="基础与访问", exact=True).click()
+                await page.get_by_role("button", name="实例管理", exact=True).click()
                 # Corrupt business configuration remains repairable through the independent shell.
                 valid = entry.read_text()
                 entry.write_text(valid + "broken = [\n")

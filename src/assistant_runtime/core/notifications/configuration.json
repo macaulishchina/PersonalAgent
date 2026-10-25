@@ -57,5 +57,9 @@
         "maximum": 3600
       }
     }
+  },
+  "requires": [],
+  "application": {
+    "*": "boundary"
   }
 }

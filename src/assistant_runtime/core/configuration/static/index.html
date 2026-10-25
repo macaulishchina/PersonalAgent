@@ -62,7 +62,7 @@
               <h1 id="page-title">基础与访问</h1>
               <p id="page-description">管理实例的基础设置与访问入口。</p>
             </div>
-            <button id="apply-open" class="secondary">应用配置</button>
+            <button id="apply-open" class="secondary">生效状态与维护</button>
           </div>
           <div class="configuration-state">
             <span class="state-dot"></span><strong id="state">读取配置中</strong
@@ -74,12 +74,12 @@
         <footer class="savebar">
           <div class="save-status">
             <strong id="count">没有未保存的修改</strong
-            ><span>校验并保存至文件，重启业务后生效。</span>
+            ><span>保存后自动尝试生效；需要重启时会提示，不会自动重启。</span>
           </div>
           <div class="footer-actions">
             <button id="history" class="subtle">变更记录</button
             ><button id="discard" class="secondary" disabled>放弃修改</button
-            ><button id="save" class="primary" disabled>校验并保存</button>
+            ><button id="save" class="primary" disabled>保存并生效</button>
           </div>
         </footer>
       </div>
@@ -134,6 +134,7 @@
     </dialog>
 
     <dialog id="apply-dialog">
+      <button id="apply-update" class="primary">重试在线应用（不重启）</button>
       <div class="dialog-heading">
         <div>
           <h2>应用已保存的配置</h2>

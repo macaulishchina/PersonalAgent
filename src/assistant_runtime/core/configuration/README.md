@@ -36,7 +36,8 @@ reasoning selections. Low-frequency maps/lists retain bounded structured editors
 The module's packaged JSON Schema drives defaults, constraints and visibility; the browser
 has no second model registry or plugin-specific scripts. Disabled-owner settings are still
 schema-validated. Disabled external packages are not imported for semantic validation;
-their settings remain available when disabling an uncertified owner. Missing schema
+their settings remain available when disabling an uncertified owner. Dormant values require
+correct structure/types; full semantic checks run only for enabled owners. Missing schema
 validation dependencies still block a save instead of skipping checks.
 
 Extension rows display Linux/Windows certification from packaged `platform.json`,
@@ -50,13 +51,28 @@ persistent save bar. Plugin activation has its own category. Named model/provide
 create their nested forms only when expanded; switches, enum choices, ordered reference
 lists and structured JSON keep their original value types. Technical field/file/default
 information is available on demand. Apply/restart, history, repair and password changes
-open separate dialogs instead of occupying the main form. Pending edits survive category
-changes, malformed drafts block saving, and saved files remain separate from loaded values.
+open separate dialogs instead of occupying the main form. Save or discard the current page
+before switching; malformed drafts block saving, and saved files remain separate from loaded values.
 
-**Edit → validate/save → confirm apply → restart → verify.** Save preserves comments,
+**Edit → save and apply → inspect the outcome.** Save preserves comments,
 explicit includes and unrelated fields; defaults are displayed, not materialized by an
 unrelated edit. Reset removes an override. The page distinguishes file and loaded values.
-Saving never starts inference, probes devices, installs software or restarts the worker.
+Saving does not start inference, install software or restart the worker. Applying an enabled
+connection can replace that owner's connection locally; live work first reaches a safe boundary.
+
+`ConfigurationService` is shared by CLI checks and management. The worker coordinates
+`ConfigurationUpdate` preparation, commit, reverse rollback and cleanup. Field policies are
+static owner data (`application`); UI mapping is independent (`interface`). Budget/parallelism
+changes preserve usage and active leases. Model changes preserve logical sessions and Pi
+context. Resource manifests use scoped candidate views and publish only after commit.
+Failed candidates are blocked from automatic restart retry; worker receipts reconcile lost
+IPC responses. Unrecoverable owners and their dependents refuse new requests. Management
+listener failures remain separately pending and can be retried without restarting the worker.
+
+Plugin composition, process foundation, fixed main voice bindings and storage migration
+remain explicit restart/maintenance operations. A page is applied atomically: if its related
+changes require restart, the candidate waits as a whole. External gateway steps stay pending
+until the operator explicitly confirms them. Manual edits are detected but never auto-applied.
 
 ## Files and credentials
 
@@ -87,8 +103,8 @@ Restoring configuration does not roll back business data or replay work.
 
 Workers read immutable TOML/resource generations, including lazily read private credentials
 and declared extension resources. New executions also retain the loaded MCP definitions.
-A saved MCP change is pending restart, not an automatic context refresh. Explicit MCP
-verification may inspect a pending definition; it does not apply it or execute its tools.
+A saved MCP change applies at a verified idle boundary through the registry owner. Explicit MCP
+verification may inspect a pending definition; it does not execute its tools or replay work.
 Only declared MCP environment references are supplied from the loaded credential generation.
 The independent process retains at most 20 generations plus any currently protected one.
 
@@ -155,7 +171,7 @@ python scripts/verify_configuration_console.py --installed --python /absolute/re
 ```
 
 `--browser` selects an existing Chromium executable; `--artifacts /private/directory` saves
-synthetic screenshots. The check creates a temporary standard instance, keeps model routes
+synthetic screenshots. The check creates a temporary slim instance, keeps model routes
 disabled, and verifies 1280/1440/1920 desktop widths, external-plugin forms, typed values,
 new references, removal, save/apply, repair and custom passwords. It does not load the
 production instance, credentials or task plans. Install validation dependencies separately

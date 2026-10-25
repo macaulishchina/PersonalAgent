@@ -116,4 +116,13 @@ def context_for(host, name):
 
 def create(host, name, factory=None):
     public, attach = dependencies(host, name)
-    return BoundExtension((factory or declaration(name).create)(public), public, attach)
+    plugin = BoundExtension((factory or declaration(name).create)(public), public, attach)
+    from .configuration_replacement import REPLACEABLE, prepare
+
+    if (
+        name in REPLACEABLE
+        and not hasattr(plugin, "prepare_configuration")
+        and hasattr(plugin, "maintenance_pending")
+    ):
+        plugin.prepare_configuration = lambda config: prepare(host, name, config)
+    return plugin

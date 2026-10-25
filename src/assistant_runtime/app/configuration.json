@@ -27,20 +27,6 @@
         "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
         "x-advanced": true
       },
-      "realtime_voice": {
-        "type": "string",
-        "title": "realtime_voice",
-        "default": "juniper",
-        "x-advanced": true,
-        "x-group": "conversation"
-      },
-      "workspace": {
-        "type": "string",
-        "title": "workspace",
-        "readOnly": true,
-        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
-        "x-advanced": true
-      },
       "pi_binary": {
         "type": "string",
         "title": "pi_binary",
@@ -79,51 +65,6 @@
         ],
         "x-group": "models"
       },
-      "assistant_name": {
-        "type": "string",
-        "title": "助手名称",
-        "default": "个人助理",
-        "x-group": "conversation"
-      },
-      "wake_words": {
-        "type": "array",
-        "title": "wake_words",
-        "default": [
-          "嘟嘟"
-        ],
-        "items": {},
-        "x-advanced": true,
-        "x-group": "conversation"
-      },
-      "idle_seconds": {
-        "type": "integer",
-        "title": "idle_seconds",
-        "default": 60,
-        "x-advanced": true,
-        "x-group": "conversation"
-      },
-      "voice_follow_up_seconds": {
-        "type": "integer",
-        "title": "voice_follow_up_seconds",
-        "default": 8,
-        "x-advanced": true,
-        "x-group": "conversation"
-      },
-      "quiet_hours": {
-        "type": "object",
-        "title": "静默时段",
-        "default": {},
-        "additionalProperties": {},
-        "x-group": "conversation"
-      },
-      "interaction": {
-        "type": "object",
-        "title": "interaction",
-        "default": {},
-        "additionalProperties": {},
-        "x-advanced": true,
-        "x-group": "conversation"
-      },
       "hid_buttons": {
         "type": "object",
         "title": "硬件按键",
@@ -131,44 +72,6 @@
         "additionalProperties": {},
         "x-group": "resources",
         "x-advanced": true
-      },
-      "work_files": {
-        "type": "object",
-        "title": "工作文件",
-        "default": {},
-        "additionalProperties": {},
-        "x-group": "resources"
-      },
-      "input_device": {
-        "type": "string",
-        "title": "input_device",
-        "default": "",
-        "x-advanced": true
-      },
-      "default_output": {
-        "type": "string",
-        "title": "default_output",
-        "default": "",
-        "x-advanced": true
-      },
-      "minimum_volume": {
-        "type": "integer",
-        "title": "minimum_volume",
-        "default": 80,
-        "x-advanced": true
-      },
-      "echo_cancel": {
-        "type": "boolean",
-        "title": "echo_cancel",
-        "default": true,
-        "x-advanced": true
-      },
-      "devices": {
-        "type": "object",
-        "title": "设备资源",
-        "default": {},
-        "additionalProperties": {},
-        "x-group": "resources"
       },
       "model_dir": {
         "type": "string",
@@ -223,18 +126,6 @@
         },
         "additionalProperties": {}
       },
-      "memory_enabled": {
-        "type": "boolean",
-        "title": "启用记忆",
-        "default": false,
-        "x-group": "resources"
-      },
-      "memory_auto_capture": {
-        "type": "boolean",
-        "title": "自动提取记忆",
-        "default": true,
-        "x-group": "resources"
-      },
       "pi_shell": {
         "type": "string",
         "title": "命令工具",
@@ -248,5 +139,12 @@
         "x-group": "execution"
       }
     }
+  },
+  "application": {
+    "*": "restart",
+    "main_model": "boundary",
+    "main_reasoning_effort": "boundary",
+    "instance_skills": "boundary",
+    "hid_buttons": "boundary"
   }
 }

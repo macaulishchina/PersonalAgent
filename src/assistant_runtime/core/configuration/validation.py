@@ -41,6 +41,14 @@ def validate_candidate(entry_name, contents, *, root, management=None, entry_dir
         external = [name for name in config.enabled_plugins if name not in OWNERS]
         specs = {name: declaration(name) for name in config.enabled_plugins if name in OWNERS}
         specs.update(discover(external, OWNERS) if external else {})
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        for name, spec in specs.items():
+            missing = set(spec.manifest.requires) - specs.keys()
+            if missing:
+                raise ConfigurationError(
+                    ["plugins", name], "dependency", f"插件 {name} 需要启用：{', '.join(sorted(missing))}"
+                )
         graph = Runtime(None)
         for name, spec in specs.items():
             graph.add(SimpleNamespace(manifest=spec.manifest))
@@ -59,8 +67,8 @@ def validate_candidate(entry_name, contents, *, root, management=None, entry_dir
                 raise ValueError("Unavailable capability binding: " + binding)
         from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 
-        models = ModelSettings.parse(config.model_api)
-        if models.enabled:
+        models = ModelSettings.parse(config.model_api) if "models" in config.enabled_plugins else None
+        if models and models.enabled:
             if config.main_model != "unconfigured":
                 if config.main_model not in models.entries:
                     raise ValueError("Main model alias is not configured")

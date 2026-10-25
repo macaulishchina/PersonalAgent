@@ -81,6 +81,16 @@ class Worker:
                     break
                 action, args, future = item
                 try:
+                    if action == "configure":
+                        settings = args["settings"]
+                        if not self.readonly:
+                            db.execute(
+                                f"PRAGMA max_page_count={max(64, (settings.quota_bytes - 65536) // 8192)}"
+                            )
+                        self.settings = settings
+                        self.queue.maxsize = settings.queue_size
+                        future.set_result({"configured": True})
+                        continue
                     deadline = time.monotonic() + self.settings.query_seconds
                     db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
                     if self.readonly:

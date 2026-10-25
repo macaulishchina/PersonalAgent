@@ -634,6 +634,9 @@ class PiClient:
         self.counter = 0
         self.started = False
         self.closing = False
+        self.configuration_ready = asyncio.Event()
+        self.configuration_ready.set()
+        self.configuration_tasks = set()
         self.locks = {}
         from assistant_runtime.core.pi.transport import ExecutionTransport
 
@@ -665,7 +668,7 @@ class PiClient:
         path = self._meta_path(ident)
         temp = path.with_suffix(".tmp")
         fd = os.open(temp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(meta, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -698,12 +701,16 @@ class PiClient:
             await worker.send_line({"type": "extension_ui_response", "id": ui_id, "cancelled": True})
 
     async def request(self, command, arguments, timeout=30):
+        if asyncio.current_task() not in self.configuration_tasks:
+            await self.configuration_ready.wait()
         command = Command(command)
         if not self.started:
             raise RpcError("Executor is not started")
         async with asyncio.timeout(timeout):
 
             def dispatch():
+                if command == Command.START and getattr(self, "configuration_unavailable", False):
+                    raise RpcError("Executor unavailable after a configuration recovery failure")
                 return self._request(command, arguments)
 
             if self.admission and command == Command.START:
@@ -987,7 +994,9 @@ class PiClient:
                 raise ValueError("Execution model does not support images")
             text, images = convert_inputs(p.get("input", []))
             # Restart at a verified idle boundary. Pi reports the selected model/effort before prompt.
-            if (model, effort) != (meta["model"], meta["reasoning_effort"]):
+            if (model, effort) != (meta["model"], meta["reasoning_effort"]) or meta.get(
+                "model_binding"
+            ) != self._binding(model):
                 await w.close()
                 meta.update(model=model, model_binding=self._binding(model), reasoning_effort=effort)
             await w.start()

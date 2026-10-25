@@ -56,5 +56,9 @@
         "port": "hap_port"
       }
     ]
+  },
+  "requires": [],
+  "application": {
+    "*": "boundary"
   }
 }

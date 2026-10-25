@@ -11,6 +11,18 @@ from .plugins import current_call
 _accepted = ContextVar("accepted_work", default=None)
 
 
+async def configuration_boundary(context):
+    """Pause new background dispatch while a host configuration transaction switches owners."""
+    event = getattr(getattr(context, "runtime", None), "configuration_ready", None)
+    if event is not None:
+        await event.wait()
+    if getattr(context, "state", None) in {"failed", "blocked"}:
+        import asyncio
+
+        await context.cancelled.wait()
+        raise asyncio.CancelledError()
+
+
 class WorkIntake:
     def __init__(self):
         self.paused = False

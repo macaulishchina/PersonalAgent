@@ -1,4 +1,5 @@
 from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api.configuration import configuration_spec
 
 
 def build(host):
@@ -22,6 +23,7 @@ def build(host):
 DECLARATION = PluginDefinition(
     Manifest("memory", (), critical=False),
     internal_factory=build,
+    configuration=configuration_spec(__file__),
     service="memory",
     tools_factory="assistant_runtime.core.memory.tools:create_server",
     task_context=False,

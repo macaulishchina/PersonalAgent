@@ -79,7 +79,7 @@ def main():
     files.add_argument("action", choices=["put", "get"])
     files.add_argument("arguments", help="JSON: put accepts name, base64 data, and optional kind=file|image")
     management = sub.add_parser("configuration", help="Independent operator configuration console")
-    management.add_argument("action", choices=["serve", "token", "reset-token"])
+    management.add_argument("action", choices=["serve", "token", "reset-token", "check", "apply", "status"])
     management.add_argument("--management", required=True, help="Independent management.toml path")
     run = sub.add_parser("run")
     run.add_argument("--no-mic", action="store_true")
@@ -315,7 +315,15 @@ def main():
             from assistant_runtime.core.configuration.auth import AdminAccess
 
             settings = ManagementSettings.load(args.management)
-            if args.action == "serve":
+            if args.action == "check":
+                from assistant_runtime.core.configuration.service import ConfigurationService
+
+                print(json.dumps(ConfigurationService(settings).check(), ensure_ascii=False))
+            elif args.action in {"apply", "status"}:
+                from assistant_runtime.core.configuration.client import operate
+
+                print(json.dumps(asyncio.run(operate(settings, args.action)), ensure_ascii=False))
+            elif args.action == "serve":
                 from assistant_runtime.app.management import serve
 
                 asyncio.run(serve(settings))
@@ -353,14 +361,22 @@ def main():
                 argv.extend(["--account", args.account])
             install_service(argv)
             return
-        config = Config.load(args.config)
-        if args.command == "service":
+        if args.command == "service" or args.command in {"start", "restart", "stop", "logs"}:
+            from .management_bootstrap import control_config
             from assistant_runtime.platforms.services import control
 
-            result = control(args.action, config)
+            result = control(
+                args.action if args.command == "service" else args.command, control_config(args.config)
+            )
             if result is not None:
                 print(result)
             return
+        if args.command == "status":
+            from .management_bootstrap import control_config
+
+            config = control_config(args.config)
+        else:
+            config = Config.load(args.config)
         if args.command == "chat":
             from .chat import chat as enter_chat
 
@@ -373,10 +389,6 @@ def main():
             from assistant_runtime.app.host import AssistantService
 
             asyncio.run(AssistantService(config, args.no_mic).run())
-        elif args.command in {"start", "restart", "stop", "logs"}:
-            from assistant_runtime.platforms.services import control
-
-            control(args.command, config)
         elif args.command == "ai-usage" and args.action == "check":
             from assistant_runtime.core.ai_usage.settings import UsageSettings
 

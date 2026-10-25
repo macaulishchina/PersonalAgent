@@ -26,6 +26,24 @@ class AIUsagePlugin:
         await self.service.start()
         context.spawn(self.maintenance(), "ledger-and-notices")
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationUpdate
+
+        incoming = UsageSettings.parse(config.ai_usage)
+        previous = self.service.settings
+
+        async def update(settings):
+            await self.service.call("configure", settings)
+            self.service.settings = settings
+
+        async def commit():
+            await update(incoming)
+
+        async def rollback():
+            await update(previous)
+
+        return ConfigurationUpdate(commit, rollback)
+
     def diagnostics(self):
         return {
             "ready": self.service.ready,

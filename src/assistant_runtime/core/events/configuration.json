@@ -29,5 +29,9 @@
         "maximum": 10
       }
     }
+  },
+  "requires": [],
+  "application": {
+    "*": "immediate"
   }
 }

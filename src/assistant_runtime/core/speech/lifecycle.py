@@ -549,6 +549,9 @@ class VoiceLifecycle:
     async def _maintenance(self):
         while True:
             await asyncio.sleep(1)
+            from assistant_runtime.api.lifecycle import configuration_boundary
+
+            await configuration_boundary(self.context)
             await self._enforce_quiet()
             if (
                 self.active

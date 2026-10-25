@@ -10,6 +10,35 @@ class ExecutionPlugin:
     def __init__(self, host):
         self.host, self.service = host, None
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationUpdate
+
+        incoming = settings(config.execution)
+        service = self.service
+        previous = (service.concurrency, service.queue.maxsize, service.default_model, service.default_effort)
+        previous_skills = service.skill_paths
+
+        def update(concurrency, queue_size, model, effort):
+            service.concurrency = concurrency
+            service.admission.slots.resize(concurrency)
+            service.queue._maxsize = queue_size
+            service.default_model, service.default_effort = model, effort
+
+        async def commit():
+            service.skill_paths = getattr(config, "_prepared_skill_paths", previous_skills)
+            update(
+                incoming["concurrency"],
+                incoming["queue_size"],
+                config.main_model,
+                config.main_reasoning_effort,
+            )
+
+        async def rollback():
+            service.skill_paths = previous_skills
+            update(*previous)
+
+        return ConfigurationUpdate(commit, rollback)
+
     async def start(self, context):
         host = self.host
         self.service = ExecutionService(

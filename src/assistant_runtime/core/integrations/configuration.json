@@ -27,5 +27,9 @@
         "default": false
       }
     }
+  },
+  "requires": [],
+  "application": {
+    "*": "boundary"
   }
 }

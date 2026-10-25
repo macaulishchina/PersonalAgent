@@ -10,6 +10,7 @@ from .auth import AdminAccess, PasswordPolicyError
 from .files import Conflict
 from .catalog import catalog
 from assistant_runtime.api.plugins import PlatformCertificationError
+from assistant_runtime.api.configuration import ConfigurationError
 
 COOKIE = "personal_agent_admin"
 log = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class Console:
             response = web.json_response({"error": str(exc)}, status=400)
         except PlatformCertificationError as exc:
             response = web.json_response({"error": str(exc), "code": "platform_not_certified"}, status=400)
+        except ConfigurationError as exc:
+            response = web.json_response({"error": str(exc), "issues": [exc.public()]}, status=400)
         except (ValueError, TypeError, KeyError, OSError):
             # Parser and owner exception strings may contain credentials. Do not echo them.
             response = web.json_response(
@@ -109,6 +112,8 @@ class Console:
                 web.post("/api/restore", self.restore),
                 web.get("/api/application-preview", self.preview),
                 web.post("/api/apply", self.apply),
+                web.post("/api/update", self.update),
+                web.post("/api/configuration-action", self.configuration_action),
                 web.post("/api/abort-apply", self.abort_apply),
             ]
         )
@@ -130,7 +135,13 @@ class Console:
         return {"host": settings.host, "port": settings.port, "public_origin": settings.public_origin}
 
     def writable(self):
-        if self.business.application.get("phase") in {"preparing", "waiting", "cancelling", "restarting"}:
+        if self.business.application.get("phase") in {
+            "preparing",
+            "applying",
+            "waiting",
+            "cancelling",
+            "restarting",
+        }:
             raise ValueError("Configuration application is active")
 
     async def close(self):
@@ -203,10 +214,30 @@ class Console:
     async def read(self, request):
         from .fields import present
 
-        result = await asyncio.to_thread(self.files.fields)
+        def snapshot_view():
+            with self.files.locked():
+                snapshot = self.files.snapshot()
+                result = present(
+                    snapshot,
+                    self.files.entry.name,
+                    root=self.files.resources.root if self.files.resources else None,
+                )
+                result["resources"] = (
+                    self.files.resources.public(snapshot.contents, snapshot.resources)
+                    if self.files.resources
+                    else []
+                )
+                return result
+
+        result = await asyncio.to_thread(snapshot_view)
+        result["application"] = dict(self.business.application)
         loaded = getattr(self.business, "loaded_snapshot", None)
         if loaded:
-            applied = present(loaded, self.files.entry.name)
+            applied = present(
+                loaded,
+                self.files.entry.name,
+                root=self.files.resources.root if self.files.resources else None,
+            )
             by_path = {tuple(field["path"]): field for field in applied["fields"]}
             for field in result["fields"]:
                 previous = by_path.get(tuple(field["path"]), {})
@@ -238,6 +269,8 @@ class Console:
                 actor="administrator",
                 resource_changes=data.get("resources"),
             )
+            if result.get("changed"):
+                result["application"] = self.business.update(result["version"])
         return web.json_response(result)
 
     async def history(self, request):
@@ -256,6 +289,26 @@ class Console:
             return web.json_response(
                 self.business.apply(data.get("version"), data.get("mode"), data.get("confirmed")), status=202
             )
+
+    async def update(self, request):
+        data = await request.json()
+        async with self.writes:
+            self.writable()
+            return web.json_response(self.business.update(data.get("version")), status=202)
+
+    async def configuration_action(self, request):
+        data = await request.json()
+        return web.json_response(
+            await self.business.request(
+                {
+                    "command": "configuration-action",
+                    "owner": data.get("owner"),
+                    "action": data.get("action"),
+                    "arguments": data.get("arguments", {}),
+                    "confirmed": data.get("confirmed", False),
+                }
+            )
+        )
 
     async def abort_apply(self, request):
         return web.json_response(await self.business.abort_apply())

@@ -97,7 +97,7 @@ Pi 主会话和后台任务自动获得动态扩展工具服务，不需要改�
 `.agent`、`.agents` 与根目录开发指南不作为助手技能加载。
 
 `pa plugins` 列出启用插件、类型、版本和依赖；启动时私下记录
-`state/plugin-installation.json`。配置修改重启生效，安装/升级由操作者显式执行。
+`state/plugin-installation.json`。插件启停、安装和升级需要显式重启；普通设置按所属模块声明的更新方式生效。
 这是一套可信代码开发契约，不是 Python 或操作系统沙箱。
 
 ## 示例和验证
@@ -170,6 +170,57 @@ these against the independent management listener without opening ports or probi
 Configuration descriptors must remain static package data; arbitrary frontend scripts and
 runtime network probes are not part of this interface.
 
+### Pages and live updates
+
+Keep presentation separate from the data schema. `interface` describes the independent
+plugin page and maps fields to host-owned components; `application` declares the update
+mode. Example:
+
+```json
+{
+  "interface": {
+    "title": "Example connection",
+    "fields": {
+      "endpoint": {"order": 0, "widget": "text"},
+      "model": {"widget": "model", "advanced": true},
+      "timeout": {"advanced": true, "visible_when": {"path": ["plugin_settings", "sample", "enabled"], "equals": true}}
+    },
+    "actions": {
+      "connection": {
+        "title": "Test connection", "read_only": true,
+        "input": {"type": "object", "additionalProperties": false},
+        "output": {"type": "object", "properties": {"message": {"type": "string", "maxLength": 200}}, "required": ["message"], "additionalProperties": false}
+      }
+    }
+  },
+  "application": {"*": "boundary", "storage_path": "restart"}
+}
+```
+
+Modes are `immediate`, `boundary`, and `restart`; the most specific relative field path
+wins. Declare all owned settings, using `*` for a shared policy. Undeclared external
+settings require restart. Components are `auto`, `text`, `secret`, `select`, `list`,
+`connection`, `model`, and `status`; objects and lists use the shared schema editor,
+`options_from` references a declared configuration collection. No plugin JavaScript is loaded.
+Actions call `configuration_action(name, arguments)` on the running owner, validate input
+and output, redact declared secrets and reuse operator authentication. Mutating actions
+require explicit confirmation and are not included in configuration rollback.
+
+For online updates implement `async prepare_configuration(settings)` returning the public
+`ConfigurationUpdate(commit, rollback, release)` contract. Extensions receive only their
+own resolved settings. Preparation must not change active state, open a device in use,
+dispatch work, or invalidate credentials. Raise `ConfigurationPending` to wait for an idle
+boundary. Validate allocations before returning; clean them up yourself if preparation fails.
+Commit must recheck its boundary and support partial failure. Rollback must restore the
+previous effective state; `release(committed)` closes obsolete resources only. Use
+`context.configuration_resource(id)` to read the candidate resource view during preparation.
+
+The host prepares owners in dependency order, suspends new request admission while switching,
+rolls back in reverse order and blocks owners/dependents if recovery fails. Existing work
+must retain its context and identity. The sample plugin demonstrates an atomic settings
+and resource update. Device connection replacements preserve fixed main voice bindings;
+changing those bindings remains a restart operation.
+
 
 ## Operator drain hooks
 
@@ -209,8 +260,9 @@ Both presets start `core/configuration` through `app/management`; management own
 loop and exposes no model tools. A minimal independent bootstrap permits repair when business
 configuration cannot parse. Owner JSON descriptions drive defaults, validation and forms.
 TOML remains the sole instance source, with registered credential/MCP/skill resources handled
-through versioned private transactions. Saved files do not change a running worker's frozen
-generation. The management process verifies readiness and version after explicit drain/force
-application. Linux guardian ownership closes escaped subprocesses after manager loss; unknown
+through versioned private transactions. Saving submits an immutable candidate to the shared
+update coordinator; the effective generation advances only after a successful switch. Structural
+changes wait for an explicit restart, and failed candidates are not retried automatically.
+Linux guardian ownership closes escaped subprocesses after manager loss; unknown
 operations never replay. External gateway deployment remains an explicit operator step.
 See the [configuration guide](../../src/assistant_runtime/core/configuration/README.md).

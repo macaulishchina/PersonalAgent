@@ -29,7 +29,7 @@ class AdminPasswordTest(unittest.TestCase):
         self.admin.change_password(self.original, password, password, "browser")
         self.assertFalse(self.admin.valid(self.session))
         self.assertFalse(self.admin.valid(other))
-        self.assertEqual(self.path.read_text(), password + "\n")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), password + "\n")
         self.assertEqual(private_mode(self.path), 0o600)
         fresh = AdminAccess(self.path)
         self.assertTrue(fresh.valid(fresh.login(password, "restarted")))

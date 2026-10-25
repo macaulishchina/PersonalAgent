@@ -51,7 +51,7 @@ class QuietHoursTest(unittest.TestCase):
             {**SETTINGS, "enabled": True},
         ):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
-                Config(quiet_hours=settings)
+                Config(plugins=["assistant"], quiet_hours=settings)
 
     def test_switch_preserves_schedule_and_can_be_reenabled(self):
         settings = {**SETTINGS, "enable": False}

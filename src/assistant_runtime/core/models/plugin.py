@@ -25,6 +25,17 @@ log = logging.getLogger(__name__)
 class ModelsPlugin:
     manifest = DECLARATION.manifest
 
+    async def configuration_action(self, action, arguments):
+        if action != "connection" or arguments:
+            raise ValueError("Unknown model configuration action")
+        if not self.client:
+            return {"reachable": False, "message": "请先配置并启用模型服务"}
+        result = await self.client.health()
+        return {
+            "reachable": result["reachable"],
+            "message": "模型网关连通" if result["reachable"] else "模型网关不可用",
+        }
+
     def __init__(self, host, client=None):
         self.host = host
         self.settings = ModelSettings.parse(host.config.model_api)
@@ -70,6 +81,50 @@ class ModelsPlugin:
     async def maintenance_cancel(self):
         for task in list(self.active):
             task.cancel()
+
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationUpdate, ConfigurationPending
+        from assistant_runtime.core.pi.accounts import NativeAccounts
+
+        if self.pending or self.active:
+            raise ConfigurationPending()
+        settings = ModelSettings.parse(config.model_api)
+        previous = self.settings, self.client, self.semaphore, self.error
+        client = None
+        if settings.enabled:
+            client = GatewayClient(
+                settings,
+                gateway_credential(config.root, settings),
+                accounts=NativeAccounts(config.root, settings, binary=config.pi_binary),
+            )
+            try:
+                await client.start()
+            except BaseException:
+                await client.close()
+                raise
+
+        async def commit():
+            if self.pending or self.active:
+                raise ConfigurationPending()
+            self.settings, self.client = settings, client
+            self.semaphore = asyncio.Semaphore(settings.concurrency)
+            self.error = None
+            if client and self.context:
+                self.context.own(client.close)
+            if self.context:
+                self.context.runtime.timeouts[ModelRequest] = settings.timeout_seconds + 30
+
+        async def rollback():
+            self.settings, self.client, self.semaphore, self.error = previous
+            if self.context:
+                self.context.runtime.timeouts[ModelRequest] = previous[0].timeout_seconds + 30
+
+        async def release(committed):
+            obsolete = previous[1] if committed else client
+            if obsolete:
+                await obsolete.close()
+
+        return ConfigurationUpdate(commit, rollback, release)
 
     def maintenance_pending(self):
         return [{"state": "model_call"} for task in self.active if not task.done()]

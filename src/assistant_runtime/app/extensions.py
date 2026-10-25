@@ -148,6 +148,21 @@ class ToolRegistry:
 
 
 class InstalledPlugin:
+    def __getattr__(self, name):
+        if name == "configuration_action" and "instance" in self.__dict__:
+            return getattr(self.instance, name)
+        if name != "prepare_configuration" or "instance" not in self.__dict__:
+            raise AttributeError(name)
+        callback = getattr(self.instance, name)
+
+        async def prepare(config):
+            from assistant_runtime.api.configuration import scoped_update
+
+            value = resolve_definition(self.definition, config.plugin_settings.get(self.manifest.name, {}))
+            return scoped_update(await callback(value), self.public, value)
+
+        return prepare
+
     def __init__(self, definition, config, root, credential, capabilities, tools, *, resources=None):
         self.manifest = definition.manifest
         self.context = None
@@ -226,7 +241,7 @@ class InstalledPlugin:
                 raise ValueError("Invalid configuration resource path")
             return configuration_path(path)
 
-        public = PluginContext(
+        public = self.public = PluginContext(
             configuration_resource=configuration_resource,
             name=self.manifest.name,
             config=resolve_definition(self.definition, self.config),

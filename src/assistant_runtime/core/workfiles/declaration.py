@@ -1,5 +1,6 @@
 from assistant_runtime.api.files import FileRequest
 from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api.configuration import configuration_spec
 
 
 def build(host):
@@ -9,4 +10,9 @@ def build(host):
     return WorkFilesMaintenance(host.workfiles)
 
 
-DECLARATION = PluginDefinition(Manifest("workfiles"), internal_factory=build, provides=(FileRequest,))
+DECLARATION = PluginDefinition(
+    Manifest("workfiles"),
+    internal_factory=build,
+    provides=(FileRequest,),
+    configuration=configuration_spec(__file__),
+)

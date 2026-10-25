@@ -4,6 +4,9 @@
   "title": "示例笔记",
   "group": "extensions",
   "description": "独立插件的配置声明、默认值和界面示例。",
+  "interface": {"title": "示例笔记", "fields": {"max_length": {"order": 0}, "report": {"order": 1}}},
+  "application": {"*": "boundary"},
+  "requires": ["execution", "workfiles"],
   "schema": {
     "type": "object",
     "additionalProperties": false,

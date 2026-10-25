@@ -32,6 +32,12 @@ class MemoryPlugin:
         context.register(MemoryRequest, self.handle)
         context.spawn(self.run(), "memory-worker")
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.core.configuration.updates import attributes
+
+        # Captures already accepted keep their work identity; policy applies to new captures.
+        return attributes([(self, "config", config)])
+
     def maintenance_pause(self):
         self.draining = True
 
@@ -222,7 +228,10 @@ class MemoryPlugin:
             self.store.db.commit()
 
     async def run(self):
+        from assistant_runtime.api.lifecycle import configuration_boundary
+
         while True:
+            await configuration_boundary(self.context)
             if self.draining:
                 await asyncio.sleep(0.2)
                 continue

@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from assistant_runtime.api.capacity import Capacity
 
 from .records import TERMINAL
 
@@ -9,7 +10,7 @@ from .records import TERMINAL
 class Admission:
     def __init__(self, service):
         self.service = service
-        self.slots = asyncio.Semaphore(service.concurrency)
+        self.slots = Capacity(service.concurrency)
         self.waiting = {}
         self.leases = set()
         self.external = set()

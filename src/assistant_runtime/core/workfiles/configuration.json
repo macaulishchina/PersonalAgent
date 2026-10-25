@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "文件",
+  "group": "resources",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspace": {
+        "type": "string",
+        "title": "workspace",
+        "readOnly": true,
+        "description": "由本机部署维护；需要安装、路径检查或数据迁移。",
+        "x-advanced": true,
+        "default": ""
+      },
+      "work_files": {
+        "type": "object",
+        "title": "工作文件",
+        "default": {},
+        "additionalProperties": false,
+        "properties": {
+          "root": {
+            "type": "string",
+            "title": "文件存储目录",
+            "x-advanced": true,
+            "description": "相对于实例目录；更换需要维护迁移"
+          },
+          "retention_days": {
+            "type": "integer",
+            "title": "临时文件保留天数",
+            "default": 7,
+            "minimum": 1,
+            "maximum": 365
+          }
+        }
+      }
+    }
+  },
+  "application": {
+    "*": "boundary",
+    "work_files.root": "restart"
+  }
+}

@@ -1,22 +1,11 @@
 """Registered instance resources. No arbitrary filesystem editing or OAuth token backup."""
 
-from dataclasses import dataclass
+from assistant_runtime.api.configuration import ConfigurationResource as Resource
 from pathlib import Path
 import json
 import os
 import re
 import tomllib
-
-
-@dataclass(frozen=True)
-class Resource:
-    id: str
-    path: Path
-    kind: str
-    title: str
-    sensitive: bool = False
-    read_only: bool = False
-    schema: dict | None = None
 
 
 class Resources:
@@ -31,31 +20,17 @@ class Resources:
             merge(data, tomllib.loads(raw.decode()))
         result = [
             Resource("credentials", self.root / ".env", "dotenv", "私有环境凭据", True),
-            Resource(
-                "gateway_key",
-                self.root / "state/model-api/gateway.key",
-                "credential",
-                "模型网关私有口令",
-                True,
-            ),
             Resource("management", self.root / "management.toml", "management", "管理服务地址与生命周期"),
-            Resource(
-                "mcp",
-                Path(
-                    data.get("external_mcp", {}).get("registry_path") or self.root / "config/mcp/servers.json"
-                ),
-                "mcp",
-                "外部 MCP 注册表",
-                True,
-            ),
-            Resource(
-                "web_access",
-                Path(data.get("web", {}).get("token_file") or self.root / "state/web-access-token"),
-                "credential",
-                "聊天网页访问口令",
-                True,
-            ),
         ]
+        from assistant_runtime.core.models.configuration_resources import registered as model_resources
+        from assistant_runtime.core.integrations.configuration_resources import (
+            registered as integration_resources,
+        )
+        from assistant_runtime.plugins.web.configuration_resources import registered as web_resources
+
+        for registered in (model_resources, integration_resources):
+            result.extend(registered(self.root, data))
+        result.extend(web_resources(self.root, data.get("web", {})))
         for name in data.get("instance_skills", []):
             if not re.fullmatch("[a-z][a-z0-9-]{0,63}", name):
                 raise ValueError("Invalid instance skill")
@@ -264,11 +239,9 @@ class Resources:
                     visit(child)
 
         visit(data)
-        from assistant_runtime.core.models.settings import PRESETS
+        from assistant_runtime.core.models.configuration_resources import credential_names
 
-        for p in data.get("model_api", {}).get("providers", {}).values():
-            if p.get("preset") in PRESETS:
-                names.add(p.get("key_env", PRESETS[p["preset"]]["key_env"]))
+        names.update(credential_names(data))
         return names
 
     def frozen_target(self, folder, resource):
@@ -283,15 +256,11 @@ class Resources:
         data = {}
         for raw in contents.values():
             merge(data, tomllib.loads(raw.decode()))
-        if "web" in data.get("plugins", []) and data.get("web", {}).get("enable", True):
-            resource = self.registered(contents)["web_access"]
-            if not resource.read_only:
-                path = self.path(resource)
-                if not path.exists():
-                    import secrets
-                    from .files import atomic
+        from assistant_runtime.plugins.web.configuration_resources import provision
 
-                    atomic(path, (secrets.token_urlsafe(32) + "\n").encode())
+        resource = self.registered(contents)["web_access"]
+        if not resource.read_only:
+            provision(self.path(resource), data.get("web", {}), "web" in data.get("plugins", []))
 
     def prepare_defaults(self, contents, values, touched):
         from .fields import merge
@@ -299,43 +268,38 @@ class Resources:
         data = {}
         for raw in contents.values():
             merge(data, tomllib.loads(raw.decode()))
-        if (
-            "web" in data.get("plugins", [])
-            and data.get("web", {}).get("enable", True)
-            and values.get("web_access") is None
-        ):
-            if "web_access" in touched:
-                raise ValueError("An enabled web entry requires an access credential")
-            resource = self.registered(contents)["web_access"]
-            if not resource.read_only:
-                import secrets
+        from assistant_runtime.plugins.web.configuration_resources import prepare_defaults
 
-                values["web_access"] = (secrets.token_urlsafe(32) + "\n").encode()
-                touched.add("web_access")
+        resource = self.registered(contents)["web_access"]
+        value = prepare_defaults(
+            values.get("web_access"),
+            "web_access" in touched,
+            not resource.read_only,
+            data.get("web", {}),
+            "web" in data.get("plugins", []),
+        )
+        if value != values.get("web_access"):
+            values["web_access"] = value
+            touched.add("web_access")
 
     def validate_candidate(self, config, contents, values):
         from .validation import validate_ports
         from .settings import ManagementSettings
         import tempfile
 
-        token = values.get("web_access")
-        if token is not None and len(token.strip()) < 24:
-            import hashlib
-            import hmac
+        from assistant_runtime.plugins.web.configuration_resources import validate_candidate as validate_web
+        from assistant_runtime.core.integrations.configuration_resources import (
+            validate_candidate as validate_integrations,
+        )
 
-            fingerprint = config.web.get("approved_short_password_sha256", "")
-            if not hmac.compare_digest(hashlib.sha256(token.strip()).hexdigest(), fingerprint):
-                raise ValueError("Short web credential is not explicitly approved")
+        validate_web(config.web, "web" in config.enabled_plugins, values.get("web_access"))
+        validate_integrations(config, values)
         raw = values.get("management")
         if raw is not None:
             with tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / "management.toml"
                 path.write_bytes(raw)
                 validate_ports(config, ManagementSettings.load(path))
-        if values.get("mcp") is not None:
-            from assistant_runtime.core.integrations.configuration import validate_registry
-
-            validate_registry(json.loads(values["mcp"]), config.external_mcp.get("max_servers", 32))
 
     def prepare(self, resource, previous, operation):
         if resource.read_only or resource.kind == "asset":

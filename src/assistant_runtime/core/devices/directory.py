@@ -204,6 +204,30 @@ class DevicesPlugin:
             if not task.done()
         ]
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationPending
+        from assistant_runtime.core.configuration.updates import attributes
+
+        changed = {
+            ident
+            for ident in self.directory.config.keys() | config.devices.keys()
+            if self.directory.config.get(ident) != config.devices.get(ident)
+        }
+
+        def ready():
+            calls = getattr(self.operations.context, "calls", ())
+            return not any(not call.done() for call in calls) and not any(
+                ident in changed for ident, resource in self.operations.resources.held
+            )
+
+        if not ready():
+            raise ConfigurationPending()
+        changes = [(self.directory, "config", config.devices)]
+        for registry in (self.video, self.camera_controls, self.audio_inputs, self.audio_outputs):
+            if registry is not None:
+                changes.append((registry, "devices", config.devices))
+        return attributes(changes, ready=ready)
+
     async def maintenance_cancel(self):
         await self.operations.close()
 
@@ -244,40 +268,7 @@ class DevicesPlugin:
             return await self.operations.execute("audio.volume", request)
 
         context.register(AudioVolume, volume_control)
-        for ident, entry in self.directory.entries.items():
-            owner, caps = entry["adapter"], entry["capabilities"]
-            if (
-                self.audio_outputs is not None
-                and ident in self.audio_outputs.providers
-                and "audio.volume" in caps
-            ):
-
-                async def volume(request):
-                    provider = self.audio_outputs.get(request.device_id)
-                    result = await provider.set_volume(request.percent)
-                    return {**result, "device_id": request.device_id, "operation_id": request.operation_id}
-
-                self.operations.register(
-                    owner, ident, "audio.volume", volume, resource="audio.volume", mutating=True
-                )
-            if self.video is not None and ident in self.video.providers:
-                if "video.snapshot" in caps:
-                    self.operations.register(
-                        owner, ident, "video.snapshot", self.video.capture, resource="video.input"
-                    )
-                if "video.record" in caps:
-                    self.operations.register(
-                        owner, ident, "video.record", self.video.record, resource="video.input", mutating=True
-                    )
-            if self.camera_controls is not None and ident in self.camera_controls.providers:
-                self.operations.register(
-                    owner,
-                    ident,
-                    "camera.pan_tilt",
-                    self.camera_controls.move,
-                    resource=lambda request: None if request.direction == "stop" else "camera.motion",
-                    mutating=True,
-                )
+        self.register_operations()
         if self.camera_controls is not None:
 
             async def move(request):
@@ -331,3 +322,40 @@ class DevicesPlugin:
                 return clip
 
             context.register(VideoRecord, record)
+
+    def register_operations(self):
+        self.operations.routes.clear()
+        for ident, entry in self.directory.entries.items():
+            owner, caps = entry["adapter"], entry["capabilities"]
+            if (
+                self.audio_outputs is not None
+                and ident in self.audio_outputs.providers
+                and "audio.volume" in caps
+            ):
+
+                async def volume(request):
+                    provider = self.audio_outputs.get(request.device_id)
+                    result = await provider.set_volume(request.percent)
+                    return {**result, "device_id": request.device_id, "operation_id": request.operation_id}
+
+                self.operations.register(
+                    owner, ident, "audio.volume", volume, resource="audio.volume", mutating=True
+                )
+            if self.video is not None and ident in self.video.providers:
+                if "video.snapshot" in caps:
+                    self.operations.register(
+                        owner, ident, "video.snapshot", self.video.capture, resource="video.input"
+                    )
+                if "video.record" in caps:
+                    self.operations.register(
+                        owner, ident, "video.record", self.video.record, resource="video.input", mutating=True
+                    )
+            if self.camera_controls is not None and ident in self.camera_controls.providers:
+                self.operations.register(
+                    owner,
+                    ident,
+                    "camera.pan_tilt",
+                    self.camera_controls.move,
+                    resource=lambda request: None if request.direction == "stop" else "camera.motion",
+                    mutating=True,
+                )

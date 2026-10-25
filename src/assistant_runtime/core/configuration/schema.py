@@ -4,6 +4,7 @@ from copy import deepcopy
 from functools import lru_cache
 import json
 from jsonschema import Draft202012Validator
+from assistant_runtime.api.configuration import ConfigurationError
 
 
 @lru_cache(maxsize=128)
@@ -92,9 +93,45 @@ def resolve(spec, raw):
     if errors:
         # jsonschema's default message may include the actual secret value.
         error = errors[0]
-        location = ".".join(map(str, error.absolute_path)) or "configuration"
-        raise ValueError(f"Invalid {location}: {error.validator}")
+        messages = {
+            "type": "类型不正确",
+            "required": "缺少必填项",
+            "minimum": "低于允许的最小值",
+            "maximum": "超过允许的最大值",
+            "enum": "请选择可用选项",
+            "additionalProperties": "包含未声明的配置项",
+            "minLength": "内容过短",
+            "maxLength": "内容过长",
+            "pattern": "格式不符合要求",
+        }
+        raise ConfigurationError(
+            [*(spec.namespace.split(".") if spec.namespace else []), *error.absolute_path],
+            str(error.validator),
+            messages.get(error.validator, "配置不符合声明规则"),
+        )
     return value
+
+
+def validate_structure(spec, raw):
+    """Dormant settings keep their types without requiring usable connections or ranges."""
+
+    def shape(rule):
+        result = {k: rule[k] for k in ("type",) if k in rule}
+        if "properties" in rule:
+            result["properties"] = {k: shape(v) for k, v in rule["properties"].items()}
+        if isinstance(rule.get("items"), dict):
+            result["items"] = shape(rule["items"])
+        if isinstance(rule.get("additionalProperties"), dict):
+            result["additionalProperties"] = shape(rule["additionalProperties"])
+        return result
+
+    errors = list(Draft202012Validator(shape(expand(dict(spec.schema)))).iter_errors(raw))
+    if errors:
+        raise ConfigurationError(
+            [*(spec.namespace.split(".") if spec.namespace else []), *errors[0].absolute_path],
+            "type",
+            "配置类型不正确",
+        )
 
 
 def resolve_definition(definition, raw):

@@ -47,5 +47,11 @@
         "enabled": "enable"
       }
     ]
+  },
+  "requires": [
+    "conversation"
+  ],
+  "application": {
+    "*": "boundary"
   }
 }

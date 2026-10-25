@@ -10,8 +10,7 @@ import os
 import sys
 import time
 
-from assistant_runtime.core.configuration.files import ConfigurationFiles, Snapshot, atomic
-from assistant_runtime.core.configuration.validation import validate_candidate
+from assistant_runtime.core.configuration.files import Snapshot, atomic
 
 
 class BusinessProcess:
@@ -19,17 +18,10 @@ class BusinessProcess:
         self.settings = settings
         self.state = settings.root / "state/configuration"
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        from assistant_runtime.core.configuration.resources import Resources
+        from assistant_runtime.core.configuration.service import ConfigurationService
 
-        self.resources = Resources(settings.root)
-        self.files = ConfigurationFiles(
-            settings.entry,
-            self.state,
-            lambda contents: validate_candidate(
-                settings.entry.name, contents, root=settings.root, entry_directory=settings.entry.parent
-            ),
-            resources=self.resources,
-        )
+        self.configuration = ConfigurationService(settings)
+        self.resources, self.files = self.configuration.resources, self.configuration.files
         self.process = None
         self.loaded = None
         self.loaded_snapshot = None
@@ -62,9 +54,44 @@ class BusinessProcess:
                 raise ValueError("Invalid application receipt")
         except (ValueError, OSError):
             self.application = {"phase": "failed", "diagnostic": "application_receipt_invalid"}
-        if self.application.get("phase") in {"preparing", "waiting", "cancelling", "restarting"}:
+        self.reconcile_update()
+        if self.application.get("phase") in {"preparing", "applying", "waiting", "cancelling", "restarting"}:
             self.application.update(phase="failed", interrupted=True)
             self.persist_application()
+
+    def reconcile_update(self):
+        if self.application.get("hot") and self.application.get("phase") in {
+            "preparing",
+            "applying",
+            "waiting",
+            "failed",
+        }:
+            try:
+                worker = json.loads((self.state / "hot-receipt.json").read_text(encoding="utf-8"))
+                pending = json.loads((self.state / "pending-snapshot.json").read_text(encoding="utf-8"))
+                if worker.get("phase") == "applied" and worker.get("version") == pending[
+                    "version"
+                ] == self.application.get("version"):
+                    self.accept_snapshot(
+                        Snapshot(
+                            pending["version"],
+                            {k: base64.b64decode(v, validate=True) for k, v in pending["contents"].items()},
+                            {
+                                k: base64.b64decode(v, validate=True) if v is not None else None
+                                for k, v in pending["resources"].items()
+                            },
+                        )
+                    )
+                    self.application.update(worker)
+                    if (
+                        self.application.get("required_steps")
+                        or self.application.get("management_pending")
+                        or worker.get("cleanup_failed")
+                    ):
+                        self.application["phase"] = "partially_applied"
+                    self.persist_application()
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
 
     def persist_application(self):
         atomic(self.state / "application.json", json.dumps(self.application).encode())
@@ -101,12 +128,16 @@ class BusinessProcess:
         self.application.setdefault("operator_confirmed_steps", []).append(component)
         self.application_phase(
             "partially_applied"
-            if self.application["required_steps"] or self.outcome == "degraded"
+            if self.application["required_steps"]
+            or self.application.get("management_pending")
+            or self.application.get("cleanup_failed")
+            or self.outcome == "degraded"
             else "applied"
         )
         return dict(self.application)
 
     async def status(self):
+        self.reconcile_update()
         running = self.process is not None and self.process.returncode is None
         result = {
             "state": self.outcome if running or self.error else "stopped",
@@ -123,18 +154,53 @@ class BusinessProcess:
         return result
 
     async def request(self, payload):
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(
+            max(120, self.settings.startup_seconds)
+            if payload.get("command") == "configuration-update"
+            else 10
+        ):
             reader, writer = await connect(self.settings.root / "state/control.sock")
             try:
                 writer.write(json.dumps(payload).encode() + b"\n")
                 await writer.drain()
                 reply = json.loads(await reader.readline())
                 if not reply.get("ok"):
+                    if reply.get("issue"):
+                        from assistant_runtime.api.configuration import ConfigurationError
+
+                        issue = reply["issue"]
+                        raise ConfigurationError(issue["path"], issue["code"], issue["message"])
                     raise ValueError("Business control request failed")
                 return reply["result"]
             finally:
                 writer.close()
                 await writer.wait_closed()
+
+    def freeze(self, snapshot):
+        import tomlkit
+
+        # Workers read a frozen generation. Later saves cannot affect startup or
+        # lazy configuration reads; original include names are preserved.
+        folder = self.state / "generations" / snapshot.version
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        system.private(folder.parent, directory=True)
+        for name, content in snapshot.contents.items():
+            if name == self.settings.entry.name:
+                document = tomlkit.parse(content.decode())
+                document["root"] = str(self.settings.root)
+                content = tomlkit.dumps(document).encode()
+            atomic(folder / name, content)
+        resource_map = {}
+        for ident, raw in snapshot.resources.items():
+            resource = self.resources.registered(snapshot.contents)[ident]
+            target = self.resources.frozen_target(folder, resource)
+            if raw is not None:
+                atomic(target, raw)
+            else:
+                target.unlink(missing_ok=True)
+            resource_map[str(resource.path.absolute())] = str(target)
+        atomic(folder / "resources.json", json.dumps(resource_map).encode())
+        return folder / self.settings.entry.name
 
     async def start(self, snapshot=None):
         async with self.operation:
@@ -143,36 +209,20 @@ class BusinessProcess:
             try:
                 with self.files.locked():
                     if snapshot is None:
-                        initial = self.files.snapshot()
-                        self.resources.provision(initial.contents)
+                        if (self.state / "blocked-update.json").exists():
+                            snapshot = self.loaded_snapshot
+                            if snapshot is None:
+                                raise ValueError(
+                                    "An unconfirmed update requires explicit configuration repair/apply"
+                                )
+                        else:
+                            initial = self.files.snapshot()
+                            self.resources.provision(initial.contents)
                     snapshot = snapshot or self.files.snapshot()
                     required_steps = self.application_steps(snapshot)
                     self.files.validate_all(snapshot.contents, snapshot.resources)
-                    import tomlkit
-
                     revision = snapshot.version
-                    # Workers read a frozen generation. Later saves cannot affect startup or
-                    # lazy configuration reads; original include names are preserved.
-                    folder = self.state / "generations" / snapshot.version
-                    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    system.private(folder.parent, directory=True)
-                    for name, content in snapshot.contents.items():
-                        if name == self.settings.entry.name:
-                            document = tomlkit.parse(content.decode())
-                            document["root"] = str(self.settings.root)
-                            content = tomlkit.dumps(document).encode()
-                        atomic(folder / name, content)
-                    resource_map = {}
-                    for ident, raw in snapshot.resources.items():
-                        resource = self.resources.registered(snapshot.contents)[ident]
-                        target = self.resources.frozen_target(folder, resource)
-                        if raw is not None:
-                            atomic(target, raw)
-                        else:
-                            target.unlink(missing_ok=True)
-                        resource_map[str(resource.path.absolute())] = str(target)
-                    atomic(folder / "resources.json", json.dumps(resource_map).encode())
-                    frozen_entry = folder / self.settings.entry.name
+                    frozen_entry = self.freeze(snapshot)
                 self.outcome, self.error = "starting", None
                 logfile = self.state / "business.log"
                 self.logfile = logfile.open("ab")
@@ -181,7 +231,7 @@ class BusinessProcess:
                     **os.environ,
                     "PERSONAL_AGENT_CONFIGURATION_VERSION": revision,
                     "PERSONAL_AGENT_INSTANCE_ROOT": str(self.settings.root),
-                    "PERSONAL_AGENT_RESOURCE_MANIFEST": str(folder / "resources.json"),
+                    "PERSONAL_AGENT_RESOURCE_MANIFEST": str(frozen_entry.parent / "resources.json"),
                     "PERSONAL_AGENT_OWNED_BUSINESS": "1",
                 }
                 # Durable ownership also survives termination of the entire Windows
@@ -299,11 +349,15 @@ class BusinessProcess:
         def settings(value):
             raw = {}
             for content in value.contents.values():
-                incoming = tomllib.loads(content.decode()).get("model_api", {})
+                incoming = tomllib.loads(content.decode())
                 from assistant_runtime.core.configuration.fields import merge
 
                 merge(raw, incoming)
-            return ModelSettings.parse(raw)
+            from .presets import default_plugins
+
+            if "models" not in raw.get("plugins", default_plugins()):
+                return ModelSettings.parse({})
+            return ModelSettings.parse(raw.get("model_api", {}))
 
         steps = application_steps(
             settings(self.loaded_snapshot) if self.loaded_snapshot else None,
@@ -315,6 +369,127 @@ class BusinessProcess:
         # restart succeeds. Only the operator's explicit version-bound acknowledgement clears it.
         pending = self.application.get("required_steps", [])
         return list({step["component"]: step for step in [*pending, *steps]}.values())
+
+    def accept_snapshot(self, snapshot):
+        self.loaded, self.loaded_snapshot = snapshot.version, snapshot
+        atomic(
+            self.state / "loaded-snapshot.json",
+            json.dumps(
+                {
+                    "version": snapshot.version,
+                    "contents": {k: base64.b64encode(v).decode() for k, v in snapshot.contents.items()},
+                    "resources": {
+                        k: base64.b64encode(v).decode() if v is not None else None
+                        for k, v in snapshot.resources.items()
+                    },
+                }
+            ).encode(),
+        )
+        (self.state / "blocked-update.json").unlink(missing_ok=True)
+
+    def update(self, version):
+        """Save/apply never implies permission to restart or cancel accepted work."""
+        from assistant_runtime.core.configuration.files import Conflict
+
+        if self.operation.locked() or (self.apply_task and not self.apply_task.done()):
+            raise Conflict("Configuration application is already active")
+        with self.files.locked():
+            snapshot = self.files.snapshot()
+            if snapshot.version != version:
+                raise Conflict("Reload the configuration before applying")
+            self.files.validate_all(snapshot.contents, snapshot.resources)
+            entry = self.freeze(snapshot)
+        self.application = {
+            "phase": "preparing",
+            "version": version,
+            "hot": True,
+            "management_pending": self.application.get("management_pending", False),
+            "required_steps": self.application_steps(snapshot),
+        }
+        self.persist_application()
+        atomic(self.state / "blocked-update.json", json.dumps({"version": version}).encode())
+        atomic(
+            self.state / "pending-snapshot.json",
+            json.dumps(
+                {
+                    "version": snapshot.version,
+                    "contents": {k: base64.b64encode(v).decode() for k, v in snapshot.contents.items()},
+                    "resources": {
+                        k: base64.b64encode(v).decode() if v is not None else None
+                        for k, v in snapshot.resources.items()
+                    },
+                }
+            ).encode(),
+        )
+        self.apply_task = asyncio.create_task(self._update(snapshot, entry), name="configuration-update")
+        return dict(self.application)
+
+    async def _update(self, snapshot, entry):
+        async with self.operation:
+            await self._update_serial(snapshot, entry)
+
+    async def _update_serial(self, snapshot, entry):
+        before = self.loaded_snapshot.resources if self.loaded_snapshot else {}
+        changed = [
+            key
+            for key in before.keys() | snapshot.resources.keys()
+            if before.get(key) != snapshot.resources.get(key)
+        ]
+        if self.application.get("management_pending") and "management" not in changed:
+            changed.append("management")
+        try:
+            if not self.process or self.process.returncode is not None:
+                (self.state / "blocked-update.json").unlink(missing_ok=True)
+                self.application_phase("pending_start")
+                return
+            request = {
+                "command": "configuration-update",
+                "entry": str(entry),
+                "version": snapshot.version,
+                "resources": changed,
+            }
+            while True:
+                try:
+                    result = await self.request(request)
+                except (OSError, ValueError, TimeoutError):
+                    # A lost IPC response must not misreport a completed worker transaction.
+                    receipt = self.state / "hot-receipt.json"
+                    result = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
+                    if result.get("version") != snapshot.version or result.get("phase") != "applied":
+                        raise
+                self.application.update(result)
+                self.persist_application()
+                if result["phase"] != "waiting":
+                    break
+                await asyncio.sleep(0.5)
+            if result["phase"] == "applied":
+                self.accept_snapshot(snapshot)
+                if "management" in changed:
+                    try:
+                        self.application["management_address"] = await self.management_applied()
+                        self.application["management_pending"] = False
+                    except Exception:
+                        # The worker committed, but the independent management listener stayed old.
+                        self.application.update(
+                            phase="partially_applied",
+                            diagnostic="management_listener_update_failed",
+                            management_pending=True,
+                        )
+                if self.application.get("required_steps") or result.get("cleanup_failed"):
+                    self.application["phase"] = "partially_applied"
+                self.persist_application()
+            elif result["phase"] == "pending_restart":
+                (self.state / "blocked-update.json").unlink(missing_ok=True)
+        except asyncio.CancelledError:
+            self.application_phase("failed")
+            raise
+        except Exception as exc:
+            from assistant_runtime.api.configuration import ConfigurationError
+
+            self.application.update(phase="failed", diagnostic="configuration_update_failed")
+            if isinstance(exc, ConfigurationError):
+                self.application["issues"] = [exc.public()]
+            self.persist_application()
 
     def preview(self):
         import tomllib

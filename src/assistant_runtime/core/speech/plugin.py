@@ -12,6 +12,28 @@ class AssistantPlugin:
         self.manifest = self.Manifest("assistant", dependencies, critical=True)
         self.service = service
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationPending
+        from assistant_runtime.core.configuration.updates import attributes
+        from .quiet import QuietHours
+        from .dialogue import Dialogue
+        from .interaction.input import InputBuffer
+
+        if self.service.active or self.service.transition.locked():
+            raise ConfigurationPending()
+        return attributes(
+            [
+                (self.service, "quiet_hours", QuietHours.from_settings(config.quiet_hours)),
+                (self.service, "dialogue", Dialogue(config.voice_follow_up_seconds)),
+                (
+                    self.service,
+                    "input_buffer",
+                    InputBuffer(config.interaction.get("input_buffer_seconds", 30)),
+                ),
+            ],
+            ready=lambda: not self.service.active and not self.service.transition.locked(),
+        )
+
     async def start(self, context):
         self.service.context = context
         context.register(Control, self.service.control)

@@ -61,6 +61,18 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
         await self.usage.settle(ticket["id"], state="unknown")
         self.assertEqual((await self.usage.snapshot("work"))["unknown_execution_requests"], 1)
 
+    async def test_online_budget_change_keeps_spent_usage_and_reservations(self):
+        await self.done(await self.admit())
+        reserved = await self.admit()
+        revised = replace(self.usage.settings, max_requests=2)
+        await self.usage.call("configure", revised)
+        self.usage.settings = revised
+        self.assertEqual((await self.usage.snapshot("work"))["requests"], 2)
+        with self.assertRaisesRegex(UsageError, "max_requests"):
+            await self.admit()
+        await self.done(reserved)
+        self.assertEqual((await self.usage.snapshot("work"))["requests"], 2)
+
     async def test_default_128_warning_256_allowed_257_denied(self):
         for n in range(256):
             ticket = await self.admit()

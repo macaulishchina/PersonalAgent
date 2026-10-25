@@ -42,6 +42,9 @@ class AssistantService:
         from .maintenance import Maintenance
 
         self.maintenance = Maintenance(self)
+        from .configuration_updates import ConfigurationRuntime
+
+        self.configuration = ConfigurationRuntime(self)
         self.startup_complete = False
         self.assistant = None
         from assistant_runtime.app.bootstrap import compose
@@ -106,9 +109,28 @@ class AssistantService:
                     pass
 
     async def _connection_body(self, reader, writer):
+        action = None
         try:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
             action = d["command"]
+            if action == "configuration-action":
+                if d.get("execution_session"):
+                    raise ValueError("Configuration control is operator-only")
+                result = await self.configuration.action(
+                    d["owner"], d["action"], d.get("arguments", {}), d.get("confirmed", False)
+                )
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
+            if action == "configuration-update":
+                if d.get("execution_session"):
+                    raise ValueError("Configuration control is operator-only")
+                result = await self.configuration.apply(
+                    d["entry"], d["version"], d.get("resources", []), preview=d.get("preview", False)
+                )
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
             if action in {"management-pause", "management-resume", "management-work", "management-cancel"}:
                 if d.get("execution_session"):
                     raise ValueError("Lifecycle control is operator-only")
@@ -487,6 +509,12 @@ class AssistantService:
             response = {"ok": True, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": str(exc)[:200]}
+            if action in {"configuration-update", "configuration-action"}:
+                from assistant_runtime.api.configuration import ConfigurationError
+
+                response = {"ok": False, "error": "Configuration operation failed"}
+                if isinstance(exc, ConfigurationError):
+                    response["issue"] = exc.public()
         try:
             writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode())
             await writer.drain()

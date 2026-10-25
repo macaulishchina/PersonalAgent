@@ -367,7 +367,7 @@ asyncio.run(main())
 
         root = Path(__file__).resolve().parents[1] / "src/assistant_runtime/plugins"
         for path in root.rglob("*.py"):
-            tree = ast.parse(path.read_text())
+            tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):
                     if (

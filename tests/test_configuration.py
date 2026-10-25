@@ -54,7 +54,7 @@ class ConfigurationTest(ConfigurationFixture, unittest.TestCase):
         self.assertEqual(private_mode(self.files.state / "versions"), 0o700)
 
     def test_invalid_configuration_writes_nothing(self):
-        changed = self.change(-1)
+        changed = self.change("invalid type")
         before = self.documents()
         with self.assertRaises(ValueError):
             self.files.save(changed["version"], changed["files"])
@@ -472,5 +472,7 @@ class MetadataIsolationTest(unittest.TestCase):
                 self.assertEqual(config.plugins, [])
                 description = next(p for p in catalog()["plugins"] if p["id"] == "bad")
                 self.assertIn("error", description["configuration"])
+                retained = Config(root=Path(folder), plugins=[], plugin_settings={"bad": {"draft": True}})
+                self.assertEqual(retained.plugin_settings, {"bad": {"draft": True}})
                 with self.assertRaises(ValueError):
-                    Config(root=Path(folder), plugins=[], plugin_settings={"bad": {}})
+                    Config(root=Path(folder), plugins=["bad"], plugin_settings={"bad": {}})

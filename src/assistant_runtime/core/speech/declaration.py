@@ -1,4 +1,5 @@
 from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api.configuration import configuration_spec
 
 
 def build(host):
@@ -10,4 +11,5 @@ def build(host):
 DECLARATION = PluginDefinition(
     Manifest("assistant", ("conversation", "devices", "voice_disabled"), critical=True),
     internal_factory=build,
+    configuration=configuration_spec(__file__),
 )

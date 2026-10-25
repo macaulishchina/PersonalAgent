@@ -37,6 +37,6 @@ pa doctor
 pa models check
 ```
 
-`doctor` 检查本机依赖与配置；模型检查不代表供应商实测通过。配置修改通过管理页“保存 → 应用”加载；API 网关变更需完成独立部署步骤。系统服务安装见[日常维护](../docs/guides/operations.md#安装系统服务)。
+`doctor` 检查本机依赖与配置；模型检查不代表供应商实测通过。管理页“保存并生效”尝试在线更新，结构性变更提示显式重启；API 网关变更需完成独立部署步骤。系统服务安装见[日常维护](../docs/guides/operations.md#安装系统服务)。
 
 模型能力、思考档位、任务选型与输出限制由[模型模块](../src/assistant_runtime/core/models/README.md)和[任务模块](../src/assistant_runtime/core/tasks/README.md)维护。本页不另复制字段默认值。

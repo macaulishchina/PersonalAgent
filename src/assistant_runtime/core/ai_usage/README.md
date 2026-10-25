@@ -16,7 +16,7 @@ Main/subtask model traffic, models MCP, memory extraction, Jev native calls, and
 
 ## Configuration
 
-Include `ai-usage.toml` from the entry TOML. `[ai_usage]` owns its policy; `[model_api.execution_limits]` is removed. Configuration changes apply on restart and preserve cumulative use. A changed policy is reevaluated without clearing counts; a paused plan still requires explicit recovery. See `config.example/ai-usage.toml`.
+Include `ai-usage.toml` from the entry TOML. `[ai_usage]` owns its policy; `[model_api.execution_limits]` is removed. Configuration changes apply online through the ledger worker and preserve cumulative use and outstanding reservations. A changed policy is reevaluated without clearing counts; a paused plan still requires explicit recovery. See `config.example/ai-usage.toml`.
 
 `max_requests=256`, `warning_fraction=0.5`. Optional `work_limits` include `max_input_tokens`, `max_output_tokens`, `max_compactions`, `max_seconds`, `max_cost_cny`, `concurrency`, `requests_per_second`; absent means disabled. There is no default daily quota, token cap, compaction cap or overall execution timer. `max_seconds`, when explicitly enabled, denies subsequent admissions after elapsed time; it does not kill an in-flight operation.
 

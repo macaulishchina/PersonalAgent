@@ -9,6 +9,19 @@ from pathlib import Path
 
 _held = ContextVar("configuration_locks", default=frozenset())
 _manifests = {}
+_resource_view = ContextVar("configuration_resource_view", default=None)
+
+
+@contextmanager
+def resource_view(manifest):
+    view = {"manifest": str(manifest) if manifest is not None else None, "active": True}
+    token = _resource_view.set(view)
+    try:
+        yield
+    finally:
+        # Tasks started while preparing a module must not keep a stale candidate view forever.
+        view["active"] = False
+        _resource_view.reset(token)
 
 
 @contextmanager
@@ -30,7 +43,10 @@ def configuration_lock(root):
 
 
 def configuration_path(path):
-    manifest = os.environ.get("PERSONAL_AGENT_RESOURCE_MANIFEST")
+    view = _resource_view.get()
+    manifest = (
+        view["manifest"] if view and view["active"] else os.environ.get("PERSONAL_AGENT_RESOURCE_MANIFEST")
+    )
     if not manifest:
         return Path(path)
     if manifest not in _manifests:

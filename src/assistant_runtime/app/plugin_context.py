@@ -33,11 +33,26 @@ class UsageAccess:
 class DeviceRegistration:
     def __init__(self, directory, owner):
         self.__directory, self.__owner = directory, owner
+        self.__registered = {}
 
     def register(self, owner, device_id, capabilities, probe):
         if owner != self.__owner:
             raise ValueError("Device registrar owner mismatch")
-        return self.__directory.register(owner, device_id, capabilities, probe)
+        result = self.__directory.register(owner, device_id, capabilities, probe)
+        self.__registered[device_id] = probe
+        return result
+
+    async def close(self):
+        for ident, probe in self.__registered.items():
+            if self.__directory.probes.get(ident) is probe:
+                for values in (
+                    self.__directory.entries,
+                    self.__directory.probes,
+                    self.__directory.observations,
+                    self.__directory.reading_clocks,
+                ):
+                    values.pop(ident, None)
+        self.__registered.clear()
 
     def observe(self, owner, device_id, observation):
         if owner != self.__owner:
@@ -104,6 +119,9 @@ def environment(
         box[:] = [context]
         public.ready = context.ready
         public.cancelled = context.cancelled
+        for resource in (resources or {}).values():
+            if isinstance(resource, (DeviceRegistration, ResourceRegistration)):
+                context.own(resource.close)
 
     return public, attach
 
@@ -114,6 +132,19 @@ class BoundExtension:
         self.manifest = plugin.manifest
 
     def __getattr__(self, name):
+        if name == "prepare_configuration":
+            callback = getattr(self.instance, name)
+
+            async def prepare(config):
+                from assistant_runtime.core.plugin_catalog import declaration
+                from assistant_runtime.core.configuration.schema import resolve_definition
+                from assistant_runtime.api.configuration import scoped_update
+
+                spec = declaration(self.manifest.name)
+                value = resolve_definition(spec, getattr(config, spec.config_key))
+                return scoped_update(await callback(value), self.public, value)
+
+            return prepare
         return getattr(self.instance, name)
 
     async def start(self, context):
@@ -126,11 +157,21 @@ class ResourceRegistration:
 
     def __init__(self, registry, owner, readable=()):
         self.__registry, self.__owner, self.__readable = registry, owner, frozenset(readable)
+        self.__registered = {}
 
     def register(self, owner, device_id, provider, **kwargs):
         if owner != self.__owner:
             raise ValueError("Resource registrar owner mismatch")
-        return self.__registry.register(owner, device_id, provider, **kwargs)
+        result = self.__registry.register(owner, device_id, provider, **kwargs)
+        self.__registered[device_id] = provider
+        return result
+
+    async def close(self):
+        for ident, provider in self.__registered.items():
+            if self.__registry.providers.get(ident) is provider:
+                self.__registry.providers.pop(ident)
+                getattr(self.__registry, "sharing", {}).pop(ident, None)
+        self.__registered.clear()
 
     def get(self, device_id):
         if device_id not in self.__readable:

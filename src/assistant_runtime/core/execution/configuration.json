@@ -22,5 +22,13 @@
         "maximum": 1024
       }
     }
+  },
+  "requires": [
+    "pi",
+    "ai_usage",
+    "workfiles"
+  ],
+  "application": {
+    "*": "immediate"
   }
 }

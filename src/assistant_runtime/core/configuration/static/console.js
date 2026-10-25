@@ -38,9 +38,10 @@ const navPaths = {
 let snapshot,
   inventory,
   resourceInventory = [],
-  selected = "access",
+  selected = "models",
   expandedOwner,
   saving = false;
+let showInactive = false;
 const openEntries = new Set();
 const resourceEdits = new Map();
 const dirty = () => edits.size + resourceEdits.size;
@@ -94,7 +95,7 @@ async function api(path, body) {
   if (!response.headers.get("Content-Type")?.includes("application/json"))
     throw Error(`请求失败（${response.status}）`);
   const data = await response.json();
-  if (!response.ok) throw Error(data.error || "请求失败");
+  if (!response.ok) throw Object.assign(Error(data.error || "请求失败"), {issues: data.issues || []});
   return data;
 }
 function showNotice(message) {
@@ -127,6 +128,16 @@ async function action(fn) {
     await fn();
   } catch (error) {
     showNotice(error.message);
+    for (const issue of error.issues || []) {
+      const input = document.getElementById(key(issue.path));
+      if (input) {
+        input.setAttribute("aria-invalid", "true");
+        input.closest(".field")?.append(node("p", issue.message, "hint"));
+        for (let parent = input.parentElement; parent; parent = parent.parentElement)
+          if (parent.tagName === "DETAILS") parent.open = true;
+        input.focus();
+      }
+    }
   }
 }
 function changed(path, op, value) {
@@ -173,7 +184,86 @@ function icon(path) {
   return svg;
 }
 function fieldGroup(field) {
-  return field.group;
+  return field.page || field.group;
+}
+function interfaceVisible(field) {
+  const when = field.interface?.visible_when;
+  if (!when) return true;
+  const source = snapshot.fields.find((f) => key(f.path) === key(when.path));
+  return (
+    source &&
+    JSON.stringify(currentValue(source)) === JSON.stringify(when.equals)
+  );
+}
+function drawActions(plugin, section) {
+  for (const [id, operation] of Object.entries(
+    plugin?.configuration?.interface?.actions || {},
+  )) {
+    const form = node("form", undefined, "owner-action"),
+      inputs = new Map(),
+      result = node("p", "", "hint");
+    form.append(node("h3", operation.title || id));
+    for (const [name, shape] of Object.entries(
+      operation.input?.properties || {},
+    )) {
+      const label = node("label", shape.title || name),
+        input = node(shape.enum ? "select" : "input");
+      if (shape.enum)
+        for (const value of shape.enum) {
+          const option = node("option", String(value));
+          option.value = value;
+          input.append(option);
+        }
+      else
+        input.type =
+          shape.type === "boolean"
+            ? "checkbox"
+            : ["number", "integer"].includes(shape.type)
+              ? "number"
+              : shape.writeOnly
+                ? "password"
+                : "text";
+      label.append(input);
+      form.append(label);
+      inputs.set(name, { input, shape });
+    }
+    const button = node("button", operation.title || "执行", "secondary");
+    form.append(button, result);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      action(async () => {
+        if (dirty()) throw Error("请先保存设置；此操作使用已生效的配置。");
+        const confirmed =
+          operation.read_only ||
+          confirm(
+            operation.confirmation ||
+              "此操作立即执行，不随配置恢复撤销。是否继续？",
+          );
+        if (!confirmed) return;
+        const args = {};
+        for (const [name, { input, shape }] of inputs)
+          args[name] =
+            shape.type === "boolean"
+              ? input.checked
+              : ["number", "integer"].includes(shape.type)
+                ? Number(input.value)
+                : input.value;
+        button.disabled = true;
+        try {
+          const reply = await api("/api/configuration-action", {
+            owner: plugin.id,
+            action: id,
+            arguments: args,
+            confirmed,
+          });
+          result.textContent = reply.message || JSON.stringify(reply);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+    section.append(form);
+  }
 }
 function updateSaveBar() {
   $("count").textContent = invalid.size
@@ -182,7 +272,7 @@ function updateSaveBar() {
       ? `${dirty()} 项未保存`
       : "没有未保存的修改";
   $("save").disabled = saving || !dirty() || Boolean(invalid.size);
-  $("save").textContent = saving ? "保存中…" : "校验并保存";
+  $("save").textContent = saving ? "保存中…" : "保存并生效";
   $("discard").disabled = saving || (!dirty() && !invalid.size);
   for (const id of ["refresh", "history", "password-open", "apply-open"])
     $(id).disabled = saving;
@@ -285,10 +375,10 @@ function resetControl(field, secret = false) {
   );
   reset.type = "button";
   reset.addEventListener("click", () => {
-    if (secret && !confirm("清除此凭据？保存并重启后生效。")) return;
+    if (secret && !confirm("清除此凭据？保存后将尝试生效。")) return;
     if (
       field.schema["x-removable"] &&
-      !confirm("移除此配置条目？保存并重启后生效。")
+      !confirm("移除此配置条目？保存后将尝试生效。")
     )
       return;
     changed(field.path, secret ? "clear_secret" : "default");
@@ -337,6 +427,8 @@ function drawField(field) {
   label.htmlFor = id;
   label.id = id + "-label";
   copy.append(label);
+  if (field.application)
+    copy.append(node("p", {immediate:"保存后即时更新", boundary:"保存后在安全边界生效", restart:"需要重启或维护生效"}[field.application], "hint"));
   if (rule.description) copy.append(node("p", rule.description, "hint"));
   if (rule["x-readonly-reason"])
     copy.append(node("p", rule["x-readonly-reason"], "hint"));
@@ -415,6 +507,13 @@ function drawField(field) {
           } else openEntries.delete(entryId);
         });
         children.append(entry);
+      } else if (child["x-advanced"]) {
+        let advanced = children.querySelector(":scope > .advanced-fields");
+        if (!advanced) {
+          advanced = advancedGroup("advanced:" + key(path));
+          children.append(advanced);
+        }
+        advanced.append(drawField(definition));
       } else children.append(drawField(definition));
     }
     if (!children.childElementCount)
@@ -505,6 +604,19 @@ function drawField(field) {
         node("strong", plugin.configuration?.title || plugin.id),
         node("code", plugin.id),
       );
+      if (plugin.requires?.length)
+        title.append(node("small", `需要：${plugin.requires.join("、")}`));
+      if (plugin.page?.startsWith("plugin:")) {
+        const configure = node("button", "配置", "text-button");
+        configure.type = "button";
+        configure.addEventListener("click", (event) => {
+          event.preventDefault(); event.stopPropagation();
+          if (dirty() || invalid.size) { showNotice("请先保存或放弃当前页面的修改。"); return; }
+          selected = plugin.page;
+          render();
+        });
+        title.append(configure);
+      }
       badges.append(
         node(
           "span",
@@ -756,6 +868,17 @@ function cardHeading(title, description) {
   if (description) heading.append(node("p", description));
   return heading;
 }
+function advancedGroup(identity) {
+  const group = node("details", undefined, "advanced-fields");
+  group.open = openEntries.has(identity);
+  group.append(node("summary", "高级设置"));
+  group.addEventListener("toggle", () => {
+    if (!group.isConnected) return;
+    if (group.open) openEntries.add(identity);
+    else openEntries.delete(identity);
+  });
+  return group;
+}
 function render() {
   $("documents").replaceChildren();
   $("navigation").replaceChildren();
@@ -763,10 +886,12 @@ function render() {
     ...snapshot.fields.map(fieldGroup),
     ...resourceInventory.filter((r) => r.kind !== "asset").map(resourceGroup),
   ]);
+  const selectedPlugins = currentValue(snapshot.fields.find(f => key(f.path) === key(["plugins"])));
   const available = [
     ...Object.keys(groups).filter((group) => present.has(group)),
     ...present,
-  ].filter((group, index, list) => list.indexOf(group) === index);
+  ].filter((group, index, list) => list.indexOf(group) === index &&
+    (!group.startsWith("plugin:") || selectedPlugins.includes(group.slice(7)) || selected === group));
   if (!available.includes(selected)) selected = available[0];
   for (const group of available) {
     const button = node(
@@ -780,6 +905,10 @@ function render() {
     );
     button.setAttribute("aria-current", group === selected ? "page" : "false");
     button.addEventListener("click", () => {
+      if (dirty() || invalid.size) {
+        showNotice("请先保存或放弃当前页面的修改，再切换页面。");
+        return;
+      }
       selected = group;
       render();
       window.scrollTo(0, 0);
@@ -790,12 +919,36 @@ function render() {
   $("page-description").textContent =
     descriptions[selected] || "管理当前模块的配置。";
   $("breadcrumb-current").textContent = groups[selected] || selected;
-  const fields = snapshot.fields.filter((f) => fieldGroup(f) === selected),
+  const fields = snapshot.fields
+      .filter((f) => fieldGroup(f) === selected && interfaceVisible(f))
+      .sort((a, b) => (a.interface?.order || 0) - (b.interface?.order || 0)),
     owners = [...new Set(fields.map((f) => f.owner))];
   const pluginField = snapshot.fields.find(
       (f) => key(f.path) === key(["plugins"]),
     ),
     enabled = pluginField ? currentValue(pluginField) : [];
+  if (!selected.startsWith("plugin:") && selected !== "plugins") {
+    const visibility = node(
+      "button",
+      showInactive ? "隐藏未启用功能" : "显示未启用功能的设置",
+      "subtle",
+    );
+    visibility.addEventListener("click", () => {
+      showInactive = !showInactive;
+      render();
+    });
+    $("documents").append(visibility);
+  }
+  if (selected === "models") {
+    const guide = node("article", undefined, "owner-panel");
+    guide.append(
+      cardHeading(
+        "接通模型，开始聊天",
+        "先配置账号或供应商，再添加模型并选择主对话用途。只有需要调整运行策略时才展开高级设置。",
+      ),
+    );
+    $("documents").append(guide);
+  }
   const extension = (owner) =>
     inventory.plugins.find((p) => p.configuration?.title === owner);
   if (!owners.includes(expandedOwner))
@@ -803,6 +956,15 @@ function render() {
       owners.find((owner) => enabled.includes(extension(owner)?.id)) ||
       owners[0];
   for (const owner of owners) {
+    const ownerFields = fields.filter(
+      (f) =>
+        f.owner === owner &&
+        (showInactive ||
+          selected.startsWith("plugin:") ||
+          !f.owner_id ||
+          enabled.includes(f.owner_id)),
+    );
+    if (!ownerFields.length) continue;
     const plugin = extension(owner),
       collapsible = selected === "extensions",
       section = node(
@@ -810,7 +972,7 @@ function render() {
         undefined,
         collapsible ? "owner-panel" : "",
       ),
-      advanced = node("details", undefined, "advanced-fields");
+      advanced = advancedGroup("advanced:" + selected + ":" + owner);
     if (collapsible) {
       section.open = owner === expandedOwner;
       const summary = node("summary", owner);
@@ -844,12 +1006,27 @@ function render() {
           plugin?.configuration?.description,
         ),
       );
-    advanced.append(node("summary", "高级设置"));
-    for (const field of fields.filter((f) => f.owner === owner))
-      (field.schema["x-advanced"] ? advanced : section).append(
-        drawField(field),
+    for (const field of ownerFields)
+      ((field.interface?.advanced ?? field.schema["x-advanced"])
+        ? advanced
+        : section
+      ).append(
+        drawField({
+          ...field,
+          schema: {
+            ...field.schema,
+            ...(field.interface?.widget === "secret" ? {writeOnly:true} : {}),
+            ...(field.interface?.widget === "status" ? {readOnly:true} : {}),
+            ...(field.interface?.widget === "model" ? {"x-reference":"model_api.entries"} : {}),
+            ...(field.interface?.options_from
+              ? { "x-reference": field.interface.options_from }
+              : {}),
+            title: field.interface?.title || field.schema.title,
+          },
+        }),
       );
     if (advanced.childElementCount > 1) section.append(advanced);
+    drawActions(plugin, section);
     $("documents").append(section);
   }
   drawResources();
@@ -871,15 +1048,19 @@ async function load() {
   $("login").hidden = true;
   $("editor").hidden = false;
   $("password-open").hidden = false;
-  const [config, descriptions, resources] = await Promise.all([
+  const [config, catalogInfo] = await Promise.all([
     api("/api/configuration"),
     api("/api/catalog"),
-    api("/api/resources"),
   ]);
-  resourceInventory = resources.resources;
+  resourceInventory = config.resources;
   resourceEdits.clear();
   snapshot = config;
-  inventory = descriptions;
+  inventory = catalogInfo;
+  for (const name of Object.keys(groups)) delete groups[name];
+  for (const page of inventory.pages || []) {
+    groups[page.id] = page.title;
+    descriptions[page.id] = page.description;
+  }
   edits.clear();
   invalid.clear();
   drafts.clear();
@@ -895,7 +1076,7 @@ async function load() {
   $("state").textContent =
     status.loaded_version === config.version
       ? "已应用 · 配置与运行版本一致"
-      : "已保存 · 等待重启生效";
+      : "已保存 · 等待确认生效";
   $("state-version").textContent = "版本 " + config.version.slice(0, 10);
   $("health").textContent =
     {
@@ -976,6 +1157,13 @@ $("apply-open").addEventListener("click", () =>
     showDialog("apply-dialog");
   }),
 );
+$("apply-update").addEventListener("click", () =>
+  action(async () => {
+    if (dirty()) throw Error("请先保存或放弃编辑");
+    await api("/api/update", { version: snapshot.version });
+    await applicationStatus();
+  }),
+);
 $("save").addEventListener("click", () =>
   action(async () => {
     if (invalid.size)
@@ -997,7 +1185,7 @@ $("save").addEventListener("click", () =>
       resourceEdits.clear();
       await load();
       $("notice").textContent = saved.changed
-        ? "已保存，待重启生效。"
+        ? "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
         : "没有配置变更。";
     } finally {
       saving = false;
@@ -1057,11 +1245,14 @@ async function applicationStatus() {
     idle: "尚未发起应用",
     preparing: "校验配置中",
     waiting: "正在等待工作结束",
+    applying: "正在更新设置",
+    pending_start: "已保存，下次启动生效",
+    pending_restart: "已保存，此次修改需要显式重启",
     cancelling: "正在取消在途工作",
     restarting: "正在重启业务服务",
     applied: "已应用指定配置版本",
     partially_applied: "已应用，但部分功能或外部部署步骤尚未就绪",
-    failed: "应用失败，请查看业务诊断",
+    failed: "应用失败，尚未确认生效；请查看诊断后重试",
     withdrawn: "已撤销等待，继续接收新工作",
   };
   $("application-state").textContent =
@@ -1073,11 +1264,10 @@ async function applicationStatus() {
   $("application-state").parentElement.dataset.state = pending
     ? "pending"
     : application.phase;
-  $("state").textContent = partial
-    ? "已加载 · 仍有待处理事项"
-    : pending
-      ? "已保存 · 等待重启生效"
-      : "已应用 · 配置与运行版本一致";
+  $("state").textContent =
+    pending || partial
+      ? labels[application.phase] || "文件有修改，等待校验并应用"
+      : "已生效 · 文件快照一致";
   document
     .querySelector(".configuration-state")
     .classList.toggle("pending", Boolean(pending || partial));
@@ -1107,6 +1297,8 @@ async function applicationStatus() {
     drain_not_supported: "插件尚不支持等待检查；可撤销等待或选择终止并重启",
   };
   $("blockers").replaceChildren(
+    ...(application.fields || []).map(item => node("li", `${item.path.join(".")} · ${item.reason || ({immediate:"即时更新", boundary:"安全边界更新", restart:"需要重启"}[item.mode])}`)),
+    ...(application.issues || []).map(item => node("li", `${item.path.join(".")}：${item.message}`)),
     ...(application.blockers || []).map((item) => {
       const owner =
         inventory?.plugins.find((plugin) => plugin.id === item.owner)
@@ -1179,6 +1371,7 @@ async function applicationStatus() {
     $("application-state").textContent = "业务启动中，正在核对配置";
   }
   $("apply-wait").disabled = active;
+  $("apply-update").disabled = active;
   $("apply-force").disabled = active;
   $("abort-apply").disabled = !["preparing", "waiting"].includes(
     application.phase,
@@ -1262,9 +1455,9 @@ function resourceGroup(resource) {
       credentials: "models",
       mcp: "connections",
       management: "access",
-      web_access: "access",
+      web_access: "plugin:web",
       gateway_key: "models",
-    }[resource.id] || (resource.kind === "skill" ? "resources" : "extensions")
+    }[resource.id] || (resource.kind === "skill" ? "resources" : resource.id.includes(":") ? "plugin:" + resource.id.split(":")[0] : "plugins")
   );
 }
 function drawResources() {

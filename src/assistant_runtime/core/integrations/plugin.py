@@ -42,6 +42,59 @@ class IntegrationsPlugin:
         context.register(IntegrationRequest, self.request, timeout=3660)
         context.spawn(self.refresh(), "apply-at-idle")
 
+    async def prepare_configuration(self, config):
+        from assistant_runtime.api.configuration import ConfigurationUpdate, ConfigurationPending
+        from assistant_runtime.api.configuration_io import configuration_path
+        from .settings import IntegrationSettings
+        from .configuration import validate_registry
+        from pathlib import Path
+
+        settings = IntegrationSettings.parse(config.external_mcp)
+        path = (
+            Path(settings.registry_path)
+            if settings.registry_path
+            else config.root / "config/mcp/servers.json"
+        )
+        source = configuration_path(path)
+        data = (
+            validate_registry(json.loads(source.read_text(encoding="utf-8")))
+            if source.exists()
+            else {"revision": 0, "servers": {}, "removed": []}
+        )
+        backend = self.host.backend
+        adapters = [b.integrations for b in [backend, *backend.conversations.values()] if b.integrations]
+        if self.maintenance_pending() or any(
+            b.busy or b.active_turn for b in [backend, *backend.conversations.values()]
+        ):
+            raise ConfigurationPending()
+        previous = self.registry.settings, self.registry.path, self.registry.data
+        old_runtime = [(adapter, adapter.runtime_data) for adapter in adapters]
+
+        async def apply():
+            for adapter in adapters:
+                if adapter.backend.execution_session_id:
+                    result = await adapter.apply(force=True, staged=True)
+                    if result["state"] != "applied":
+                        raise (
+                            ConfigurationPending()
+                            if result["state"] == "deferred"
+                            else RuntimeError("MCP update failed")
+                        )
+
+        async def commit():
+            self.registry.settings, self.registry.path, self.registry.data = settings, path, data
+            for adapter in adapters:
+                adapter.runtime_data = data
+            await apply()
+
+        async def rollback():
+            self.registry.settings, self.registry.path, self.registry.data = previous
+            for adapter, old in old_runtime:
+                adapter.runtime_data = old
+            await apply()
+
+        return ConfigurationUpdate(commit, rollback)
+
     async def refresh(self):
         while True:
             try:

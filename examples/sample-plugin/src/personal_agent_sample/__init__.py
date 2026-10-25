@@ -26,16 +26,33 @@ class Notes:
         io.private(self.context.state_dir, directory=True)
         io.atomic_write(self.context.state_dir / "runtime.json", json.dumps({"platform": io.name}).encode())
         policy = self.context.configuration_resource("policy")
-        self.policy = json.loads(policy.read_text()) if policy.exists() else {}
+        self.policy = json.loads(policy.read_text(encoding="utf-8")) if policy.exists() else {}
         self.context.log.info("sample ready")
 
     async def read(self, arguments):
         return {"text": self.context.get("text", "")}
 
     async def write(self, arguments):
+        if len(arguments["text"]) > self.context.config["max_length"]:
+            raise ValueError("Note exceeds the configured limit")
         self.context.set("text", arguments["text"])
         self.context.publish("sample.updated", length=len(arguments["text"]))
         return await self.read({})
+
+    async def prepare_configuration(self, settings):
+        from assistant_runtime.api.configuration import ConfigurationUpdate
+
+        path = self.context.configuration_resource("policy")
+        policy = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        previous = self.policy
+
+        async def commit():
+            self.policy = policy
+
+        async def rollback():
+            self.policy = previous
+
+        return ConfigurationUpdate(commit, rollback)
 
     async def report(self, arguments):
         """Submit, never synchronously wait for a nested agent to finish."""
@@ -93,7 +110,7 @@ class Notes:
                 {
                     **value,
                     "properties": {
-                        "text": {"type": "string", "maxLength": self.context.config["max_length"]}
+                        "text": {"type": "string", "maxLength": 2000}
                     },
                 },
                 value,
@@ -148,6 +165,6 @@ def definition():
         supported_platforms=plugin_platforms(Path(__file__).parent),
         resources=("system_io",),
         configuration=ConfigurationSpec(
-            **json.loads((Path(__file__).parent / "configuration.json").read_text())
+            **json.loads((Path(__file__).parent / "configuration.json").read_text(encoding="utf-8"))
         ),
     )

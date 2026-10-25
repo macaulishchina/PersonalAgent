@@ -168,6 +168,9 @@ class Runtime:
         self.started: list[str] = []
         self.fatal = asyncio.Event()
         self.ready = asyncio.Event()
+        self.configuration_ready = asyncio.Event()
+        self.configuration_ready.set()
+        self.configuration_tasks = set()
 
     def add(self, plugin):
         m = plugin.manifest
@@ -188,6 +191,9 @@ class Runtime:
         self.timeouts[request_type] = timeout
 
     async def invoke(self, request, timeout=None):
+        configuring = asyncio.current_task() in self.configuration_tasks
+        if not configuring:
+            await self.configuration_ready.wait()
         if type(request) not in self.handlers:
             raise RuntimeError(f"{type(request).__name__} unavailable: plugin is starting or disabled")
         owner, handler = self.handlers[type(request)]
@@ -198,6 +204,8 @@ class Runtime:
         timeout = self.timeouts[type(request)] if timeout is None else timeout
         started = time.monotonic()
         pending = asyncio.ensure_future(handler(request))
+        if configuring:
+            self.configuration_tasks.add(pending)
         context.calls.add(pending)
         try:
             result = await asyncio.wait_for(pending, timeout)
@@ -212,6 +220,7 @@ class Runtime:
             raise
         finally:
             context.calls.discard(pending)
+            self.configuration_tasks.discard(pending)
         if epoch != context.generation:
             raise RuntimeError("Stale plugin result discarded")
         return result
@@ -310,6 +319,26 @@ class Runtime:
             except Exception:
                 log.exception("plugin_cleanup_failed %s", name)
         self.started.clear()
+
+    async def replace(self, name, factory):
+        """Replace a drained owner without restarting unrelated owners or the store."""
+        previous = self.contexts[name]
+        if any(not call.done() for call in previous.calls):
+            raise RuntimeError("Owner still has active capability calls")
+        await previous.close()
+        context = self.contexts[name] = Context(self, name)
+        context.generation = previous.generation
+        try:
+            plugin = factory()
+            if plugin.manifest != self.plugins[name].manifest:
+                raise ValueError("Online replacement cannot change plugin dependencies")
+            self.plugins[name] = plugin
+            await plugin.start(context)
+            context.state = "ready"
+        except BaseException:
+            await context.close()
+            context.state, context.error = "failed", "configuration_replacement_failed"
+            raise
 
     def health(self):
         return {

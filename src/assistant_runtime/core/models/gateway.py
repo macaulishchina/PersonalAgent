@@ -18,6 +18,14 @@ def credential(root, key):
 
 
 def gateway_credential(root, settings):
+    if settings.entries and all(
+        settings.providers[e["provider"]]["protocol"] == "pi" for e in settings.entries.values()
+    ):
+        # Native-only instances still authenticate their private Pi loopback bridge.
+        # This process-local token is not a supplier credential or an external gateway prerequisite.
+        import secrets
+
+        return secrets.token_urlsafe(32)
     try:
         return credential(root, settings.gateway_key_env)
     except ValueError:

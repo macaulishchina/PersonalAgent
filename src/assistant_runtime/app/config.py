@@ -2,6 +2,7 @@
 
 from assistant_runtime.api.configuration import configuration_default
 from .presets import default_plugins
+from .configuration_fields import ModuleSettings
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,12 +89,10 @@ def read_config(path, *, text=None):
 
 
 @dataclass
-class Config:
+class Config(ModuleSettings):
     root: Path = field(default_factory=default_root)
     profile: str = field(default_factory=lambda: configuration_default(__file__, "profile"))
     backend: str = field(default_factory=lambda: configuration_default(__file__, "backend"))
-    realtime_voice: str = field(default_factory=lambda: configuration_default(__file__, "realtime_voice"))
-    workspace: str = field(default_factory=lambda: str(Path.cwd()))
     pi_shell: str = field(default_factory=lambda: configuration_default(__file__, "pi_shell"))
     pi_binary: str = field(default_factory=lambda: configuration_default(__file__, "pi_binary"))
     instance_skills: list[str] = field(
@@ -103,20 +102,10 @@ class Config:
     main_reasoning_effort: str = field(
         default_factory=lambda: configuration_default(__file__, "main_reasoning_effort")
     )
-    assistant_name: str = field(default_factory=lambda: configuration_default(__file__, "assistant_name"))
-    wake_words: list[str] = field(default_factory=lambda: configuration_default(__file__, "wake_words"))
-    idle_seconds: int = field(default_factory=lambda: configuration_default(__file__, "idle_seconds"))
-    voice_follow_up_seconds: int = field(
-        default_factory=lambda: configuration_default(__file__, "voice_follow_up_seconds")
-    )
-    quiet_hours: dict[str, str | bool] = field(
-        default_factory=lambda: configuration_default(__file__, "quiet_hours")
-    )
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
-    interaction: dict = field(default_factory=lambda: configuration_default(__file__, "interaction"))
     ai_usage: dict = field(default_factory=dict)
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
@@ -125,24 +114,17 @@ class Config:
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     execution: dict = field(default_factory=dict)
-    work_files: dict = field(default_factory=lambda: configuration_default(__file__, "work_files"))
-    input_device: str = field(default_factory=lambda: configuration_default(__file__, "input_device"))
-    default_output: str = field(default_factory=lambda: configuration_default(__file__, "default_output"))
-    minimum_volume: int = field(default_factory=lambda: configuration_default(__file__, "minimum_volume"))
-    echo_cancel: bool = field(default_factory=lambda: configuration_default(__file__, "echo_cancel"))
-    devices: dict[str, dict] = field(default_factory=lambda: configuration_default(__file__, "devices"))
     model_dir: str = field(default_factory=lambda: configuration_default(__file__, "model_dir"))
     unit_name: str = field(default_factory=lambda: configuration_default(__file__, "unit_name"))
     plugins: list[str] = field(default_factory=default_plugins)
     bindings: dict[str, str] = field(default_factory=lambda: configuration_default(__file__, "bindings"))
     plugin_settings: dict[str, dict] = field(default_factory=dict)
     external_mcp: dict = field(default_factory=dict)
-    memory_enabled: bool = field(default_factory=lambda: configuration_default(__file__, "memory_enabled"))
-    memory_auto_capture: bool = field(
-        default_factory=lambda: configuration_default(__file__, "memory_auto_capture")
-    )
 
     def __post_init__(self):
+        self.root = Path(self.root).expanduser().resolve()
+        workspace = Path(self.workspace).expanduser() if self.workspace else self.root
+        self.workspace = str((self.root / workspace).resolve())
         if (
             not isinstance(self.plugins, list)
             or len(self.plugins) > 64
@@ -163,6 +145,13 @@ class Config:
         from .extensions import discover
 
         validate_stored(self, discover)
+        for section, key in (
+            (self.work_files, "root"),
+            (self.external_mcp, "registry_path"),
+            (self.web, "token_file"),
+        ):
+            if section.get(key):
+                section[key] = str((self.root / Path(section[key]).expanduser()).resolve())
 
         from assistant_runtime.app.skills import validate_names
 
@@ -170,10 +159,9 @@ class Config:
 
         from assistant_runtime.core.models.settings import ModelSettings
 
-        model_settings = ModelSettings.parse(self.model_api)
-        if model_settings.enabled and "models" not in self.plugins:
-            raise ValueError("Enabled model API requires the models plugin")
-        if self.interaction != {}:
+        if "models" in self.enabled_plugins:
+            ModelSettings.parse(self.model_api)
+        if "assistant" in self.enabled_plugins and self.interaction != {}:
             from assistant_runtime.core.speech.interaction.settings import InteractionSettings
 
             if InteractionSettings.parse(self.interaction).enabled:
@@ -193,64 +181,35 @@ class Config:
                 spec.validate(getattr(self, spec.config_key))
         if "search" in self.plugins and not self.search.get("providers"):
             raise ValueError("Search plugin requires a configured provider")
-        if self.quiet_hours != {}:
+        if "assistant" in self.enabled_plugins and self.quiet_hours != {}:
             from assistant_runtime.core.speech.quiet import QuietHours
 
             QuietHours.from_settings(self.quiet_hours)
         for name in (
             "main_model",
             "main_reasoning_effort",
-            "realtime_voice",
         ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a nonempty string")
             setattr(self, name, value.strip())
-        if type(self.voice_follow_up_seconds) is not int or not 1 <= self.voice_follow_up_seconds <= 30:
+        if "assistant" in self.enabled_plugins and (
+            type(self.voice_follow_up_seconds) is not int or not 1 <= self.voice_follow_up_seconds <= 30
+        ):
             raise ValueError("voice_follow_up_seconds must be 1..30")
 
-        if not isinstance(self.devices, dict) or len(self.devices) > 32:
-            raise ValueError("devices must be a table with at most 32 entries")
-        for ident, spec in self.devices.items():
-            if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", ident) or not isinstance(spec, dict):
-                raise ValueError("Invalid device ID or definition")
-            allowed = {
-                "adapter",
-                "kind",
-                "label",
-                "location",
-                "connection",
-                "enabled",
-                "max_age_seconds",
-                "physical_id",
-            }
-            if set(spec) - allowed:
-                raise ValueError(f"Unknown device settings: {ident}")
-            for name in ("adapter", "kind", "label"):
-                if not isinstance(spec.get(name), str) or not spec[name].strip() or len(spec[name]) > 120:
-                    raise ValueError(f"Invalid device {name}: {ident}")
-            physical = spec.get("physical_id", ident)
-            if not isinstance(physical, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", physical):
-                raise ValueError("Invalid physical device association")
-            if not isinstance(spec.get("connection"), dict):
-                raise ValueError(f"Device connection must be a table: {ident}")
-            if not isinstance(spec.get("location", ""), str) or len(spec.get("location", "")) > 120:
-                raise ValueError("Invalid device location")
-            if type(spec.get("enabled", True)) is not bool:
-                raise ValueError("Device enabled must be boolean")
-            age = spec.get("max_age_seconds", 15)
-            if type(age) not in (int, float) or not 0 < age <= 3600:
-                raise ValueError("Invalid device freshness period")
-            if spec.get("enabled", True) and spec["adapter"] not in self.plugins:
-                raise ValueError(f"Enabled device adapter not in plugins: {ident}")
-        if (
+        if "devices" in self.enabled_plugins:
+            from assistant_runtime.core.devices.configuration_validation import validate_devices
+
+            validate_devices(self)
+        if "assistant" in self.enabled_plugins and (
             not isinstance(self.wake_words, list)
             or not self.wake_words
             or any(not isinstance(word, str) or not word.strip() for word in self.wake_words)
         ):
             raise ValueError("wake_words must be a nonempty list of nonempty strings")
         self.wake_words = [word.strip() for word in self.wake_words]
-        if len(set(self.wake_words)) != len(self.wake_words):
+        if "assistant" in self.enabled_plugins and len(set(self.wake_words)) != len(self.wake_words):
             raise ValueError("wake_words must not contain duplicates")
 
     @property
@@ -267,7 +226,11 @@ class Config:
 
     @property
     def models(self):
-        return Path(self.model_dir).expanduser() if self.model_dir else self.root / "models"
+        return (
+            (self.root / Path(self.model_dir).expanduser()).resolve()
+            if self.model_dir
+            else self.root / "models"
+        )
 
     @property
     def socket(self):
@@ -296,8 +259,6 @@ class Config:
         c = cls(root=root, **data)
         if c.profile not in {"voice", "headless"} or c.backend != "pi":
             raise ValueError("Unsupported profile or backend")
-        if not 0 <= c.minimum_volume <= 100 or c.idle_seconds < 1:
-            raise ValueError("Invalid volume, wake word or idle timeout")
         if c.profile == "voice":
             for ident, kind in ((c.input_device, "microphone"), (c.default_output, "speaker")):
                 spec = c.devices.get(ident, {})
