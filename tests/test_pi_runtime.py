@@ -15,10 +15,13 @@ from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
 from test_pi_skeleton import configuration
 from assistant_runtime.app.config import Config
 from assistant_runtime.app.host import AssistantService
+from assistant_runtime.api.system import system
+from assistant_runtime.core.plugin_catalog import platforms
 
 
 @unittest.skipUnless(
-    sys.platform == "linux", "Full conversation host requires Linux-certified voice/web extensions"
+    all(system.name in platforms(name) for name in ("web", "voice_disabled")),
+    "Full host requires certified web and voice placeholder extensions",
 )
 class HostTest(unittest.IsolatedAsyncioTestCase):
     async def test_cli_headless_starts_real_web_models_and_metering(self):
@@ -449,26 +452,26 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
             gateway = FakeResponsesGateway(discover_extension)
             self.addCleanup(gateway.close)
             (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
-            config = Config(
-                root=root,
-                workspace=folder,
-                main_model="model-a",
-                main_reasoning_effort="low",
-                model_api=configuration(gateway.base_url),
-                plugins=[
-                    "ai_usage",
-                    "workfiles",
-                    "devices",
-                    "assistant",
-                    "conversation",
-                    "execution",
-                    "models",
-                    "pi",
-                    "voice_disabled",
-                    "sample",
-                ],
-            )
             with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
+                config = Config(
+                    root=root,
+                    workspace=folder,
+                    main_model="model-a",
+                    main_reasoning_effort="low",
+                    model_api=configuration(gateway.base_url),
+                    plugins=[
+                        "ai_usage",
+                        "workfiles",
+                        "devices",
+                        "assistant",
+                        "conversation",
+                        "execution",
+                        "models",
+                        "pi",
+                        "voice_disabled",
+                        "sample",
+                    ],
+                )
                 host = AssistantService(config)
             serving = asyncio.create_task(host.run())
             try:

@@ -57,6 +57,7 @@ const pluginNames = {
   assistant: "个人助手",
   devices: "设备管理",
   pipewire: "本机音频",
+  v4l2: "本机摄像头",
   airplay: "AirPlay 音频",
   voice_disabled: "语音占位",
   web: "聊天网页",
@@ -673,7 +674,7 @@ function renderSettingsPage() {
   if (owner) {
     const panel = surface("管理操作", "即时执行，独立于配置保存。");
     drawActions(owner, panel);
-    if (panel.children.length > 1) $("documents").append(panel);
+    if (panel.querySelector("select")) $("documents").append(panel);
   }
   drawResources();
 }
@@ -797,11 +798,89 @@ function renderPlugins() {
   }
   const [filter, empty] = collectionFilter(grid, "搜索可选能力", "plugins");
   section.append(filter, grid, empty);
-  $("documents").append(section, core);
+  $("documents").append(section);
+  renderBackendDefaults();
+  $("documents").append(core);
   for (const f of snapshot.fields.filter(
-    (f) => fieldGroup(f) === "plugins" && f.path[0] !== "plugins",
+    (f) =>
+      fieldGroup(f) === "plugins" &&
+      !["plugins", "plugin_backends"].includes(f.path[0]),
   ))
     core.append(drawField(prettyField(f)));
+}
+
+function renderBackendDefaults() {
+  const plugins = inventory.plugins.filter((p) => p.backends?.implementations),
+    platform = inventory.platform;
+  if (!plugins.length || !platform) return;
+  const panel = surface(
+    "平台默认实现",
+    `当前系统：${platform === "windows" ? "Windows / Windows Server" : "Linux"}。插件自动选择当前平台的实现，通常无需修改。`,
+  );
+  const settings = valueAt(["plugin_backends"], {});
+  const enabled = new Set(valueAt(["plugins"], []));
+  for (const plugin of plugins) {
+    const choices = plugin.backends.implementations[platform] || [];
+    const configured = settings[plugin.id]?.[platform];
+    const invalidChoice = configured && !choices.includes(configured);
+    if (!invalidChoice && (!enabled.has(plugin.id) || choices.length <= 1))
+      continue;
+    const row = node("section", undefined, "field"),
+      copy = node("div", undefined, "field-copy"),
+      label = node("label", pluginNames[plugin.id] || plugin.id),
+      control = node("div", undefined, "field-control"),
+      input = node("select");
+    const id = "backend-" + plugin.id;
+    label.htmlFor = id;
+    input.id = id;
+    input.setAttribute(
+      "aria-label",
+      `${pluginNames[plugin.id] || plugin.id}默认实现`,
+    );
+    const automatic =
+      plugin.backends.defaults[platform] ||
+      (choices.length === 1 ? choices[0] : null);
+    const option = node(
+      "option",
+      automatic ? `使用默认（${automatic}）` : "请选择默认实现",
+    );
+    option.value = "";
+    input.append(option);
+    for (const name of new Set([
+      ...choices,
+      ...(configured ? [configured] : []),
+    ])) {
+      const item = node(
+        "option",
+        choices.includes(name) ? name : name + "（不可用）",
+      );
+      item.value = name;
+      input.append(item);
+    }
+    input.value = configured || "";
+    input.addEventListener("change", () => {
+      changed(
+        ["plugin_backends", plugin.id, platform],
+        input.value ? "set" : "default",
+        input.value || undefined,
+      );
+      updateSaveBar();
+    });
+    copy.append(
+      label,
+      node(
+        "p",
+        choices.length === 1
+          ? "当前平台只有一个实现，已自动选择。"
+          : "同一平台有多个实现时，使用这里指定的默认值。",
+        "hint",
+      ),
+    );
+    control.append(input);
+    row.append(copy, control);
+    panel.append(row);
+  }
+  if (panel.querySelector("select")) $("documents").append(panel);
 }
 
 function draftCheckpoint() {

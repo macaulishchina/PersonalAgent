@@ -6,7 +6,7 @@
 
 记录代码提交、依赖锁文件和配置版本。在私有候选目录保留原实例 `root`、凭据引用、注册表和用途绑定，不用空模板覆盖已有配置。
 
-旧配置可用 `pa --config <旧配置> prepare-config <候选目录>` 生成可审查候选。核对 `conversation`、`cli` 及其依赖；Windows 使用 slim，不能启用 `web`、`voice_disabled` 等当前扩展。模型、任务和记忆只配置实际启用的用途，不隐式启用供应商或回退。
+旧配置可用 `pa --config <旧配置> prepare-config <候选目录>` 生成可审查候选。核对 `conversation`、`cli` 及其依赖；Windows 默认使用 slim，只启用声明支持 Windows 的插件；standard 能否启用由所含插件的实际认证决定。模型、任务和记忆只配置实际启用的用途，不隐式启用供应商或回退。
 
 在应用目录使用当前 `.venv` 的 Python 预检：
 

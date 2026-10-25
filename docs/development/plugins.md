@@ -15,18 +15,40 @@
 `atomic_write`，不能认为 Windows 的 `chmod(0600)` 已实现隔离。
 
 扩展插件通过静态 `platform.json` 的 `supported_platforms` 声明平台认证，运行时声明
-从同一文件读取。单文件插件使用 `<模块名>.platform.json`。当前仓库全部扩展只认证
-Linux，包括 `web`、`voice_disabled`；内核范围及版本不变。`windows` 同时表示普通
-Windows 和 Windows Server。认证是随发布维护的支持声明，不是签名或在线认证服务。
+从同一文件读取。单文件插件使用 `<模块名>.platform.json`。每个扩展分别认证；
+现有全部扩展声明支持 Linux、Windows；本机音频 `pipewire`、本机摄像头 `v4l2` 在插件内部选择平台实现。Linux 使用 PipeWire、V4L2，Windows 使用 WASAPI、DirectShow，不另注册同能力的 Windows 插件。
+当前矩阵见[模块索引](../reference/modules.md)与 `pa plugins`，不以插件属于扩展为由统一禁止 Windows。`windows` 同时表示普通 Windows 和 Windows Server。认证是随发布维护的支持声明，不是签名或在线认证服务。
 独立包必须在 entry point 模块对应路径打包上述元数据；缺失、无效或与运行时声明不一致
 均不能启用，不再对扩展自动假定跨平台支持。管理页无需导入扩展代码即可展示认证。
 配置保存和启动装配都检查当前平台，未认证时拒绝启用。Windows 默认使用 slim，
-显式选择 standard 会在创建实例目录前拒绝。已有显式配置不会自动删改。
+显式选择 standard 时先按所含插件的实际认证检查，未获认证则在创建实例目录前拒绝。已有显式配置不会自动删改。
 Windows 适配完成度和认证启用策略分开记录，
 操作步骤见[安装指南](../guides/deployment.md)，实测边界见[平台验收记录](../archive/platform-acceptance-2026-10.md)。
 
 公共接口为 `assistant_runtime.api`：`PluginDefinition`、`Manifest`、
 `PluginContext`、`CallIdentity` 和 `Tool`。仓库内和独立包采用同一声明模型。
+
+### 平台身份与默认实现
+
+运行时提供不可变的 `PlatformInfo`，内置及外部插件共享同一个平台对象，均可读取 `context.platform.name`（`linux` / `windows`）；普通 Windows 与 Server 共用实现。平台由系统识别，配置不提供伪装平台的开关。
+
+没有平台差异的插件保持一份实现，只声明 `supported_platforms` 即可，无需添加平台分支或 `BackendSpec`。仅有系统调用差异时可在插件内部按 `context.platform` 适配；存在需要独立选择的实现时才使用下面的默认实现协议。
+
+需要多实现的插件在同一静态 `platform.json` 中声明 `backends`（平台到实现名列表）和 `default_backends`，运行时 `PluginDefinition.backends` 使用公开的 `BackendSpec`；`plugin_backends()` 可直接从该文件读取。目录显示无需导入运行库。静态与运行时声明不一致则拒绝加载。
+
+配置读取、配置服务、CLI 清单和装配器复用同一静态认证与默认实现检查，内置和外部插件规则一致；检查先于插件代码加载及实例创建。插件在工厂中读取 `context.backend`，仅导入被选中的实现。配置优先，其次插件声明的默认值；只有一个实现时可自动选中。多个实现且没有默认值、指定实现不可用或平台不匹配均明确报错，不静默回退。
+
+```toml
+[plugin_backends.pipewire]
+linux = "pipewire"
+windows = "wasapi"
+
+[plugin_backends.v4l2]
+linux = "v4l2"
+windows = "directshow"
+```
+
+这些是平台内的默认实现，不是设备选择；设备身份、凭据和端口仍由实例显式配置。未启用插件及其他平台的默认值允许保留，禁用插件时也可一并删除其实现偏好。网页“功能与插件 → 平台默认实现”只为已启用且当前平台存在多个实现的插件展示选择器；保存了无效选择时仍显示修复入口。单一实现自动选择，不增加无意义的表项。CLI `pa plugins` 显示当前实现。等价默认值或其他平台设置的变更不替换运行模块；本机适配器切换通过已有租约与维护边界，固定主语音实现和外部插件实现切换须显式重启。
 
 ## 声明与生命周期
 
@@ -220,6 +242,13 @@ rolls back in reverse order and blocks owners/dependents if recovery fails. Exis
 must retain its context and identity. The sample plugin demonstrates an atomic settings
 and resource update. Device connection replacements preserve fixed main voice bindings;
 changing those bindings remains a restart operation.
+
+Bundled adapters registered for owned connection replacement may first handle a policy-only
+change through their own `prepare_configuration` hook. Returning `NotImplemented` from this
+internal hook delegates a connection change to the registered drain/replacement path; it is
+not a fallback contract for arbitrary external extensions. The framework never edits provider
+policy fields itself. Linux audio minimum volume continues to affect only its fixed main
+output; extra speakers retain their existing policy.
 
 
 ## Operator drain hooks

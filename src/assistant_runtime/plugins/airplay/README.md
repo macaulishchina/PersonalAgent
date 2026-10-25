@@ -1,6 +1,6 @@
 # AirPlay speaker integration
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Platform certification covers the PA adapter; physical devices and external services require their own acceptance. See the [module index](../../../../docs/reference/modules.md).
 Voice is currently disabled; adapter and device checks do not establish voice readiness.
 
 This optional adapter registers AirPlay/RAOP speakers in the same device directory as local microphones and Bluetooth speakers. It uses pyatv 0.18.0's public discovery, connect, audio and StreamReader APIs. MP3 encoding uses FFmpeg supplied by the imageio-ffmpeg wheel in the project's single environment. No receiver protocol, custom RTP clock or separate environment is implemented.

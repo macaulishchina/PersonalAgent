@@ -159,7 +159,12 @@ class DeviceConfigTest(unittest.TestCase):
             values = copy.deepcopy(cfg.devices)
             values["living"][key] = value
             with self.assertRaises(ValueError):
-                Config(devices=values)
+                from assistant_runtime.core.devices.configuration_validation import validate_devices
+                from types import SimpleNamespace
+
+                validate_devices(
+                    SimpleNamespace(devices=values, enabled_plugins=("devices",), plugins=("pipewire",))
+                )
 
     def test_context_describes_capabilities_without_connection_details(self):
         directory = DeviceDirectory(device_config().devices)

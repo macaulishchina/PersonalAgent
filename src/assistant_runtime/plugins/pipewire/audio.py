@@ -11,7 +11,6 @@ from .devices import resolve, validate_device
 from .volume import apply_hardware_volume
 
 import numpy as np
-from pywebrtc_audio import AudioProcessor
 
 log = logging.getLogger(__name__)
 
@@ -321,6 +320,8 @@ class AudioRoute:
                     reference = self.reference_capture = await self._record(
                         self.sink + ".monitor", "personal-agent-echo-reference"
                     )
+                    from pywebrtc_audio import AudioProcessor
+
                     processor = AudioProcessor(
                         sample_rate=16000,
                         echo_cancellation=True,

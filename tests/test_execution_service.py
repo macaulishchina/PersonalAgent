@@ -468,12 +468,14 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_real_pi_submission_through_shared_cli_transport_and_restart_receipt(self):
         from assistant_runtime.api.system import system
 
-        if system.name == "windows":
+        from assistant_runtime.core.plugin_catalog import platforms
+
+        if system.name == "windows" and "windows" not in platforms("voice_disabled"):
             from assistant_runtime.app.initialize import initialize
 
             with tempfile.TemporaryDirectory() as folder:
                 root = Path(folder) / "standard"
-                with self.assertRaisesRegex(ValueError, "web, voice_disabled.*slim"):
+                with self.assertRaisesRegex(ValueError, "voice_disabled.*slim"):
                     initialize(root, preset="standard")
                 self.assertFalse(root.exists())
             return

@@ -1,12 +1,11 @@
 """Standalone guide ownership, subprocess cleanup, scene coverage and private evidence."""
 
-from platform_support import private_mode
+from platform_support import private_mode, process_alive
 
 import asyncio
 import contextlib
 import io
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -34,6 +33,12 @@ def prompts(folder):
 
 
 class GuideTest(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows explicit Linux-benchmark refusal")
+    async def test_windows_benchmark_refuses_before_opening_devices(self):
+        with self.assertRaisesRegex(RuntimeError, "仅支持 Linux PipeWire"):
+            await require_stopped(SimpleNamespace())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux systemd/PipeWire benchmark guard")
     async def test_live_service_and_unmanaged_socket_prevent_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             value = SimpleNamespace(unit_name="agent.service", socket=Path(directory) / "control.sock")
@@ -84,8 +89,7 @@ class GuideTest(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
+            self.assertFalse(process_alive(pid))
         with self.assertRaisesRegex(RuntimeError, "Voice preparation failed"):
             await command(
                 [sys.executable, "-c", "import sys;sys.stderr.buffer.write(bytes([228,255]));sys.exit(1)"]

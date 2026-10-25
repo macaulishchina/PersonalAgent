@@ -55,7 +55,9 @@ class ReportingTest(unittest.IsolatedAsyncioTestCase):
         self.host = SimpleNamespace(
             assistant=None,
             runtime=self.runtime,
-            config=SimpleNamespace(root=self.root, state_dir=self.root / "state", events={"queue_size": 8}),
+            config=SimpleNamespace(
+                root=self.root, state_dir=self.root / "state", events={"queue_size": 8}, plugin_backends={}
+            ),
         )
         self.events = EventsPlugin(self.host)
         self.sources = ObservationsPlugin(context_for(self.host, "observations"), {"push": PushProvider()})

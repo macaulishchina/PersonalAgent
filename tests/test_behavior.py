@@ -108,8 +108,19 @@ class TaskTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("t1", b.muted_turns)
 
 
+class DeviceFixture(SimpleNamespace):
+    """Synthetic PipeWire protocol fixture, never a Windows deployment declaration."""
+
+    @property
+    def output_devices(self):
+        return {k: v for k, v in self.devices.items() if v["kind"] == "speaker" and v.get("enabled", True)}
+
+
 def device_config(**kw):
-    return Config(
+    defaults = Config(plugins=[])
+    return DeviceFixture(
+        minimum_volume=kw.pop("minimum_volume", defaults.minimum_volume),
+        echo_cancel=kw.pop("echo_cancel", defaults.echo_cancel),
         plugins=["pipewire", "voice_disabled", "pi"],
         input_device="living_microphone",
         default_output="living",

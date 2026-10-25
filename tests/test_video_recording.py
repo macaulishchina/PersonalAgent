@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,6 +21,31 @@ from assistant_runtime.plugins.go2rtc.camera import Go2RTCCamera
 from assistant_runtime.plugins.go2rtc.recording import inspect_clip
 from assistant_runtime.app.host import AssistantService
 from assistant_runtime.mcp.client import LocalRuntimeClient
+
+
+class ProbeLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_metadata_probe_reaps_its_process(self):
+        started = asyncio.Event()
+
+        async def blocked(_):
+            started.set()
+            await asyncio.Event().wait()
+
+        process = SimpleNamespace(
+            returncode=None,
+            stdout=SimpleNamespace(read=blocked),
+            stderr=SimpleNamespace(read=blocked),
+            wait=AsyncMock(return_value=-1),
+        )
+        process.kill = Mock(side_effect=lambda: setattr(process, "returncode", -1))
+        with patch("assistant_runtime.plugins.go2rtc.recording.system.spawn", return_value=process):
+            task = asyncio.create_task(inspect_clip(Path("synthetic.mp4")))
+            await started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        process.kill.assert_called_once()
+        process.wait.assert_awaited_once()
 
 
 def sample_video(path):
@@ -128,7 +153,7 @@ class RecordingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clip.device_id, "camera")
         self.assertEqual((clip.width, clip.height), (160, 96))
         self.assertAlmostEqual(clip.duration_seconds, 2, delta=0.2)
-        self.assertEqual(await asyncio.to_thread(inspect_clip, clip.path), (160, 96, clip.duration_seconds))
+        self.assertEqual(await inspect_clip(clip.path), (160, 96, clip.duration_seconds))
         self.assertEqual(private_mode(clip.path), 0o600)
         self.assertFalse(self.aliases)
         self.assertEqual(len(self.deleted), 1)

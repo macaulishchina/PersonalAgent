@@ -6,10 +6,12 @@ import os
 import tempfile
 from assistant_runtime.core.plugin_catalog import OWNERS, declaration
 from assistant_runtime.api.system import system
+from .plugin_selection import resolve_selection
 from .extensions import discover
 
 
 def inventory(config):
+    selected = resolve_selection(config.enabled_plugins, config.plugin_backends, system.name)
     external = [name for name in config.enabled_plugins if name not in OWNERS]
     definitions = discover(external, OWNERS) if external else {}
     sources = {
@@ -32,6 +34,7 @@ def inventory(config):
                 "requires": list(spec.manifest.requires),
                 "optional": list(spec.manifest.optional),
                 "supported_platforms": list(spec.supported_platforms),
+                "backend": selected[name],
                 "platform_supported": system.name in spec.supported_platforms,
                 "distribution": {"name": distribution.metadata["Name"], "version": distribution.version}
                 if distribution

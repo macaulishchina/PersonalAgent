@@ -51,6 +51,10 @@ class Context:
         self.cancelled = asyncio.Event()
         self.optional_unavailable: tuple[str, ...] = ()
 
+    @property
+    def platform(self):
+        return self.runtime.platform
+
     def own(self, cleanup):
         self.resources.push_async_callback(cleanup)
 
@@ -154,7 +158,10 @@ class Context:
 
 
 class Runtime:
-    def __init__(self, store, bindings=None):
+    def __init__(self, store, bindings=None, *, platform=None):
+        from .platform import PlatformInfo
+
+        self._platform = platform or PlatformInfo.current()
         self.event_sink: EventSink | None = None
         self.event_owners: dict[str, str] = {}
         self.store = store
@@ -171,6 +178,10 @@ class Runtime:
         self.configuration_ready = asyncio.Event()
         self.configuration_ready.set()
         self.configuration_tasks = set()
+
+    @property
+    def platform(self):
+        return self._platform
 
     def add(self, plugin):
         m = plugin.manifest

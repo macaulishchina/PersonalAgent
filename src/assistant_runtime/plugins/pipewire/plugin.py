@@ -16,6 +16,14 @@ class PipeWirePlugin:
     def maintenance_pending(self):
         return [{"state": "running"}] if self.player.playing or not self.player.queue.empty() else []
 
+    async def prepare_configuration(self, config):
+        from .policy import volume_update
+
+        # Linux extra speakers retain their own unrestricted volume policy.
+        provider = self.outputs.get(self.route.output_device) if self.route.output_device else None
+        providers = [provider] if provider is not None and hasattr(provider, "minimum_volume") else []
+        return volume_update(self.route.config, config, providers)
+
     async def start(self, context):
         self.devices.register()
         from .io import PipeWireEndpoint

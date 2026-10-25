@@ -9,14 +9,14 @@ import re
 
 from assistant_runtime.api import CallIdentity, PluginContext, PluginDefinition
 from assistant_runtime.api.plugins import current_call, require_platform, PlatformCertificationError
-from .plugin_metadata import installed_platforms
+from .plugin_metadata import installed_platforms, installed_backends
 from assistant_runtime.core.configuration.schema import resolve_definition
 
 GROUP = "personal_agent.plugins"
 
 
-def discover(names, builtins=()):
-    """Read metadata without importing disabled extensions; reject ambiguous ownership."""
+def installed_entries(names, builtins=()):
+    """Resolve distribution identities without importing any extension code."""
     if len(names) != len(set(names)):
         raise ValueError("Duplicate enabled plugin")
     found = {}
@@ -28,10 +28,17 @@ def discover(names, builtins=()):
         if entry.name in found:
             raise ValueError("Duplicate installed plugin: " + entry.name)
         found[entry.name] = entry
-    result = {}
     for name in names:
         if name not in found:
             raise ValueError("Plugin not installed: " + name)
+    return found
+
+
+def discover(names, builtins=()):
+    """Read metadata without importing disabled extensions; reject ambiguous ownership."""
+    found = installed_entries(names, builtins)
+    result = {}
+    for name in names:
         from assistant_runtime.api.system import system
 
         try:
@@ -42,6 +49,7 @@ def discover(names, builtins=()):
                 "(missing or invalid static platform certification)"
             ) from exc
         require_platform(name, platforms, system.name)
+        backends = installed_backends(found[name])
         definition = found[name].load()
         definition = definition() if callable(definition) else definition
         if not isinstance(definition, PluginDefinition) or definition.manifest.name != name:
@@ -57,6 +65,8 @@ def discover(names, builtins=()):
                 f"Plugin {name} cannot enable on {system.name}; certified platforms: {', '.join(platforms)}; "
                 "static and runtime platform certifications differ"
             )
+        if definition.backends != backends:
+            raise ValueError(f"Plugin {name}: static and runtime backend declarations differ")
         if definition.manifest.critical:
             raise ValueError("Extensions cannot declare themselves critical")
         result[name] = definition
@@ -163,11 +173,23 @@ class InstalledPlugin:
 
         return prepare
 
-    def __init__(self, definition, config, root, credential, capabilities, tools, *, resources=None):
+    def __init__(
+        self,
+        definition,
+        config,
+        root,
+        credential,
+        capabilities,
+        tools,
+        *,
+        resources=None,
+        backend_defaults=None,
+    ):
         self.manifest = definition.manifest
         self.context = None
         self.definition, self.config, self.root = definition, config, root
         self.credential, self.capabilities, self.tools = credential, capabilities, tools
+        self.backend_defaults = backend_defaults or {}
         self.resources = resources or {}
         if "system_io" in definition.resources:
             from assistant_runtime.api.system import system
@@ -241,7 +263,13 @@ class InstalledPlugin:
                 raise ValueError("Invalid configuration resource path")
             return configuration_path(path)
 
+        from assistant_runtime.api.backends import select_backend
+
         public = self.public = PluginContext(
+            platform=context.platform,
+            backend=select_backend(
+                self.manifest.name, self.definition.backends, context.platform.name, self.backend_defaults
+            ),
             configuration_resource=configuration_resource,
             name=self.manifest.name,
             config=resolve_definition(self.definition, self.config),

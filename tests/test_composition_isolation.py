@@ -13,7 +13,7 @@ class CompositionIsolationTest(unittest.TestCase):
         from importlib.resources import files
         from assistant_runtime.app.config import Config
         from assistant_runtime.app.initialize import initialize
-        from assistant_runtime.core.plugin_catalog import OWNERS
+        from assistant_runtime.core.plugin_catalog import OWNERS, platforms
 
         for owner in OWNERS.values():
             if owner.startswith("assistant_runtime.core."):
@@ -21,8 +21,12 @@ class CompositionIsolationTest(unittest.TestCase):
                 self.assertTrue((files("assistant_runtime") / relative / "declaration.py").is_file(), owner)
         with tempfile.TemporaryDirectory() as directory:
             for preset in ("slim", "standard"):
-                if sys.platform == "win32" and preset == "standard":
-                    with self.assertRaisesRegex(ValueError, "web, voice_disabled"):
+                if (
+                    sys.platform == "win32"
+                    and preset == "standard"
+                    and "windows" not in platforms("voice_disabled")
+                ):
+                    with self.assertRaisesRegex(ValueError, "voice_disabled.*slim"):
                         initialize(Path(directory) / preset, preset=preset)
                     self.assertFalse((Path(directory) / preset).exists())
                     continue

@@ -135,14 +135,14 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
     async def test_hardware_platform_declarations_and_no_optional_imports(self):
         from assistant_runtime.core.plugin_catalog import declaration
 
-        for name in ("pipewire", "v4l2", "hid_buttons"):
-            self.assertEqual(declaration(name).supported_platforms, ("linux",))
-        self.assertEqual(declaration("search").supported_platforms, ("linux",))
+        for name in ("pipewire", "v4l2"):
+            self.assertEqual(declaration(name).supported_platforms, ("linux", "windows"))
+        self.assertEqual(declaration("search").supported_platforms, ("linux", "windows"))
         from assistant_runtime.core.configuration.catalog import catalog
 
         rows = {row["id"]: row for row in catalog()["plugins"]}
-        self.assertEqual(rows["hid_buttons"]["supported_platforms"], ["linux"])
-        self.assertEqual(rows["hid_buttons"]["platform_supported"], sys.platform == "linux")
+        self.assertEqual(rows["hid_buttons"]["supported_platforms"], ["linux", "windows"])
+        self.assertTrue(rows["hid_buttons"]["platform_supported"])
 
     async def test_platform_specific_imports_stay_out_of_business(self):
         import ast

@@ -5,6 +5,8 @@ import os
 import sys
 import wave
 
+from assistant_runtime.api.system import system
+
 import numpy as np
 
 from .guide import CUES, POSITIONS, READING
@@ -12,12 +14,16 @@ from .metrics import RATE
 
 
 def write_wave(path, pcm):
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "wb") as file, wave.open(file, "wb") as audio:
-        audio.setnchannels(1)
-        audio.setsampwidth(2)
-        audio.setframerate(RATE)
-        audio.writeframes(pcm)
+    directory = system.directory(path.parent)
+    try:
+        descriptor = directory.open_file(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        with os.fdopen(descriptor, "wb") as file, wave.open(file, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(RATE)
+            audio.writeframes(pcm)
+    finally:
+        directory.close()
 
 
 def keyword_events(detector, pcm):

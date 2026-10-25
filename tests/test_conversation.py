@@ -15,6 +15,7 @@ from assistant_runtime.core.conversation.store import ConversationStore
 from assistant_runtime.core.pi.conversation import task_event
 from assistant_runtime.core.pi.tool_display import tool_display
 from assistant_runtime.app.store import Store
+from assistant_runtime.kernel.runtime import Runtime
 
 
 class Owned:
@@ -186,8 +187,9 @@ def fixture(root):
         player=SimpleNamespace(playing=False),
         quiet_active=lambda: False,
         memory=None,
-        runtime=SimpleNamespace(invoke=AsyncMock()),
+        runtime=Runtime(store),
     )
+    host.runtime.invoke = AsyncMock()
     host.conversation = Conversation(host)
     return host
 

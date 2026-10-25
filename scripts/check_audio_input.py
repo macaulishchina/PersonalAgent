@@ -3,13 +3,13 @@
 import argparse
 import asyncio
 from datetime import datetime, timezone
-import fcntl
 import json
 import os
 from pathlib import Path
 import sys
 
 from assistant_runtime.app.config import Config
+from assistant_runtime.api.system import system
 from scripts.audio_check.capture import Capture, duration, endpoint_fingerprint, require_stopped
 from scripts.audio_check.guide import CUES, POSITIONS, READING, VOICE_MODEL, GuidePlayer
 from scripts.audio_check.metrics import noise_comparison
@@ -18,10 +18,14 @@ from scripts.audio_check.protocol import Protocol
 
 
 def save(report, output):
-    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-        json.dump(report, file, ensure_ascii=False, indent=2, allow_nan=False)
-        file.write("\n")
+    directory = system.directory(output.parent)
+    try:
+        descriptor = directory.open_file(output.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            json.dump(report, file, ensure_ascii=False, indent=2, allow_nan=False)
+            file.write("\n")
+    finally:
+        directory.close()
 
 
 def summary(report):
@@ -66,13 +70,16 @@ async def run(args):
         raise ValueError("--text-only 需要 --guided")
     if args.output and args.output.exists():
         raise ValueError("结果文件已存在，请使用新文件名。")
-    descriptor = os.open(
-        config.state_dir / "audio-input-check.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
-    )
+    directory = system.directory(config.state_dir)
+    try:
+        descriptor = directory.open_file("audio-input-check.lock", os.O_CREAT | os.O_RDWR)
+    finally:
+        directory.close()
+    lock_stream = os.fdopen(descriptor, "r+b")
     capture = player = None
     try:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.lock(lock_stream, blocking=False)
         except BlockingIOError as exc:
             raise RuntimeError("本实例已有测试脚本运行，不会打断它。") from exc
         if args.prepare_guide:
@@ -163,7 +170,7 @@ async def run(args):
             if player is not None:
                 await player.close()
         finally:
-            os.close(descriptor)
+            lock_stream.close()
 
 
 def main():

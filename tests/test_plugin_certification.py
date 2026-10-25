@@ -20,6 +20,10 @@ from assistant_runtime.core.plugin_catalog import OWNERS, declaration, platforms
 from assistant_runtime.core.configuration.catalog import catalog
 
 
+def uncertified(name):
+    return ("linux",) if name in {"pipewire", "v4l2"} else platforms(name)
+
+
 class CertificationTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -44,9 +48,9 @@ class CertificationTest(unittest.TestCase):
             ),
         )
 
-    def test_all_bundled_extensions_are_linux_only_and_core_scope_is_unchanged(self):
+    def test_bundled_platform_matrix_and_core_scope_is_unchanged(self):
         for name, module in OWNERS.items():
-            expected = ("linux", "windows") if module.startswith("assistant_runtime.core.") else ("linux",)
+            expected = ("linux", "windows")
             with self.subTest(plugin=name):
                 self.assertEqual(platforms(name), expected)
                 self.assertEqual(declaration(name).supported_platforms, expected)
@@ -55,7 +59,7 @@ class CertificationTest(unittest.TestCase):
                 rows = {p["id"]: p for p in catalog()["plugins"]}
                 for name in ("web", "voice_disabled", "gesture"):
                     self.assertEqual(rows[name]["kind"], "extension")
-                    self.assertEqual(rows[name]["platform_supported"], current == "linux")
+                    self.assertEqual(rows[name]["platform_supported"], current in platforms(name))
                 self.assertTrue(rows["pi"]["platform_supported"])
 
     def test_bad_or_missing_certification_never_defaults_to_all_platforms(self):
@@ -112,8 +116,11 @@ class CertificationTest(unittest.TestCase):
     def test_windows_configuration_and_mutated_composition_cannot_bypass_gate(self):
         from assistant_runtime.app.bootstrap import compose
 
-        with patch.object(system, "name", "windows"):
-            for name in ("web", "voice_disabled", "gesture"):
+        with (
+            patch.object(system, "name", "windows"),
+            patch("assistant_runtime.core.plugin_catalog.platforms", side_effect=uncertified),
+        ):
+            for name in ("pipewire", "v4l2"):
                 with (
                     self.subTest(plugin=name),
                     patch(
@@ -124,8 +131,8 @@ class CertificationTest(unittest.TestCase):
                     with self.assertRaisesRegex(PlatformCertificationError, name):
                         Config(root=self.root, plugins=[name])
             config = Config(root=self.root, plugins=[])
-            config.plugins = ["web"]
-            with self.assertRaisesRegex(PlatformCertificationError, "web"):
+            config.plugins = ["pipewire"]
+            with self.assertRaisesRegex(PlatformCertificationError, "pipewire"):
                 compose(SimpleNamespace(config=config, store=None))
 
     def test_disabling_external_plugin_retains_stored_settings_without_loading_it(self):
@@ -152,10 +159,15 @@ class CertificationTest(unittest.TestCase):
             config = Config.load(initialize(self.root / "windows"))
             self.assertNotIn("web", config.plugins)
             self.assertEqual(config.plugins, Config(root=self.root).plugins)
-            for _ in range(2):
-                with self.assertRaisesRegex(ValueError, "web, voice_disabled.*slim"):
-                    initialize(self.root / "rejected", preset="standard")
-                self.assertFalse((self.root / "rejected").exists())
+            if "windows" not in platforms("voice_disabled"):
+                for _ in range(2):
+                    with self.assertRaisesRegex(ValueError, "voice_disabled.*slim"):
+                        initialize(self.root / "rejected", preset="standard")
+                    self.assertFalse((self.root / "rejected").exists())
+            else:
+                self.assertIn(
+                    "web", Config.load(initialize(self.root / "standard", preset="standard")).plugins
+                )
         with patch.object(system, "name", "linux"):
             config = Config.load(initialize(self.root / "linux"))
             self.assertIn("web", config.plugins)
@@ -173,14 +185,16 @@ class CertificationTest(unittest.TestCase):
         config = Config.load(entry)
         self.assertEqual("web" in config.plugins, system.name == "linux")
         if system.name == "windows":
-            entry.write_text('root = ".."\nplugins = ["web"]\n')
+            entry.write_text(
+                'root = ".."\nplugins = ["pipewire"]\n[plugin_backends.pipewire]\nwindows = "removed"\n'
+            )
             result = subprocess.run(
                 [sys.executable, "-m", "assistant_runtime.app.cli", "--config", str(entry), "plugins"],
                 capture_output=True,
                 timeout=20,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("web does not support windows", result.stderr.decode(errors="replace"))
+            self.assertIn("unavailable on windows", result.stderr.decode(errors="replace"))
 
 
 class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
@@ -188,10 +202,15 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
         from assistant_runtime.app.management import BusinessProcess
         from assistant_runtime.core.configuration.settings import ManagementSettings
 
-        with tempfile.TemporaryDirectory() as folder, patch.object(system, "name", "windows"):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(system, "name", "windows"),
+            patch("assistant_runtime.core.plugin_catalog.platforms", side_effect=uncertified),
+            patch("assistant_runtime.core.configuration.catalog.platforms", side_effect=uncertified),
+        ):
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text('plugins = ["web"]\n')
+            entry.write_text('plugins = ["pipewire"]\n')
             business = BusinessProcess(ManagementSettings(root, entry))
             with patch.object(system, "spawn", side_effect=AssertionError("worker created")):
                 await business.start()
@@ -205,10 +224,15 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
         from assistant_runtime.core.configuration.files import ConfigurationFiles
         from assistant_runtime.core.configuration.validation import validate_candidate
 
-        with tempfile.TemporaryDirectory() as folder, patch.object(system, "name", "windows"):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(system, "name", "windows"),
+            patch("assistant_runtime.core.plugin_catalog.platforms", side_effect=uncertified),
+            patch("assistant_runtime.core.configuration.catalog.platforms", side_effect=uncertified),
+        ):
             root = Path(folder)
             entry = root / "config.toml"
-            entry.write_text('plugins = ["web"]\n')
+            entry.write_text('plugins = ["pipewire"]\n')
             files = ConfigurationFiles(
                 entry, root / "private", lambda contents: validate_candidate(entry.name, contents, root=root)
             )
@@ -238,12 +262,12 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 response = await client.get("/api/catalog")
                 rows = {p["id"]: p for p in (await response.json())["plugins"]}
-                self.assertFalse(rows["web"]["platform_supported"])
+                self.assertFalse(rows["pipewire"]["platform_supported"])
                 response = await client.get("/api/configuration")
                 self.assertEqual(response.status, 200)
                 version = (await response.json())["version"]
                 original = entry.read_bytes()
-                for selected, status in ((["web"], 400), (["voice_disabled"], 400), ([], 200)):
+                for selected, status in ((["pipewire"], 400), (["v4l2"], 400), ([], 200)):
                     response = await client.post(
                         "/api/configuration",
                         headers=origin,

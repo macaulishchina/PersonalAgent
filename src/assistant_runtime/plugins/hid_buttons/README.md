@@ -1,6 +1,6 @@
 # HID function buttons
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Platform certification covers the PA adapter; physical devices and external services require their own acceptance. See the [module index](../../../../docs/reference/modules.md).
 
 Optional `hid_buttons` plugin translates explicitly configured USB HID reports into
 existing `Trigger(source, "wake")` requests. The assistant retains wake acceptance,
@@ -69,3 +69,9 @@ produced accepted HID wakes and successful native voice connections. The user
 observed no wake with the hardware red mute indicator. This is evidence about this
 MCP01, not a generic software mute-state check. Quiet hours were temporarily delayed
 for testing, then restored to the original 01:00–06:00 policy and confirmed active.
+
+## Windows
+
+Install the `hid-buttons` extra. Windows uses HIDAPI with the same vendor ID, product ID, serial and exact report mapping. Enumeration/opening rejects missing or ambiguous identities and rechecks the serial after opening. Reports are read only; no global keyboard hook, output report or device write is installed. Cancellation closes the owned handle, and reconnect repeats identity validation. Linux keeps its hidraw implementation and udev permissions.
+
+Current Windows Server acceptance covers the actual HIDAPI enumeration and missing-identity path, plus bounded reads, cancellation, debounce and handle cleanup. A physical button press and USB unplug/replug have not been accepted on this host.

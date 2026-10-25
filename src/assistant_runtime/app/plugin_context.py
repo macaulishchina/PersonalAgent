@@ -61,7 +61,16 @@ class DeviceRegistration:
 
 
 def environment(
-    host, name, settings, *, resources=None, uses=(), provides=(), credentials=(), state_name=None
+    host,
+    name,
+    settings,
+    *,
+    resources=None,
+    uses=(),
+    provides=(),
+    credentials=(),
+    state_name=None,
+    backend=None,
 ):
     box = []
 
@@ -93,6 +102,8 @@ def environment(
         box[0].register(kind, handler, timeout=timeout)
 
     public = PluginContext(
+        platform=runtime().platform,
+        backend=backend,
         name=name,
         config=settings,
         state_dir=state_dir,

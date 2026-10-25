@@ -90,6 +90,8 @@ async def main():
             document["plugins"].append("sample")
         else:
             document["plugin_settings"] = {"sample": {}}
+        platform = "windows" if sys.platform == "win32" else "linux"
+        document["plugin_backends"] = {"pipewire": {platform: "removed_for_acceptance"}}
         entry.write_text(tomlkit.dumps(document))
         models = root / "config/models.toml"
         models.write_text(
@@ -171,8 +173,33 @@ default_reasoning_effort = "none"
                     await sample.uncheck()
                     await sample.check()
                     await page.get_by_role("button", name="放弃修改", exact=True).click()
+                    await expect(page.locator("#discard")).to_be_disabled()
                 else:
                     await expect(sample).to_be_disabled()
+                backend = page.get_by_label("本机音频默认实现", exact=True)
+                await expect(backend).to_have_value("removed_for_acceptance")
+                await expect(page.get_by_label("本机摄像头默认实现", exact=True)).to_have_count(0)
+                await backend.select_option("")
+                async with page.expect_response(
+                    lambda r: r.url.endswith("/api/configuration")
+                    and r.request.method == "POST"
+                    and r.status == 200
+                ):
+                    await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#documents")).not_to_have_attribute("inert", "")
+                await expect(backend).to_have_count(0)
+                assert (
+                    not tomllib.loads(entry.read_text())
+                    .get("plugin_backends", {})
+                    .get("pipewire", {})
+                    .get(platform)
+                )
+                assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == pid
+                audio = page.locator('.plugin-option input[type="checkbox"][value="pipewire"]')
+                await audio.check()
+                await expect(backend).to_have_count(0)
+                await page.get_by_role("button", name="放弃修改", exact=True).click()
+                await expect(page.locator("#discard")).to_be_disabled()
                 await capture(page, "configuration-desktop-plugins.png")
                 await (
                     page.locator(".plugin-option")

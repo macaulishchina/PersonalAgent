@@ -1,5 +1,7 @@
 """Standalone capture using existing device registries; no service-side test mode."""
 
+from assistant_runtime.api.system import system
+
 import asyncio
 import json
 import math
@@ -21,6 +23,8 @@ def duration(value):
 
 
 async def require_stopped(config):
+    if system.name != "linux":
+        raise RuntimeError("此独立录音验收仅支持 Linux PipeWire；Windows 设备使用 wasapi，需单独验收。")
     env = audio_env()
     env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{os.getuid()}/bus"
     output = await command(

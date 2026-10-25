@@ -1,6 +1,6 @@
 # Reyee observations
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Host platforms: Linux and Windows / Windows Server, through the `observations` plugin. This protocol provider is not an independently enabled plugin. Actual router/TV connectivity requires separate acceptance.
 
 The protocol and client-state comparison live here. Instance lifecycle and configuration
 use [observation sources](../observations/README.md). Install the `reyee` extra.

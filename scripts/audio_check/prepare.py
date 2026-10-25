@@ -1,10 +1,10 @@
 """Fixed Mandarin neural prompts, synthesized locally in an owned worker."""
 
+from assistant_runtime.api.system import system
+
 import argparse
 import asyncio
-import os
 from pathlib import Path
-import signal
 import sys
 import tempfile
 import wave
@@ -13,10 +13,9 @@ from .guide import CUES, RATE, VOICE_ID, VOICE_SPEED, load_prompt, prompt_folder
 
 
 async def command(arguments, *, timeout=30, env=None):
-    process = await asyncio.create_subprocess_exec(
+    process = await system.spawn(
         *arguments,
         env=env,
-        start_new_session=True,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -29,13 +28,7 @@ async def command(arguments, *, timeout=30, env=None):
             )
         return output
     finally:
-        # Reap only this owned child; never signal an already-reaped/reused PID.
-        if process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        await process.wait()
+        await system.stop_process(process, timeout=2)
 
 
 async def prepare_prompts(state_dir, model_dir):
@@ -99,7 +92,7 @@ def synthesize(model_dir, output):
             file.setsampwidth(2)
             file.setframerate(RATE)
             file.writeframes((samples * 32767).astype("<i2").tobytes())
-        path.chmod(0o600)
+        system.private(path)
 
 
 if __name__ == "__main__":

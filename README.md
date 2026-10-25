@@ -16,7 +16,7 @@
 | Windows / Windows Server | slim | CLI、独立配置网页 |
 | Linux | standard；也可选 slim | CLI、独立配置网页；standard 另有聊天网页 |
 
-当前扩展插件仅认证 Linux，Windows 禁止启用，包括 `web`、`voice_disabled`。语音当前停用。Windows Server 2025 已完成核心启动、对话和重启验证；系统服务、注销及整机重启仍待实机验收，详见[验收记录](docs/archive/platform-acceptance-2026-10.md)。
+现有全部扩展声明支持 Linux、Windows／Windows Server，关闭的插件也保留认证。插件自动选择平台实现，可在配置页指定平台默认实现。Windows 默认使用 slim，也可显式选择 standard；语音入口继续停用。Windows Server 的源码／安装包启停和重启已验证，真实设备、训练唤醒模型及系统服务生命周期的边界见[验收记录](docs/archive/platform-acceptance-2026-10.md)。
 
 ## 已安装后的日常入口
 

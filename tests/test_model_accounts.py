@@ -527,13 +527,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             "TEST_MODEL_KEY=sk-synthetic-test\nASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n"
         )
         config = Config(root=self.root, model_api=raw)
-        from assistant_runtime.api.system import system
 
-        if system.name == "windows":
-            with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
-                await verify(config, "subscription", "model-b", effort="low", max_requests=6)
-            self.assertEqual(self.gateway.requests, [])
-            return
         result = await verify(config, "subscription", "model-b", effort="low", max_requests=6)
         self.assertEqual(result["state"], "completed", result)
         self.assertEqual(result["requests"], 5)

@@ -95,6 +95,11 @@ class HidButtonsPlugin:
         await self.context.ready.wait()
         while True:
             try:
+                if self.context.platform.name == "windows":
+                    from .windows import read_reports
+
+                    await read_reports(button, self.report, lambda: self.health(button.name, "ready"))
+                    continue
                 path = discover(button)
                 fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
                 try:

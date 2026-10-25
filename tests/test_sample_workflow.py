@@ -63,34 +63,34 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
                 return sse_text_reply("report-result", "REPORT_OK")
 
             gateway = FakeResponsesGateway(script)
-            config = Config.load(initialize(instance, preset="slim"))
-            config = replace(
-                config,
-                workspace=str(root),
-                plugins=[
-                    *(name for name in config.plugins if name not in {"conversation", "cli"}),
-                    "sample",
-                    "tasks",
-                    "notifications",
-                ],
-                notifications={"channels": ["inbox"], "voice_enabled": False},
-                model_api=configuration(gateway.base_url),
-                main_model="model-a",
-                main_reasoning_effort="low",
-                tasks={
-                    "model_policy": {
-                        "profiles": {
-                            p: {"model": "model-a", "reasoning_effort": "low"}
-                            for p in ("fast", "balanced", "deep", "ultra")
-                        }
-                    }
-                },
-            )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
             old_path = sys.path[:]
             sys.path.insert(0, str(installed))
             host, running = None, None
             try:
+                config = Config.load(initialize(instance, preset="slim"))
+                config = replace(
+                    config,
+                    workspace=str(root),
+                    plugins=[
+                        *(name for name in config.plugins if name not in {"conversation", "cli"}),
+                        "sample",
+                        "tasks",
+                        "notifications",
+                    ],
+                    notifications={"channels": ["inbox"], "voice_enabled": False},
+                    model_api=configuration(gateway.base_url),
+                    main_model="model-a",
+                    main_reasoning_effort="low",
+                    tasks={
+                        "model_policy": {
+                            "profiles": {
+                                p: {"model": "model-a", "reasoning_effort": "low"}
+                                for p in ("fast", "balanced", "deep", "ultra")
+                            }
+                        }
+                    },
+                )
+                (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
                 host = AssistantService(config)
                 running = asyncio.create_task(host.run())
                 await asyncio.wait_for(host.runtime.ready.wait(), 20)

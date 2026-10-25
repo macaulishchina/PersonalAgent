@@ -99,6 +99,29 @@ class ConfigurationRuntime:
         owners, restart, changes = set(), [], []
         for key in changed:
             affected = mapping.get(key, set()) & set(current.enabled_plugins)
+            if key == "plugin_backends":
+                from assistant_runtime.api.backends import select_backend
+
+                mapping.setdefault(key, set())
+                affected = set()
+                for name in current.enabled_plugins:
+                    if name not in candidate.enabled_plugins:
+                        continue  # Removed owners need no candidate implementation.
+                    spec = declaration(name) if name in OWNERS else self.host.runtime.plugins[name].definition
+                    before = select_backend(
+                        name,
+                        spec.backends,
+                        self.host.runtime.platform.name,
+                        current.plugin_backends.get(name, {}),
+                    )
+                    after = select_backend(
+                        name,
+                        spec.backends,
+                        self.host.runtime.platform.name,
+                        candidate.plugin_backends.get(name, {}),
+                    )
+                    if before != after:
+                        affected.add(name)
             if key == "plugin_settings":
                 affected = {
                     name
@@ -106,6 +129,15 @@ class ConfigurationRuntime:
                     if current.plugin_settings.get(name) != candidate.plugin_settings.get(name)
                 }
             reason = ""
+            if key == "plugin_backends" and affected:
+                from .configuration_replacement import REPLACEABLE
+
+                if (
+                    affected - REPLACEABLE
+                    or "pipewire" in affected
+                    and "assistant" in current.enabled_plugins
+                ):
+                    reason = "实现切换需要重新装配模块；固定主语音实现须重启生效"
             paths = list(changed_paths(getattr(current, key), getattr(candidate, key), (key,)))
             if key in RESTART:
                 reason = "实例或插件装配设置需要重启"

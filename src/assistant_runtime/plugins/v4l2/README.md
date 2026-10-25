@@ -1,8 +1,8 @@
 # V4L2 camera integration
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Certification declares code support; physical devices and external services require separate acceptance. See the [module index](../../../../docs/reference/modules.md).
 
-The current composition root does not register this adapter. Use the [go2rtc integration](../go2rtc/README.md) for camera onboarding; the implementation below is inactive in the deployed assistant.
+The adapter is registered when explicitly enabled. Choose an exact local device identity, or use the [go2rtc integration](../go2rtc/README.md) for a network gateway.
 
 Linux UVC cameras with an exact `/dev/v4l/by-id/*-video-index0` or
 `/dev/v4l/by-path/*-video-index0` identity use the `v4l2` adapter. UGREEN Camera 2K
@@ -107,3 +107,38 @@ Necessary acceptance evidence stays under ignored `state/acceptance/v4l2-camera/
 Device onboarding does not require generating an HTML report or another report website.
 
 Reference: [FFmpeg V4L2 input](https://ffmpeg.org/ffmpeg-devices.html#video4linux2_002c-v4l2).
+
+
+## Windows 本机摄像头
+
+`v4l2` 在 Windows 自动选择 `directshow` 后端，为 Windows／Windows Server 提供按需截图。Linux 本机摄像头继续使用 `v4l2`，网络摄像头可通过 `go2rtc` 协议适配器连接网关。安装 `camera` extra，并启用 `devices`、`v4l2`。
+
+先使用 `imageio_ffmpeg.get_ffmpeg_exe()` 返回的 FFmpeg 执行：
+
+```text
+ffmpeg -list_devices true -f dshow -i dummy
+```
+
+选择视频设备的 **Alternative name**，保留完整 `@device_pnp_...` 路径；不使用友好名称、默认设备或序号。
+
+```toml
+[devices.office_camera]
+adapter = "v4l2"
+kind = "camera"
+label = "办公室摄像头"
+[devices.office_camera.connection]
+device_path = '@device_pnp_完整的实际设备路径'
+width = 1280
+height = 720
+framerate = 15
+input_format = "mjpeg"
+timeout_seconds = 8
+```
+
+`input_format` 支持 `mjpeg`、`yuyv422`；设备必须实际支持所选格式和分辨率。参数不兼容时明确失败，不选择其他设备或格式。宽高上限为 1920×1080、帧率上限 30、超时上限 10 秒。
+
+后台仅枚举设备，不持续取帧。截图通过公共设备操作入口按请求采集，一次只允许一个采集操作；JPEG 上限 1 MiB，尺寸和格式经过验证。超时、取消和关闭会回收所属 FFmpeg 进程；设备缺失或采集失败不自动重放。
+
+Windows Server 需要摄像头驱动和对应账号的设备访问权限。当前验收覆盖真实 DirectShow 后端、缺失设备拒绝、输出验证及实例重启；本机未连接用于验收的摄像头，尚未进行真实画面、权限弹窗和 USB 插拔验收。
+
+上游：[FFmpeg DirectShow](https://ffmpeg.org/ffmpeg-devices.html#dshow)。

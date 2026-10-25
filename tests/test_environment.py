@@ -132,7 +132,10 @@ class ReadingTest(unittest.TestCase):
                 endpoint_settings(spec() | {"connection": {"metrics": metrics}})
         for physical in ("Invalid name", 1, ""):
             with self.assertRaises(ValueError):
-                Config(plugins=["apple_home"], devices={"environment": spec() | {"physical_id": physical}})
+                Config(
+                    plugins=["devices", "apple_home"],
+                    devices={"environment": spec() | {"physical_id": physical}},
+                )
 
 
 class SensorDirectoryTest(unittest.TestCase):

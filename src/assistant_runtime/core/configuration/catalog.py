@@ -5,8 +5,8 @@ from pathlib import Path
 from functools import lru_cache
 from copy import deepcopy
 from importlib.metadata import entry_points
-from assistant_runtime.core.plugin_catalog import OWNERS, platforms
-from assistant_runtime.app.plugin_metadata import installed_platforms
+from assistant_runtime.core.plugin_catalog import OWNERS, platforms, backends
+from assistant_runtime.app.plugin_metadata import installed_platforms, installed_backends
 
 
 def platform_status(read):
@@ -17,6 +17,14 @@ def platform_status(read):
     except ValueError as exc:
         return {"supported_platforms": [], "platform_supported": False, "platform_error": str(exc)}
     return {"supported_platforms": list(certified), "platform_supported": system.name in certified}
+
+
+def backend_status(read):
+    try:
+        policy = read()
+        return {"backends": policy.describe() if policy else None}
+    except (ValueError, TypeError, OSError) as exc:
+        return {"backends": None, "backend_error": str(exc), "platform_supported": False}
 
 
 @lru_cache(maxsize=128)
@@ -86,6 +94,7 @@ def installed_descriptions(names=None):
                 "description_available": description is not None,
                 "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: installed_platforms(entry)),
+                **backend_status(lambda: installed_backends(entry)),
             }
         )
     return result
@@ -106,6 +115,7 @@ def catalog(*, external_names=None):
                 "description_available": description is not None,
                 "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: platforms(name)),
+                **backend_status(lambda: backends(name)),
             }
         )
     installed = installed_descriptions(external_names)
@@ -125,8 +135,16 @@ def catalog(*, external_names=None):
             {"id": item["id"], "error": item["platform_error"]}
             for item in result + installed
             if item.get("platform_error")
+        ]
+        + [
+            {"id": item["id"], "error": item["backend_error"]}
+            for item in result + installed
+            if item.get("backend_error")
         ],
     }
+    from assistant_runtime.api.system import system
+
+    inventory["platform"] = system.name
     from .interface import describe
 
     inventory["pages"] = describe(inventory)

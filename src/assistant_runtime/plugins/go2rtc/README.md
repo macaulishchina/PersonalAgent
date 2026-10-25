@@ -1,6 +1,6 @@
 # go2rtc camera integration
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Certification declares code support; physical devices and external services require separate acceptance. See the [module index](../../../../docs/reference/modules.md).
 
 All deployed assistant video inputs use configured go2rtc streams. The gateway owns USB device identity, camera protocols, formats and transcoding. The assistant owns the logical device ID, bounded snapshot request and native MCP image delivery. The microphone remains on PipeWire.
 
@@ -152,3 +152,8 @@ pa --config config/config.toml restart
 The reusable acceptance checks repeated nonblank JPEGs through the installed socket, unknown-device errors, microphone/output coexistence, actual device MCP image delivery, gateway outage/recovery and assistant restart. `--save-frame` explicitly retains one private preview. Evidence stays under ignored `state/acceptance/video/`; no HTML report is generated. Physical hotplug and whole-machine reboot are separate operator checks.
 
 Reference: [go2rtc snapshot API](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/internal/mjpeg/README.md).
+
+## Windows adaptation status
+
+Windows Server checks have exercised this PA adapter with local protocol fixtures and actual Windows filesystem/process APIs. The Windows support declaration includes this adapter; enabling it still requires valid configuration and dependencies. External services and real accounts/devices are separate acceptance boundaries.
+The existing Docker guide covers a Linux gateway. Windows PA can address an independently deployed network gateway through HTTP; Linux USB mappings are not applied to Windows. Local Windows USB cameras use the `v4l2` plugin with its automatically selected `directshow` implementation. Video finalization and probing use the shared hidden, owned process launcher; cancellation reaps the probe and output is bounded.

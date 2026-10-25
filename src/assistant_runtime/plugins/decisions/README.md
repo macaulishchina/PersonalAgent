@@ -1,6 +1,6 @@
 # Fast semantic decisions
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Platform certification covers the PA adapter; physical devices and external services require their own acceptance. See the [module index](../../../../docs/reference/modules.md).
 
 `decisions` owns TypeSafe Jev transport, admission, policy and observations. It does
 not grant permissions, execute tools or certify effects. Exact controls, arithmetic

@@ -13,19 +13,18 @@ from .plugin_context import (
 )
 
 
-def dependencies(host, name):
-    spec = declaration(name)
-    raw = getattr(host.config, spec.config_key) if spec.config_key else {}
+def settings_for(config, name, spec):
+    raw = getattr(config, spec.config_key) if spec.config_key else {}
     settings = spec.validate(raw) if spec.validate else raw
     if spec.config_fields or name in {"airplay", "go2rtc", "v4l2"}:
-        values = {key: deepcopy(getattr(host.config, key)) for key in spec.config_fields}
+        values = {key: deepcopy(getattr(config, key)) for key in spec.config_fields}
         values["devices"] = deepcopy(
             {
                 key: row
-                for key, row in host.config.devices.items()
+                for key, row in config.devices.items()
                 if row["adapter"] == name
                 or name == "pipewire"
-                and key in {host.config.input_device, host.config.default_output}
+                and key in {config.input_device, config.default_output}
             }
         )
         values["output_devices"] = {
@@ -34,6 +33,12 @@ def dependencies(host, name):
             if row["kind"] == "speaker" and row.get("enabled", True)
         }
         settings = SimpleNamespace(**values)
+    return settings
+
+
+def dependencies(host, name):
+    spec = declaration(name)
+    settings = settings_for(host.config, name, spec)
     resources = resources_for(host, name, spec.resources)
     credentials = (
         tuple(row["api_key_env"] for row in settings.providers.values())
@@ -41,6 +46,11 @@ def dependencies(host, name):
         else ("TYPESAFE_API_KEY",)
         if name == "decisions"
         else ()
+    )
+    from assistant_runtime.api.backends import select_backend
+
+    backend = select_backend(
+        name, spec.backends, host.runtime.platform.name, host.config.plugin_backends.get(name, {})
     )
     return environment(
         host,
@@ -50,6 +60,7 @@ def dependencies(host, name):
         uses=spec.uses,
         provides=spec.provides,
         credentials=credentials,
+        backend=backend,
     )
 
 
@@ -119,10 +130,6 @@ def create(host, name, factory=None):
     plugin = BoundExtension((factory or declaration(name).create)(public), public, attach)
     from .configuration_replacement import REPLACEABLE, prepare
 
-    if (
-        name in REPLACEABLE
-        and not hasattr(plugin, "prepare_configuration")
-        and hasattr(plugin, "maintenance_pending")
-    ):
+    if name in REPLACEABLE and hasattr(plugin, "maintenance_pending"):
         plugin.prepare_configuration = lambda config: prepare(host, name, config)
     return plugin

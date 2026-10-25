@@ -133,7 +133,9 @@ class ConfigFilesTest(unittest.TestCase):
         from assistant_runtime.api.system import system
 
         entry = Path(__file__).resolve().parents[1] / "config.example/config.toml"
-        if system.name == "windows":
+        from assistant_runtime.core.plugin_catalog import platforms
+
+        if system.name not in platforms("voice_disabled"):
             with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
                 Config.load(entry)
             return

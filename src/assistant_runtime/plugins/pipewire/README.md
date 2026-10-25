@@ -1,6 +1,6 @@
 # PipeWire hardware integration
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Certification declares code support; physical devices and external services require separate acceptance. See the [module index](../../../../docs/reference/modules.md).
 Voice is currently disabled; adapter and device checks do not establish voice readiness.
 
 This adapter family supports microphone input and speaker output using the user's existing PipeWire/Pulse socket. System requirements: `pactl`, `pacat`, and a running audio service; Bluetooth speakers also require BlueZ and prior pairing. Construction validates configuration without connecting hardware. Installation does not change codecs or system audio ownership.
@@ -181,3 +181,41 @@ by itself expose a room listening or speech-generation MCP action. Per-device vo
 is coordinated independently through `AudioVolume` and does not select a voice route.
 
 Historical results are preserved in the [module acceptance archive](../../../../docs/archive/module-acceptance-2026-10.md).
+
+
+## Windows 本机音频
+
+`pipewire` 在 Windows 自动选择 `wasapi` 后端，为 Windows／Windows Server 提供独立麦克风和扬声器资源，Linux 本机音频继续使用 `pipewire`。安装 `windows-devices` extra，并将 `devices`、`pipewire` 加入实例插件列表。
+
+使用 WASAPI 的稳定 Core Audio 端点 ID，不使用默认设备、显示名称或临时序号。可在实例使用的 Python 中执行以下只读枚举：
+
+```python
+from assistant_runtime.plugins.pipewire.windows_audio import endpoints
+for kind in ("microphone", "speaker"):
+    for row in endpoints(kind):
+        print(kind, row["name"], row["endpoint_id"])
+```
+
+```toml
+[devices.office_microphone]
+adapter = "pipewire"
+kind = "microphone"
+label = "办公室麦克风"
+connection = {endpoint_id = "{0.1.0.00000000}.{YOUR-CAPTURE-ENDPOINT-GUID}"}
+
+[devices.office_speaker]
+adapter = "pipewire"
+kind = "speaker"
+label = "办公室扬声器"
+connection = {endpoint_id = "{0.0.0.00000000}.{YOUR-PLAYBACK-ENDPOINT-GUID}"}
+```
+
+必须替换为实际枚举的完整 ID。每个物理端点只声明一次。插件构造和配置目录展示不打开设备；独立设备操作通过公共音频注册表获得独占租约，关闭只回收自己的流。输入、输出都使用有界 PCM16 缓冲区；输入溢出明确报错，不交付旧音频。设备消失后不切换其他端点，恢复后由调用方重新打开。
+
+音量操作绑定同一个端点，通过 Core Audio 设置并读回确认，不使用软件增益。Windows Server 需要可用的音频设备、驱动和音频服务；服务账号还须有设备访问权限。插件不自动启动系统音频服务、调整默认设备或申请权限。
+
+本插件不启用主语音会话。主语音仍处于独立验收前的停用状态；配置中的主语音绑定保持启动时固定的规则。
+
+源码验收覆盖真实 WASAPI 枚举、缺失端点拒绝、取消时回收、有界缓冲以及实例重启。当前 Server 没有可用采集端点，未进行物理录音、播放、声学质量和 USB 插拔验收。
+
+上游：[miniaudio](https://github.com/irmen/pyminiaudio)、[Core Audio 音量接口](https://andremiras.github.io/pycaw/api/index.html)。

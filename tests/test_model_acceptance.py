@@ -59,13 +59,7 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
                     root = Path(folder)
                     (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
                     config = Config(root=root, model_api=configuration(gateway.base_url))
-                    from assistant_runtime.api.system import system
 
-                    if system.name == "windows":
-                        with self.assertRaisesRegex(ValueError, "voice_disabled.*windows.*linux"):
-                            await verify_host(config, "model-a", "model-b", max_requests=cap)
-                        self.assertEqual(gateway.requests, [])
-                        continue
                     result = await verify_host(config, "model-a", "model-b", max_requests=cap)
                     self.assertFalse(result["production_changed"])
                     if cap == 6:

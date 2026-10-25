@@ -83,23 +83,60 @@ class ConfigurationUpdateTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_volume_policy_changes_without_replacing_or_cancelling_audio(self):
         from types import SimpleNamespace
+        from copy import deepcopy
+        from assistant_runtime.api import PlatformInfo
+        from assistant_runtime.app.config import Config
+        from assistant_runtime.app.bundled import settings_for
         from assistant_runtime.app.configuration_replacement import prepare
+        from assistant_runtime.core.plugin_catalog import declaration
+        from assistant_runtime.plugins.pipewire.plugin import PipeWirePlugin
 
-        route_settings = SimpleNamespace(minimum_volume=10)
+        current = Config(plugins=[], minimum_volume=10)
+        route_settings = settings_for(current, "pipewire", declaration("pipewire"))
         provider = SimpleNamespace(minimum_volume=10)
-        plugin = SimpleNamespace(route=SimpleNamespace(config=route_settings))
-        current = SimpleNamespace(devices={}, default_output="speaker")
+        extra = SimpleNamespace(minimum_volume=0)
+        instance = object.__new__(PipeWirePlugin)
+        instance.route = SimpleNamespace(config=route_settings, output_device="speaker")
+        instance.outputs = SimpleNamespace(get=lambda name: {"speaker": provider, "extra": extra}[name])
+        plugin = SimpleNamespace(
+            instance=instance, public=SimpleNamespace(backend="pipewire", config=route_settings)
+        )
         host = SimpleNamespace(
             config=current,
-            runtime=SimpleNamespace(plugins={"pipewire": plugin}),
-            audio_outputs=SimpleNamespace(providers={"speaker": provider}),
+            runtime=SimpleNamespace(plugins={"pipewire": plugin}, platform=PlatformInfo("linux")),
         )
-        change = await prepare(host, "pipewire", SimpleNamespace(devices={}, minimum_volume=20))
+        candidate = deepcopy(current)
+        candidate.minimum_volume = 20
+        candidate.plugin_backends = {"pipewire": {"windows": "removed"}}
+        change = await prepare(host, "pipewire", candidate)
+        self.assertEqual(provider.minimum_volume, 10)
         await change.commit()
         self.assertEqual((route_settings.minimum_volume, provider.minimum_volume), (20, 20))
+        self.assertEqual(extra.minimum_volume, 0)
+        self.assertEqual(plugin.public.config.minimum_volume, 20)
         self.assertIs(host.runtime.plugins["pipewire"], plugin)
         await change.rollback()
         self.assertEqual((route_settings.minimum_volume, provider.minimum_volume), (10, 10))
+        self.assertEqual(extra.minimum_volume, 0)
+        self.assertIs(plugin.public.config, route_settings)
+
+    async def test_windows_volume_policy_updates_endpoints_and_defers_connection_replacement(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from assistant_runtime.plugins.pipewire.windows import WindowsAudioPlugin
+
+        instance = object.__new__(WindowsAudioPlugin)
+        instance.config = SimpleNamespace(minimum_volume=10, devices={"speaker": {"endpoint": "first"}})
+        instance.providers = {name: SimpleNamespace(minimum_volume=10) for name in ("main", "extra")}
+        candidate = deepcopy(instance.config)
+        candidate.minimum_volume = 20
+        change = await instance.prepare_configuration(candidate)
+        await change.commit()
+        self.assertEqual([p.minimum_volume for p in instance.providers.values()], [20, 20])
+        await change.rollback()
+        self.assertEqual([p.minimum_volume for p in instance.providers.values()], [10, 10])
+        candidate.devices["speaker"]["endpoint"] = "second"
+        self.assertIs(await instance.prepare_configuration(candidate), NotImplemented)
 
     async def test_cli_client_uses_operator_authentication_and_saved_revision(self):
         from aiohttp.test_utils import TestServer

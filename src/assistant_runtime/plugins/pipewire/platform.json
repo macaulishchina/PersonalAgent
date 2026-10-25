@@ -1,1 +1,18 @@
-{"supported_platforms": ["linux"]}
+{
+  "supported_platforms": [
+    "linux",
+    "windows"
+  ],
+  "backends": {
+    "linux": [
+      "pipewire"
+    ],
+    "windows": [
+      "wasapi"
+    ]
+  },
+  "default_backends": {
+    "linux": "pipewire",
+    "windows": "wasapi"
+  }
+}

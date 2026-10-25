@@ -260,7 +260,8 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         root = Path(self.temp.name)
         self.runtime = Runtime(None)
         self.host = SimpleNamespace(
-            config=SimpleNamespace(root=root, state_dir=root / "state", events={}), runtime=self.runtime
+            config=SimpleNamespace(root=root, state_dir=root / "state", events={}, plugin_backends={}),
+            runtime=self.runtime,
         )
         self.host.assistant = self.host
         self.plugin = EventsPlugin(self.host)

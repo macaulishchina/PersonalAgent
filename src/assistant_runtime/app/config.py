@@ -119,6 +119,7 @@ class Config(ModuleSettings):
     plugins: list[str] = field(default_factory=default_plugins)
     bindings: dict[str, str] = field(default_factory=lambda: configuration_default(__file__, "bindings"))
     plugin_settings: dict[str, dict] = field(default_factory=dict)
+    plugin_backends: dict[str, dict[str, str]] = field(default_factory=dict)
     external_mcp: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -139,6 +140,30 @@ class Config(ModuleSettings):
             not isinstance(value, dict) for value in self.plugin_settings.values()
         ):
             raise ValueError("plugin_settings must contain configuration tables")
+
+        if not isinstance(self.plugin_backends, dict) or len(self.plugin_backends) > 64:
+            raise ValueError("plugin_backends must contain at most 64 plugin defaults")
+        for owner, values in self.plugin_backends.items():
+            if (
+                not isinstance(owner, str)
+                or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", owner)
+                or not isinstance(values, dict)
+            ):
+                raise ValueError("Invalid plugin backend defaults")
+            if any(
+                platform not in {"linux", "windows"}
+                or not isinstance(value, str)
+                or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value)
+                for platform, value in values.items()
+            ):
+                raise ValueError(
+                    "Backend defaults require linux/windows and valid implementation identifiers"
+                )
+
+        from .plugin_selection import resolve_selection
+        from assistant_runtime.api.system import system
+
+        resolve_selection(self.enabled_plugins, self.plugin_backends, system.name)
 
         from assistant_runtime.core.configuration.owners import validate_stored
 
@@ -168,10 +193,7 @@ class Config(ModuleSettings):
                 raise ValueError(
                     "Voice interaction is pending independent acceptance; disable interaction.enabled"
                 )
-        from assistant_runtime.core.plugin_catalog import OWNERS, declaration, validate_platforms
-        from assistant_runtime.api.system import system
-
-        validate_platforms(self.plugins, system.name)
+        from assistant_runtime.core.plugin_catalog import OWNERS, declaration
 
         for name in self.plugins:
             if name not in OWNERS:
@@ -208,6 +230,10 @@ class Config(ModuleSettings):
             or any(not isinstance(word, str) or not word.strip() for word in self.wake_words)
         ):
             raise ValueError("wake_words must be a nonempty list of nonempty strings")
+        if not isinstance(self.wake_words, list) or any(
+            not isinstance(word, str) for word in self.wake_words
+        ):
+            raise ValueError("wake_words must be a list of strings")
         self.wake_words = [word.strip() for word in self.wake_words]
         if "assistant" in self.enabled_plugins and len(set(self.wake_words)) != len(self.wake_words):
             raise ValueError("wake_words must not contain duplicates")

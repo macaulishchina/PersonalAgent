@@ -134,7 +134,8 @@ class HardwareVolumeTest(unittest.IsolatedAsyncioTestCase):
             order.append("volume")
 
         with (
-            patch("assistant_runtime.plugins.pipewire.io.asyncio.create_subprocess_exec", side_effect=opened),
+            patch("assistant_runtime.plugins.pipewire.io.system.spawn", side_effect=opened),
+            patch("assistant_runtime.plugins.pipewire.io.audio_env", return_value={}),
             patch("assistant_runtime.plugins.pipewire.io.apply_hardware_volume", side_effect=volume),
         ):
             provider = PipeWireEndpoint(spec("microphone"))

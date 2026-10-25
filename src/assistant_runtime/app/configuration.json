@@ -137,6 +137,25 @@
         ],
         "description": "auto 在 Windows 使用 PowerShell，在 Linux 使用 Bash；只影响本实例。",
         "x-group": "execution"
+      },
+      "plugin_backends": {
+        "type": "object",
+        "title": "平台默认实现",
+        "default": {},
+        "x-group": "plugins",
+        "x-advanced": true,
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "linux": {
+              "type": "string"
+            },
+            "windows": {
+              "type": "string"
+            }
+          }
+        }
       }
     }
   },
@@ -145,6 +164,7 @@
     "main_model": "boundary",
     "main_reasoning_effort": "boundary",
     "instance_skills": "boundary",
-    "hid_buttons": "boundary"
+    "hid_buttons": "boundary",
+    "plugin_backends": "boundary"
   }
 }

@@ -21,23 +21,25 @@ def compose(service):
     from types import SimpleNamespace
     from .bundled import create, resources_for
     from .extensions import discover, InstalledPlugin, ToolRegistry, extension_credential
-    from assistant_runtime.core.plugin_catalog import OWNERS, declaration, validate_platforms
+    from assistant_runtime.core.plugin_catalog import OWNERS, declaration
     from assistant_runtime.api.system import system
 
     config, store = service.config, service.store
     selected = config.enabled_plugins
-    validate_platforms(selected, system.name)
+    from assistant_runtime.api import PlatformInfo
+    from .plugin_selection import resolve_selection
+
+    platform = PlatformInfo(system.name)
+    resolve_selection(selected, config.plugin_backends, platform.name)
     definitions = {name: declaration(name) for name in selected if name in OWNERS}
     definitions.update(discover([name for name in selected if name not in OWNERS], OWNERS))
-    for name, spec in definitions.items():
-        if system.name not in spec.supported_platforms:
-            raise ValueError(
-                f"Plugin {name} does not support {system.name}; supported: {', '.join(spec.supported_platforms)}"
-            )
-    graph = Runtime(store)
+    graph = Runtime(store, platform=platform)
     for name, spec in definitions.items():
         graph.add(SimpleNamespace(manifest=spec.manifest))
     order = graph.order()  # Reject missing/cyclic dependencies before constructing resources.
+    runtime = service.runtime = Runtime(
+        store, {k: v for k, v in config.bindings.items() if v in selected}, platform=platform
+    )
 
     service.mcp_registry = None
     if "integrations" in selected:
@@ -56,7 +58,6 @@ def compose(service):
     service.skill_paths = assistant_skill_paths(config)
     service.extension_tools = ToolRegistry()
     service.memory = None
-    runtime = Runtime(store, {k: v for k, v in config.bindings.items() if v in selected})
     for name in order:
         spec = definitions[name]
         if spec.internal_factory:
@@ -74,6 +75,7 @@ def compose(service):
                 spec.uses,
                 service.extension_tools,
                 resources=resources_for(service, name, spec.resources),
+                backend_defaults=config.plugin_backends.get(name, {}),
             )
         if plugin.manifest.name != name:
             raise ValueError("Plugin manifest name must match its registry name")
@@ -86,8 +88,8 @@ def compose(service):
 
         state = service.assistant
         service.audio_plugin = runtime.resolve("audio") if runtime.bindings.get("audio") else None
-        state.route = service.audio_plugin.route if service.audio_plugin else None
-        state.player = service.audio_plugin.player if service.audio_plugin else None
+        state.route = getattr(service.audio_plugin, "route", None)
+        state.player = getattr(service.audio_plugin, "player", None)
         state.recognizer = runtime.resolve("trigger").recognizer
         state.interaction = None
         # Conversation construction binds callbacks before startup.

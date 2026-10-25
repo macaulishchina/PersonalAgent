@@ -4,6 +4,7 @@ from platform_support import private_mode
 
 import asyncio
 from pathlib import Path
+from assistant_runtime.api.system import system
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -313,10 +314,6 @@ asyncio.run(main())
         from assistant_runtime.app.host import AssistantService
 
         with tempfile.TemporaryDirectory() as folder:
-            if sys.platform == "win32":
-                with self.assertRaisesRegex(ValueError, "go2rtc.*windows.*linux"):
-                    Config(root=Path(folder), plugins=["devices", "go2rtc"])
-                return
             config = Config(
                 root=Path(folder),
                 plugins=["devices", "go2rtc"],
@@ -343,7 +340,6 @@ asyncio.run(main())
                 host.lock_file.close()
 
     async def test_composition_failure_closes_database_and_instance_lock(self):
-        from assistant_runtime.api.system import system
         import sqlite3
         from assistant_runtime.app.config import Config
         from assistant_runtime.app.host import AssistantService

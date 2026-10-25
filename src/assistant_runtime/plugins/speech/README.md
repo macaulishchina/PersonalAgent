@@ -1,6 +1,6 @@
 # Local speech adapters
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+This directory contains the `voice_disabled` placeholder and local speech adapters. The placeholder never loads these models or enables voice. The placeholder is certified on Linux and Windows / Windows Server; this does not enable or certify actual ASR/TTS or physical voice. See the [module index](../../../../docs/reference/modules.md).
 Voice is currently disabled; adapter and device checks do not establish voice readiness.
 
 These adapters implement the contracts in `api/speech.py` and are injected by the

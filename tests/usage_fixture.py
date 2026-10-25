@@ -10,6 +10,8 @@ def attach_usage(host, runtime):
         host.config.state_dir = Path(host.config.root) / "state"
     if not hasattr(host.config, "ai_usage"):
         host.config.ai_usage = {}
+    if not hasattr(host.config, "plugin_backends"):
+        host.config.plugin_backends = {}
     host.runtime = runtime
     host.ai_usage = AIUsagePlugin(host)
     runtime.add(host.ai_usage)

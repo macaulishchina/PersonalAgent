@@ -19,7 +19,7 @@ class WakeWordsTest(unittest.TestCase):
     def test_invalid_phrase_lists_fail_before_model_startup(self):
         for value in [[], "嘟嘟", [""], [" "], ["嘟嘟", None], ["嘟嘟", " 嘟嘟 "]]:
             with self.subTest(value=value), self.assertRaises(ValueError):
-                Config(wake_words=value)
+                Config(plugins=["assistant"], wake_words=value)
 
     def test_both_prefixes_preserve_identical_control_intents(self):
         for phrase in ["嘟嘟", "你好嘟嘟"]:

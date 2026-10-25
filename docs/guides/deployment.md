@@ -33,7 +33,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### Windows / Windows Server
 
-Windows 使用 slim，提供 CLI 和独立配置网页。
+Windows 默认使用 slim，提供 CLI 和独立配置网页；需要完整功能时也可显式使用 standard 并安装其依赖。
 
 ```powershell
 git clone git@github.com:macaulishchina/PersonalAgent.git .
@@ -45,6 +45,8 @@ pa init "$PWD\instance" --preset slim
 pa use "$PWD\instance"
 pa configuration token --management "$PWD\instance\management.toml"
 ```
+
+Windows 安装 standard 时，将上述 `--extra slim`、`--preset slim` 改为 standard；在初始化前执行 `npm --prefix frontend ci`、`npm --prefix frontend run build`，再重复一次同步命令，将聊天网页产物打包进安装环境。设备插件的额外依赖见对应模块说明，启用认证不代表默认安装所有可选依赖。
 
 ### Linux
 
@@ -82,7 +84,7 @@ pa run
 3. 按[配置模型与访问](configuration.md)设置账号、模型和主对话绑定，点击“保存并生效”，确认生效后开始聊天。
 4. 确认页面显示业务已启动、配置已应用。
 
-Windows 不允许启用当前的扩展插件，包含 `web`、`voice_disabled`；也不能使用 standard。两种平台的配置网页都可在模型尚未配置时使用。
+Windows 默认使用 slim，扩展按各自的认证启用，见[模块索引](../reference/modules.md)。全部现有扩展已声明支持 Windows，standard 可显式选择，语音入口仍停用；外部插件继续独立检查认证。两种平台的配置网页都可在模型尚未配置时使用。
 
 ## 4. 开始聊天
 

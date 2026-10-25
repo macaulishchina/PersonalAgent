@@ -61,6 +61,7 @@ LABELS = {
     "profile": "运行模式",
     "backend": "执行器",
     "bindings": "能力绑定",
+    "plugin_backends": "平台默认实现",
     "input_device": "主语音输入",
     "default_output": "主语音输出",
     "idle_seconds": "空闲超时（秒）",

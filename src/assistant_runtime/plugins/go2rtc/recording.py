@@ -4,7 +4,6 @@ from assistant_runtime.api.system import system
 
 import asyncio
 from pathlib import Path
-import subprocess
 import time
 import uuid
 
@@ -16,40 +15,60 @@ from assistant_runtime.api.contracts import VideoClip, MAX_VIDEO_BYTES
 from .camera import GatewayUnavailable
 
 
-def inspect_clip(path):
-    # The package is pinned. Reuse its metadata parser with an owned subprocess:
-    # its streaming reader leaves pipes unclosed when a one-frame process exits.
-    result = subprocess.run(
-        [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-nostdin",
-            "-hide_banner",
-            "-i",
-            str(path),
-            "-map",
-            "0:v:0",
-            "-an",
-            "-frames:v",
-            "1",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "pipe:1",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=10,
+async def inspect_clip(path):
+    # Use the same hidden, owned process path for probing and finalizing clips.
+    process = await system.spawn(
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-nostdin",
+        "-hide_banner",
+        "-i",
+        str(path),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    if result.returncode:
-        raise ValueError("Recorded video has no decodable frame")
-    metadata = parse_ffmpeg_header(result.stderr.decode(errors="replace"))
-    width, height = metadata["size"]
-    if metadata["codec"] != "h264" or not 0 < width <= 1920 or not 0 < height <= 1080:
-        raise ValueError("Recorded video has unsupported format or dimensions")
-    if len(result.stdout) != width * height * 3:
-        raise ValueError("Recorded video has no decodable frame")
-    return width, height, float(metadata["duration"])
+
+    async def bounded(reader, maximum):
+        data = bytearray()
+        while block := await reader.read(min(65536, maximum + 1 - len(data))):
+            data.extend(block)
+            if len(data) > maximum:
+                raise ValueError("Recorded video probe exceeded its size limit")
+        return bytes(data)
+
+    readers = [
+        asyncio.create_task(bounded(process.stdout, 1920 * 1080 * 3)),
+        asyncio.create_task(bounded(process.stderr, 65536)),
+    ]
+    try:
+        async with asyncio.timeout(10):
+            output, description = await asyncio.gather(*readers)
+            await process.wait()
+        if process.returncode:
+            raise ValueError("Recorded video has no decodable frame")
+        metadata = parse_ffmpeg_header(description.decode(errors="replace"))
+        width, height = metadata["size"]
+        if metadata["codec"] != "h264" or not 0 < width <= 1920 or not 0 < height <= 1080:
+            raise ValueError("Recorded video has unsupported format or dimensions")
+        if len(output) != width * height * 3:
+            raise ValueError("Recorded video has no decodable frame")
+        return width, height, float(metadata["duration"])
+    finally:
+        if process.returncode is None:
+            process.kill()
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        await process.wait()
 
 
 async def owned_write(handle, block):
@@ -145,12 +164,7 @@ async def record_clip(camera, folder, duration):
                 raise RuntimeError("Camera source changed; recording discarded")
             await finalize(source_path, target, duration)
             system.private(target)
-            worker = asyncio.create_task(asyncio.to_thread(inspect_clip, target))
-            try:
-                width, height, actual_duration = await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                await asyncio.gather(worker, return_exceptions=True)
-                raise
+            width, height, actual_duration = await inspect_clip(target)
             if actual_duration < max(0.25, duration - 0.75) or actual_duration > duration + 1:
                 raise ValueError("Recording ended before the requested duration")
             clip = VideoClip(

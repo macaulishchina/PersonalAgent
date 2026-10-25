@@ -1,6 +1,6 @@
 # Media acquisition
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Certification declares code support; physical devices and external services require separate acceptance. See the [module index](../../../../docs/reference/modules.md).
 
 Optional `media` plugin + independent `media` MCP/CLI. Requires `notifications`.
 PanSou searches public candidates; account-scoped Aliyun/Quark adapters own share/auth protocol;
@@ -651,3 +651,8 @@ Recycle operations use `/file/delete` with `action_type=2`; recovery uses
 `/file/recycle/recover` with `select_mode=2` and the recycle `record_id`. Recovery may
 be asynchronous: observe the original identity, parent, size and checksum before
 claiming completion. Permanent deletion and implicit recovery destinations remain unsupported.
+
+## Windows adaptation status
+
+Windows Server checks have exercised this PA adapter with local protocol fixtures and actual Windows filesystem/process APIs. The Windows support declaration includes this adapter; enabling it still requires valid configuration and dependencies. External services and real accounts/devices are separate acceptance boundaries.
+PanSou/OpenList can run on an explicitly configured reachable host. The documented Linux Docker deployment is not a Windows Server container installation guide. Local media and staging paths use absolute Windows paths on the same selected volume; unsafe Windows names and reparse points are rejected by the shared directory layer.

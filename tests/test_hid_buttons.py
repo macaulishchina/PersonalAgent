@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from assistant_runtime.api.contracts import Trigger
-from assistant_runtime.kernel.runtime import Context
+from assistant_runtime.kernel.runtime import Context, Runtime
 from assistant_runtime.plugins.hid_buttons.plugin import HidButtonsPlugin, discover
 from assistant_runtime.plugins.hid_buttons.settings import parse
 
@@ -68,9 +68,8 @@ class SettingsTest(unittest.TestCase):
 
 class ButtonsTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.runtime = SimpleNamespace(
-            invoke=AsyncMock(return_value={"accepted": True}), ready=asyncio.Event()
-        )
+        self.runtime = Runtime(None)
+        self.runtime.invoke = AsyncMock(return_value={"accepted": True})
         self.runtime.ready.set()
         self.context = Context(self.runtime, "hid_buttons")
         self.plugin = HidButtonsPlugin(SimpleNamespace(hid_buttons=SETTINGS))
@@ -144,14 +143,19 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_hardware_degrades_without_blocking_startup_and_retries(self):
         self.runtime.ready.clear()
-        with patch(
-            "assistant_runtime.plugins.hid_buttons.plugin.discover", side_effect=PermissionError()
-        ) as lookup:
+        target = (
+            "assistant_runtime.plugins.hid_buttons.windows.open_device"
+            if sys.platform == "win32"
+            else "assistant_runtime.plugins.hid_buttons.plugin.discover"
+        )
+        with patch(target, side_effect=PermissionError()) as lookup:
             await self.plugin.start(self.context)
             await asyncio.sleep(0)
             lookup.assert_not_called()
             self.runtime.ready.set()
-            await asyncio.sleep(0.01)
+            async with asyncio.timeout(2):
+                while self.context.state != "degraded":
+                    await asyncio.sleep(0.01)
             self.assertEqual(self.context.state, "degraded")
             self.assertIn("permission_denied", self.context.error)
             self.assertEqual(len(self.context.tasks), 1)

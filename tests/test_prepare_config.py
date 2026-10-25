@@ -21,23 +21,15 @@ class PrepareConfigTest(unittest.TestCase):
             services = source.parent / "services.toml"
             service_text = 'plugins = [\n "pi", # comment containing ]\n "web",\n]\n[web]\nenable = false\n'
             services.write_text(service_text)
-            from assistant_runtime.api.system import system
-
-            if system.name == "windows":
-                with self.assertRaisesRegex(ValueError, "web.*windows.*linux"):
-                    prepare(source, root / "candidate")
-                self.assertFalse((root / "candidate").exists())
-                self.assertEqual(source.read_text(), original)
-                self.assertEqual(services.read_text(), service_text)
-                return
             result = prepare(source, root / "candidate")
             candidate = Path(result["config"])
             data = read_config(candidate)
             self.assertEqual(data["root"], str(root))
             self.assertTrue(
-                {"ai_usage", "workfiles", "execution", "conversation", "assistant", "devices"}
+                {"pi", "web", "ai_usage", "workfiles", "execution", "conversation", "cli"}
                 <= set(data["plugins"])
             )
+            self.assertTrue({"assistant", "devices", "voice_disabled"}.isdisjoint(data["plugins"]))
             self.assertEqual(data["web"], {"enable": False})
             self.assertEqual(source.read_text(), original)
             self.assertEqual(services.read_text(), service_text)

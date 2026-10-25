@@ -10,6 +10,7 @@ import time
 
 from assistant_runtime.kernel.runtime import Manifest
 from .configuration import ConfigurationSpec
+from .backends import BackendSpec, PlatformInfo
 
 
 def plugin_platforms(directory):
@@ -97,10 +98,13 @@ class PluginDefinition:
     background_tools: tuple[str, ...] | None = None
     configuration: ConfigurationSpec | None = None
     supported_platforms: tuple[str, ...] = ("linux", "windows")
+    backends: BackendSpec | None = None
 
     def __post_init__(self):
         if not self.supported_platforms or set(self.supported_platforms) - {"linux", "windows"}:
             raise ValueError("Plugin must declare supported platforms: linux and/or windows")
+        if self.backends is not None and not isinstance(self.backends, BackendSpec):
+            raise ValueError("Plugin backend declaration must be a BackendSpec")
 
 
 class PluginContext:
@@ -134,8 +138,12 @@ class PluginContext:
         health=None,
         dropped=None,
         configuration_resource=None,
+        platform=None,
+        backend=None,
     ):
         self.name, self.config = name, config
+        self.__platform = platform or PlatformInfo.current()
+        self.__backend = backend
         self.state_dir = Path(state_dir)
         self.log = logging.getLogger("plugin." + name)
         self.cancelled: asyncio.Event = cancelled
@@ -150,6 +158,14 @@ class PluginContext:
         self.__health = health
         self.__dropped = dropped or (lambda: 0)
         self.__configuration_resource = configuration_resource
+
+    @property
+    def platform(self):
+        return self.__platform
+
+    @property
+    def backend(self):
+        return self.__backend
 
     @property
     def identity(self):

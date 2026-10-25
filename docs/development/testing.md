@@ -35,7 +35,7 @@ python scripts/verify_configuration_console.py --browser <Chromium或Edge可执�
 python scripts/verify_configuration_console.py --installed --python <安装环境的Python> --browser <Chromium或Edge可执行文件>
 ```
 
-源码与安装包分别记录结果。脚本使用独立临时实例；Linux 检查 slim／standard，Windows 检查 slim 成功和 standard 拒绝。正常退出或捕获异常时清理测试目录；强制终止留下的目录按日志路径核对后处理。
+源码与安装包分别记录结果。脚本使用独立临时实例；Linux 检查 slim／standard，Windows 默认检查 slim，standard 根据实际平台认证验收（现有内置扩展均已支持）。正常退出或捕获异常时清理测试目录；强制终止留下的目录按日志路径核对后处理。
 
 真实 Pi 子进程和本地合成模型可以验证工具、上下文、澄清、取消及恢复，不代表真实供应商、物理设备或系统服务通过。不要为获得绿色结果删除用量限制或隐藏缺失依赖。
 
@@ -51,6 +51,20 @@ python scripts/verify_configuration_console.py --installed --python <安装环�
 - **新增失败**：相对于已知基线新增的失败或错误。
 - **未验证**：没有实际执行的供应商、设备、OS 或服务生命周期。
 
-历史数据见[平台验收记录](../archive/platform-acceptance-2026-10.md)。该记录的最终全量检查仍有 12 项既有依赖错误；不因本轮文档整理改写为通过。
+历史数据见[平台验收记录](../archive/platform-acceptance-2026-10.md)。2026-10-24 的记录有 12 项既有依赖错误；2026-10-25 的 Windows 扩展适配使用独立扩展依赖目录完成了新的全量检查，结果另记在同一文件中，不改写历史结果。
 
 私有回执和实验留在忽略的实例存储或临时目录，只在明确要求时生成报告。发布验证见[发布与切换](release.md)。
+
+## Windows 扩展专项
+
+在 Windows／Server 的开发环境安装所需 extras：`windows-devices`、`hid-buttons`、`airplay`、`apple-home`、`camera`、`keyword`，并保留其他已选 extras。不要向正在运行实例使用的环境同步测试依赖。本轮在同一开发 Python 旁使用独立临时依赖目录，不修改运行安装环境。
+
+```powershell
+.venv\Scripts\python.exe scripts/check.py --test test_windows_extensions --test test_hid_buttons --test test_plugin_backends
+.venv\Scripts\python.exe scripts/verify_native_deployment.py --preset slim --plugin devices --plugin pipewire --plugin v4l2 --plugin airplay --plugin gesture --windows-device-fixtures
+.venv\Scripts\python.exe scripts/verify_native_deployment.py --preset slim --plugin events --plugin observations --plugin notifications --plugin web
+```
+
+`test_windows_extensions.NativeWindows` 只在 Windows 执行真实 HIDAPI／WASAPI／DirectShow 枚举、缺失设备拒绝、NTFS 安全文件操作、私有 ACL、FFmpeg 编码和进程清理；其余合成传输断言不等于物理设备验收。不自动录音、播放或操作设备，不连接真实供应商。实际唤醒推理需提供既有 FSMN V2 模型包；缺少资产只能记录为未验收。
+
+额外插件的完整进程验收会检查插件 ready、管理端口鉴权、异常所有者退出后的回收和重启；每个实例使用独立临时目录及端口。`--installed` 在安装包环境重复同样的命令。预设能否初始化由实际平台认证决定，Windows 默认仍为 slim。

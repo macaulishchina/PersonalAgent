@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [options]
@@ -303,6 +303,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cc/c7/eed8f27100517e8c0e6b923d5f0845d0cb99763da6fdee00478f91db7325/coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0", size = 278520, upload-time = "2021-06-11T10:22:45.202Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/06/3d6badcf13db419e25b07041d9c7b4a2c331d3f4e7134445ec5df57714cd/coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934", size = 46018, upload-time = "2021-06-11T10:22:42.561Z" },
+]
+
+[[package]]
+name = "comtypes"
+version = "1.4.17"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ff/c7836bd0d78fc615281016f154f514e9d523d7cb9ab9e8b4d344adc5f5e7/comtypes-1.4.17.tar.gz", hash = "sha256:3d9c1e92ad8daf7600d371e76ee16161a627a5fb70c3144f6e52e78af6034363", size = 262743, upload-time = "2026-09-21T08:08:07.687Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/9c/d0bc1fb69ad22a04bdc01dd9b5613a2ebc4d02ba1ec24b02127dc93791ba/comtypes-1.4.17-py3-none-any.whl", hash = "sha256:4e0a221dde2c589b82977bed802efd71cd5eb67a380347b732e02735e597f586", size = 298743, upload-time = "2026-09-21T08:08:06.461Z" },
 ]
 
 [[package]]
@@ -667,6 +676,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6c/dc/03a21b89f118664a0926ff25b0f8e44a519bf22724a6a8fc7a9abbc188b6/hf_xet-1.7.0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0a9e802f33bf50c851abe45fc5380e61f959e2d369647d6742b79ad9d6c27cab", size = 4418814, upload-time = "2026-10-06T20:18:37.888Z" },
     { url = "https://files.pythonhosted.org/packages/4d/59/b35106dfa71b6eef605dc88bd038fe99c7f86fb132a15b60d0bf2f235b2c/hf_xet-1.7.0-cp38-abi3-win_amd64.whl", hash = "sha256:2b7bb5727889b0f2436dbaaad8fc4c3e66b8240d992716989e0c086b4278b1bc", size = 3822644, upload-time = "2026-10-06T20:18:40.052Z" },
     { url = "https://files.pythonhosted.org/packages/48/cd/072313585f74fe9d441e2eb5e0a4703c30586cd709810ea369675f61b74e/hf_xet-1.7.0-cp38-abi3-win_arm64.whl", hash = "sha256:acc3851cf2576a8fb2ae926da863f4efabe21303cf292e9a44332802ab0dcc6a", size = 3662436, upload-time = "2026-10-06T20:18:42.205Z" },
+]
+
+[[package]]
+name = "hidapi"
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/f6/caad9ed701fbb9223eb9e0b41a5514390769b4cb3084a2704ab69e9df0fe/hidapi-0.15.0.tar.gz", hash = "sha256:ecbc265cbe8b7b88755f421e0ba25f084091ec550c2b90ff9e8ddd4fcd540311", size = 184995, upload-time = "2025-12-09T09:48:54.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/a7/9b7fe9acd09ed90d702f8cc01190ab53e01d5022c21808b079144bc9017d/hidapi-0.15.0-cp312-cp312-win32.whl", hash = "sha256:ce6f99554dae15c48cd89a12d5aede77a92a8bd184b45d0b257a17c97e053cdb", size = 60136, upload-time = "2025-12-09T09:45:40.612Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/35/f9e2d3ead60b573140546b041dd41c78a48c0e6b573d61a03130adccd32e/hidapi-0.15.0-cp312-cp312-win_amd64.whl", hash = "sha256:9abc71a62bf8a8f1d70a6fd3613f86feb37ddb67e05ed934e734df79e27bf4f6", size = 67073, upload-time = "2025-12-09T09:45:39.261Z" },
 ]
 
 [[package]]
@@ -1359,8 +1378,18 @@ dev = [
 events = [
     { name = "fastmcp" },
 ]
+hid-buttons = [
+    { name = "hidapi", marker = "sys_platform == 'win32'" },
+]
 integrations = [
     { name = "fastmcp" },
+]
+keyword = [
+    { name = "kaldi-native-fbank" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core" },
 ]
 media = [
     { name = "aiohttp" },
@@ -1419,7 +1448,7 @@ voice = [
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "playwright" },
-    { name = "pywebrtc-audio" },
+    { name = "pywebrtc-audio", marker = "sys_platform == 'linux'" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "soxr" },
@@ -1427,6 +1456,10 @@ voice = [
 web = [
     { name = "aiohttp" },
     { name = "pillow" },
+]
+windows-devices = [
+    { name = "miniaudio", marker = "sys_platform == 'win32'" },
+    { name = "pycaw", marker = "sys_platform == 'win32'" },
 ]
 
 [package.metadata]
@@ -1454,18 +1487,23 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'models'", specifier = "==4.0.0b1" },
     { name = "fastmcp", marker = "extra == 'tasks'", specifier = "==4.0.0b1" },
     { name = "hap-python", marker = "extra == 'apple-home'", specifier = "==5.0.0" },
+    { name = "hidapi", marker = "sys_platform == 'win32' and extra == 'hid-buttons'", specifier = "==0.15.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'airplay'", specifier = "==0.6.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'camera'", specifier = "==0.6.0" },
     { name = "jsonschema", marker = "extra == 'core'", specifier = ">=4.23,<5" },
     { name = "jsonschema", marker = "extra == 'models'", specifier = ">=4.23,<5" },
+    { name = "kaldi-native-fbank", marker = "extra == 'keyword'", specifier = "==1.22.3" },
     { name = "kaldi-native-fbank", marker = "extra == 'voice'", specifier = "==1.22.3" },
     { name = "mcp", marker = "extra == 'core'", specifier = "==2.3.0" },
     { name = "mcp", marker = "extra == 'memory'", specifier = "==2.3.0" },
     { name = "mem0ai", marker = "extra == 'core'", specifier = "==1.0.11" },
     { name = "mem0ai", marker = "extra == 'memory'", specifier = "==1.0.11" },
+    { name = "miniaudio", marker = "sys_platform == 'win32' and extra == 'windows-devices'", specifier = "==1.71" },
     { name = "miniaudio", marker = "extra == 'voice'", specifier = ">=1.61" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.18.2" },
+    { name = "numpy", marker = "extra == 'keyword'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=1.26" },
+    { name = "onnxruntime", marker = "extra == 'keyword'", specifier = "==1.31.0" },
     { name = "onnxruntime", marker = "extra == 'voice'", specifier = "==1.31.0" },
     { name = "personal-agent", extras = ["core"], marker = "extra == 'slim'" },
     { name = "personal-agent", extras = ["core", "web"], marker = "extra == 'standard'" },
@@ -1476,21 +1514,24 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'voice'", specifier = "==1.63.0" },
     { name = "portalocker", specifier = ">=3.2,<4" },
     { name = "pyatv", marker = "extra == 'airplay'", specifier = "==0.18.0" },
+    { name = "pycaw", marker = "sys_platform == 'win32' and extra == 'windows-devices'", specifier = "==20260927" },
     { name = "python-dotenv", marker = "extra == 'core'", specifier = ">=1.2,<2" },
     { name = "python-dotenv", marker = "extra == 'decisions'", specifier = ">=1.2,<2" },
     { name = "python-dotenv", marker = "extra == 'models'", specifier = ">=1.2,<2" },
-    { name = "pywebrtc-audio", marker = "extra == 'voice'", specifier = "==0.2.0" },
+    { name = "pywebrtc-audio", marker = "sys_platform == 'linux' and extra == 'voice'", specifier = "==0.2.0" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
     { name = "pyyaml", marker = "extra == 'camera'", specifier = ">=6,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.0" },
     { name = "setuptools", marker = "extra == 'dev'", specifier = "==84.0.0" },
+    { name = "sherpa-onnx", marker = "extra == 'keyword'", specifier = "==1.13.8" },
     { name = "sherpa-onnx", marker = "extra == 'voice'", specifier = "==1.13.8" },
+    { name = "sherpa-onnx-core", marker = "extra == 'keyword'", specifier = "==1.13.8" },
     { name = "sherpa-onnx-core", marker = "extra == 'voice'", specifier = "==1.13.8" },
     { name = "soxr", marker = "extra == 'voice'", specifier = ">=0.5" },
     { name = "tomlkit", marker = "extra == 'core'", specifier = "==0.13.3" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
 ]
-provides-extras = ["core", "slim", "standard", "voice", "tasks", "events", "models", "decisions", "media", "reyee", "integrations", "web", "airplay", "apple-home", "camera", "memory", "dev"]
+provides-extras = ["core", "slim", "standard", "voice", "tasks", "events", "models", "decisions", "media", "reyee", "integrations", "web", "airplay", "apple-home", "windows-devices", "hid-buttons", "keyword", "camera", "memory", "dev"]
 
 [[package]]
 name = "pillow"
@@ -1606,6 +1647,16 @@ wheels = [
 ]
 
 [[package]]
+name = "psutil"
+version = "7.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/c6/d1ddf4abb55e93cebc4f2ed8b5d6dbad109ecb8d63748dd2b20ab5e57ebe/psutil-7.2.2.tar.gz", hash = "sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372", size = 493740, upload-time = "2026-01-28T18:14:54.428Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl", hash = "sha256:eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988", size = 137737, upload-time = "2026-01-28T18:15:33.849Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/c7/7bb2e321574b10df20cbde462a94e2b71d05f9bbda251ef27d104668306a/psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee", size = 134617, upload-time = "2026-01-28T18:15:36.514Z" },
+]
+
+[[package]]
 name = "py-key-value-aio"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1669,6 +1720,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/de/7e/b752fdae36f3f63243da26a6e490ac019a03f8134339cab1d82401008aca/pyatv-0.18.0.tar.gz", hash = "sha256:f650807f6d5c15460677152d38c97e83d22ddfe2113d63689e71d9a27b616c35", size = 1694735, upload-time = "2026-06-19T20:57:57.943Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/fa/5334e26d22cacd518a5d58836f48f1372126aba2711e93dca239906ed6ce/pyatv-0.18.0-py3-none-any.whl", hash = "sha256:3df6af5679eea809ff17954cf9f5d33c7e5ed5a8d1c90fa14090a0425ce5cd8a", size = 475244, upload-time = "2026-06-19T20:57:56.299Z" },
+]
+
+[[package]]
+name = "pycaw"
+version = "20260927"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "comtypes" },
+    { name = "psutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/51/2870619bf47cef359505d88d277b71c18ae5af18ffe94e707dbce6def6c2/pycaw-20260927.tar.gz", hash = "sha256:3a833ace1a76d0cee134366366d64c56ea9552ebc6f572580e4299ad552743f6", size = 29644, upload-time = "2026-09-26T20:05:02.191Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/79/baf93a0a0b53a886f6a84ac05dd8491068c8a7c54db4ccd247acdcff9d1c/pycaw-20260927-py3-none-any.whl", hash = "sha256:d5b162a87536956af8dfa0fc53b1c77870a30706445ffd7f92a2ed184f65ddf4", size = 28463, upload-time = "2026-09-26T20:05:00.817Z" },
 ]
 
 [[package]]
@@ -1833,13 +1897,10 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d8/b0/8d9e93083ac412cc758003d5e216d44f69b50619cdd0cfc7897e576eb90c/pywebrtc_audio-0.2.0.tar.gz", hash = "sha256:cdc47c063439b033bdd6110d2e1119fd6e36c6e007ed824bc369c9a5e3cb307a", size = 1748548, upload-time = "2026-09-03T19:03:15.662Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/74/a6e3a35e39199039ae9cc88e7728da1f5329b820c092ce51ced49fb842d2/pywebrtc_audio-0.2.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:2b3552930655219101c59c1295cdc29f2ab38b389c3c495d9f41773183880615", size = 403707, upload-time = "2026-09-03T19:02:44.771Z" },
-    { url = "https://files.pythonhosted.org/packages/33/01/6b48bbf13c765420aadf96667b433207e705179f67bc0dee6b8f87f93022/pywebrtc_audio-0.2.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:46134bf1a6d8d1fcdf90674e2787ec93435533a0f290f67b530040f8eabdb793", size = 367960, upload-time = "2026-09-03T19:02:46.215Z" },
     { url = "https://files.pythonhosted.org/packages/14/bc/17ddeb099bb7b5a4cf16cd2abaee97c27b57455c0711a2c7d58813cf4abd/pywebrtc_audio-0.2.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b5ddbe2fb5533b5aff7315e5463dfabbeb4f9d89135f5a6076144de81334bf1b", size = 400609, upload-time = "2026-09-03T19:02:47.88Z" },
     { url = "https://files.pythonhosted.org/packages/8b/f0/7cde753b5bebf1cabff32289370caae8b2e1ae300477dfd00d05ea1aa84d/pywebrtc_audio-0.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e0cbe0afe02c7fa3b5bb7c47a64a145664a90141c504abac64bd55163b456c60", size = 442400, upload-time = "2026-09-03T19:02:49.319Z" },
     { url = "https://files.pythonhosted.org/packages/d1/17/498662ef1dd4fe9b649d1507c95e65b41186a083f0cc1ca52c96dbdd12f5/pywebrtc_audio-0.2.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e295bb687cce04552d2585a01346d219a2eab545a0aa63458116633359f0f3e0", size = 1395946, upload-time = "2026-09-03T19:02:51.054Z" },
     { url = "https://files.pythonhosted.org/packages/ed/0d/40da061f539e635beec444a7aa83ce8705861e42238a29a697ad4a2fcc50/pywebrtc_audio-0.2.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:66c5be23e71be322872378dce4df89aad13522ec968bf6d6fa7386c2699d88a6", size = 1484743, upload-time = "2026-09-03T19:02:52.39Z" },
-    { url = "https://files.pythonhosted.org/packages/33/3e/1b9dee1fa750e744a128289c9d8fa991fffc8a2ff89b3285b238b275eb3c/pywebrtc_audio-0.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:0dabbdadd5d7fd7dcb88323266e5e14d46aaa136c58fa0573c4b0323b683c80b", size = 513391, upload-time = "2026-09-03T19:02:54.085Z" },
 ]
 
 [[package]]

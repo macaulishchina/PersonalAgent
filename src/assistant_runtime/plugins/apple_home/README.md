@@ -1,6 +1,6 @@
 # Apple Home environment integration
 
-Platform: Linux only; Windows / Windows Server are not certified. See the [module index](../../../../docs/reference/modules.md).
+Platform: Linux and Windows / Windows Server. Platform certification covers the PA adapter; physical devices and external services require their own acceptance. See the [module index](../../../../docs/reference/modules.md).
 
 The optional `apple_home` adapter registers temperature/humidity endpoints through the existing hardware onboarding standard. It supports sensor-equipped HomePod mini / HomePod (2nd generation) when those measurements are visible in Apple Home. Existing AirPlay/RAOP does not expose these measurements; the AirPlay speaker adapter remains separate. No HomePod firmware, Apple account credentials or receiver pairing are changed.
 

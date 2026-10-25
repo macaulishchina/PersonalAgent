@@ -26,7 +26,7 @@
 
 ## 扩展插件
 
-当前全部扩展仅认证 Linux，Windows／Server 不允许启用；语音停用。平台声明和启用规则见[插件开发](../development/plugins.md#平台基础设施)。
+插件按静态平台声明启用，普通 Windows 与 Windows Server 共用 `windows`。现有全部 14 个扩展均声明支持 Linux、Windows，关闭的插件也保留认证；这不自动启用插件或替代真实设备、模型与供应商验收。语音入口继续停用。本机音视频插件自动选取平台实现，配置可指定平台默认值，见[插件开发](../development/plugins.md#平台身份与默认实现)。
 
 | 模块 | 阅读内容 |
 | --- | --- |
@@ -35,8 +35,8 @@
 | [observations](../../src/assistant_runtime/plugins/observations/README.md) | 设备观察与事件来源 |
 | [decisions](../../src/assistant_runtime/plugins/decisions/README.md) | 事件决策与触发规则 |
 | [go2rtc](../../src/assistant_runtime/plugins/go2rtc/README.md) | 已注册摄像头流的适配 |
-| [v4l2](../../src/assistant_runtime/plugins/v4l2/README.md) | Linux 本地视频输入 |
-| [pipewire](../../src/assistant_runtime/plugins/pipewire/README.md) | Linux 固定音频资源 |
+| [v4l2](../../src/assistant_runtime/plugins/v4l2/README.md) | 本机视频：Linux V4L2 / Windows DirectShow |
+| [pipewire](../../src/assistant_runtime/plugins/pipewire/README.md) | 本机音频：Linux PipeWire / Windows WASAPI |
 | [speech](../../src/assistant_runtime/plugins/speech/README.md) | 语音适配与当前停用边界 |
 | [airplay](../../src/assistant_runtime/plugins/airplay/README.md) | AirPlay 设备适配 |
 | [apple_home](../../src/assistant_runtime/plugins/apple_home/README.md) | Apple Home 接入 |

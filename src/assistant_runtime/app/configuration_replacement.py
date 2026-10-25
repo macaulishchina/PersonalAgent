@@ -24,16 +24,23 @@ async def prepare(host, name, config):
     old = host.config
     previous_manifest = os.environ.get("PERSONAL_AGENT_RESOURCE_MANIFEST")
     runtime = host.runtime
-    if name == "pipewire" and old.devices == config.devices:
-        # A volume policy applies to the next volume operation without closing ongoing streams.
-        from assistant_runtime.core.configuration.updates import attributes
+    plugin = runtime.plugins[name]
+    callback = getattr(getattr(plugin, "instance", None), "prepare_configuration", None)
+    if callback:
+        from assistant_runtime.api.backends import select_backend
+        from assistant_runtime.api.configuration import scoped_update
+        from assistant_runtime.core.plugin_catalog import declaration
+        from .bundled import settings_for
 
-        plugin = runtime.plugins[name]
-        changes = [(plugin.route.config, "minimum_volume", config.minimum_volume)]
-        provider = getattr(getattr(host, "audio_outputs", None), "providers", {}).get(old.default_output)
-        if provider is not None and hasattr(provider, "minimum_volume"):
-            changes.append((provider, "minimum_volume", config.minimum_volume))
-        return attributes(changes)
+        spec = declaration(name)
+        backend = select_backend(
+            name, spec.backends, runtime.platform.name, config.plugin_backends.get(name, {})
+        )
+        if backend == plugin.public.backend:
+            value = settings_for(config, name, spec)
+            update = await callback(value)
+            if update is not NotImplemented:
+                return scoped_update(update, plugin.public, value)
 
     owned_devices = {
         ident
@@ -95,8 +102,8 @@ async def prepare(host, name, config):
             await runtime.replace(name, lambda: factory(candidate))
             if name == runtime.bindings.get("audio") and getattr(host, "assistant", None) is not None:
                 host.audio_plugin = runtime.plugins[name]
-                host.assistant.route = host.audio_plugin.route
-                host.assistant.player = host.audio_plugin.player
+                host.assistant.route = getattr(host.audio_plugin, "route", None)
+                host.assistant.player = getattr(host.audio_plugin, "player", None)
             devices = runtime.plugins.get("devices")
             if devices is not None:
                 devices.register_operations()
