@@ -30,9 +30,10 @@ business TOML. Only the action is audited, never the passwords. CLI `reset-token
 local recovery path and generates a new random credential. Configuration restore does not
 restore administrator passwords.
 
-The page groups application/core settings by function and extension settings by owner.
-Model providers, accounts and aliases have typed named-object forms, references and
-reasoning selections. Low-frequency maps/lists retain bounded structured editors.
+The console starts with an overview and setup progress. Model configuration follows
+connections → model library → usage, with card lists, guided additions and an editor drawer.
+Native connection creation stages the account, provider and private credential together;
+OAuth login stays an explicit operation after saving. Low-frequency maps/lists retain bounded structured editors.
 The module's packaged JSON Schema drives defaults, constraints and visibility; the browser
 has no second model registry or plugin-specific scripts. Disabled-owner settings are still
 schema-validated. Disabled external packages are not imported for semantic validation;
@@ -46,13 +47,17 @@ metadata is shown as uncertified. An incompatible checked entry can be unchecked
 but cannot be re-enabled. Saving, applying and startup enforce the same policy;
 the console remains available to repair an incompatible existing selection.
 
-The desktop console uses fixed category navigation, aligned label/control rows and a
-persistent save bar. Plugin activation has its own category. Named model/provider entries
-create their nested forms only when expanded; switches, enum choices, ordered reference
-lists and structured JSON keep their original value types. Technical field/file/default
+The console uses purpose-based navigation and a persistent save bar. Optional capabilities
+use cards, with core assembly under advanced settings. Desktop model/connection lists are searchable; radio cards explain connection routes.
+Model tabs share a draft; cancelling
+a drawer restores its checkpoint without discarding other edits. Switches, enum choices,
+ordered reference lists and structured JSON keep their original value types.
+`workspace.js` composes these first-party views over the shared typed editor and transaction
+client in `console.js`; extension pages still use packaged interface declarations. Technical field/file/default
 information is available on demand. Apply/restart, history, repair and password changes
-open separate dialogs instead of occupying the main form. Save or discard the current page
-before switching; malformed drafts block saving, and saved files remain separate from loaded values.
+open separate dialogs instead of occupying the main form. Page navigation offers stay, discard, or save-and-switch; a failed save keeps the page and
+draft. Malformed inputs show local accessible errors and block saving. Percentage presentation
+converts to the original stored fraction; saved files remain separate from loaded values.
 
 **Edit → save and apply → inspect the outcome.** Save preserves comments,
 explicit includes and unrelated fields; defaults are displayed, not materialized by an

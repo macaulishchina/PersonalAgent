@@ -9,7 +9,7 @@
   <body>
     <section id="login-screen" class="login-screen">
       <div class="login-brand">
-        <span class="brand-mark">P</span><span>Personal Agent</span>
+        <span class="brand-mark">pa</span><span>Personal Agent</span>
       </div>
       <form id="login" class="login-card">
         <span class="eyebrow">实例管理</span>
@@ -33,10 +33,10 @@
     <section id="editor" class="app-shell" hidden>
       <aside class="sidebar">
         <a class="brand" href="/" aria-label="Personal Agent 系统配置"
-          ><span class="brand-mark">P</span
+          ><span class="brand-mark">pa</span
           ><span>Personal Agent<small>系统配置</small></span></a
         >
-        <p class="nav-label">工作区设置</p>
+
         <nav id="navigation" aria-label="配置分类"></nav>
         <div class="sidebar-bottom">
           <button id="repair-open" class="sidebar-link">配置修复</button
@@ -46,8 +46,8 @@
       <div class="workspace">
         <header class="topbar">
           <div class="breadcrumbs">
-            <span>系统配置</span><span class="breadcrumb-divider">/</span
-            ><strong id="breadcrumb-current">基础与访问</strong>
+            <span>工作空间</span><span class="breadcrumb-divider">/</span
+            ><strong id="breadcrumb-current">概览</strong>
           </div>
           <div class="header-actions">
             <span id="health" class="health-badge">连接中</span
@@ -59,14 +59,17 @@
         <main class="page">
           <div class="page-heading">
             <div>
-              <h1 id="page-title">基础与访问</h1>
-              <p id="page-description">管理实例的基础设置与访问入口。</p>
+              <h1 id="page-title" tabindex="-1">概览</h1>
+              <p id="page-description">从一个可用模型开始。</p>
             </div>
             <button id="apply-open" class="secondary">生效状态与维护</button>
           </div>
           <div class="configuration-state">
             <span class="state-dot"></span><strong id="state">读取配置中</strong
-            ><code id="state-version"></code>
+            ><code
+              id="state-version"
+              title="用于核对保存与生效状态的配置版本"
+            ></code>
           </div>
           <div id="diagnostics" role="status"></div>
           <div id="documents"></div>
@@ -87,6 +90,61 @@
 
     <p id="notice" role="status" aria-live="polite"></p>
 
+    <dialog
+      id="leave-dialog"
+      class="compact-dialog"
+      aria-labelledby="leave-title"
+    >
+      <div class="dialog-heading">
+        <div>
+          <h2 id="leave-title">如何处理当前修改？</h2>
+          <p id="leave-description"></p>
+        </div>
+      </div>
+      <div class="dialog-actions navigation-actions">
+        <button id="leave-stay" class="secondary">继续编辑</button>
+        <button id="leave-discard" class="text-button">放弃并切换</button>
+        <button id="leave-save" class="primary">保存并切换</button>
+      </div>
+    </dialog>
+    <dialog
+      id="entry-dialog"
+      class="editor-drawer"
+      aria-labelledby="entry-title"
+    >
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">配置详情</span>
+          <h2 id="entry-title"></h2>
+          <p id="entry-description"></p>
+        </div>
+      </div>
+      <div id="entry-body"></div>
+      <div class="drawer-footer">
+        <button id="entry-cancel" class="secondary">取消编辑</button
+        ><button id="entry-done" class="primary">保留修改</button>
+      </div>
+    </dialog>
+    <dialog
+      id="setup-dialog"
+      class="setup-dialog"
+      aria-labelledby="setup-title"
+    >
+      <div class="dialog-heading">
+        <div>
+          <h2 id="setup-title"></h2>
+          <p id="setup-description"></p>
+        </div>
+        <button
+          class="icon-button"
+          data-close="setup-dialog"
+          aria-label="关闭添加窗口"
+        >
+          ×
+        </button>
+      </div>
+      <form id="setup-form"></form>
+    </dialog>
     <dialog id="password-dialog" class="compact-dialog">
       <div class="dialog-heading">
         <div>
@@ -134,11 +192,10 @@
     </dialog>
 
     <dialog id="apply-dialog">
-      <button id="apply-update" class="primary">重试在线应用（不重启）</button>
       <div class="dialog-heading">
         <div>
-          <h2>应用已保存的配置</h2>
-          <p>重启业务服务并核对实际加载的配置版本。</p>
+          <h2>生效状态与维护</h2>
+          <p>查看保存结果；只有需要时才手动重启。</p>
         </div>
         <button
           class="icon-button"
@@ -154,6 +211,9 @@
           ><strong id="application-state" aria-live="polite"></strong>
         </div>
         <ul id="blockers"></ul>
+        <button id="apply-update" class="primary">
+          重试在线应用（不重启）
+        </button>
         <section class="restart-option">
           <div>
             <h3>等待完成后重启</h3>
@@ -209,6 +269,7 @@
       </div>
       <section id="repair" hidden></section>
     </dialog>
+    <script src="/workspace.js" defer></script>
     <script src="/console.js" defer></script>
   </body>
 </html>

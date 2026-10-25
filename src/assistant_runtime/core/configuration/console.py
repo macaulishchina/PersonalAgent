@@ -91,6 +91,7 @@ class Console:
             [
                 web.get("/", self.index),
                 web.get("/console.js", self.javascript),
+                web.get("/workspace.js", self.workspace_javascript),
                 web.get("/console.css", self.styles),
                 web.post("/api/login", self.login),
                 web.post("/api/logout", self.logout),
@@ -154,6 +155,9 @@ class Console:
 
     async def javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.js")
+
+    async def workspace_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "workspace.js")
 
     async def styles(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.css")

@@ -38,8 +38,7 @@ const navPaths = {
 let snapshot,
   inventory,
   resourceInventory = [],
-  selected = "models",
-  expandedOwner,
+  selected = "overview",
   saving = false;
 let showInactive = false;
 const openEntries = new Set();
@@ -62,6 +61,8 @@ const node = (tag, text, cls) => {
   return e;
 };
 function signedOut() {
+  activeEditor = null;
+  for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
   $("login-screen").hidden = false;
   $("login").hidden = false;
   $("editor").hidden = true;
@@ -95,10 +96,19 @@ async function api(path, body) {
   if (!response.headers.get("Content-Type")?.includes("application/json"))
     throw Error(`请求失败（${response.status}）`);
   const data = await response.json();
-  if (!response.ok) throw Object.assign(Error(data.error || "请求失败"), {issues: data.issues || []});
+  if (!response.ok)
+    throw Object.assign(Error(data.error || "请求失败"), {
+      issues: data.issues || [],
+    });
   return data;
 }
-function showNotice(message) {
+let noticeTimer;
+function showNotice(message, duration = 0) {
+  clearTimeout(noticeTimer);
+  if (duration)
+    noticeTimer = setTimeout(() => {
+      if ($("notice").textContent === message) $("notice").textContent = "";
+    }, duration);
   $("notice").textContent = message;
   const dialog = document.querySelector("dialog[open]");
   if (dialog) {
@@ -132,8 +142,17 @@ async function action(fn) {
       const input = document.getElementById(key(issue.path));
       if (input) {
         input.setAttribute("aria-invalid", "true");
-        input.closest(".field")?.append(node("p", issue.message, "hint"));
-        for (let parent = input.parentElement; parent; parent = parent.parentElement)
+        const field = input.closest(".field"),
+          local = field?.querySelector(".field-error");
+        if (local) {
+          local.textContent = issue.message;
+          local.hidden = false;
+        } else field?.append(node("p", issue.message, "field-error"));
+        for (
+          let parent = input.parentElement;
+          parent;
+          parent = parent.parentElement
+        )
           if (parent.tagName === "DETAILS") parent.open = true;
         input.focus();
       }
@@ -344,10 +363,16 @@ function currentValue(field) {
     }
   return value;
 }
+function displayValue(rule, value) {
+  return typeof value === "number" && rule["x-display-scale"]
+    ? Number((value * rule["x-display-scale"]).toPrecision(12)) +
+        (rule["x-unit"] || "")
+    : JSON.stringify(value);
+}
 function fieldSource(field) {
   const details = node("details", undefined, "field-source");
   details.append(
-    node("summary", "字段信息"),
+    node("summary", "说明"),
     node("code", field.path.join(".")),
     node(
       "p",
@@ -363,7 +388,11 @@ function fieldSource(field) {
     !field.schema["x-sensitive"]
   )
     details.append(
-      node("p", "默认值：" + JSON.stringify(field.schema.default), "hint"),
+      node(
+        "p",
+        "默认值：" + displayValue(field.schema, field.schema.default),
+        "hint",
+      ),
     );
   return details;
 }
@@ -400,6 +429,20 @@ function seedValue(rule) {
               : ""),
   );
 }
+function optionLabel(rule, value, path) {
+  if (!path.at(-1)?.includes("reasoning")) return String(value);
+  const labels = {
+    none: "关闭思考",
+    minimal: "最低",
+    low: "低",
+    medium: "中",
+    high: "高",
+    xhigh: "更高",
+    max: "最高",
+    ultra: "超高",
+  };
+  return labels[value] ? `${labels[value]} · ${value}` : String(value);
+}
 function drawField(field) {
   if (typeof field.schema !== "object")
     field = {
@@ -427,9 +470,13 @@ function drawField(field) {
   label.htmlFor = id;
   label.id = id + "-label";
   copy.append(label);
-  if (field.application)
-    copy.append(node("p", {immediate:"保存后即时更新", boundary:"保存后在安全边界生效", restart:"需要重启或维护生效"}[field.application], "hint"));
-  if (rule.description) copy.append(node("p", rule.description, "hint"));
+  if (field.application === "restart")
+    copy.append(node("span", "重启或维护后生效", "badge restart-badge"));
+  if (rule.description) {
+    const description = node("p", rule.description, "hint");
+    description.id = id + "-description";
+    copy.append(description);
+  }
   if (rule["x-readonly-reason"])
     copy.append(node("p", rule["x-readonly-reason"], "hint"));
   const control = node("div", undefined, "field-control"),
@@ -449,7 +496,8 @@ function drawField(field) {
     titles.append(node("strong", rule.title || path.at(-1)));
     if (rule.description) titles.append(node("p", rule.description, "hint"));
     actions.append(badge);
-    if (!rule.readOnly) actions.append(resetControl(field));
+    if (!rule.readOnly && rule["x-removable"])
+      actions.append(resetControl(field));
     heading.append(titles, actions);
     row.append(heading);
     const current = value || {},
@@ -516,6 +564,8 @@ function drawField(field) {
         advanced.append(drawField(definition));
       } else children.append(drawField(definition));
     }
+    const advancedFields = children.querySelector(":scope > .advanced-fields");
+    if (advancedFields) children.append(advancedFields);
     if (!children.childElementCount)
       children.append(node("p", "尚未添加条目", "empty-state"));
     if (rule.additionalProperties && !rule.readOnly) {
@@ -576,86 +626,7 @@ function drawField(field) {
     row.append(copy, control);
     return row;
   }
-  if (path.length === 1 && path[0] === "plugins") {
-    row.classList.add("plugin-field");
-    input = node("div", undefined, "plugin-picker");
-    const available = new Map(
-      inventory.plugins.map((plugin) => [plugin.id, plugin]),
-    );
-    for (const name of value || [])
-      if (!available.has(name))
-        available.set(name, { id: name, kind: "unavailable" });
-    for (const plugin of available.values()) {
-      const line = node("label", undefined, "plugin-option"),
-        check = node("input"),
-        title = node("span"),
-        badges = node("span", undefined, "plugin-badges");
-      check.type = "checkbox";
-      check.value = plugin.id;
-      check.checked = (value || []).includes(plugin.id);
-      const blocked =
-        plugin.platform_supported === false || plugin.kind === "unavailable";
-      if (blocked && !check.checked) check.disabled = true;
-      // An existing incompatible selection can be removed, but never re-enabled.
-      check.addEventListener("change", () => {
-        if (blocked && !check.checked) check.disabled = true;
-      });
-      title.append(
-        node("strong", plugin.configuration?.title || plugin.id),
-        node("code", plugin.id),
-      );
-      if (plugin.requires?.length)
-        title.append(node("small", `需要：${plugin.requires.join("、")}`));
-      if (plugin.page?.startsWith("plugin:")) {
-        const configure = node("button", "配置", "text-button");
-        configure.type = "button";
-        configure.addEventListener("click", (event) => {
-          event.preventDefault(); event.stopPropagation();
-          if (dirty() || invalid.size) { showNotice("请先保存或放弃当前页面的修改。"); return; }
-          selected = plugin.page;
-          render();
-        });
-        title.append(configure);
-      }
-      badges.append(
-        node(
-          "span",
-          plugin.platform_error
-            ? "未声明平台认证"
-            : plugin.platform_supported === false
-              ? "当前系统不支持"
-              : plugin.kind === "unavailable"
-                ? "未安装"
-                : plugin.kind === "core"
-                  ? "内核"
-                  : "扩展",
-          "badge",
-        ),
-      );
-      line.append(check, title, badges);
-      if (plugin.kind === "extension") {
-        for (const [platform, label] of [
-          ["linux", "Linux"],
-          ["windows", "Windows"],
-        ]) {
-          const certified = (plugin.supported_platforms || []).includes(
-            platform,
-          );
-          badges.append(
-            node(
-              "span",
-              `${label} ${certified ? "已认证" : "未认证"}`,
-              "badge",
-            ),
-          );
-        }
-      }
-      if (plugin.platform_error) line.title = plugin.platform_error;
-      input.append(line);
-    }
-    read = () =>
-      [...input.querySelectorAll("input:checked")].map((i) => i.value);
-  } else if (secret) {
+  if (secret) {
     input = node("input");
     input.type = "password";
     input.autocomplete = "new-password";
@@ -683,7 +654,7 @@ function drawField(field) {
       input.append(placeholder);
     }
     for (const v of rule.enum) {
-      const option = node("option", String(v));
+      const option = node("option", optionLabel(rule, v, path));
       option.value = String(v);
       input.append(option);
     }
@@ -706,13 +677,59 @@ function drawField(field) {
     input = node("input");
     input.type = "number";
     input.step = rule.type === "integer" ? "1" : "any";
-    if (rule.minimum !== undefined) input.min = rule.minimum;
-    if (rule.maximum !== undefined) input.max = rule.maximum;
-    input.value = value ?? "";
+    const scale = rule["x-display-scale"] || 1;
+    if (rule.minimum !== undefined) input.min = rule.minimum * scale;
+    if (rule.maximum !== undefined) input.max = rule.maximum * scale;
+    input.value =
+      value === undefined || value === null
+        ? ""
+        : Number((value * scale).toPrecision(12));
+    const unit =
+      rule["x-unit"] ||
+      (/(?:_seconds|_s)$/.test(path.at(-1))
+        ? "秒"
+        : /_ms$/.test(path.at(-1))
+          ? "毫秒"
+          : /_bytes$/.test(path.at(-1))
+            ? "字节"
+            : /_days$/.test(path.at(-1))
+              ? "天"
+              : "");
+    if (unit) {
+      element = node("div", undefined, "number-with-unit");
+      element.append(input, node("span", unit));
+    }
     read = () => {
-      if (!input.value || !input.checkValidity())
-        throw Error("请填写符合范围的数值");
-      return Number(input.value);
+      if (!input.value) throw Error("请输入数值。");
+      if (!input.checkValidity())
+        throw Error(
+          input.validity.rangeUnderflow
+            ? `数值不能小于 ${input.min}。`
+            : input.validity.rangeOverflow
+              ? `数值不能大于 ${input.max}。`
+              : "请填写符合范围的数值。",
+        );
+      const number = Number(input.value) / scale;
+      if (
+        (rule.exclusiveMinimum !== undefined &&
+          number <= rule.exclusiveMinimum) ||
+        (rule.exclusiveMaximum !== undefined && number >= rule.exclusiveMaximum)
+      )
+        throw Error(
+          "数值需" +
+            [
+              rule.exclusiveMinimum !== undefined
+                ? `大于 ${rule.exclusiveMinimum * scale}`
+                : "",
+              rule.exclusiveMaximum !== undefined
+                ? `小于 ${rule.exclusiveMaximum * scale}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("、") +
+            "。",
+        );
+      return number;
     };
   } else if (rule.type === "array" && Array.isArray(rule.items?.enum)) {
     input = node("div", undefined, "choice-list");
@@ -722,7 +739,7 @@ function drawField(field) {
       check.type = "checkbox";
       check.value = String(choice);
       check.checked = (value || []).includes(choice);
-      line.append(check, node("span", String(choice)));
+      line.append(check, node("span", optionLabel(rule, choice, path)));
       input.append(line);
     }
     read = () =>
@@ -816,12 +833,28 @@ function drawField(field) {
     input.setAttribute("role", "group");
     input.setAttribute("aria-labelledby", label.id);
   }
+  const error = node(
+    "p",
+    invalid.has(id) ? "请检查输入格式或允许的范围。" : "",
+    "field-error",
+  );
+  error.id = id + "-error";
+  error.hidden = !invalid.has(id);
+  error.setAttribute("role", "alert");
+  input.setAttribute(
+    "aria-describedby",
+    [rule.description ? id + "-description" : "", error.id]
+      .filter(Boolean)
+      .join(" "),
+  );
   input.setAttribute("aria-invalid", String(invalid.has(id)));
   input.addEventListener("input", () => {
     if (input.tagName !== "DIV") drafts.set(id, input.value);
     try {
       changed(path, secret ? "replace_secret" : "set", read());
       input.setAttribute("aria-invalid", "false");
+      error.hidden = true;
+      error.textContent = "";
       if (
         input.tagName === "SELECT" ||
         input.type === "checkbox" ||
@@ -831,34 +864,51 @@ function drawField(field) {
         render();
         document.getElementById(id)?.focus();
       }
-    } catch {
+    } catch (reason) {
       invalid.set(id, path.join("."));
       input.setAttribute("aria-invalid", "true");
       updateSaveBar();
-      $("notice").textContent =
-        "字段格式不正确：" + (rule.title || path.join("."));
+      error.hidden = false;
+      error.textContent = ["number", "integer"].includes(rule.type)
+        ? reason.message
+        : "请检查输入格式或允许的范围。";
     }
   });
   control.append(element || input);
   const limits = [
-    rule.minimum !== undefined ? "最小 " + rule.minimum : null,
-    rule.maximum !== undefined ? "最大 " + rule.maximum : null,
+    rule.minimum !== undefined
+      ? "最小 " + displayValue(rule, rule.minimum)
+      : null,
+    rule.exclusiveMinimum !== undefined
+      ? "大于 " + displayValue(rule, rule.exclusiveMinimum)
+      : null,
+    rule.maximum !== undefined
+      ? "最大 " + displayValue(rule, rule.maximum)
+      : null,
+    rule.exclusiveMaximum !== undefined
+      ? "小于 " + displayValue(rule, rule.exclusiveMaximum)
+      : null,
   ].filter(Boolean);
-  if (limits.length)
-    control.append(node("p", limits.join(" · "), "hint control-hint"));
+  input.title = limits.join(" · ");
+  const information = fieldSource(field);
+  if (limits.length) information.append(node("p", limits.join(" · "), "hint"));
   if (
     Object.hasOwn(field, "loaded_value") &&
     JSON.stringify(field.loaded_value) !== JSON.stringify(field.value) &&
     !secret &&
     field.loaded_value !== undefined
   )
-    control.append(
-      node("p", "当前已加载：" + JSON.stringify(field.loaded_value), "hint"),
+    information.append(
+      node(
+        "p",
+        "当前已加载：" + displayValue(rule, field.loaded_value),
+        "hint",
+      ),
     );
-  const sourceWrap = node("div");
-  sourceWrap.append(badge, fieldSource(field));
-  bottom.replaceChildren(sourceWrap, resetControl(field, secret));
-  control.append(bottom);
+  if (!rule.readOnly) information.append(resetControl(field, secret));
+  copy.append(information);
+  bottom.replaceChildren(badge);
+  control.append(error, bottom);
   row.append(copy, control);
   return row;
 }
@@ -880,161 +930,8 @@ function advancedGroup(identity) {
   return group;
 }
 function render() {
-  $("documents").replaceChildren();
-  $("navigation").replaceChildren();
-  const present = new Set([
-    ...snapshot.fields.map(fieldGroup),
-    ...resourceInventory.filter((r) => r.kind !== "asset").map(resourceGroup),
-  ]);
-  const selectedPlugins = currentValue(snapshot.fields.find(f => key(f.path) === key(["plugins"])));
-  const available = [
-    ...Object.keys(groups).filter((group) => present.has(group)),
-    ...present,
-  ].filter((group, index, list) => list.indexOf(group) === index &&
-    (!group.startsWith("plugin:") || selectedPlugins.includes(group.slice(7)) || selected === group));
-  if (!available.includes(selected)) selected = available[0];
-  for (const group of available) {
-    const button = node(
-      "button",
-      undefined,
-      group === selected ? "active" : "",
-    );
-    button.append(
-      icon(navPaths[group] || navPaths.extensions),
-      node("span", groups[group] || group),
-    );
-    button.setAttribute("aria-current", group === selected ? "page" : "false");
-    button.addEventListener("click", () => {
-      if (dirty() || invalid.size) {
-        showNotice("请先保存或放弃当前页面的修改，再切换页面。");
-        return;
-      }
-      selected = group;
-      render();
-      window.scrollTo(0, 0);
-    });
-    $("navigation").append(button);
-  }
-  $("page-title").textContent = groups[selected] || selected;
-  $("page-description").textContent =
-    descriptions[selected] || "管理当前模块的配置。";
-  $("breadcrumb-current").textContent = groups[selected] || selected;
-  const fields = snapshot.fields
-      .filter((f) => fieldGroup(f) === selected && interfaceVisible(f))
-      .sort((a, b) => (a.interface?.order || 0) - (b.interface?.order || 0)),
-    owners = [...new Set(fields.map((f) => f.owner))];
-  const pluginField = snapshot.fields.find(
-      (f) => key(f.path) === key(["plugins"]),
-    ),
-    enabled = pluginField ? currentValue(pluginField) : [];
-  if (!selected.startsWith("plugin:") && selected !== "plugins") {
-    const visibility = node(
-      "button",
-      showInactive ? "隐藏未启用功能" : "显示未启用功能的设置",
-      "subtle",
-    );
-    visibility.addEventListener("click", () => {
-      showInactive = !showInactive;
-      render();
-    });
-    $("documents").append(visibility);
-  }
-  if (selected === "models") {
-    const guide = node("article", undefined, "owner-panel");
-    guide.append(
-      cardHeading(
-        "接通模型，开始聊天",
-        "先配置账号或供应商，再添加模型并选择主对话用途。只有需要调整运行策略时才展开高级设置。",
-      ),
-    );
-    $("documents").append(guide);
-  }
-  const extension = (owner) =>
-    inventory.plugins.find((p) => p.configuration?.title === owner);
-  if (!owners.includes(expandedOwner))
-    expandedOwner =
-      owners.find((owner) => enabled.includes(extension(owner)?.id)) ||
-      owners[0];
-  for (const owner of owners) {
-    const ownerFields = fields.filter(
-      (f) =>
-        f.owner === owner &&
-        (showInactive ||
-          selected.startsWith("plugin:") ||
-          !f.owner_id ||
-          enabled.includes(f.owner_id)),
-    );
-    if (!ownerFields.length) continue;
-    const plugin = extension(owner),
-      collapsible = selected === "extensions",
-      section = node(
-        collapsible ? "details" : "article",
-        undefined,
-        collapsible ? "owner-panel" : "",
-      ),
-      advanced = advancedGroup("advanced:" + selected + ":" + owner);
-    if (collapsible) {
-      section.open = owner === expandedOwner;
-      const summary = node("summary", owner);
-      summary.append(
-        node(
-          "span",
-          enabled.includes(plugin?.id) ? "已启用" : "未启用",
-          "badge",
-        ),
-      );
-      section.append(summary);
-      section.addEventListener("toggle", () => {
-        if (section.open) {
-          expandedOwner = owner;
-          for (const other of $("documents").querySelectorAll(".owner-panel"))
-            if (other !== section) other.open = false;
-        }
-      });
-      if (!enabled.includes(plugin?.id))
-        section.append(
-          node(
-            "p",
-            "此插件尚未启用。请在插件管理中选择插件，保存时会校验完整依赖。",
-            "hint",
-          ),
-        );
-    } else
-      section.append(
-        cardHeading(
-          selected === "plugins" ? "启用的插件" : owner,
-          plugin?.configuration?.description,
-        ),
-      );
-    for (const field of ownerFields)
-      ((field.interface?.advanced ?? field.schema["x-advanced"])
-        ? advanced
-        : section
-      ).append(
-        drawField({
-          ...field,
-          schema: {
-            ...field.schema,
-            ...(field.interface?.widget === "secret" ? {writeOnly:true} : {}),
-            ...(field.interface?.widget === "status" ? {readOnly:true} : {}),
-            ...(field.interface?.widget === "model" ? {"x-reference":"model_api.entries"} : {}),
-            ...(field.interface?.options_from
-              ? { "x-reference": field.interface.options_from }
-              : {}),
-            title: field.interface?.title || field.schema.title,
-          },
-        }),
-      );
-    if (advanced.childElementCount > 1) section.append(advanced);
-    drawActions(plugin, section);
-    $("documents").append(section);
-  }
-  drawResources();
-  if (selected === "models") action(drawAccounts);
-  else {
-    clearTimeout(accountTimer);
-    accountTimer = undefined;
-  }
+  workspaceRender();
+  renderEntityEditor();
   updateSaveBar();
 }
 async function load() {
@@ -1164,35 +1061,37 @@ $("apply-update").addEventListener("click", () =>
     await applicationStatus();
   }),
 );
-$("save").addEventListener("click", () =>
-  action(async () => {
-    if (invalid.size)
-      throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
-    if (!dirty()) {
-      $("notice").textContent = "没有未保存的修改。";
-      return;
-    }
-    saving = true;
-    $("notice").textContent = "";
-    updateSaveBar();
-    try {
-      const saved = await api("/api/configuration", {
-        version: snapshot.version,
-        patches: [...edits.values()],
-        resources: [...resourceEdits.values()],
-      });
-      edits.clear();
-      resourceEdits.clear();
-      await load();
-      $("notice").textContent = saved.changed
+async function saveChanges() {
+  if (invalid.size)
+    throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
+  if (!dirty()) {
+    $("notice").textContent = "没有未保存的修改。";
+    return;
+  }
+  saving = true;
+  $("notice").textContent = "";
+  updateSaveBar();
+  try {
+    const saved = await api("/api/configuration", {
+      version: snapshot.version,
+      patches: [...edits.values()],
+      resources: [...resourceEdits.values()],
+    });
+    edits.clear();
+    resourceEdits.clear();
+    await load();
+    showNotice(
+      saved.changed
         ? "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
-        : "没有配置变更。";
-    } finally {
-      saving = false;
-      updateSaveBar();
-    }
-  }),
-);
+        : "没有配置变更。",
+      6000,
+    );
+  } finally {
+    saving = false;
+    updateSaveBar();
+  }
+}
+$("save").addEventListener("click", () => action(saveChanges));
 $("history").addEventListener("click", () =>
   action(async () => {
     const history = await api("/api/history");
@@ -1214,7 +1113,7 @@ $("history").addEventListener("click", () =>
       restore.addEventListener("click", () =>
         action(async () => {
           if (dirty()) throw Error("请先保存或放弃当前编辑");
-          if (!confirm("恢复此前的配置？业务数据不会回滚，保存后仍需重启。"))
+          if (!confirm("恢复此前的配置？业务数据不会回滚，保存后将尝试生效。"))
             return;
           await api("/api/restore", { id: item.id, version: snapshot.version });
           $("history-dialog").close();
@@ -1232,6 +1131,23 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+$("entry-cancel").addEventListener("click", () => finishEntity(true));
+$("entry-done").addEventListener("click", () => finishEntity());
+$("leave-stay").addEventListener("click", () => $("leave-dialog").close());
+$("leave-discard").addEventListener("click", () =>
+  action(() => leavePage(false)),
+);
+$("leave-save").addEventListener("click", () => action(() => leavePage(true)));
+$("leave-dialog").addEventListener("cancel", (event) => {
+  if (saving) event.preventDefault();
+});
+$("entry-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  finishEntity(true);
+});
+$("setup-dialog").addEventListener("close", () =>
+  $("setup-form").replaceChildren(),
+);
 load().catch((error) => {
   if (error.status !== 401) showNotice(error.message);
 });
@@ -1297,8 +1213,15 @@ async function applicationStatus() {
     drain_not_supported: "插件尚不支持等待检查；可撤销等待或选择终止并重启",
   };
   $("blockers").replaceChildren(
-    ...(application.fields || []).map(item => node("li", `${item.path.join(".")} · ${item.reason || ({immediate:"即时更新", boundary:"安全边界更新", restart:"需要重启"}[item.mode])}`)),
-    ...(application.issues || []).map(item => node("li", `${item.path.join(".")}：${item.message}`)),
+    ...(application.fields || []).map((item) =>
+      node(
+        "li",
+        `${item.path.join(".")} · ${item.reason || { immediate: "即时更新", boundary: "安全边界更新", restart: "需要重启" }[item.mode]}`,
+      ),
+    ),
+    ...(application.issues || []).map((item) =>
+      node("li", `${item.path.join(".")}：${item.message}`),
+    ),
     ...(application.blockers || []).map((item) => {
       const owner =
         inventory?.plugins.find((plugin) => plugin.id === item.owner)
@@ -1457,12 +1380,19 @@ function resourceGroup(resource) {
       management: "access",
       web_access: "plugin:web",
       gateway_key: "models",
-    }[resource.id] || (resource.kind === "skill" ? "resources" : resource.id.includes(":") ? "plugin:" + resource.id.split(":")[0] : "plugins")
+    }[resource.id] ||
+    (resource.kind === "skill"
+      ? "resources"
+      : resource.id.includes(":")
+        ? "plugin:" + resource.id.split(":")[0]
+        : "plugins")
   );
 }
-function drawResources() {
+function drawResources(target = $("documents"), filter) {
   const resources = resourceInventory.filter(
-    (r) => r.kind !== "asset" && resourceGroup(r) === selected,
+    (r) =>
+      r.kind !== "asset" &&
+      (filter ? filter(r) : resourceGroup(r) === selected),
   );
   if (!resources.length) return;
   const section = node("article");
@@ -1532,7 +1462,7 @@ function drawResources() {
         const clear = node("button", "清除", "subtle");
         clear.disabled = input.disabled;
         clear.addEventListener("click", () => {
-          if (confirm("清除此文件凭据？保存及重启后生效。")) {
+          if (confirm("清除此文件凭据？保存后将尝试生效。")) {
             resourceEdits.set(id, {
               id: resource.id,
               key: entry.name,
@@ -1613,23 +1543,26 @@ function drawResources() {
     row.append(content);
     section.append(row);
   }
-  $("documents").append(section);
+  target.append(section);
 }
 let accountTimer;
 async function drawAccounts() {
   const data = await api("/api/accounts");
-  if (selected !== "models" || $("editor").hidden) return;
+  if (selected !== "models" || modelTab !== "connections" || $("editor").hidden)
+    return;
   let section = $("accounts-panel");
   if (!section) {
     section = node("article");
     section.id = "accounts-panel";
-    $("documents").append(section);
+    ($("model-panel") || $("documents")).append(section);
   }
   section.replaceChildren(
     cardHeading("原生账号授权", "登录与退出即时生效，账号授权独立于配置保存。"),
   );
-  if (!data.accounts.length)
-    section.append(node("p", "尚未配置原生账号", "empty-state"));
+  if (!data.accounts.length) {
+    section.remove();
+    return;
+  }
   for (const account of data.accounts) {
     const row = node("section", undefined, "account-row"),
       title = node("div"),
@@ -1654,6 +1587,8 @@ async function drawAccounts() {
       );
       button.addEventListener("click", () =>
         action(async () => {
+          if (dirty() || invalid.size)
+            throw Error("请先保存连接设置，再执行账号操作。");
           if (
             ["login", "logout"].includes(name) &&
             !confirm(
@@ -1745,9 +1680,11 @@ function drawFlows(flows, section) {
 async function pollAccounts() {
   clearTimeout(accountTimer);
   accountTimer = undefined;
-  if (selected !== "models" || $("editor").hidden) return;
+  if (selected !== "models" || modelTab !== "connections" || $("editor").hidden)
+    return;
   const data = await api("/api/accounts");
-  if (selected !== "models" || $("editor").hidden) return;
+  if (selected !== "models" || modelTab !== "connections" || $("editor").hidden)
+    return;
   let section = $("account-flows");
   if (!section) {
     section = node("article");

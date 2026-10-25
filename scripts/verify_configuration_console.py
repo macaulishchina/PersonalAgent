@@ -165,7 +165,7 @@ default_reasoning_effort = "none"
                 await expect(page.locator("#health")).to_have_text("业务运行中")
                 assert not errors, errors
                 await capture(page, "configuration-desktop-access.png")
-                await page.get_by_role("button", name="插件", exact=True).click()
+                await page.get_by_role("button", name="功能与插件", exact=True).click()
                 sample = page.locator(".plugin-option").filter(has_text="示例笔记").locator("input")
                 if sys.platform == "linux":
                     await sample.uncheck()
@@ -183,7 +183,11 @@ default_reasoning_effort = "none"
                 maximum = page.get_by_label("笔记长度上限", exact=True)
                 await maximum.fill("0")
                 await expect(page.locator("#save")).to_be_disabled()
+                await expect(page.locator(".field-error:visible")).to_contain_text("1")
+                await capture(page, "configuration-desktop-validation.png")
                 await page.get_by_role("button", name="实例管理", exact=True).click()
+                await expect(page.locator("#leave-save")).to_be_disabled()
+                await page.get_by_role("button", name="继续编辑", exact=True).click()
                 await expect(maximum).to_have_value("0")
                 await maximum.fill("1200")
                 await page.get_by_label("报告风格", exact=True).select_option("detailed")
@@ -203,37 +207,71 @@ default_reasoning_effort = "none"
                 assert config["plugin_settings"]["sample"]["max_length"] == 1200
                 assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == pid
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
-                providers = page.locator(selector(["model_api", "providers"]))
-                await providers.get_by_role("textbox", name="2. 连接供应商 · 新条目名称", exact=True).fill(
-                    "testing"
+                await page.get_by_role("tab", name="连接", exact=True).focus()
+                await page.keyboard.press("ArrowRight")
+                await expect(page.get_by_role("tab", name="模型库", exact=True)).to_be_focused()
+                await page.keyboard.press("ArrowLeft")
+                await expect(page.get_by_role("tab", name="连接", exact=True)).to_be_focused()
+                await page.get_by_role("button", name="添加连接", exact=True).click()
+                setup = page.locator("#setup-dialog")
+                await capture(page, "configuration-desktop-connection-wizard.png")
+                await setup.get_by_role("radio", name="通过 API 网关", exact=True).check()
+                await setup.get_by_label("连接名称", exact=True).fill("testing")
+                await setup.get_by_label("接口类型", exact=True).select_option("deepseek")
+                await setup.get_by_role("button", name="添加连接", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=testing]")).to_be_visible()
+                # Native setup stages account, connection and private credential atomically.
+                await page.get_by_role("button", name="添加连接", exact=True).click()
+                await setup.get_by_label("连接名称", exact=True).fill("native_test")
+                await setup.get_by_label("供应商", exact=True).fill("openai")
+                await setup.locator("#setup-credential").fill("synthetic-native-key")
+                await setup.get_by_role("button", name="添加连接", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=native_test]")).to_be_visible()
+                await expect(page.locator("#documents")).not_to_contain_text("synthetic-native-key")
+                # A wizard cancellation creates neither an account nor a credential.
+                await page.get_by_role("button", name="添加连接", exact=True).click()
+                await setup.get_by_label("连接名称", exact=True).fill("cancelled_connection")
+                await setup.locator("#setup-credential").fill("discarded-secret")
+                await setup.get_by_role("button", name="取消", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=cancelled_connection]")).to_have_count(0)
+                # Creating a connection is still a draft; switching model tabs must retain it.
+                await page.get_by_role("button", name="添加连接", exact=True).click()
+                await setup.get_by_role("radio", name="通过 API 网关", exact=True).check()
+                await setup.get_by_label("连接名称", exact=True).fill("discard_me")
+                await setup.get_by_label("接口类型", exact=True).select_option("deepseek")
+                await setup.get_by_role("button", name="添加连接", exact=True).click()
+                await (
+                    page.locator(".entity-card[data-entity=discard_me]")
+                    .get_by_role("button", name="移除", exact=True)
+                    .click()
                 )
-                await providers.get_by_role("button", name="添加条目", exact=True).click()
-                testing = (
-                    providers.locator(".named-entry")
-                    .filter(has=page.get_by_text("testing", exact=True))
-                    .first
+                await expect(page.locator(".entity-card[data-entity=discard_me]")).to_have_count(0)
+                await capture(page, "configuration-desktop-connections.png")
+                await page.get_by_role("tab", name="模型库", exact=True).click()
+                search = page.get_by_role("searchbox", name="搜索名称、模型 ID 或连接", exact=True)
+                await search.fill("deepseek")
+                await expect(page.locator(".entity-card[data-entity=primary]")).not_to_be_visible()
+                await expect(page.locator(".entity-card[data-entity=fast]")).to_be_visible()
+                await search.fill("does-not-exist")
+                await expect(page.locator(".search-empty")).to_be_visible()
+                await search.fill("")
+                await capture(page, "configuration-desktop-library.png")
+                # Cancelling a newly created model restores the pre-wizard draft.
+                await page.get_by_role("button", name="添加模型", exact=True).click()
+                await setup.get_by_label("供应商模型 ID", exact=True).fill("synthetic-model")
+                await setup.get_by_label("在 PA 中的名称", exact=True).fill("cancelled_model")
+                await setup.get_by_role("button", name="添加并完善设置", exact=True).click()
+                await page.locator("#entry-dialog").get_by_role("button", name="取消编辑", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=cancelled_model]")).to_have_count(0)
+
+                await (
+                    page.locator(".entity-card[data-entity=primary]")
+                    .get_by_role("button", name="编辑", exact=True)
+                    .click()
                 )
-                await testing.get_by_label("预设接口", exact=True).select_option("deepseek")
-                await providers.get_by_role("textbox", name="2. 连接供应商 · 新条目名称", exact=True).fill(
-                    "discard_me"
-                )
-                await providers.get_by_role("button", name="添加条目", exact=True).click()
-                discarded = (
-                    providers.locator(".named-entry")
-                    .filter(has=page.get_by_text("discard_me", exact=True))
-                    .first
-                )
-                await discarded.get_by_role("button", name="移除条目", exact=True).click()
-                await expect(providers.get_by_text("discard_me", exact=True)).to_have_count(0)
-                primary = (
-                    page.locator(selector(["model_api", "entries"]))
-                    .locator(".named-entry")
-                    .filter(has=page.get_by_text("primary", exact=True))
-                    .first
-                )
-                await primary.locator(":scope > summary").click()
-                await primary.get_by_label("供应商", exact=True).select_option("testing")
-                await expect(primary.get_by_label("供应商", exact=True)).to_have_value("testing")
+                primary = page.locator("#entry-dialog")
+                await primary.get_by_label("使用连接", exact=True).select_option("testing")
+                await expect(primary.get_by_label("使用连接", exact=True)).to_have_value("testing")
                 await primary.get_by_text("高级设置", exact=True).click()
                 efforts = primary.get_by_role("group", name="模型支持的思考深度", exact=True)
                 await efforts.locator("input[value=none]").check()
@@ -241,7 +279,25 @@ default_reasoning_effort = "none"
                 fallback = primary.locator(selector(["model_api", "entries", "primary", "fallbacks"]))
                 await fallback.get_by_role("button", name="添加一项", exact=True).click()
                 await fallback.get_by_label("有序回退模型 · 第 1 项", exact=True).select_option("fast")
+                await primary.get_by_text("高级设置", exact=True).click()
+                await primary.evaluate("dialog => dialog.scrollTop = 0")
                 await capture(page, "configuration-desktop-models.png")
+                await primary.get_by_role("button", name="保留修改", exact=True).click()
+                # Cancel an editor without losing a different model's pending edits.
+                await (
+                    page.locator(".entity-card[data-entity=fast]")
+                    .get_by_role("button", name="编辑", exact=True)
+                    .click()
+                )
+                await primary.get_by_label("供应商模型 ID", exact=True).fill("discarded-draft")
+                await page.keyboard.press("Escape")
+                await expect(primary).not_to_be_visible()
+                await expect(page.locator(".entity-card[data-entity=fast]")).not_to_contain_text(
+                    "discarded-draft"
+                )
+                await page.get_by_role("tab", name="用途", exact=True).click()
+                await expect(page.get_by_label("主对话模型", exact=True)).to_be_visible()
+                await capture(page, "configuration-desktop-usage.png")
                 async with page.expect_response(
                     lambda r: r.url.endswith("/api/configuration")
                     and r.request.method == "POST"
@@ -252,12 +308,81 @@ default_reasoning_effort = "none"
                     "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
                 )
                 saved = tomllib.loads(models.read_text())["model_api"]
+                assert saved["providers"]["native_test"]["account"] == "native_test"
+                assert saved["accounts"]["native_test"]["key_env"] == "PA_NATIVE_TEST_API_KEY"
+                assert "cancelled_connection" not in saved["providers"]
+                assert "cancelled_model" not in saved["entries"]
+                assert "synthetic-native-key" not in models.read_text()
+                from dotenv import dotenv_values
+
+                assert dotenv_values(root / ".env")["PA_NATIVE_TEST_API_KEY"] == "synthetic-native-key"
+                assert "discarded-secret" not in (root / ".env").read_text()
                 assert saved["entries"]["primary"]["provider"] == "testing"
                 assert saved["entries"]["primary"]["fallbacks"] == ["fast"]
                 assert saved["entries"]["primary"]["reasoning_efforts"] == ["none", "medium"]
-                for width, height in [(1280, 800), (1920, 1080)]:
+                # Explicit leave actions retain drafts on failure and save before navigation.
+                await page.get_by_label("主对话模型", exact=True).select_option("primary")
+                await page.get_by_role("button", name="对话与执行", exact=True).click()
+                await expect(page.locator("#leave-dialog")).to_be_visible()
+                await capture(page, "configuration-desktop-unsaved.png")
+
+                async def fail_save(route):
+                    await route.fulfill(status=409, json={"error": "synthetic conflict: reload required"})
+
+                await page.route("**/api/configuration", fail_save, times=1)
+                await page.get_by_role("button", name="保存并切换", exact=True).click()
+                await expect(page.locator("#leave-dialog .dialog-notice")).to_contain_text(
+                    "synthetic conflict"
+                )
+                await expect(page.locator("#leave-dialog")).to_be_visible()
+                await page.get_by_role("button", name="继续编辑", exact=True).click()
+                await expect(page.get_by_label("主对话模型", exact=True)).to_have_value("primary")
+                await page.get_by_role("button", name="对话与执行", exact=True).click()
+                await page.get_by_role("button", name="保存并切换", exact=True).click()
+                await expect(page.locator("#page-title")).to_have_text("对话与执行")
+                await expect(page.locator("#leave-dialog")).not_to_be_visible()
+                await expect(page.get_by_label("共享工作额度", exact=True)).not_to_be_visible()
+                fraction = page.get_by_label("用量预警比例", exact=True)
+                await expect(fraction).to_have_value("50")
+                await fraction.fill("100")
+                await expect(page.locator("#save")).to_be_disabled()
+                await expect(page.locator(".field-error:visible")).to_contain_text("小于 100")
+                await fraction.fill("65")
+                async with page.expect_response(
+                    lambda r: r.url.endswith("/api/configuration")
+                    and r.request.method == "POST"
+                    and r.status == 200
+                ):
+                    await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#count")).to_have_text("没有未保存的修改")
+                await expect(fraction).to_have_value("65")
+                usage_file = next(
+                    path for path in (root / "config").glob("*.toml") if "[ai_usage]" in path.read_text()
+                )
+                assert tomllib.loads(usage_file.read_text())["ai_usage"]["warning_fraction"] == 0.65
+                await capture(page, "configuration-desktop-execution.png")
+                await page.get_by_role("button", name="模型与账号", exact=True).click()
+                await page.get_by_label("主对话模型", exact=True).select_option("fast")
+                await page.get_by_role("button", name="实例管理", exact=True).click()
+                await page.get_by_role("button", name="放弃并切换", exact=True).click()
+                await page.get_by_role("button", name="模型与账号", exact=True).click()
+                await expect(page.get_by_label("主对话模型", exact=True)).to_have_value("primary")
+                for width, height in [(1024, 768), (1280, 800), (1366, 768), (1440, 900), (1920, 1080)]:
                     await page.set_viewport_size({"width": width, "height": height})
-                    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                    for name in ["功能与插件", "对话与执行", "模型与账号"]:
+                        await page.get_by_role("button", name=name, exact=True).click()
+                        assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                    await page.get_by_role("tab", name="模型库", exact=True).click()
+                    await (
+                        page.locator(".entity-card[data-entity=primary]")
+                        .get_by_role("button", name="编辑", exact=True)
+                        .click()
+                    )
+                    done = page.get_by_role("button", name="保留修改", exact=True)
+                    bounds = await done.bounding_box()
+                    assert bounds and bounds["y"] >= 0 and bounds["y"] + bounds["height"] <= height
+                    assert await page.locator("#entry-dialog").evaluate("d => d.scrollWidth <= d.clientWidth")
+                    await page.get_by_role("button", name="取消编辑", exact=True).click()
                 await page.set_viewport_size({"width": 1440, "height": 1000})
                 await page.get_by_role("button", name="生效状态与维护", exact=True).click()
                 await expect(page.locator("#apply-dialog")).to_be_visible()
@@ -316,7 +441,13 @@ default_reasoning_effort = "none"
             print(
                 json.dumps(
                     {
-                        "desktop_1280_1440_1920": "passed",
+                        "desktop_1024_1280_1366_1440_1920": "passed",
+                        "inline_validation_and_keyboard_tabs": "passed",
+                        "search_and_empty_results": "passed",
+                        "percentage_input_preserves_stored_fraction": "passed",
+                        "leave_save_discard_and_failed_save": "passed",
+                        "connection_wizard_and_model_tabs": "passed",
+                        "editor_cancel_preserves_other_drafts": "passed",
                         "plugin_selection": "passed",
                         "nested_conditional_fields": "passed",
                         "invalid_draft_preservation": "passed",
