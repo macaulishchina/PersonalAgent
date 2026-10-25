@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-agent"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Extensible personal assistant runtime for Linux and Windows"
 requires-python = ">=3.12,<3.13"
-dependencies = ["portalocker>=3.2,<4", "pywin32>=311; sys_platform == 'win32'", "tzdata>=2025.2; sys_platform == 'win32'"]
+dependencies = ["packaging>=24,<27", "portalocker>=3.2,<4", "pywin32>=311; sys_platform == 'win32'", "tzdata>=2025.2; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 core = [
@@ -49,8 +49,12 @@ pa = "assistant_runtime.app.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = {file = "src/assistant_runtime/VERSION"}
+
 [tool.setuptools.package-data]
-"*" = ["configuration.json", "platform.json"]
+"*" = ["configuration.json", "plugin.json"]
+"assistant_runtime" = ["VERSION", "release.json", "owners.json"]
 "assistant_runtime.app" = ["templates/*/*.toml"]
 "assistant_runtime.core.configuration" = ["static/*"]
 "assistant_runtime.plugins.media" = ["README.md", "skills/*/SKILL.md"]
@@ -61,7 +65,7 @@ where = ["src"]
 "assistant_runtime.core.cli" = ["README.md"]
 "assistant_runtime.core.pi" = ["*.ts", "*.mjs"]
 "assistant_runtime.platforms" = ["*.mjs"]
-"assistant_runtime.plugins" = ["*.platform.json"]
+"assistant_runtime.plugins" = ["*.plugin.json"]
 "assistant_runtime.plugins.keyword" = ["FUNASR_LICENSE.txt"]
 "assistant_runtime.plugins.web" = ["static/*", "static/assets/*"]
 
@@ -82,6 +86,7 @@ files = ["src/assistant_runtime/kernel"]
 prerelease = "allow"
 # Non-editable installs must rebuild when code or bundled resources change.
 cache-keys = [
+    { file = "src/assistant_runtime/VERSION" },
     { file = "pyproject.toml" },
     { file = "deploy/pi/package*.json" },
     { file = "src/**/*.py" },

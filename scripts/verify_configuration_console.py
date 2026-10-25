@@ -168,6 +168,13 @@ default_reasoning_effort = "none"
                 assert not errors, errors
                 await capture(page, "configuration-desktop-access.png")
                 await page.get_by_role("button", name="功能与插件", exact=True).click()
+                release_catalog = await (await page.request.get(origin + "/api/catalog")).json()
+                await expect(
+                    page.get_by_role(
+                        "heading", name="内核 " + release_catalog["core_release"]["version"], exact=True
+                    )
+                ).to_be_visible()
+                await expect(page.locator("#state-version")).to_contain_text("配置修订")
                 sample = page.locator(".plugin-option").filter(has_text="示例笔记").locator("input")
                 if sys.platform == "linux":
                     await sample.uncheck()
@@ -476,6 +483,7 @@ default_reasoning_effort = "none"
                         "connection_wizard_and_model_tabs": "passed",
                         "editor_cancel_preserves_other_drafts": "passed",
                         "plugin_selection": "passed",
+                        "core_and_extension_versions": "passed",
                         "nested_conditional_fields": "passed",
                         "invalid_draft_preservation": "passed",
                         "save_without_restart": "passed",

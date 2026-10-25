@@ -30,6 +30,13 @@ class AssistantService:
         self.lock_file = (config.state_dir / "service.lock").open("w")
         try:
             system.lock(self.lock_file, blocking=False)
+            from .plugin_selection import resolve_selection
+            from .release_state import attempted
+            from .release_inventory import releases
+
+            resolve_selection(config.enabled_plugins, config.plugin_backends, system.name)
+            installed, _ = releases()
+            attempted(config.root, {name: installed[name]["version"] for name in config.enabled_plugins})
             self.store = Store(config.state_dir / "assistant.sqlite3")
         except BaseException:
             self.lock_file.close()
@@ -537,6 +544,15 @@ class AssistantService:
             system.stop_signals(self.stop_event.set)
             await self.runtime.start()
             self.startup_complete = not self.runtime.fatal.is_set()
+            if self.startup_complete and all(
+                item["state"] == "ready" for item in self.runtime.health().values()
+            ):
+                from .release_state import successful
+
+                successful(
+                    self.config.root,
+                    {name: plugin.manifest.version for name, plugin in self.runtime.plugins.items()},
+                )
             if getattr(self, "backend", None) and self.backend.session_id:
                 self.store.set("session_id", self.backend.session_id)
             waiters = [

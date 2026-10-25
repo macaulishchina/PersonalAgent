@@ -1,5 +1,7 @@
 """Platform policy contracts; simulations are distinct from native startup acceptance."""
 
+from release_fixture import release_data
+
 import asyncio
 import json
 from pathlib import Path
@@ -31,10 +33,10 @@ class CertificationTest(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def entry(self, certified=("linux",), runtime=None, *, module=False):
-        resource = "sample.platform.json" if module else "sample/platform.json"
+        resource = "sample.plugin.json" if module else "sample/plugin.json"
         metadata = self.root / resource
         metadata.parent.mkdir(parents=True, exist_ok=True)
-        metadata.write_text(json.dumps({"supported_platforms": list(certified)}), encoding="utf-8")
+        metadata.write_text(json.dumps(release_data(supported_platforms=list(certified))), encoding="utf-8")
         return SimpleNamespace(
             name="sample",
             value="sample:definition",
@@ -63,7 +65,7 @@ class CertificationTest(unittest.TestCase):
                 self.assertTrue(rows["pi"]["platform_supported"])
 
     def test_bad_or_missing_certification_never_defaults_to_all_platforms(self):
-        path = self.root / "platform.json"
+        path = self.root / "plugin.json"
         for content in (
             None,
             "not-json",
@@ -194,7 +196,9 @@ class CertificationTest(unittest.TestCase):
                 timeout=20,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("unavailable on windows", result.stderr.decode(errors="replace"))
+            report = json.loads(result.stdout)
+            self.assertFalse(report["compatible"])
+            self.assertIn("implementation selection", report["blockers"][0]["reason"])
 
 
 class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
@@ -237,6 +241,7 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
                 entry, root / "private", lambda contents: validate_candidate(entry.name, contents, root=root)
             )
             console = object.__new__(Console)
+            console.settings = SimpleNamespace(root=root)
             console.files = files
             console.business = SimpleNamespace(
                 application={},

@@ -11,6 +11,7 @@ from .files import Conflict
 from .catalog import catalog
 from assistant_runtime.api.plugins import PlatformCertificationError
 from assistant_runtime.api.configuration import ConfigurationError
+from assistant_runtime.app.versions import CompatibilityError
 
 COOKIE = "personal_agent_admin"
 log = logging.getLogger(__name__)
@@ -69,6 +70,8 @@ class Console:
             response = web.json_response({"error": str(exc)}, status=400)
         except PlatformCertificationError as exc:
             response = web.json_response({"error": str(exc), "code": "platform_not_certified"}, status=400)
+        except CompatibilityError as exc:
+            response = web.json_response({"error": str(exc), "code": "version_incompatible"}, status=400)
         except ConfigurationError as exc:
             response = web.json_response({"error": str(exc), "issues": [exc.public()]}, status=400)
         except (ValueError, TypeError, KeyError, OSError):
@@ -254,6 +257,12 @@ class Console:
         from .fields import public_rule, described_schema
 
         inventory = await asyncio.to_thread(catalog)
+        from assistant_runtime.app.release_state import read as release_record
+
+        try:
+            inventory["instance_release"] = release_record(self.settings.root)
+        except CompatibilityError as exc:
+            inventory["instance_release_error"] = str(exc)
         for description in [
             inventory["application"],
             *(p.get("configuration") for p in inventory["plugins"]),

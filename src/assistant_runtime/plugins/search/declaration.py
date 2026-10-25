@@ -1,7 +1,7 @@
 from pathlib import Path
 from assistant_runtime.api.plugins import plugin_platforms
 from assistant_runtime.api.configuration import configuration_spec
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import SearchSettings
 
 from assistant_runtime.api.contracts import TaskRequest, SearchRequest
@@ -16,7 +16,7 @@ def create(api):
 DECLARATION = PluginDefinition(
     supported_platforms=plugin_platforms(Path(__file__).parent),
     configuration=configuration_spec(__file__),
-    manifest=Manifest("search", ("ai_usage",), critical=False),
+    manifest=plugin_manifest(__file__),
     create=create,
     uses=(TaskRequest,),
     provides=(SearchRequest,),

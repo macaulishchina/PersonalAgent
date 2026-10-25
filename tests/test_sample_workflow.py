@@ -1,5 +1,7 @@
 """Installed external package plus real Pi: input, tools, report, shared budget."""
 
+import json
+
 import asyncio
 from dataclasses import replace
 from pathlib import Path
@@ -29,9 +31,10 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
             shutil.copytree(source, root / "package", ignore=shutil.ignore_patterns("build", "*.egg-info"))
             # This temporary fixture tests the extension API on both systems;
             # the shipped example's Linux-only certification is unchanged.
-            (root / "package/src/personal_agent_sample/platform.json").write_text(
-                '{"supported_platforms": ["linux", "windows"]}'
-            )
+            metadata = root / "package/src/personal_agent_sample/plugin.json"
+            data = json.loads(metadata.read_text())
+            data["supported_platforms"] = ["linux", "windows"]
+            metadata.write_text(json.dumps(data))
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",

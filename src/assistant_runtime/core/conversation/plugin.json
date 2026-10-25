@@ -1,0 +1,17 @@
+{
+  "supported_platforms": [
+    "linux",
+    "windows"
+  ],
+  "schema_version": 1,
+  "id": "conversation",
+  "version": "core",
+  "api_version": 1,
+  "requires_core": "core",
+  "requires": {
+    "workfiles": "core",
+    "execution": "core"
+  },
+  "optional": {},
+  "critical": true
+}

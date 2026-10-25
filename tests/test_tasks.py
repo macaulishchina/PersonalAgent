@@ -635,6 +635,8 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         run = self.plugin.repo.runs(d["id"])[0]
         self.plugin.repo.update_run(run["id"], "running", execution_session_id="old", turn_id="old-turn")
         with self.store.db:
+            # Make the active run genuinely older, even on coarse Windows clocks.
+            self.store.db.execute("UPDATE job_runs SET created=? WHERE id=?", (time.time() - 3600, run["id"]))
             for number in range(105):
                 self.plugin.repo.enqueue(d, f"missed:{number}", "missed")
         self.assertNotIn(run["id"], [r["id"] for r in self.plugin.repo.runs(d["id"])])

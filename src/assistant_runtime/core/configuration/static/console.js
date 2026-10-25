@@ -974,7 +974,7 @@ async function load() {
     status.loaded_version === config.version
       ? "已应用 · 配置与运行版本一致"
       : "已保存 · 等待确认生效";
-  $("state-version").textContent = "版本 " + config.version.slice(0, 10);
+  $("state-version").textContent = "配置修订 " + config.version.slice(0, 10);
   $("health").textContent =
     {
       running: "业务运行中",

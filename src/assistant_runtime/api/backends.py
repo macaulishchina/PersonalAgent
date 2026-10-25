@@ -62,7 +62,7 @@ class BackendSpec:
 
 def plugin_backends(directory):
     path = Path(directory)
-    path = path if path.suffix == ".json" else path / "platform.json"
+    path = path if path.suffix == ".json" else path / "plugin.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("Backend metadata must be an object")

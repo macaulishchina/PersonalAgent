@@ -1,5 +1,7 @@
 """Production host + main Pi + delegated Pi + real task MCP; synthetic model transport."""
 
+from release_fixture import release_data
+
 import asyncio
 import json
 from pathlib import Path
@@ -431,13 +433,13 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
         definition = PluginDefinition(Manifest("sample"), Sample, lambda value: value)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            metadata = root / "sample.platform.json"
-            metadata.write_text('{"supported_platforms": ["linux", "windows"]}')
+            metadata = root / "sample.plugin.json"
+            metadata.write_text(json.dumps(release_data()))
             entry = SimpleNamespace(
                 name="sample",
                 value="sample:definition",
                 load=lambda: definition,
-                dist=SimpleNamespace(files=["sample.platform.json"], locate_file=lambda name: metadata),
+                dist=SimpleNamespace(files=["sample.plugin.json"], locate_file=lambda name: metadata),
             )
 
             def discover_extension(step, body):

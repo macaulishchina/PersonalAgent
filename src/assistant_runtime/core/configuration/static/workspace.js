@@ -679,6 +679,28 @@ function renderSettingsPage() {
   drawResources();
 }
 function renderPlugins() {
+  const release = inventory.core_release;
+  if (release) {
+    const panel = surface(
+      "内核 " + release.version,
+      "核心组件随内核统一发布；扩展声明自己的版本与兼容范围。代码升级需要重启。",
+    );
+    const last = inventory.instance_release?.last_successful;
+    panel.append(
+      node(
+        "p",
+        last
+          ? `上次成功运行：内核 ${last.core_version}`
+          : "尚无成功运行的版本记录",
+        "hint",
+      ),
+    );
+    if (inventory.instance_release_error)
+      panel.append(
+        node("p", inventory.instance_release_error, "compatibility-note"),
+      );
+    $("documents").append(panel);
+  }
   const field = fieldAt(["plugins"]),
     enabled = currentValue(field);
   const section = surface(
@@ -727,7 +749,9 @@ function renderPlugins() {
         (pluginNames[plugin.id] || plugin.configuration?.title || plugin.id),
     );
     const blocked =
-      plugin.platform_supported === false || plugin.kind === "unavailable";
+      plugin.platform_supported === false ||
+      plugin.version_compatible === false ||
+      plugin.kind === "unavailable";
     check.disabled = blocked && !check.checked;
     check.addEventListener("change", () => {
       const values = new Set(valueAt(["plugins"], []));
@@ -766,6 +790,17 @@ function renderPlugins() {
         ),
       );
     const foot = node("div", undefined, "capability-footer");
+    foot.append(
+      node(
+        "span",
+        plugin.version ? "版本 " + plugin.version : "版本未声明",
+        "badge",
+      ),
+    );
+    if (plugin.requires_core && plugin.kind === "extension")
+      row.append(node("p", "兼容内核 " + plugin.requires_core, "hint"));
+    if (plugin.version_error)
+      row.append(node("p", plugin.version_error, "compatibility-note"));
     if (plugin.kind === "extension")
       for (const [id, name] of [
         ["linux", "Linux"],
@@ -781,7 +816,11 @@ function renderPlugins() {
             "badge",
           ),
         );
-    if (plugin.platform_error || blocked)
+    if (
+      plugin.platform_error ||
+      plugin.platform_supported === false ||
+      plugin.kind === "unavailable"
+    )
       row.append(
         node(
           "p",

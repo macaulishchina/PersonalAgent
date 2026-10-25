@@ -10,7 +10,7 @@ import hashlib
 import json
 import uuid
 
-from assistant_runtime.kernel.runtime import Manifest
+from assistant_runtime.api import plugin_manifest
 from assistant_runtime.api.contracts import Control, NotificationRequest, ConversationFeedbackRequest
 from assistant_runtime.core.conversation.store import ConversationStore
 from assistant_runtime.core.workfiles.media import MediaAttachments, MAX_BYTES
@@ -19,7 +19,7 @@ from assistant_runtime.core.conversation.task_replies import TaskReplies
 
 
 class Conversation:
-    manifest = Manifest("conversation", ("workfiles", "execution"), critical=True)
+    manifest = plugin_manifest(__file__)
 
     def __init__(self, host, backend=None):
         self.host = host

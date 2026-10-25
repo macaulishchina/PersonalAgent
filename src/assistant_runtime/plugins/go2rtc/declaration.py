@@ -1,6 +1,6 @@
 from pathlib import Path
 from assistant_runtime.api.plugins import plugin_platforms
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 
 
 def create(api):
@@ -13,7 +13,7 @@ def create(api):
 
 DECLARATION = PluginDefinition(
     supported_platforms=plugin_platforms(Path(__file__).parent),
-    manifest=Manifest("go2rtc", (), critical=False),
+    manifest=plugin_manifest(__file__),
     create=create,
     resources=("directory", "video_inputs", "camera_controls"),
     config_fields=("state_dir",),

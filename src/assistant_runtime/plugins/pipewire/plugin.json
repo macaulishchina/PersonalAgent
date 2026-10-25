@@ -14,5 +14,13 @@
   "default_backends": {
     "linux": "pipewire",
     "windows": "wasapi"
-  }
+  },
+  "schema_version": 1,
+  "id": "pipewire",
+  "version": "1.0.0",
+  "api_version": 1,
+  "requires_core": ">=0.3.0,<0.4.0",
+  "requires": {},
+  "optional": {},
+  "critical": false
 }

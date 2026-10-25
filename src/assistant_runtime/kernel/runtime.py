@@ -35,8 +35,8 @@ class Manifest:
         if self.name in self.requires + self.optional:
             raise ValueError("Plugin cannot depend on itself")
         for name, version in self.dependency_versions:
-            if name not in self.requires + self.optional or not re.fullmatch(r"[0-9]+", version):
-                raise ValueError("Dependency version must name a declared dependency and supported major")
+            if name not in self.requires + self.optional or not isinstance(version, str) or not version:
+                raise ValueError("Dependency version must name a declared dependency and version range")
 
 
 class Context:
@@ -273,12 +273,6 @@ class Runtime:
             for dependency in manifest.optional:
                 if dependency in self.plugins:
                     visit(dependency)
-            for dependency, major in manifest.dependency_versions:
-                if (
-                    dependency in self.plugins
-                    and self.plugins[dependency].manifest.version.split(".")[0] != major
-                ):
-                    raise ValueError(f"Incompatible dependency: {name} requires {dependency} major {major}")
             visiting.remove(name)
             result.append(name)
 

@@ -1,0 +1,18 @@
+{
+  "supported_platforms": [
+    "linux",
+    "windows"
+  ],
+  "schema_version": 1,
+  "id": "models",
+  "version": "core",
+  "api_version": 1,
+  "requires_core": "core",
+  "requires": {
+    "ai_usage": "core"
+  },
+  "optional": {
+    "workfiles": "core"
+  },
+  "critical": false
+}

@@ -41,7 +41,7 @@ their settings remain available when disabling an uncertified owner. Dormant val
 correct structure/types; full semantic checks run only for enabled owners. Missing schema
 validation dependencies still block a save instead of skipping checks.
 
-Extension rows display Linux/Windows certification from packaged `platform.json`,
+Extension rows display Linux/Windows certification from packaged `plugin.json`,
 without importing runtime code. Windows includes Windows Server. Missing or invalid
 metadata is shown as uncertified. An incompatible checked entry can be unchecked,
 but cannot be re-enabled. Saving, applying and startup enforce the same policy;

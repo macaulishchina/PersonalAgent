@@ -1,5 +1,6 @@
+from assistant_runtime.api import plugin_manifest
 from assistant_runtime.api.configuration import configuration_default, configuration_spec
-from assistant_runtime.api import Manifest, PluginDefinition, ExecutionRequest
+from assistant_runtime.api import PluginDefinition, ExecutionRequest
 
 
 def settings(raw):
@@ -21,7 +22,7 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("execution", ("pi", "ai_usage", "workfiles"), critical=True),
+    plugin_manifest(__file__),
     internal_factory=build,
     configuration=configuration_spec(__file__),
     provides=(ExecutionRequest,),

@@ -6,7 +6,8 @@ import json
 import time
 from typing import Callable
 
-from assistant_runtime.kernel.runtime import Manifest
+from assistant_runtime.api import plugin_manifest
+from dataclasses import replace
 from assistant_runtime.api.contracts import IntegrationRequest, IntegrationProvider, TaskRequest
 
 
@@ -18,7 +19,15 @@ class IntegrationsPlugin:
     def __init__(self, host, registry, provider: Callable[[], IntegrationProvider]):
         self.host, self.registry = host, registry
         self.provider = provider
-        self.manifest = Manifest("integrations", (host.config.bindings["brain"],))
+        manifest = plugin_manifest(__file__)
+        required = (host.config.bindings["brain"],)
+        self.manifest = replace(
+            manifest,
+            requires=required,
+            dependency_versions=tuple(
+                (name, limits) for name, limits in manifest.dependency_versions if name in required
+            ),
+        )
         self.error = None
         self.probing = asyncio.Semaphore(2)
         self.pending = 0

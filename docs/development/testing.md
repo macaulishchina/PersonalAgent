@@ -22,6 +22,21 @@ python scripts/check.py
 
 测试按模块进程并发，默认最多 3 个；共享资源或诊断问题时使用 `--jobs 1`。真实设备、供应商和已安装服务验收单独执行。
 
+## 版本与兼容性检查
+
+修改版本契约、插件声明或装配路径时，先运行：
+
+```sh
+python scripts/check.py --test test_versions --test test_plugin_framework --test test_plugin_certification --test test_plugin_backends
+python scripts/check_release.py
+```
+
+`check.py` 的静态阶段已包含发布声明检查，`--static-only` 也会运行它；单独执行 `check_release.py` 可快速定位声明问题。它核对内核版本来源、内置插件及示例包声明、依赖范围和旧平台文件残留，不导入设备实现。
+
+框架 wheel 构建后运行 `python scripts/check_release.py --wheel <框架wheel>`，检查实际包中的版本与声明是否和源码一致。针对真实实例配置的候选预检使用 `pa --config <测试配置> upgrade-check <框架wheel> --plugin-wheel <独立插件wheel>`；只有框架更新时省略 `--plugin-wheel`。这两个命令分别解决包与源码一致性、候选与实例声明兼容性，不替代安装版运行验证。
+
+插件作者至少覆盖：正常兼容、缺失／无效声明、内核／API／依赖版本不匹配、静态与运行时声明不一致、禁用插件可保留并移除。检查拒绝发生在实例创建和设备打开之前；候选包预检不得执行候选代码。启动记录还须覆盖失败不覆盖上次成功、关闭后再启用旧插件仍拒绝降级，以及两次真实启动。代码更新需重启，不把配置热更新测试当作代码升级验证。
+
 ## 原生平台与安装包
 
 使用已安装好的 Python 和 Pi，在应用目录按需运行：
@@ -35,11 +50,11 @@ python scripts/verify_configuration_console.py --browser <Chromium或Edge可执�
 python scripts/verify_configuration_console.py --installed --python <安装环境的Python> --browser <Chromium或Edge可执行文件>
 ```
 
-源码与安装包分别记录结果。脚本使用独立临时实例；Linux 检查 slim／standard，Windows 默认检查 slim，standard 根据实际平台认证验收（现有内置扩展均已支持）。正常退出或捕获异常时清理测试目录；强制终止留下的目录按日志路径核对后处理。
+源码与安装包分别记录结果。脚本使用独立临时实例；`verify_native_deployment.py` 在 Linux 和 Windows 默认都检查 slim／standard，可用 `--preset slim` 缩小范围；这与 Windows 的 `pa init` 默认 slim 是两回事。standard 根据实际平台认证验收（现有内置扩展均已支持）。正常退出或捕获异常时清理测试目录；强制终止留下的目录按日志路径核对后处理。
 
 真实 Pi 子进程和本地合成模型可以验证工具、上下文、澄清、取消及恢复，不代表真实供应商、物理设备或系统服务通过。不要为获得绿色结果删除用量限制或隐藏缺失依赖。
 
-配置网页验收由开发环境的 Playwright 驱动浏览器；`--python` 仅选择被验证的服务环境，`--installed` 禁止用源码覆盖安装包。脚本检查保存生效、显式重启、插件认证、嵌套表单、密码确认和坏配置修复。配置事务的并发准入、连接替换、失败回滚和监听切换失败由 `test_configuration_service` 覆盖；执行中模型切换与多轮上下文由 `test_conversation_native` 使用真实 Pi 和合成模型验证。
+配置网页验收由开发环境的 Playwright 驱动浏览器；`--python` 仅选择被验证的服务环境，`--installed` 禁止用源码覆盖安装包。脚本检查保存生效、显式重启、插件认证、内核／扩展版本展示、配置修订标识、嵌套表单、密码确认和坏配置修复。原生部署脚本还核对每次启动的成功版本记录。配置事务的并发准入、连接替换、失败回滚和监听切换失败由 `test_configuration_service` 覆盖；执行中模型切换与多轮上下文由 `test_conversation_native` 使用真实 Pi 和合成模型验证。
 
 ## 如何记录结果
 

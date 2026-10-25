@@ -57,6 +57,17 @@ sudo loginctl enable-linger "$(id -un)"
 
 ## 备份和升级
 
+先查看版本及插件兼容性，再检查准备安装的发行包：
+
+```text
+pa version
+pa plugins
+pa upgrade-check <personal_agent版本包.whl>
+pa upgrade-check <personal_agent版本包.whl> --plugin-wheel <独立插件版本包.whl>
+```
+
+`pa version` 无需实例；其他命令作用于选定实例。`pa plugins` 在插件不兼容时仍能显示版本与原因。预检不安装、不重启；出现阻断项应先取得兼容插件或显式取消启用。未启用的旧插件可以保留，版本较旧但兼容的插件不强制更新。配置页“功能与插件”同步显示内核版本、扩展版本与兼容范围；“配置修订”表示设置快照，不是软件版本。
+
 1. 核对在途工作和未知操作，完成收尾后停服。
 2. 记录 `git rev-parse HEAD`，备份完整实例，包括配置、`.env`、OAuth 凭据、数据库、用量和工作文件，保持备份私有。
 3. 获取目标发布版本，在应用目录重做[安装指南](deployment.md)中的依赖安装；standard 需构建前端并再次安装包。Pi 锁定版本变化时重新执行 `pa install-pi`。保留实例，不执行 `init`。
@@ -81,6 +92,9 @@ sudo loginctl enable-linger "$(id -un)"
 | 找不到 `pa` 或缺少新子命令 | 检查 PATH 是否指向本次 `.venv`；拉取源码后还需安装包 |
 | `Plugin ... does not support windows` | 在独立配置页取消未认证插件并修正依赖；Windows 使用 slim |
 | 业务配置损坏，聊天无法启动 | 执行 `pa configuration serve --management <实例目录>/management.toml` 打开独立管理页修复；已有管理进程时直接访问原页面 |
+| `requires core`、`requires ... installed ...` | 当前内核或依赖版本不在插件声明范围内，更新插件或取消启用；不要修改版本号绕过检查 |
+| `missing or invalid release declaration` | 插件需由作者提供当前格式的 `plugin.json` 并重新打包；仅有旧平台声明不足以启用 |
+| `downgrade requires ... backup` | 恢复匹配的旧环境和升级前完整实例备份；不能只装回旧代码或删除版本记录 |
 | 模型未配置／调用失败 | 检查账号授权、供应商开关、模型绑定和网页待部署步骤 |
 | 端口被占用／后台启动失败 | 检查日志和原有进程；明确修改监听地址，不另起重复实例 |
 | 配置保存后未生效 | 查看“生效状态与维护”：等待安全边界、修复后重试，或按提示显式重启／完成外部部署 |

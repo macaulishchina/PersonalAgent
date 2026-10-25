@@ -1,4 +1,4 @@
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 from assistant_runtime.api.configuration import configuration_spec
 
 
@@ -21,7 +21,7 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("memory", (), critical=False),
+    plugin_manifest(__file__),
     internal_factory=build,
     configuration=configuration_spec(__file__),
     service="memory",

@@ -18,7 +18,7 @@ def plugin_platforms(directory):
     import json
 
     path = Path(directory)
-    path = path if path.suffix == ".json" else path / "platform.json"
+    path = path if path.suffix == ".json" else path / "plugin.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         values = data["supported_platforms"]

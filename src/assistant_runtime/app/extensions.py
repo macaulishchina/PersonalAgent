@@ -9,7 +9,7 @@ import re
 
 from assistant_runtime.api import CallIdentity, PluginContext, PluginDefinition
 from assistant_runtime.api.plugins import current_call, require_platform, PlatformCertificationError
-from .plugin_metadata import installed_platforms, installed_backends
+from .plugin_metadata import installed_platforms, installed_backends, installed_release
 from assistant_runtime.core.configuration.schema import resolve_definition
 
 GROUP = "personal_agent.plugins"
@@ -50,6 +50,17 @@ def discover(names, builtins=()):
             ) from exc
         require_platform(name, platforms, system.name)
         backends = installed_backends(found[name])
+        from assistant_runtime.app.versions import CompatibilityError, compatibility, manifest
+
+        try:
+            release = installed_release(found[name])
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            raise CompatibilityError(
+                f"Plugin {name}: missing or invalid release declaration; update the plugin"
+            ) from exc
+        error = compatibility(release)
+        if error:
+            raise CompatibilityError(error)
         definition = found[name].load()
         definition = definition() if callable(definition) else definition
         if not isinstance(definition, PluginDefinition) or definition.manifest.name != name:
@@ -67,6 +78,8 @@ def discover(names, builtins=()):
             )
         if definition.backends != backends:
             raise ValueError(f"Plugin {name}: static and runtime backend declarations differ")
+        if definition.manifest != manifest(release):
+            raise CompatibilityError(f"Plugin {name}: static and runtime release declarations differ")
         if definition.manifest.critical:
             raise ValueError("Extensions cannot declare themselves critical")
         result[name] = definition

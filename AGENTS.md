@@ -1,7 +1,7 @@
 # Personal Agent engineering guide
 
 - Read the relevant sections of `docs/development/architecture.md` and the owning plugin README before changing a boundary. Each module owns one responsibility; use targeted reads instead of repeatedly loading unrelated modules.
-- `kernel/` imports only the standard library and its contracts. Never import plugins there.
+- `kernel/` and the public `api/` contracts use only the standard library and kernel contracts. Never import plugins there; version range policy and package inspection belong to `app/`.
 - Keep Pi protocol fields inside `core/pi/`; the kernel owns only provider-neutral execution contracts. Pi is the sole agent loop. Voice is disabled pending independent acceptance.
 - Add a capability contract and an adapter for a new device/provider. Do not add hardware branches to the assistant.
 - Before changing go2rtc deployment or adding cameras through it, read `docs/guides/cameras.md` for device mapping, stable identity, permissions, reconnection and acceptance.
@@ -21,7 +21,7 @@
 - For uncertain provider behavior, run a minimal isolated protocol probe early. Define the integration's acceptance boundaries before expanding implementation. Separate local checks, real-provider acceptance and deployment/user/device waits; do not rerun successful checks merely while waiting for unrelated work.
 - Private instance configuration lives in ignored `config/`; reusable templates live in `config.example/`. The entry `config/config.toml` explicitly includes fragments; only `Config.load()` composes them. No recursive includes or silent overrides. Preserve the instance `root` when moving configuration: `.env`, `state/` and `models/` stay there. Never commit credentials or recordings.
 - `.agents/` (and `.agent/`) is ignored local Coding AI tooling, never assistant runtime input. Keep root `AGENTS.md` tracked as the engineering guide. Bundled assistant operational skills belong to their owning plugin’s `skills/` and ship in its package; the composition root selects enabled owners. Instance skills live privately in `config/skills/`, loaded only through explicit `instance_skills` names. Instance MCP/source registries live in private `config/`; only reusable empty examples belong in `config.example/`. Runtime agents must not auto-discover project instructions, skills or extensions. User facts continue through existing memory, not a second knowledge store.
-- Development has one current API/CLI. Do not add compatibility aliases; Git is the rollback mechanism.
+- Development has one current API/CLI. Do not add compatibility aliases. Git restores source only; runtime rollback requires matching code, dependencies and a verified stopped-instance backup. Never remove or edit release-state records to bypass downgrade protection.
 - Continue development on `main` by default; leave this workspace on `main` after merging and pushing.
 - Keep `scripts/` for reusable setup, checks and hardware acceptance. One-off probes/experiments belong in ignored instance storage or `/tmp`, not the source tree. Generate a report only when requested by the user.
 - Keep OS mechanisms in `platforms/` or explicitly platform-specific hardware adapters. Business plugins use public `api.system` facilities; independent plugins declare the `system_io` resource. Never substitute POSIX mode assertions for Windows ACL checks, or claim Windows readiness from Linux mocks. Native acceptance commands live in `docs/development/testing.md`; dated results and pending SCM/reboot checks live in `docs/archive/platform-acceptance-2026-10.md`.
@@ -39,6 +39,8 @@
 - New extensions import only `assistant_runtime.api`, declare an installed package
   entry point in `personal_agent.plugins`, and accept PluginContext rather than
   the application host. Do not add another arbitrary module-factory loader.
+- Before changing release metadata or plugin compatibility, read `docs/development/release.md` and `docs/development/plugins.md`. `src/assistant_runtime/VERSION` is the single core/package version source; core plugins use the `core` marker. Each extension owns one static `plugin.json` with its version, bounded core compatibility, API, dependencies and platform declarations. Runtime manifests must derive from that descriptor; do not recreate default versions in plugin instances. External plugin versions match their distribution. Never widen compatibility merely to pass checks.
+- Release declarations are checked by `scripts/check.py`; also run `scripts/check_release.py --wheel <candidate>` against the actual framework wheel before release. `pa upgrade-check` is read-only metadata preflight, not dependency installation or migration/device/provider acceptance. Code changes require an explicit restart; configuration revision and live updates are separate.
 - Kernel dependency failures must block dependent startup and remove partial
   registrations. Test owner shutdown, cancellation and stale results.
 - Work directly in the current project checkout by default. Do not create source copies or worktrees unless a major change requires isolation. Production deployment is separate from source editing; preserve the running instance during development and complete the full gate and package acceptance before an authorized cutover.

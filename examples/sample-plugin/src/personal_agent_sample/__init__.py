@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from assistant_runtime.api import (
     ConfigurationSpec,
-    Manifest,
+    plugin_manifest,
     PluginDefinition,
     Tool,
     ExecutionRequest,
@@ -157,7 +157,7 @@ def definition():
     from assistant_runtime.api.plugins import plugin_platforms
 
     return PluginDefinition(
-        Manifest("sample", ("execution", "workfiles")),
+        plugin_manifest(__file__),
         Notes,
         None,
         (Path(__file__).parent / "skills" / "sample-notes",),

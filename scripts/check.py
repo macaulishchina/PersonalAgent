@@ -237,6 +237,7 @@ async def check(args):
         ("format", [sys.executable, "-m", "ruff", "format", "--check", "src", "tests", "scripts"]),
         ("lint", [sys.executable, "-m", "ruff", "check", "src", "tests", "scripts"]),
         ("types", [sys.executable, "-m", "mypy"]),
+        ("release declarations", [sys.executable, "scripts/check_release.py"]),
     ):
         result = await execute(name, command, ROOT, args.timeout)
         display(result, args.verbose)

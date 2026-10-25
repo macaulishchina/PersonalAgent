@@ -1,5 +1,7 @@
 """Platform identity and declarative backend selection, before device construction."""
 
+from release_fixture import release_data
+
 import asyncio
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
@@ -40,7 +42,7 @@ class SelectionTest(unittest.TestCase):
 
     def test_invalid_metadata_is_rejected_without_loading_implementation(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "platform.json"
+            path = Path(folder) / "plugin.json"
             for data in (
                 [],
                 {"backends": {}},
@@ -54,23 +56,21 @@ class SelectionTest(unittest.TestCase):
 
     def test_external_static_and_runtime_backend_declarations_must_match(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "sample/platform.json"
+            path = Path(folder) / "sample/plugin.json"
             path.parent.mkdir()
-            path.write_text(
-                json.dumps({"supported_platforms": ["linux", "windows"], "backends": {"windows": ["one"]}})
-            )
+            path.write_text(json.dumps({**release_data(), "backends": {"windows": ["one"]}}))
             entry = SimpleNamespace(
                 name="sample",
                 value="sample:definition",
                 dist=SimpleNamespace(
-                    files=["sample/platform.json"], locate_file=lambda name: Path(folder) / str(name)
+                    files=["sample/plugin.json"], locate_file=lambda name: Path(folder) / str(name)
                 ),
                 load=Mock(return_value=PluginDefinition(Manifest("sample"), create=lambda api: None)),
             )
             with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
                 with self.assertRaisesRegex(ValueError, "backend declarations differ"):
                     discover(["sample"])
-                path.write_text('{"supported_platforms": ["linux", "windows"], "backends": []}')
+                path.write_text('{**release_data(), "backends": []}')
                 entry.load.reset_mock()
                 with self.assertRaises(ValueError):
                     discover(["sample"])
@@ -107,12 +107,12 @@ class SelectionTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            path = root / "sample/platform.json"
+            path = root / "sample/plugin.json"
             path.parent.mkdir()
             path.write_text(
                 json.dumps(
                     {
-                        "supported_platforms": ["linux", "windows"],
+                        **release_data(),
                         "backends": {system.name: ["one", "two"]},
                     }
                 )
@@ -125,9 +125,7 @@ class SelectionTest(unittest.TestCase):
             entry = SimpleNamespace(
                 name="sample",
                 value="sample:definition",
-                dist=SimpleNamespace(
-                    files=["sample/platform.json"], locate_file=lambda name: root / str(name)
-                ),
+                dist=SimpleNamespace(files=["sample/plugin.json"], locate_file=lambda name: root / str(name)),
                 load=Mock(return_value=definition),
             )
             with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):

@@ -43,11 +43,22 @@ def systemctl(*args):
 
 
 def main():
+    from assistant_runtime.app.versions import CORE_VERSION
+
     parser = argparse.ArgumentParser(prog="pa", description="Personal Agent — run pa to chat")
+    parser.add_argument("--version", action="version", version="PA " + CORE_VERSION)
     parser.add_argument(
         "--config", help="Use this config for this invocation; otherwise local or remembered instance"
     )
     sub = parser.add_subparsers(dest="command")
+    sub.add_parser("version", help="Show framework release without requiring an instance")
+    upgrade = sub.add_parser(
+        "upgrade-check", help="Inspect candidate wheels without installing or restarting"
+    )
+    upgrade.add_argument("wheel", help="Target personal-agent wheel")
+    upgrade.add_argument(
+        "--plugin-wheel", action="append", default=[], help="Optional replacement extension wheel; repeatable"
+    )
     use = sub.add_parser("use", help="Remember an existing instance for future commands")
     use.add_argument("instance", help="Instance directory or entry TOML")
     chat = sub.add_parser(
@@ -256,6 +267,12 @@ def main():
     try:
         from .instance_selection import resolve, select
 
+        if args.command == "version":
+            from assistant_runtime.app.versions import framework
+
+            print(json.dumps(framework(), indent=2))
+            return
+
         if args.command == "use":
             if args.config:
                 raise ValueError("Use pa use <instance>, without --config")
@@ -266,6 +283,22 @@ def main():
                 args.config, required=not (args.command == "model-accounts" and args.action == "providers")
             )
             args.config = str(entry) if entry else None
+        if args.command == "plugins":
+            from .release_inventory import inventory
+
+            result = inventory(args.config)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if not result["compatible"]:
+                raise SystemExit(2)
+            return
+        if args.command == "upgrade-check":
+            from .release_package import preflight
+
+            result = preflight(args.config, args.wheel, args.plugin_wheel)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if not result["compatible"]:
+                raise SystemExit(2)
+            return
         if args.command == "model-accounts":
             from assistant_runtime.app.config import read_config, default_root
             from assistant_runtime.core.models.settings import ModelSettings
@@ -381,10 +414,6 @@ def main():
             from .chat import chat as enter_chat
 
             asyncio.run(enter_chat(config, args.config, getattr(args, "session", None)))
-        elif args.command == "plugins":
-            from .plugin_inventory import inventory
-
-            print(json.dumps(inventory(config), ensure_ascii=False, indent=2))
         elif args.command == "run":
             from assistant_runtime.app.host import AssistantService
 

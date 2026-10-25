@@ -15,7 +15,8 @@ from assistant_runtime.api.contracts import (
     CameraMotion,
     VideoRecord,
 )
-from assistant_runtime.kernel.runtime import Manifest
+from assistant_runtime.api import plugin_manifest
+from dataclasses import replace
 
 
 class DeviceDirectory:
@@ -195,7 +196,7 @@ class DevicesPlugin:
         owners = tuple(
             dict.fromkeys(d["adapter"] for d in directory.config.values() if d.get("enabled", True))
         )
-        self.manifest = Manifest("devices", owners, critical=True)
+        self.manifest = replace(plugin_manifest(__file__), requires=owners)
 
     def maintenance_pending(self):
         return [

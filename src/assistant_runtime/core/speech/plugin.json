@@ -1,0 +1,18 @@
+{
+  "supported_platforms": [
+    "linux",
+    "windows"
+  ],
+  "schema_version": 1,
+  "id": "assistant",
+  "version": "core",
+  "api_version": 1,
+  "requires_core": "core",
+  "requires": {
+    "conversation": "core",
+    "devices": "core",
+    "voice_disabled": ">=1.0.0,<2.0.0"
+  },
+  "optional": {},
+  "critical": true
+}

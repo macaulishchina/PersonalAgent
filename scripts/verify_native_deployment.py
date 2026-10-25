@@ -138,6 +138,15 @@ async def verify(preset, root, extensions=(), windows_device_fixtures=False):
                                     assert (
                                         backends["pipewire"] == "wasapi" and backends["v4l2"] == "directshow"
                                     ), backends
+                                from assistant_runtime.app.versions import CORE_VERSION
+
+                                receipt = json.loads(
+                                    (root / "state/release-state.json").read_text(encoding="utf-8")
+                                )
+                                assert receipt["last_successful"]["core_version"] == CORE_VERSION
+                                assert set(receipt["last_successful"]["plugins"]) == set(
+                                    config.enabled_plugins
+                                )
                                 break
                         except (OSError, KeyError):
                             pass

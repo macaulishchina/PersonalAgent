@@ -5,6 +5,7 @@ from assistant_runtime.api.lifecycle import admits_work
 from .declaration import DECLARATION
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,7 +15,6 @@ import uuid
 import weakref
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from assistant_runtime.kernel.runtime import Manifest
 from assistant_runtime.api.contracts import TaskRequest, DeviceQuery, NotificationRequest
 from assistant_runtime.core.tasks.settings import TaskSettings
 from assistant_runtime.core.tasks.repository import TaskRepository, ACTIVE, TERMINAL, one_shot
@@ -63,10 +63,15 @@ class TasksPlugin:
 
     def __init__(self, host):
         self.host = host
-        self.manifest = Manifest(
-            "tasks",
-            ("execution", host.config.bindings["brain"], "notifications", "workfiles"),
-            optional=("conversation", "devices"),
+        required = ("execution", host.config.bindings["brain"], "notifications", "workfiles")
+        self.manifest = replace(
+            DECLARATION.manifest,
+            requires=required,
+            dependency_versions=tuple(
+                (name, limits)
+                for name, limits in DECLARATION.manifest.dependency_versions
+                if name in required + DECLARATION.manifest.optional
+            ),
         )
         self.settings = TaskSettings.parse(host.config.tasks)
         self.model_policy = ModelPolicy.parse(self.settings.model_policy)

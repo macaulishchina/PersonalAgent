@@ -1331,9 +1331,9 @@ wheels = [
 
 [[package]]
 name = "personal-agent"
-version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "packaging" },
     { name = "portalocker" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
@@ -1505,6 +1505,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "extra == 'keyword'", specifier = "==1.31.0" },
     { name = "onnxruntime", marker = "extra == 'voice'", specifier = "==1.31.0" },
+    { name = "packaging", specifier = ">=24,<27" },
     { name = "personal-agent", extras = ["core"], marker = "extra == 'slim'" },
     { name = "personal-agent", extras = ["core", "web"], marker = "extra == 'standard'" },
     { name = "pillow", marker = "extra == 'camera'", specifier = ">=12,<13" },

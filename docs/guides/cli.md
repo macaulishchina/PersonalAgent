@@ -51,3 +51,7 @@ pa restart
 `pa stop` 停止整个实例后台，`/cancel` 只取消聊天中的一轮工作。模型未配置时提供配置指引，不发送模型请求。
 
 服务安装、日志和故障处理见[日常维护](operations.md)。入口选择优先级和实现契约见[CLI 模块](../../src/assistant_runtime/core/cli/README.md)。
+
+## 版本与升级检查
+
+`pa --version` 显示内核版本；`pa version` 输出包含协议及数据格式的版本信息，两者都不要求已创建实例。`pa plugins` 展示所选实例的全部插件版本、启用状态和兼容原因。`pa upgrade-check <目标wheel>` 离线检查候选发布包，可追加 `--plugin-wheel <独立插件wheel>`。兼容检查通过不执行安装；完整升级流程见[日常维护](operations.md#备份和升级)。

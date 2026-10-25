@@ -6,7 +6,7 @@
 
 | 项目 | slim | standard |
 | --- | --- | --- |
-| 平台 | Linux、Windows／Server | Linux |
+| 平台 | Linux、Windows／Server | Linux、Windows／Server（按插件认证） |
 | CLI、对话、模型、执行、用量、文件、MCP | 默认启用 | 默认启用 |
 | 独立配置网页 | 默认启用 | 默认启用 |
 | 个人助手、聊天网页、任务、通知 | 默认关闭 | 默认启用 |
@@ -70,7 +70,7 @@ uv build --wheel
 ```sh
 python3.12 -m venv /absolute/app-env
 /absolute/app-env/bin/python -m pip install --require-hashes -r /absolute/release/requirements-standard.txt
-/absolute/app-env/bin/python -m pip install --no-deps /absolute/release/personal_agent-0.2.0-py3-none-any.whl
+/absolute/app-env/bin/python -m pip install --no-deps /absolute/release/personal_agent-0.3.0-py3-none-any.whl
 /absolute/app-env/bin/pa install-pi
 /absolute/app-env/bin/pa init /absolute/instance --preset standard
 ```

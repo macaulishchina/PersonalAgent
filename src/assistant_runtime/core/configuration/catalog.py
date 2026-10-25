@@ -7,6 +7,27 @@ from copy import deepcopy
 from importlib.metadata import entry_points
 from assistant_runtime.core.plugin_catalog import OWNERS, platforms, backends
 from assistant_runtime.app.plugin_metadata import installed_platforms, installed_backends
+from assistant_runtime.app.versions import compatibility, framework
+
+
+def release_status(read):
+    try:
+        data = read()
+        error = compatibility(data)
+        return {
+            "version": data["version"],
+            "requires_core": data["requires_core"],
+            "version_compatible": not error,
+            "version_error": error,
+            "requires": list(data["requires"]),
+            "dependency_versions": {**data["requires"], **data["optional"]},
+        }
+    except (ValueError, OSError, TypeError, KeyError):
+        return {
+            "version": None,
+            "version_compatible": False,
+            "version_error": "缺少或无效的版本声明，请更新插件",
+        }
 
 
 def platform_status(read):
@@ -50,6 +71,8 @@ def read_description(path):
 
 
 def installed_descriptions(names=None):
+    from assistant_runtime.app.plugin_metadata import installed_release
+
     result = []
     seen = set()
     for entry in entry_points(group="personal_agent.plugins"):
@@ -95,12 +118,15 @@ def installed_descriptions(names=None):
                 "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: installed_platforms(entry)),
                 **backend_status(lambda: installed_backends(entry)),
+                **release_status(lambda: installed_release(entry)),
             }
         )
     return result
 
 
 def catalog(*, external_names=None):
+    from assistant_runtime.core.plugin_catalog import release
+
     root = Path(__file__).resolve().parents[2]
     result = []
     for name, module in OWNERS.items():
@@ -116,6 +142,7 @@ def catalog(*, external_names=None):
                 "requires": description.get("requires", []) if description else [],
                 **platform_status(lambda: platforms(name)),
                 **backend_status(lambda: backends(name)),
+                **release_status(lambda: release(name)),
             }
         )
     installed = installed_descriptions(external_names)
@@ -145,6 +172,7 @@ def catalog(*, external_names=None):
     from assistant_runtime.api.system import system
 
     inventory["platform"] = system.name
+    inventory["core_release"] = framework()
     from .interface import describe
 
     inventory["pages"] = describe(inventory)

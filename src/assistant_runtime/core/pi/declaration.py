@@ -1,4 +1,4 @@
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 
 
 def build(host):
@@ -21,6 +21,6 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("pi", ("ai_usage",), critical=True),
+    plugin_manifest(__file__),
     internal_factory=build,
 )

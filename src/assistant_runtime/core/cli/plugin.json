@@ -1,0 +1,16 @@
+{
+  "supported_platforms": [
+    "linux",
+    "windows"
+  ],
+  "schema_version": 1,
+  "id": "cli",
+  "version": "core",
+  "api_version": 1,
+  "requires_core": "core",
+  "requires": {
+    "conversation": "core"
+  },
+  "optional": {},
+  "critical": true
+}

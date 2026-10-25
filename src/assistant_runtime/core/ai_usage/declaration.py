@@ -1,5 +1,5 @@
 from assistant_runtime.api.configuration import configuration_spec
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import UsageSettings
 
 
@@ -12,7 +12,7 @@ def build(host):
 
 DECLARATION = PluginDefinition(
     configuration=configuration_spec(__file__),
-    manifest=Manifest("ai_usage", (), critical=False),
+    manifest=plugin_manifest(__file__),
     internal_factory=build,
     config_key="ai_usage",
     validate=UsageSettings.parse,

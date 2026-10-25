@@ -7,7 +7,7 @@ import re
 import shutil
 import time
 import uuid
-from assistant_runtime.kernel.runtime import Manifest
+from assistant_runtime.api import plugin_manifest
 
 
 class WorkFiles:
@@ -123,7 +123,7 @@ class WorkFiles:
 class WorkFilesMaintenance:
     """Application-wide retention, independent from the optional tasks plugin."""
 
-    manifest = Manifest("workfiles")
+    manifest = plugin_manifest(__file__)
 
     def __init__(self, files):
         self.files = files

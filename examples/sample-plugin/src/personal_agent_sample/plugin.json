@@ -1,0 +1,16 @@
+{
+  "supported_platforms": [
+    "linux"
+  ],
+  "schema_version": 1,
+  "id": "sample",
+  "version": "1.0.0",
+  "api_version": 1,
+  "requires_core": ">=0.3.0,<0.4.0",
+  "requires": {
+    "execution": ">=0.3.0,<0.4.0",
+    "workfiles": ">=0.3.0,<0.4.0"
+  },
+  "optional": {},
+  "critical": false
+}

@@ -1,7 +1,7 @@
 from pathlib import Path
 from assistant_runtime.api.plugins import plugin_platforms
 from assistant_runtime.api.backends import plugin_backends
-from assistant_runtime.api import PluginDefinition, Manifest
+from assistant_runtime.api import PluginDefinition, plugin_manifest
 
 
 def create(api):
@@ -17,7 +17,7 @@ def create(api):
 
 
 DECLARATION = PluginDefinition(
-    Manifest("v4l2", (), critical=False),
+    plugin_manifest(__file__),
     create=create,
     supported_platforms=plugin_platforms(Path(__file__).parent),
     backends=plugin_backends(Path(__file__).parent),

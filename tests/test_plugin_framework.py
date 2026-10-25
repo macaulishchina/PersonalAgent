@@ -1,5 +1,8 @@
 """Public plugin boundaries and lifecycle behavior, independent of model services."""
 
+import json
+from release_fixture import release_data
+
 from platform_support import private_mode
 
 import asyncio
@@ -56,11 +59,14 @@ class PluginFrameworkTest(unittest.IsolatedAsyncioTestCase):
         await runtime.start()
         self.assertEqual(plugin.unavailable, ("missing",))
         await runtime.close()
-        runtime = Runtime(None)
-        runtime.add(SimpleNamespace(manifest=Manifest("one", version="2.0.0")))
-        runtime.add(SimpleNamespace(manifest=Manifest("two", ("one",), dependency_versions=(("one", "1"),))))
-        with self.assertRaisesRegex(ValueError, "Incompatible dependency"):
-            runtime.order()
+        from assistant_runtime.app.versions import check_dependencies
+
+        records = {
+            "one": release_data("one", version="2.0.0"),
+            "two": release_data("two", requires={"one": ">=1.0.0,<2.0.0"}),
+        }
+        with self.assertRaisesRegex(ValueError, "two requires one"):
+            check_dependencies(records, ["one", "two"])
 
     async def test_installed_extension_context_tools_state_and_cleanup(self):
         class Extension:
@@ -137,13 +143,13 @@ class PluginFrameworkTest(unittest.IsolatedAsyncioTestCase):
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        metadata = Path(temporary.name) / "platform.json"
-        metadata.write_text('{"supported_platforms": ["linux", "windows"]}')
+        metadata = Path(temporary.name) / "plugin.json"
+        metadata.write_text(json.dumps(release_data()))
         entry = SimpleNamespace(
             name="sample",
             value="sample:definition",
             load=load,
-            dist=SimpleNamespace(files=["sample/platform.json"], locate_file=lambda name: metadata),
+            dist=SimpleNamespace(files=["sample/plugin.json"], locate_file=lambda name: metadata),
         )
         with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
             self.assertEqual(discover([]), {})
@@ -209,9 +215,10 @@ asyncio.run(main())
             root = Path(folder)
             shutil.copytree(source, root / "source", ignore=shutil.ignore_patterns("build", "*.egg-info"))
             # Certify this isolated synthetic fixture, not the shipped Linux-only example.
-            (root / "source/src/personal_agent_sample/platform.json").write_text(
-                '{"supported_platforms": ["linux", "windows"]}'
-            )
+            metadata = root / "source/src/personal_agent_sample/plugin.json"
+            data = json.loads(metadata.read_text())
+            data["supported_platforms"] = ["linux", "windows"]
+            metadata.write_text(json.dumps(data))
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",

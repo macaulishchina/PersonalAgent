@@ -5,7 +5,7 @@ from assistant_runtime.api.plugins import plugin_platforms
 
 def metadata_path(entry):
     module = entry.value.split(":")[0].replace(".", "/")
-    resources = {module + "/platform.json", module + ".platform.json"}
+    resources = {module + "/plugin.json", module + ".plugin.json"}
     distribution = getattr(entry, "dist", None)
     matches = [file for file in distribution.files or () if str(file) in resources] if distribution else []
     if len(matches) != 1:
@@ -21,3 +21,15 @@ def installed_backends(entry):
     from assistant_runtime.api.backends import plugin_backends
 
     return plugin_backends(metadata_path(entry))
+
+
+def installed_release(entry):
+    from assistant_runtime.app.versions import read_descriptor
+
+    data = read_descriptor(metadata_path(entry))
+    if data["id"] != entry.name:
+        raise ValueError("Plugin release identity must match its entry point")
+    package_version = getattr(entry.dist, "version", None)
+    if package_version is not None and data["version"] != package_version:
+        raise ValueError("Plugin release version must match its distribution")
+    return data

@@ -11,7 +11,7 @@
 | 3 | [CLI 使用](guides/cli.md) | `pa` 聊天、会话、队列、补充和取消 |
 | 4 | [日常维护](guides/operations.md) | 后台与系统服务、日志、备份、升级、排障 |
 
-Windows 和 Windows Server 使用 slim；Linux 可选 slim 或 standard。两种组合都有 CLI 和独立配置页，聊天网页仅 standard 默认提供。语音当前停用。
+Windows 和 Windows Server 默认使用 slim；Linux 默认 standard。两类平台均可按插件认证选择 slim 或 standard。两种组合都有 CLI 和独立配置页，聊天网页仅 standard 默认提供。语音当前停用。
 
 ## 按需配置
 
@@ -23,9 +23,9 @@ Windows 和 Windows Server 使用 slim；Linux 可选 slim 或 standard。两种
 ## 开发与维护
 
 1. [架构](development/architecture.md)：进程、模块边界、执行和数据归属。
-2. [插件开发](development/plugins.md)：公共接口、平台声明、配置描述与生命周期。
+2. [插件开发](development/plugins.md)：公共接口、版本／平台声明、配置描述与生命周期。
 3. [开发与验证](development/testing.md)：环境、针对性测试、全量检查和实机验收。
-4. [发布与切换](development/release.md)：发布包、配置候选、供应商验收和回退。
+4. [发布与切换](development/release.md)：版本递增规则、候选包检查、发布切换和数据回退。
 5. [文档维护](development/documentation.md)：文档放置规则与修改检查。
 
 工程约束以根目录 [AGENTS.md](../AGENTS.md) 为准。模块 README 保留在所属代码旁，由[模块索引](reference/modules.md)统一导航。

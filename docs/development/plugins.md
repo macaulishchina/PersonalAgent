@@ -14,9 +14,9 @@
 或已授权工作资源中。文件锁持有期等于打开文件的生命周期；创建凭据应使用
 `atomic_write`，不能认为 Windows 的 `chmod(0600)` 已实现隔离。
 
-扩展插件通过静态 `platform.json` 的 `supported_platforms` 声明平台认证，运行时声明
-从同一文件读取。单文件插件使用 `<模块名>.platform.json`。每个扩展分别认证；
-现有全部扩展声明支持 Linux、Windows；本机音频 `pipewire`、本机摄像头 `v4l2` 在插件内部选择平台实现。Linux 使用 PipeWire、V4L2，Windows 使用 WASAPI、DirectShow，不另注册同能力的 Windows 插件。
+扩展插件通过静态 `plugin.json` 的 `supported_platforms` 声明平台认证，运行时声明
+从同一文件读取。单文件插件使用 `<模块名>.plugin.json`。每个扩展分别认证；
+现有全部内置扩展声明支持 Linux、Windows，独立示例包仍只认证 Linux；本机音频 `pipewire`、本机摄像头 `v4l2` 在插件内部选择平台实现。Linux 使用 PipeWire、V4L2，Windows 使用 WASAPI、DirectShow，不另注册同能力的 Windows 插件。
 当前矩阵见[模块索引](../reference/modules.md)与 `pa plugins`，不以插件属于扩展为由统一禁止 Windows。`windows` 同时表示普通 Windows 和 Windows Server。认证是随发布维护的支持声明，不是签名或在线认证服务。
 独立包必须在 entry point 模块对应路径打包上述元数据；缺失、无效或与运行时声明不一致
 均不能启用，不再对扩展自动假定跨平台支持。管理页无需导入扩展代码即可展示认证。
@@ -34,7 +34,7 @@ Windows 适配完成度和认证启用策略分开记录，
 
 没有平台差异的插件保持一份实现，只声明 `supported_platforms` 即可，无需添加平台分支或 `BackendSpec`。仅有系统调用差异时可在插件内部按 `context.platform` 适配；存在需要独立选择的实现时才使用下面的默认实现协议。
 
-需要多实现的插件在同一静态 `platform.json` 中声明 `backends`（平台到实现名列表）和 `default_backends`，运行时 `PluginDefinition.backends` 使用公开的 `BackendSpec`；`plugin_backends()` 可直接从该文件读取。目录显示无需导入运行库。静态与运行时声明不一致则拒绝加载。
+需要多实现的插件在同一静态 `plugin.json` 中声明 `backends`（平台到实现名列表）和 `default_backends`，运行时 `PluginDefinition.backends` 使用公开的 `BackendSpec`；`plugin_backends()` 可直接从该文件读取。目录显示无需导入运行库。静态与运行时声明不一致则拒绝加载。
 
 配置读取、配置服务、CLI 清单和装配器复用同一静态认证与默认实现检查，内置和外部插件规则一致；检查先于插件代码加载及实例创建。插件在工厂中读取 `context.backend`，仅导入被选中的实现。配置优先，其次插件声明的默认值；只有一个实现时可自动选中。多个实现且没有默认值、指定实现不可用或平台不匹配均明确报错，不静默回退。
 
@@ -50,15 +50,65 @@ windows = "directshow"
 
 这些是平台内的默认实现，不是设备选择；设备身份、凭据和端口仍由实例显式配置。未启用插件及其他平台的默认值允许保留，禁用插件时也可一并删除其实现偏好。网页“功能与插件 → 平台默认实现”只为已启用且当前平台存在多个实现的插件展示选择器；保存了无效选择时仍显示修复入口。单一实现自动选择，不增加无意义的表项。CLI `pa plugins` 显示当前实现。等价默认值或其他平台设置的变更不替换运行模块；本机适配器切换通过已有租约与维护边界，固定主语音实现和外部插件实现切换须显式重启。
 
+## 版本与兼容声明
+
+每个插件只有一份 `plugin.json`，单文件插件使用 `<模块名>.plugin.json`；它同时拥有版本、平台、依赖与可选实现信息。配置界面描述仍放在 `configuration.json`。外部包的插件版本必须与其 Python distribution 版本一致，同包多个插件共用该包发布版本。不要保留另一份旧 `platform.json`。
+
+```json
+{
+  "schema_version": 1,
+  "id": "sample",
+  "version": "1.0.0",
+  "api_version": 1,
+  "requires_core": ">=0.3.0,<0.4.0",
+  "supported_platforms": ["linux"],
+  "requires": {
+    "execution": ">=0.3.0,<0.4.0",
+    "workfiles": ">=0.3.0,<0.4.0"
+  },
+  "optional": {},
+  "critical": false
+}
+```
+
+上述声明对应仓库的独立示例包。`id` 必须等于 entry point 名称；`version` 使用三段稳定数字版本；`api_version` 必须与宿主公共协议一致。`requires` 和 `optional` 即使为空也须显式声明。平台、版本范围和依赖均由插件作者验证维护，不能由安装器猜测。
+
+插件声明使用 `from assistant_runtime.api import plugin_manifest`，将 `plugin_manifest(__file__)` 传给 `PluginDefinition`。声明缺失或错误、包版本不一致、内核／协议／依赖版本不兼容都拒绝加载；静态清单先于运行代码加载，运行时再核对 manifest。范围使用稳定版本比较 `>=`、`>`、`<=`、`<`、`==`、`!=`，逗号表示同时满足；内核范围必须有上界。可选依赖未启用时不要求存在，已启用时同样检查版本。
+
+核心插件的 `version`、`requires_core` 为 `"core"`，核心间依赖可使用 `"core"`，均解析为当前内核版本；外部插件不能使用这些内部标记，也不能声明 critical。扩展无需实现版本比较、在线认证或升级回调。兼容检查复用现有配置保存、装配和维护入口；内核只负责依赖图及生命周期，不引入包管理库。
+
+### 新建或迁移插件
+
+1. 新独立插件优先采用目录式包：entry point `sample = "personal_agent_sample:definition"` 对应 `personal_agent_sample/plugin.json`。从旧接口迁移时，把 `platform.json` 的字段移入此文件并补齐版本声明，删除旧文件。
+2. `definition()` 使用 `plugin_manifest(__file__)` 生成 manifest，平台通过 `assistant_runtime.api.plugins.plugin_platforms` 读取同一文件；存在多实现时再使用 `assistant_runtime.api.backends.plugin_backends`。保留自己的配置、资源、工具和能力声明，不在工厂或运行实例中重新写 `Manifest(... version=...)`。
+3. 确保 wheel 真正包含声明文件；只在源码中创建 JSON 不够。示例包使用如下打包配置，版本与 `plugin.json` 一致：
+
+   ```toml
+   [project]
+   name = "personal-agent-sample"
+   version = "1.0.0"
+
+   [project.entry-points."personal_agent.plugins"]
+   sample = "personal_agent_sample:definition"
+
+   [tool.setuptools.package-data]
+   personal_agent_sample = ["plugin.json", "configuration.json", "skills/*/SKILL.md"]
+   ```
+
+4. 在独立验收环境安装 wheel，检查 `pa plugins` 的版本、平台及依赖，再按[版本专项检查](testing.md#版本与兼容性检查)验证拒绝与正常加载场景。发布时按[版本规则](release.md#版本规则)递增版本；修改兼容声明也属于发布变更。
+
+单文件插件的静态资源是 `<入口模块>.plugin.json`。`plugin_manifest(__file__)` 默认读取同目录 `plugin.json`，仅对 `<名称>_declaration.py` 自动选择 `<名称>.plugin.json`（例如内置 gesture）；不要假定任意单文件入口都能这样定位。其他单文件布局可使用公共 `assistant_runtime.api.releases.read_descriptor` 与 `manifest` 显式读取对应路径。独立包元数据必须位于 entry point 模块对应位置，不能靠导入插件后查找文件。
+
+业务配置和实例插件列表不自动改写。缺少新声明的旧插件无法启用，但可在管理页查看并取消；宿主不提供旧声明的隐式兼容层。升级、失败恢复和数据格式边界见[发布与切换](release.md)。
+
 ## 声明与生命周期
 
-每个仓库内插件的 `declaration.py` 拥有配置校验、依赖、工厂、能力、资源、
-技能和工具服务声明。框架目录只登记内置插件的身份与模块位置，不重复登记工具名。
+每个仓库内插件的 `plugin.json` 拥有静态版本、依赖及平台信息；`declaration.py` 读取它生成 manifest，并声明配置校验、工厂、能力、资源、技能和工具服务。`owners.json` 只登记内置插件的身份与模块位置，不重复登记版本、依赖或工具名。
 独立包通过 `personal_agent.plugins` Python entry point 声明，名称与 manifest 一致。
 只导入显式启用的独立包，不自动安装或更新。外部包不能占用内置身份、声明关键插件，
 或使用核心内部工厂。
 
-`Manifest` 包含插件版本、框架接口版本、必需/可选依赖及支持的依赖主版本。
+`Manifest` 从静态描述生成，包含插件版本、框架接口版本、必需／可选依赖及版本范围。
 缺失、循环和版本冲突在启动前报错。必需依赖启动失败时，依赖方为 blocked；
 可选依赖不可用时，通过健康信息说明。关闭按依赖反序进行，取消已接收调用和
 后台工作，再清理资源、能力处理器及订阅；迟到结果不能覆盖新的执行状态。
@@ -118,8 +168,7 @@ Pi 主会话和后台任务自动获得动态扩展工具服务，不需要改�
 技能随所属插件打包，由其声明选择；禁用插件不加载技能。技能重名或实例覆盖会报错。
 `.agent`、`.agents` 与根目录开发指南不作为助手技能加载。
 
-`pa plugins` 列出启用插件、类型、版本和依赖；启动时私下记录
-`state/plugin-installation.json`。插件启停、安装和升级需要显式重启；普通设置按所属模块声明的更新方式生效。
+`pa plugins` 静态列出全部可发现插件的类型、版本、启用状态、依赖范围、平台实现和不兼容原因；有启用项被阻断时退出码为 2。启动时的 `state/plugin-installation.json` 是装配清单，成功运行及降级保护另由 `state/release-state.json` 记录，不把装配完成等同于启动成功。插件启停、安装和升级需要显式重启；普通设置按所属模块声明的更新方式生效。
 这是一套可信代码开发契约，不是 Python 或操作系统沙箱。
 
 ## 示例和验证

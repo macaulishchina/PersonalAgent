@@ -1,6 +1,6 @@
 """Operator inventory of enabled, explicitly installed plugins. No secret values."""
 
-from importlib.metadata import entry_points, version, PackageNotFoundError
+from importlib.metadata import entry_points
 import json
 import os
 import tempfile
@@ -41,10 +41,9 @@ def inventory(config):
                 else None,
             }
         )
-    try:
-        application_version = version("personal-agent")
-    except PackageNotFoundError:
-        application_version = "source"
+    from assistant_runtime.app.versions import CORE_VERSION
+
+    application_version = CORE_VERSION
     return {"application_version": application_version, "platform": system.name, "plugins": records}
 
 

@@ -1,15 +1,21 @@
 """Owned dormant speech control and maintenance; no application assembly policy."""
 
 from assistant_runtime.api.contracts import Control, Trigger
+from assistant_runtime.api import plugin_manifest
+from dataclasses import replace
 
 
 class AssistantPlugin:
-    from assistant_runtime.kernel.runtime import Manifest
-
-    manifest = Manifest("assistant", ("pipewire", "voice_disabled", "pi"), critical=True)
+    manifest = plugin_manifest(__file__)
 
     def __init__(self, service, dependencies):
-        self.manifest = self.Manifest("assistant", dependencies, critical=True)
+        self.manifest = replace(
+            self.manifest,
+            requires=dependencies,
+            dependency_versions=tuple(
+                (n, v) for n, v in self.manifest.dependency_versions if n in dependencies
+            ),
+        )
         self.service = service
 
     async def prepare_configuration(self, config):

@@ -79,6 +79,15 @@ def compose(service):
             )
         if plugin.manifest.name != name:
             raise ValueError("Plugin manifest name must match its registry name")
+        if (plugin.manifest.version, plugin.manifest.api_version) != (
+            spec.manifest.version,
+            spec.manifest.api_version,
+        ):
+            from .versions import CompatibilityError
+
+            raise CompatibilityError(
+                f"Plugin {name}: constructed version differs from its release declaration"
+            )
         runtime.add(plugin)
     service.memory = runtime.plugins.get(config.bindings.get("memory"))
     if getattr(service, "backend", None):
