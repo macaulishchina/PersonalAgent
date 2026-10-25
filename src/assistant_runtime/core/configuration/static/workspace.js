@@ -363,7 +363,7 @@ function renderModels() {
     }
     $("documents").append(panel);
     const secrets = advancedGroup("model-secrets");
-    secrets.firstChild.textContent = "凭据与环境变量";
+    secrets.firstChild.textContent = "维护 · 实例凭据清单";
     drawResources(secrets, (r) => r.id === "credentials");
     $("documents").append(secrets);
     action(drawAccounts);
@@ -388,7 +388,26 @@ function renderModels() {
       ["model_api", "enabled"],
     ]) {
       const field = fieldAt(path);
-      if (field) panel.append(drawField(prettyField(field)));
+      if (field) {
+        const display = prettyField(field);
+        if (path[0] === "main_reasoning_effort") {
+          const model = valueAt(["model_api", "entries"], {})[
+            valueAt(["main_model"], "")
+          ];
+          const levels =
+            model?.reasoning_efforts ??
+            model?.capabilities?.reasoning_efforts ??
+            [];
+          display.schema = {
+            ...display.schema,
+            enum: [...new Set(["auto", ...levels, valueAt(path, "auto")])],
+          };
+        }
+        const control = drawField(display);
+        if (path[0] === "main_model")
+          control.addEventListener("change", () => render());
+        panel.append(control);
+      }
     }
     $("documents").append(panel);
     if (valueAt(["plugins"], []).includes("memory")) {
@@ -404,8 +423,37 @@ function renderModels() {
   } else {
     const panel = surface(
       "模型运行策略",
-      "默认设置适合大多数情况；仅在有明确需求时调整。",
+      "按需调整执行容量；超时、输出限制和部署参数默认收起。",
     );
+    const limits = advancedGroup("model-runtime-limits");
+    limits.firstChild.textContent = "超时、上下文与输出限制";
+    const gateway = advancedGroup("model-gateway-deployment");
+    gateway.classList.add("gateway-deployment");
+    gateway.firstChild.textContent = "部署维护 · 本机模型网关";
+    gateway.append(
+      node(
+        "p",
+        "仅在部署或维护 LiteLLM 网关时调整。普通模型配置无需修改；只使用原生账号路线时无需配置此处。",
+        "inline-note",
+      ),
+    );
+    gateway.append(
+      node(
+        "p",
+        "这些设置用于 PA 连接本机网关。供应商地址和 API Key 在“连接”中分别配置，新增连接不会继承此处的值。",
+        "inline-note",
+      ),
+    );
+    const gatewayFields = {
+      gateway_url: [
+        "本机网关地址（PA → LiteLLM）",
+        "PA 访问本机网关的地址，通常保持默认。这里不是模型供应商的接口地址。",
+      ],
+      gateway_key_env: [
+        "网关认证密钥的环境变量名",
+        "填写变量名，不是密钥值。用于 PA 与本机网关之间的认证；不提供时使用实例私有网关密钥文件，不会作为供应商 API Key。",
+      ],
+    };
     for (const field of snapshot.fields.filter(
       (f) =>
         fieldGroup(f) === "models" &&
@@ -413,14 +461,32 @@ function renderModels() {
           f.path[1],
         ) &&
         f.path.length > 1,
-    ))
-      panel.append(drawField(prettyField(field)));
+    )) {
+      const displayed = prettyField(field);
+      const gatewayCopy = gatewayFields[field.path[1]];
+      if (gatewayCopy) {
+        displayed.schema.title = gatewayCopy[0];
+        displayed.schema.description = gatewayCopy[1];
+        gateway.append(drawField(displayed));
+      } else if (["concurrency", "queue_size"].includes(field.path[1]))
+        panel.append(drawField(displayed));
+      else limits.append(drawField(displayed));
+    }
+    panel.append(limits);
+    $("documents").append(panel);
     drawActions(
       inventory.plugins.find((p) => p.id === "models"),
-      panel,
+      gateway,
     );
-    $("documents").append(panel);
-    drawResources(undefined, (r) => r.id === "gateway_key");
+    drawResources(gateway, (r) => r.id === "gateway_key");
+    gateway.append(
+      node(
+        "p",
+        "保存设置不会自动部署或更新外部网关；请按生效状态中的部署步骤完成维护。",
+        "inline-note",
+      ),
+    );
+    $("documents").append(gateway);
   }
   const body = node("div", undefined, "model-panel");
   body.id = "model-panel";
@@ -552,7 +618,13 @@ function renderModelCollection(panel, kind) {
       card.append(chips);
     }
     const actions = node("div", undefined, "entity-actions");
+    let probeStatus;
     actions.append(button("编辑", () => openEntity(kind, name)));
+    if (kind === "providers") {
+      const probe = providerTest(name);
+      actions.append(probe.button);
+      probeStatus = probe.status;
+    }
     if (kind === "providers" && value.account)
       actions.append(
         button(
@@ -580,6 +652,7 @@ function renderModelCollection(panel, kind) {
       ),
     );
     card.append(actions);
+    if (probeStatus) card.append(probeStatus);
     grid.append(card);
   }
   if (Object.keys(entries).length) {
@@ -960,7 +1033,10 @@ function openEntity(kind, name, checkpoint = draftCheckpoint()) {
   showDialog("entry-dialog");
   $("entry-body").querySelector("input,select")?.focus();
 }
+let editorInputController = new AbortController();
 function renderEntityEditor() {
+  editorInputController.abort();
+  editorInputController = new AbortController();
   if (!activeEditor) return;
   const { kind, name, field } = activeEditor;
   $("entry-title").textContent =
@@ -972,33 +1048,32 @@ function renderEntityEditor() {
   const copy = structuredClone(field),
     props = copy.schema.properties;
   if (kind === "entries") {
-    props.provider.title = "使用连接";
-    props.model.title = "供应商模型 ID";
-    for (const [name, definition] of Object.entries(props))
-      definition["x-advanced"] = ![
-        "provider",
-        "model",
-        "default_reasoning_effort",
-      ].includes(name);
-    if (props.execution_validated)
-      props.execution_validated.description =
-        "只有实际验证过工具执行能力后才开启，添加模型不代表已经通过验收。";
+    renderModelEditor(field);
+    return;
   }
-  if (kind === "providers")
-    for (const name of ["key_env", "auth_scheme", "session_header"])
-      if (props[name]) props[name]["x-advanced"] = true;
-  $("entry-body").replaceChildren(drawField(copy));
   if (kind === "providers") {
-    const value = currentValue(field),
-      name = value.key_env;
-    if (name) $("entry-body").append(credentialInput(name));
-  } else if (kind === "accounts") {
-    const value = currentValue(field);
-    if (value.key_env) $("entry-body").append(credentialInput(value.key_env));
+    renderProviderEditor(field, name);
+    return;
+  }
+  if (kind === "accounts") delete props.key_env;
+  $("entry-body").replaceChildren(drawField(copy));
+  if (kind === "accounts" && currentValue(field).auth === "api_key") {
+    let previous = currentValue(field).key_env;
+    const auth = connectionCredentials($("entry-body"), previous, {
+      onChange() {
+        const value = auth.read();
+        changed([...field.path, "key_env"], "set", value.reference);
+        stageConnectionSecret(previous, value.reference, value.secret);
+        previous = value.reference;
+        updateSaveBar();
+      },
+    });
   }
 }
 function finishEntity(discard = false) {
   if (!activeEditor) return;
+  if (!discard && activeEditor.validate && !activeEditor.validate()) return;
+  if (!discard) activeEditor.commit?.();
   if (
     !discard &&
     [...invalid.keys()].some(
@@ -1015,46 +1090,8 @@ function finishEntity(discard = false) {
   $("entry-dialog").close();
   render();
 }
-function credentialInput(name) {
-  const container = node("div", undefined, "inline-credential"),
-    input = node("input"),
-    label = node("label", "API Key");
-  const info = resourceInventory
-      .find((r) => r.id === "credentials")
-      ?.keys?.find((k) => k.name === name),
-    id = "credentials:" + name;
-  input.type = "password";
-  input.id = "connection-key";
-  input.autocomplete = "new-password";
-  label.htmlFor = input.id;
-  input.placeholder = info?.configured ? "已保存，留空保持" : "输入 API Key";
-  input.disabled = info?.source === "environment";
-  input.value = resourceEdits.get(id)?.value || "";
-  input.addEventListener("input", () => {
-    if (input.value)
-      resourceEdits.set(id, {
-        id: "credentials",
-        key: name,
-        op: "replace_secret",
-        value: input.value,
-      });
-    else resourceEdits.delete(id);
-    updateSaveBar();
-  });
-  container.append(
-    label,
-    input,
-    node(
-      "p",
-      info?.source === "environment"
-        ? "此凭据由服务器环境变量提供。"
-        : "单独保存为私有凭据，不写入普通配置。",
-      "hint",
-    ),
-  );
-  return container;
-}
 function wizard(title, detail) {
+  delete $("setup-dialog").dataset.mode;
   $("setup-title").textContent = title;
   $("setup-description").textContent = detail;
   const form = $("setup-form");
@@ -1135,6 +1172,262 @@ function wizardFooter(form, label) {
   footer.append(submit);
   form.append(footer);
 }
+function providerKeyName(provider) {
+  return (
+    provider.key_env || snapshot.provider_presets?.[provider.preset]?.key_env
+  );
+}
+function providerDraft(name) {
+  const editing =
+    activeEditor?.kind === "providers" && activeEditor.name === name
+      ? activeEditor.readConnection?.()
+      : null;
+  const provider =
+    editing?.provider || valueAt(["model_api", "providers"], {})[name];
+  if (!provider) throw Error("请选择要测试的连接。");
+  const paths = [["model_api", "providers", name]];
+  if (provider.account) paths.push(["model_api", "accounts", provider.account]);
+  for (const id of invalid.keys()) {
+    const path = JSON.parse(id);
+    if (
+      paths.some((prefix) =>
+        prefix.every((part, index) => path[index] === part),
+      )
+    ) {
+      const input = document.getElementById(id);
+      const label =
+        input?.closest(".field-row")?.querySelector("label")?.textContent ||
+        path.at(-1);
+      throw Error(`连接「${name}」的「${label}」格式无效，请修正后重试。`);
+    }
+  }
+  const draft = { provider };
+  if (provider.account)
+    draft.account = valueAt(["model_api", "accounts"], {})[provider.account];
+  const env = providerKeyName(provider) || draft.account?.key_env;
+  const secret = resourceEdits.get("credentials:" + env);
+  if (secret) draft.key = secret.op === "replace_secret" ? secret.value : "";
+  if (editing?.secret) draft.key = editing.secret;
+  return draft;
+}
+function focusProbeField(name, field) {
+  if (activeEditor?.kind !== "providers" || activeEditor.name !== name) return;
+  const input =
+    field === "key"
+      ? $("connection-key")
+      : $("entry-body").querySelector(`[data-connection-field="${field}"]`) ||
+        document.getElementById(key(["model_api", "providers", name, field]));
+  if (!input) return;
+  for (let parent = input.parentElement; parent; parent = parent.parentElement)
+    if (parent.tagName === "DETAILS") parent.open = true;
+  input.focus();
+}
+async function queryProvider(name, action) {
+  const draft = providerDraft(name);
+  const fingerprint = JSON.stringify(draft);
+  const result = await api("/api/provider-query", {
+    name,
+    action,
+    version: snapshot.version,
+    draft,
+  });
+  if (JSON.stringify(providerDraft(name)) !== fingerprint)
+    throw Error("连接或 API Key 已修改，请使用当前输入重新测试或查询。");
+  if (!result.ok && result.field) focusProbeField(name, result.field);
+  return result;
+}
+function providerTest(name) {
+  const status = node("p", "", "provider-status");
+  status.hidden = true;
+  status.setAttribute("role", "status");
+  const label = valueAt(["model_api", "providers"], {})[name]?.account
+    ? "检查授权"
+    : "测试连接";
+  const control = button(
+    label,
+    async () => {
+      control.disabled = true;
+      control.textContent = "检查中…";
+      status.hidden = false;
+      status.textContent = "正在使用当前连接设置检查，不保存修改…";
+      status.dataset.state = "loading";
+      try {
+        const result = await queryProvider(name, "test");
+        if (!control.isConnected) return;
+        status.textContent = result.message;
+        status.dataset.state = result.ok ? "success" : "error";
+      } catch (error) {
+        if (control.isConnected) {
+          status.textContent = error.message;
+          status.dataset.state = "error";
+        }
+      } finally {
+        control.disabled = false;
+        control.textContent = label;
+      }
+    },
+    "secondary",
+  );
+  return { button: control, status };
+}
+function modelPicker(form, provider, model, name) {
+  const box = node("section", undefined, "model-picker");
+  box.setAttribute("aria-label", "供应商模型查询");
+  const toolbar = node("div", undefined, "model-query-toolbar");
+  const status = node(
+    "p",
+    "查询目录后选择模型，也可以直接填写模型 ID。",
+    "hint",
+  );
+  status.setAttribute("role", "status");
+  const panel = node("div", undefined, "model-results");
+  panel.id = "setup-model-results";
+  panel.hidden = true;
+  const search = node("input");
+  search.type = "search";
+  search.placeholder = "搜索模型名称或 ID";
+  search.setAttribute("aria-label", "搜索查询到的模型");
+  const count = node("span", "", "hint");
+  const list = node("div", undefined, "model-result-list");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", "可选择的供应商模型");
+  panel.append(search, count, list);
+  let rows = [],
+    generation = 0;
+  let selectedMetadata;
+  const fold = button(
+    "收起列表",
+    () => {
+      panel.hidden = !panel.hidden;
+      fold.textContent = panel.hidden ? "展开列表" : "收起列表";
+      fold.setAttribute("aria-expanded", String(!panel.hidden));
+    },
+    "subtle",
+  );
+  fold.setAttribute("aria-controls", panel.id);
+  fold.hidden = true;
+  function draw() {
+    list.replaceChildren();
+    const query = search.value.trim().toLowerCase();
+    const matches = rows.filter((row) =>
+      (row.id + " " + row.label).toLowerCase().includes(query),
+    );
+    count.textContent = `${matches.length} / ${rows.length} 个模型`;
+    if (!matches.length)
+      list.append(
+        node("p", "没有匹配的模型，可调整搜索或手工填写 ID。", "hint"),
+      );
+    for (const row of matches) {
+      const item = node("div", undefined, "model-result");
+      const text = node("div");
+      text.append(node("strong", row.label));
+      if (row.label !== row.id) text.append(node("code", row.id));
+      const selected = model.value === row.id;
+      const choose = button(
+        selected ? "已选中" : "选择",
+        () => {
+          model.value = row.id;
+          selectedMetadata = { id: row.id, capabilities: row.capabilities };
+          model.dispatchEvent(new Event("input", { bubbles: true }));
+          if (!name.value.trim()) {
+            let alias = row.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+            if (!/^[a-z]/.test(alias)) alias = "model-" + alias;
+            name.value = alias.slice(0, 64);
+          }
+          status.textContent =
+            "已选择 " + row.id + "，可确认或修改 PA 中的名称。";
+          panel.hidden = true;
+          fold.textContent = "展开列表";
+          fold.setAttribute("aria-expanded", "false");
+          name.focus();
+          draw();
+        },
+        selected ? "secondary selected" : "secondary",
+      );
+      choose.setAttribute(
+        "aria-label",
+        (selected ? "已选中 " : "选择 ") + row.id,
+      );
+      choose.setAttribute("aria-pressed", String(selected));
+      item.append(text, choose);
+      list.append(item);
+    }
+  }
+  const load = button("查询模型", async () => {
+    const mine = ++generation,
+      selected = provider.value;
+    const alive = () =>
+      mine === generation && box.isConnected && $("setup-dialog").open;
+    load.disabled = true;
+    load.textContent = "查询中…";
+    box.setAttribute("aria-busy", "true");
+    rows = [];
+    panel.hidden = fold.hidden = true;
+    status.textContent = "正在使用当前连接设置查询模型目录…";
+    status.dataset.state = "loading";
+    try {
+      const result = await queryProvider(selected, "models");
+      if (!alive()) return;
+      status.textContent =
+        result.message +
+        (result.truncated
+          ? " 当前仅显示部分目录，可手工填写其他模型 ID。"
+          : "");
+      status.dataset.state = result.ok ? "success" : "error";
+      if (result.ok) {
+        rows = result.models || [];
+        search.value = "";
+        panel.hidden = false;
+        fold.hidden = !rows.length;
+        fold.textContent = "收起列表";
+        fold.setAttribute("aria-expanded", "true");
+        draw();
+        if (rows.length) search.focus();
+      }
+    } catch (error) {
+      if (alive()) {
+        status.textContent = error.message;
+        status.dataset.state = "error";
+      }
+    } finally {
+      if (alive()) {
+        load.disabled = false;
+        load.textContent = "查询模型";
+        box.setAttribute("aria-busy", "false");
+      }
+    }
+  });
+  provider.addEventListener("change", () => {
+    ++generation;
+    rows = [];
+    selectedMetadata = undefined;
+    model.value = "";
+    panel.hidden = fold.hidden = true;
+    load.disabled = false;
+    load.textContent = "查询模型";
+    box.setAttribute("aria-busy", "false");
+    status.dataset.state = "";
+    status.textContent = "连接已切换，请重新查询或填写模型 ID。";
+  });
+  $("setup-dialog").addEventListener(
+    "close",
+    () => {
+      ++generation;
+    },
+    { once: true },
+  );
+  search.addEventListener("input", draw);
+  model.addEventListener("input", () => {
+    if (rows.length) draw();
+  });
+  toolbar.append(load, fold);
+  box.append(toolbar, status, panel);
+  form.insertBefore(box, model.closest("label"));
+  return () =>
+    selectedMetadata?.id === model.value
+      ? selectedMetadata.capabilities
+      : undefined;
+}
 function openAddEntity(kind) {
   const form = wizard(
     "添加模型",
@@ -1158,7 +1451,16 @@ function openAddEntity(kind) {
   }
   const provider = formInput(form, "provider", "使用连接", {
     required: true,
-    choices: providers.map((p) => [p, p]),
+    choices: providers.map((p) => {
+      const item = valueAt(["model_api", "providers"], {})[p];
+      return [
+        p,
+        p +
+          " · " +
+          (item.account ? "原生账号" : "API 网关") +
+          (item.enabled ? "" : "（未启用）"),
+      ];
+    }),
   });
   const model = formInput(form, "model", "供应商模型 ID", {
     required: true,
@@ -1166,12 +1468,17 @@ function openAddEntity(kind) {
   });
   const name = formInput(form, "name", "在 PA 中的名称", {
     required: true,
-    pattern: "[a-z][a-z0-9_-]{0,63}",
+    pattern: "[A-Za-z][A-Za-z0-9_-]{0,63}",
     placeholder: "例如 main 或 fast",
     hint: "保持名称稳定，用途绑定会引用它。",
   });
+  $("setup-dialog").dataset.mode = "model";
+  const selectedMetadata = modelPicker(form, provider, model, name);
+  const details = node("div", undefined, "model-details");
+  details.append(model.closest("label"), name.closest("label"));
+  form.append(details);
   wizardFooter(form, "添加并完善设置");
-  form.onsubmit = (event) => {
+  form.onsubmit = async (event) => {
     event.preventDefault();
     if (!form.reportValidity()) return;
     const id = name.value.trim();
@@ -1179,10 +1486,31 @@ function openAddEntity(kind) {
       showNotice("此名称已存在。");
       return;
     }
+    const submitted = [provider.value, model.value.trim()];
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    let capabilities;
+    try {
+      capabilities = await describeModel(...submitted, "", selectedMetadata());
+      if (
+        !form.isConnected ||
+        !$("setup-dialog").open ||
+        JSON.stringify(submitted) !==
+          JSON.stringify([provider.value, model.value.trim()])
+      )
+        return;
+    } catch (error) {
+      showNotice(error.message);
+      return;
+    } finally {
+      submit.disabled = false;
+    }
     const checkpoint = draftCheckpoint();
     changed(["model_api", kind, id], "set", {
       provider: provider.value,
       model: model.value.trim(),
+      default_reasoning_effort: "auto",
+      capabilities,
     });
     $("setup-dialog").close();
     render();
@@ -1203,9 +1531,9 @@ function openConnectionWizard() {
   });
   const name = formInput(form, "name", "连接名称", {
     required: true,
-    pattern: "[a-z][a-z0-9_-]{0,63}",
+    pattern: "[A-Za-z][A-Za-z0-9_-]{0,63}",
     placeholder: "例如 openai 或 team",
-    hint: "用于识别连接，不是模型 ID。",
+    hint: "可使用大小写英文字母、数字、下划线或连字符，以字母开头；连接可先单独保存。",
   });
   const native = node("fieldset", undefined, "wizard-route");
   form.append(native);
@@ -1231,25 +1559,12 @@ function openConnectionWizard() {
   });
   const gateway = node("fieldset", undefined, "wizard-route");
   form.append(gateway);
-  const presets = fieldAt(["model_api", "providers"]).schema
-    .additionalProperties.properties.preset.enum;
-  const preset = formInput(gateway, "preset", "接口类型", {
-    choices: [...presets.map((p) => [p, p]), ["custom", "自定义接口"]],
-  });
-  const protocol = formInput(gateway, "protocol", "协议", {
-    choices: fieldAt([
-      "model_api",
-      "providers",
-    ]).schema.additionalProperties.properties.protocol.enum.map((p) => [p, p]),
-  });
-  const url = formInput(gateway, "url", "接口地址", {
-    type: "url",
-    placeholder: "https://…",
-  });
-  const gatewayKey = formInput(gateway, "gateway-key", "API Key", {
-    type: "password",
-    placeholder: "可选，保存为私有凭据",
-  });
+  const apiFields = apiConnectionFields(
+    gateway,
+    { enabled: true },
+    { prefix: "setup-api", inputId: "setup-gateway-key" },
+  );
+  const nativeReference = newCredentialReference();
   const note = node("p", "", "inline-note");
   form.append(note);
   function refresh() {
@@ -1260,18 +1575,11 @@ function openConnectionWizard() {
     gateway.disabled = useNative;
     credential.closest("label").hidden = auth.value === "oauth";
     credential.disabled = auth.value === "oauth";
-    const custom = preset.value === "custom";
-    for (const input of [protocol, url]) {
-      input.closest("label").hidden = !custom;
-      input.disabled = !custom;
-    }
-    url.required = !useNative && custom;
     note.textContent = useNative
       ? "账号和连接将一起添加。OAuth 授权需要先保存，再在账号授权区域登录；不会自动发起模型请求。"
       : "此路线需要单独部署模型网关。配置保存后，按生效状态中的提示完成外部部署。";
   }
-  for (const input of [route, auth, preset])
-    input.addEventListener("change", refresh);
+  for (const input of [route, auth]) input.addEventListener("change", refresh);
   refresh();
   wizardFooter(form, "添加连接");
   form.onsubmit = (event) => {
@@ -1293,22 +1601,15 @@ function openConnectionWizard() {
       showNotice("请填写有效的供应商标识。");
       return;
     }
-    const env = "PA_" + id.toUpperCase().replaceAll("-", "_") + "_API_KEY",
-      secret =
-        route.value === "native"
-          ? auth.value === "api_key"
-            ? credential.value
-            : ""
-          : gatewayKey.value;
-    const existingKey = resourceInventory
-      .find((r) => r.id === "credentials")
-      ?.keys?.find((k) => k.name === env);
-    if (secret && (existingKey || resourceEdits.has("credentials:" + env))) {
-      showNotice(
-        "此名称对应的凭据已经存在，请更换连接名称，避免覆盖其他连接的凭据。",
-      );
-      return;
-    }
+    const apiValue = apiFields.read();
+    const env =
+      route.value === "native" ? nativeReference : apiValue.provider.key_env;
+    const secret =
+      route.value === "native"
+        ? auth.value === "api_key"
+          ? credential.value
+          : ""
+        : apiValue.secret;
     if (route.value === "native") {
       const account = { provider: provider.value.trim(), auth: auth.value };
       if (auth.value === "oauth" && account.provider === "openai")
@@ -1319,19 +1620,7 @@ function openConnectionWizard() {
         account: id,
         enabled: true,
       });
-    } else
-      changed(
-        ["model_api", "providers", id],
-        "set",
-        preset.value === "custom"
-          ? {
-              protocol: protocol.value,
-              base_url: url.value.trim(),
-              key_env: env,
-              enabled: true,
-            }
-          : { preset: preset.value, key_env: env, enabled: true },
-      );
+    } else changed(["model_api", "providers", id], "set", apiValue.provider);
     if (secret)
       resourceEdits.set("credentials:" + env, {
         id: "credentials",
@@ -1342,6 +1631,8 @@ function openConnectionWizard() {
     $("setup-dialog").close();
     form.replaceChildren();
     render();
-    showNotice("连接已加入草稿。保存后可授权账号，并继续添加模型。");
+    showNotice(
+      "连接已加入草稿，可直接测试连接或查询模型；保存并生效后用于运行。原生 OAuth 账号需保存后授权。",
+    );
   };
 }

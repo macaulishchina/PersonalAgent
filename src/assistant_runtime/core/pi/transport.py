@@ -64,6 +64,10 @@ class ExecutionTransport:
         if payload.get("model") != worker.meta["model"]:
             raise web.HTTPBadRequest()
         entry = self.client.settings.entry(worker.meta["model"])
+        # Pi uses off internally to represent our automatic setting; restore the
+        # host selection before the gateway, which removes auto on the wire.
+        if worker.meta["reasoning_effort"] == "auto":
+            payload["reasoning"] = {"effort": "auto"}
         maximum = entry.get("execution_max_output_tokens", self.client.settings.execution_max_output_tokens)
         requested = payload.get("max_output_tokens", maximum)
         if type(requested) is not int or requested < 1:

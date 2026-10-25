@@ -30,6 +30,9 @@ class Console:
         from .accounts import Accounts
 
         self.accounts = Accounts(business)
+        from .provider_queries import ProviderQueries
+
+        self.provider_queries = ProviderQueries(business, self.accounts)
 
     @web.middleware
     async def guard(self, request, handler):
@@ -74,8 +77,18 @@ class Console:
             response = web.json_response({"error": str(exc), "code": "version_incompatible"}, status=400)
         except ConfigurationError as exc:
             response = web.json_response({"error": str(exc), "issues": [exc.public()]}, status=400)
-        except (ValueError, TypeError, KeyError, OSError):
+        except (ValueError, TypeError, KeyError, OSError) as exc:
             # Parser and owner exception strings may contain credentials. Do not echo them.
+            import traceback
+
+            log.warning(
+                "configuration_operation_failed type=%s frames=%s",
+                type(exc).__name__,
+                [
+                    f"{Path(f.filename).name}:{f.lineno}:{f.name}"
+                    for f in traceback.extract_tb(exc.__traceback__)
+                ],
+            )
             response = web.json_response(
                 {"error": "配置或文件操作失败；请检查字段、依赖及本地配置"}, status=400
             )
@@ -95,6 +108,8 @@ class Console:
                 web.get("/", self.index),
                 web.get("/console.js", self.javascript),
                 web.get("/workspace.js", self.workspace_javascript),
+                web.get("/model-editor.js", self.model_javascript),
+                web.get("/connections.js", self.connections_javascript),
                 web.get("/console.css", self.styles),
                 web.post("/api/login", self.login),
                 web.post("/api/logout", self.logout),
@@ -107,6 +122,8 @@ class Console:
                 web.get("/api/resources", self.resources),
                 web.get("/api/accounts", self.account_inventory),
                 web.post("/api/account", self.account_action),
+                web.post("/api/provider-query", self.provider_query),
+                web.post("/api/model-capabilities", self.model_capabilities),
                 web.post("/api/account-answer", self.account_answer),
                 web.post("/api/account-cancel", self.account_cancel),
                 web.get("/api/repair", self.repair_read),
@@ -158,6 +175,12 @@ class Console:
 
     async def javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.js")
+
+    async def connections_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "connections.js")
+
+    async def model_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "model-editor.js")
 
     async def workspace_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "workspace.js")
@@ -237,6 +260,9 @@ class Console:
                 return result
 
         result = await asyncio.to_thread(snapshot_view)
+        from assistant_runtime.core.models.settings import PRESETS
+
+        result["provider_presets"] = PRESETS
         result["application"] = dict(self.business.application)
         loaded = getattr(self.business, "loaded_snapshot", None)
         if loaded:
@@ -339,6 +365,17 @@ class Console:
                 }
 
         return web.json_response(await asyncio.to_thread(read))
+
+    async def provider_query(self, request):
+        data = await request.json()
+        return web.json_response(
+            await self.provider_queries.action(
+                data.get("name"), data.get("action"), data.get("version"), data.get("draft")
+            )
+        )
+
+    async def model_capabilities(self, request):
+        return web.json_response(await self.provider_queries.describe(await request.json()))
 
     async def account_inventory(self, request):
         return web.json_response(await asyncio.to_thread(self.accounts.public))

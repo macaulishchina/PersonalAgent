@@ -29,6 +29,8 @@ async def forward(transport, request, worker):
     if not isinstance(payload, dict) or set(payload) - {"model", "context", "effort"}:
         raise web.HTTPBadRequest()
     alias = worker.meta["model"]
+    if worker.meta["reasoning_effort"] == "auto" and payload.get("effort") == "none":
+        payload["effort"] = "auto"
     if payload.get("model") != alias or payload.get("effort") != worker.meta["reasoning_effort"]:
         raise web.HTTPBadRequest()
     entry = client.settings.entry(alias)

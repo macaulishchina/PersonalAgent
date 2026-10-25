@@ -22,7 +22,7 @@ def pi_models_config(settings, *, session_id=None):
                 "reasoning": any(e != "none" for e in entry["reasoning_efforts"]),
                 "thinkingLevelMap": {
                     ("off" if level == "none" else level): (
-                        level if level in entry["reasoning_efforts"] else None
+                        level if level == "none" or level in entry["reasoning_efforts"] else None
                     )
                     for level in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
                 },

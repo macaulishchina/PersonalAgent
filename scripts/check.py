@@ -16,7 +16,15 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 GROUPS = {
-    "models": {"ai_usage", "models", "models_transport", "model_fallbacks", "model_accounts"},
+    "models": {
+        "ai_usage",
+        "models",
+        "models_transport",
+        "model_fallbacks",
+        "model_accounts",
+        "model_capabilities",
+        "provider_queries",
+    },
     "speech": {"interaction"},
     "search": {"search"},
     "core": {

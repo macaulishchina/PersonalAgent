@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 EXTENSION_PATH = str(Path(__file__).with_name("extension.ts"))
 THINKING_MAP = {
+    "auto": "off",
     "none": "off",
     "minimal": "minimal",
     "low": "low",
@@ -818,7 +819,7 @@ class PiClient:
         entry = self.settings.entry(model)
         if not entry.get("execution_validated"):
             raise ValueError("Execution model is not validated")
-        if effort not in entry["reasoning_efforts"] or effort not in THINKING_MAP:
+        if (effort != "auto" and effort not in entry["reasoning_efforts"]) or effort not in THINKING_MAP:
             raise ValueError("Unsupported execution reasoning effort")
 
     def _write_configuration(self, meta, instructions=None):

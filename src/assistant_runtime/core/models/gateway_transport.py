@@ -47,9 +47,12 @@ def prepare_request(provider, data, environment, session_headers):
             effort = data.get("reasoning_effort")
         if effort is None:
             effort = provider["default_reasoning_effort"]
-        if effort not in provider["reasoning_efforts"]:
+        if effort != "auto" and effort not in provider["reasoning_efforts"]:
             raise ValueError("Unsupported configured reasoning effort")
-        if reasoning is not None or "reasoning_effort" not in data:
+        if effort == "auto":
+            data.pop("reasoning", None)
+            data.pop("reasoning_effort", None)
+        elif reasoning is not None or "reasoning_effort" not in data:
             data["reasoning"] = {**(reasoning or {}), "effort": effort}
         else:
             data["reasoning_effort"] = effort

@@ -34,12 +34,25 @@ The console starts with an overview and setup progress. Model configuration foll
 connections → model library → usage, with card lists, guided additions and an editor drawer.
 Native connection creation stages the account, provider and private credential together;
 OAuth login stays an explicit operation after saving. Low-frequency maps/lists retain bounded structured editors.
-The module's packaged JSON Schema drives defaults, constraints and visibility; the browser
-has no second model registry or plugin-specific scripts. Disabled-owner settings are still
-schema-validated. Disabled external packages are not imported for semantic validation;
-their settings remain available when disabling an uncertified owner. Dormant values require
-correct structure/types; full semantic checks run only for enabled owners. Missing schema
-validation dependencies still block a save instead of skipping checks.
+
+`static/connections.js` owns purpose-built connection and authentication forms shared by add/edit.
+Preset definitions come from the models owner. Serialization is exclusive: preset, custom API,
+or native account; never persist all generic schema fields together. Managed keys get internal
+random references; advanced reference mode is mutually exclusive with entering a key.
+Preserve existing references, isolate replacement of shared credentials, and use the common
+configuration/resource draft transaction. Changing presets to a different endpoint clears the
+selected draft credential, without deleting any saved credential.
+
+Connection cards and drawers expose explicit current-draft connection checks. The add-model
+wizard queries a searchable, bounded directory and copies a selected ID into the draft;
+manual IDs remain available. Changing the connection invalidates pending UI results.
+`POST /api/provider-query` uses the administrator session/origin checks and revision guard.
+It accepts only the selected connection/account draft and an optional transient API key;
+missing keys resolve through the selected reference using the normal environment/file precedence.
+Draft keys are used only for this request and never persisted or echoed. No unrelated drafts
+are validated. Owner validation maps to safe field-specific errors; the browser focuses the
+field and rejects results if inputs change in flight. Testing does not save, enable, apply or
+mark capabilities accepted. Native login remains an explicit account management operation.
 
 Extension rows display Linux/Windows certification from packaged `plugin.json`,
 without importing runtime code. Windows includes Windows Server. Missing or invalid
@@ -183,3 +196,5 @@ production instance, credentials or task plans. Install validation dependencies 
 from a running service. Mobile layout optimization is outside this desktop pass.
 
 Historical results are preserved in the [module acceptance archive](../../../../docs/archive/module-acceptance-2026-10.md).
+
+Model editing uses `model-editor.js` over the same typed draft/transaction controls. `/api/model-capabilities` is authenticated, revision-checked metadata-only lookup, independent of credentials or inference. Model facts and acceptance are separate; the page shows unknown values, supported thinking choices and explicit overrides. Model/connection changes discard stale page metadata and require re-identification; server validation rejects stale saved bindings. No provider credentials are sent to public catalogs.

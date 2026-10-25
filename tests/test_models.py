@@ -67,6 +67,24 @@ class SettingsTest(unittest.TestCase):
                 max(normal, compaction) + 60,
             )
 
+    def test_registry_names_preserve_case_and_reject_case_only_collisions(self):
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        provider = {"preset": "openai", "enabled": True}
+        parsed = ModelSettings.parse(
+            {
+                "providers": {"LeiHuo-OpenAI": provider},
+                "entries": {"Main-Model": {"provider": "LeiHuo-OpenAI", "model": "synthetic-model"}},
+            }
+        )
+        self.assertEqual(parsed.entries["Main-Model"]["provider"], "LeiHuo-OpenAI")
+        with self.assertRaises(ConfigurationError) as caught:
+            ModelSettings.parse({"providers": {"Team": provider, "team": provider}})
+        self.assertEqual(caught.exception.code, "duplicate_registry_name")
+        with self.assertRaises(ConfigurationError) as caught:
+            ModelSettings.parse({"providers": {"not valid!": provider}})
+        self.assertEqual(caught.exception.path, ["model_api", "providers"])
+
     def test_execution_limits_belong_only_to_ai_usage(self):
         with self.assertRaises(ValueError):
             ModelSettings.parse(settings(execution_limits={"max_requests": 3}))
@@ -74,8 +92,10 @@ class SettingsTest(unittest.TestCase):
     def test_missing_effort_declaration_does_not_silently_advertise_none(self):
         config = settings()
         del config["entries"]["test-model"]["reasoning_efforts"]
-        with self.assertRaisesRegex(ValueError, "reasoning efforts"):
-            ModelSettings.parse(config)
+        parsed = ModelSettings.parse(config)
+        self.assertEqual(parsed.entries["test-model"]["reasoning_efforts"], [])
+        self.assertEqual(parsed.entries["test-model"]["default_reasoning_effort"], "auto")
+        self.assertEqual(parsed.catalog()[0]["supported_reasoning_efforts"], [{"reasoning_effort": "auto"}])
 
     def test_reasoning_default_is_explicit_and_not_the_first_supported_level(self):
         raw = settings()
@@ -308,15 +328,16 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             ({}, "low"),
             ({"reasoning_effort": "none"}, "none"),
             ({"reasoning_effort": "high"}, "high"),
+            ({"reasoning_effort": "auto"}, "auto"),
         ):
             result = await self.runtime.invoke(self.request(**requested))
             self.assertEqual(result["reasoning_effort"], expected)
             self.assertEqual(self.client.complete.call_args.args[0]["reasoning"], {"effort": expected})
             self.assertEqual(result["attempts"][0]["reasoning_effort"], expected)
-        for invalid in ("medium", "auto", [], 1):
+        for invalid in ("medium", "invented", [], 1):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 await self.runtime.invoke(self.request(reasoning_effort=invalid))
-        self.assertEqual(self.client.complete.await_count, 3)
+        self.assertEqual(self.client.complete.await_count, 4)
 
     async def test_composed_memory_uses_explicit_binding_without_error_fallback(self):
         from assistant_runtime.core.memory.inference import complete as memory_complete

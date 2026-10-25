@@ -153,3 +153,9 @@ class PiInstallationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "did not produce"):
             self.run_setup(produce_binary=False)
         self.assertFalse((data_directory() / "pi-installation.json").exists())
+
+    def test_editable_setup_ignores_empty_installed_resource_directory(self):
+        prefix = self.root / "empty-environment"
+        (prefix / "share/personal-agent/pi").mkdir(parents=True)
+        with patch("sys.prefix", str(prefix)):
+            self.run_setup(self.root / "editable-pi")

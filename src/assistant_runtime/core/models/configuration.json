@@ -150,6 +150,9 @@
             }
           },
           "additionalProperties": false
+        },
+        "propertyNames": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
         }
       },
       "accounts": {
@@ -190,6 +193,9 @@
             "auth"
           ],
           "additionalProperties": false
+        },
+        "propertyNames": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
         }
       },
       "entries": {
@@ -230,6 +236,7 @@
               "type": "string",
               "title": "默认思考深度",
               "enum": [
+                "auto",
                 "none",
                 "minimal",
                 "low",
@@ -254,8 +261,8 @@
             },
             "context_window": {
               "type": "integer",
-              "minimum": 8192,
-              "maximum": 2000000,
+              "minimum": 1,
+              "maximum": 10000000,
               "title": "上下文窗口",
               "x-advanced": true
             },
@@ -281,9 +288,69 @@
                 "x-reference": "model_api.entries"
               },
               "x-advanced": true
+            },
+            "capabilities": {
+              "type": "object",
+              "title": "自动识别能力快照",
+              "properties": {
+                "binding": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                },
+                "reference": {
+                  "type": "string"
+                },
+                "images": {
+                  "type": "boolean"
+                },
+                "structured": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "boolean"
+                },
+                "reasoning": {
+                  "type": "boolean"
+                },
+                "context_window": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "output_limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "reasoning_efforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "x-advanced": true
             }
           },
           "additionalProperties": false
+        },
+        "propertyNames": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
         }
       },
       "memory": {

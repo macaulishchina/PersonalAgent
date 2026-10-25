@@ -85,6 +85,22 @@ def configuration(settings):
     }
 
 
+def transport_routes(settings):
+    from .settings import reasoning_effort
+
+    return {
+        ident: {
+            **settings.providers[entry["provider"]],
+            "reasoning_efforts": entry["reasoning_efforts"],
+            "default_reasoning_effort": reasoning_effort(entry),
+        }
+        for ident, entry in settings.entries.items()
+        if settings.enabled
+        and settings.providers[entry["provider"]].get("enabled", False)
+        and settings.providers[entry["provider"]]["protocol"] != "pi"
+    }
+
+
 def application_steps(previous, current, previous_resources=None, current_resources=None):
     """A worker restart cannot apply generated assets to a separate gateway process."""
     target = configuration(current)
@@ -108,7 +124,12 @@ def application_steps(previous, current, previous_resources=None, current_resour
         credentials_changed = any(before.get(k) != after.get(k) for k in names) or previous_resources.get(
             "gateway_key"
         ) != current_resources.get("gateway_key")
-    if previous is not None and configuration(previous) == target and not credentials_changed:
+    if (
+        previous is not None
+        and configuration(previous) == target
+        and transport_routes(previous) == transport_routes(current)
+        and not credentials_changed
+    ):
         return []
     return [
         {

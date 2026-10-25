@@ -70,7 +70,7 @@ pa upgrade-check <personal_agent版本包.whl> --plugin-wheel <独立插件版�
 
 1. 核对在途工作和未知操作，完成收尾后停服。
 2. 记录 `git rev-parse HEAD`，备份完整实例，包括配置、`.env`、OAuth 凭据、数据库、用量和工作文件，保持备份私有。
-3. 获取目标发布版本，在应用目录重做[安装指南](deployment.md)中的依赖安装；standard 需构建前端并再次安装包。Pi 锁定版本变化时重新执行 `pa install-pi`。保留实例，不执行 `init`。
+3. 获取目标发布版本，在仓库中运行 `.\scripts\install.ps1`（Windows）或 `bash scripts/install.sh`（Linux）。脚本沿用上次成功的组合和 extras，standard 自动构建前端；首次从手动安装转用脚本时显式指定原来的组合和 extras。Pi 锁定版本变化时重新执行 `pa install-pi`。保留实例，不执行 `init`。
 4. 按版本说明审查配置候选。旧实例可用下面的命令生成候选，命令不修改原配置或运行实例：
 
    ```text

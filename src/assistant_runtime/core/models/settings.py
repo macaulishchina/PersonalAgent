@@ -2,13 +2,14 @@
 
 from assistant_runtime.api.deadlines import MAX_OPERATION_SECONDS, TRANSPORT_MARGIN_SECONDS
 
-from assistant_runtime.api.configuration import configuration_default
+from assistant_runtime.api.configuration import configuration_default, ConfigurationError
 
 from dataclasses import dataclass, field
 import hashlib
 import json
 import re
 from copy import deepcopy
+from .capabilities import resolve, output_bound
 from urllib.parse import urlsplit
 
 PROTOCOLS = {"openai_responses", "openai_chat", "anthropic", "gemini", "pi"}
@@ -17,8 +18,8 @@ EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 def reasoning_effort(entry, requested=None):
     supported = entry["reasoning_efforts"]
-    effort = requested if requested is not None else entry.get("default_reasoning_effort", supported[0])
-    if not isinstance(effort, str) or effort not in supported:
+    effort = requested if requested is not None else entry.get("default_reasoning_effort", "auto")
+    if not isinstance(effort, str) or effort != "auto" and effort not in supported:
         raise ValueError("Unsupported model reasoning effort")
     return effort
 
@@ -68,9 +69,13 @@ def keys(value, allowed):
         raise ValueError("Unknown model configuration fields")
 
 
-def name(value):
-    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", value):
-        raise ValueError("Invalid model/provider configuration name")
+def name(value, path=("model_api",)):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value):
+        raise ConfigurationError(
+            path,
+            "invalid_registry_name",
+            "名称须以英文字母开头，可包含大小写字母、数字、下划线或连字符，最多 64 个字符。",
+        )
     return value
 
 
@@ -163,10 +168,20 @@ class ModelSettings:
             raise ValueError("Model registry exceeds configured bounds")
         if not isinstance(obj.accounts, dict) or len(obj.accounts) > 16:
             raise ValueError("Invalid native model accounts")
+        for registry in ("accounts", "providers", "entries"):
+            seen = set()
+            for ident in getattr(obj, registry):
+                name(ident, ("model_api", registry))
+                if ident.casefold() in seen:
+                    raise ConfigurationError(
+                        ["model_api", registry],
+                        "duplicate_registry_name",
+                        "同一列表中的名称不能仅以大小写区分，请使用不同的名称。",
+                    )
+                seen.add(ident.casefold())
         for ident, account in obj.accounts.items():
-            name(ident)
             keys(account, {"provider", "auth", "key_env", "output_limit"})
-            name(account.get("provider"))
+            name(account.get("provider"), ("model_api", "accounts", ident, "provider"))
             if account.get("auth") not in {"oauth", "api_key"}:
                 raise ValueError("Native account requires explicit oauth or api_key authentication")
             if "key_env" in account and (
@@ -183,7 +198,6 @@ class ModelSettings:
                         "ChatGPT subscription requires explicit output_limit='model'; request caps unsupported"
                     )
         for ident, p in obj.providers.items():
-            name(ident)
             if p.get("protocol") == "pi":
                 keys(p, {"protocol", "account", "enabled"})
                 if p.get("account") not in obj.accounts or type(p.get("enabled", False)) is not bool:
@@ -195,7 +209,11 @@ class ModelSettings:
             )
             if p.get("auth_scheme", "native") not in {"native", "bearer"}:
                 raise ValueError("Unsupported provider authentication scheme")
-            if "session_header" in p and not re.fullmatch(r"x-[a-z0-9-]{1,60}", p["session_header"]):
+            if (
+                p.get("session_header") != ""
+                and "session_header" in p
+                and not re.fullmatch(r"x-[a-z0-9-]{1,60}", p["session_header"])
+            ):
                 raise ValueError("Invalid provider session header")
             if p.get("session_header") in {"x-api-key", "x-goog-api-key"}:
                 raise ValueError("Session header cannot replace authentication")
@@ -209,7 +227,6 @@ class ModelSettings:
             if type(p.get("enabled", False)) is not bool:
                 raise ValueError("Provider enabled must be boolean")
         for ident, m in obj.entries.items():
-            name(ident)
             keys(
                 m,
                 {
@@ -224,26 +241,42 @@ class ModelSettings:
                     "execution_max_output_tokens",
                     "context_window",
                     "fallbacks",
+                    "capabilities",
                 },
             )
             if m.get("provider") not in obj.providers:
                 raise ValueError("Unknown provider for " + ident)
             if not isinstance(m.get("model"), str) or not 1 <= len(m["model"]) <= 200:
                 raise ValueError("Missing upstream model ID")
+            provider = obj.providers[m["provider"]]
+            try:
+                resolve(m, provider, obj.accounts.get(provider.get("account")))
+            except ValueError:
+                raise ConfigurationError(
+                    ["model_api", "entries", ident, "capabilities"],
+                    "model_capabilities_invalid",
+                    "Invalid or changed model capability snapshot；连接或模型已变化，请刷新能力资料。",
+                ) from None
             for flag in ("images", "structured", "execution_validated"):
                 if type(m.get(flag, False)) is not bool:
                     raise ValueError("Model capabilities must be boolean")
             efforts = m.get("reasoning_efforts")
             if (
                 not isinstance(efforts, list)
-                or not efforts
                 or any(not isinstance(e, str) or e not in EFFORTS for e in efforts)
                 or len(set(efforts)) != len(efforts)
             ):
                 raise ValueError("Invalid reasoning efforts")
-            reasoning_effort(m)
+            try:
+                reasoning_effort(m)
+            except ValueError:
+                raise ConfigurationError(
+                    ["model_api", "entries", ident, "default_reasoning_effort"],
+                    "reasoning_unsupported",
+                    "Unsupported model reasoning effort；请选择当前模型支持的档位或自动。",
+                ) from None
             window = m.get("context_window", 32768)
-            if type(window) is not int or not 8192 <= window <= 2000000:
+            if type(window) is not int or not 1 <= window <= 10000000:
                 raise ValueError("Invalid model context window")
             limit = m.get("max_output_tokens", obj.max_output_tokens)
             if type(limit) is not int or not 1 <= limit <= 16384:
@@ -251,6 +284,8 @@ class ModelSettings:
             execution_limit = m.get("execution_max_output_tokens", obj.execution_max_output_tokens)
             if type(execution_limit) is not int or not 1 <= execution_limit <= 131072:
                 raise ValueError("Invalid execution output token budget")
+            m["max_output_tokens"] = output_bound(m, limit)
+            m["execution_max_output_tokens"] = output_bound(m, execution_limit)
         for ident, entry in obj.entries.items():
             fallback = entry.get("fallbacks", [])
             if (
@@ -293,7 +328,10 @@ class ModelSettings:
                 "execution_validated": m.get("execution_validated", False),
                 "fallbacks": m.get("fallbacks", []),
                 "default_reasoning_effort": reasoning_effort(m),
-                "supported_reasoning_efforts": [{"reasoning_effort": e} for e in m["reasoning_efforts"]],
+                "supported_reasoning_efforts": [
+                    {"reasoning_effort": e} for e in ["auto", *m["reasoning_efforts"]]
+                ],
+                "capabilities": deepcopy(m["capabilities"]),
             }
             for k, m in self.entries.items()
         ]

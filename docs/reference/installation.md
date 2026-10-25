@@ -14,6 +14,29 @@
 
 两种组合共享核心代码与依赖。preset 只用于生成初始配置；运行时以显式插件列表为准。模型权重、账号、外部服务和设备需要按需配置。启用扩展必须通过平台认证和依赖检查。
 
+## 安装脚本选项
+
+在源码仓库安装时，Windows 使用 `.\scripts\install.ps1`，Linux 使用 `bash scripts/install.sh`。两者调用同一份 `scripts/install.py`，根据脚本位置定位仓库，不依赖终端当前目录。需要先安装 uv；standard 或 `web` 依赖组合还需要 Node.js／npm。
+
+```powershell
+# Windows：普通安装或停服备份后的更新
+.\scripts\install.ps1
+# 指定组合；后续不带参数会沿用
+.\scripts\install.ps1 --preset standard
+# 添加设备或开发依赖；参数可以重复
+.\scripts\install.ps1 --extra windows-devices --extra dev
+# 只看将执行的操作
+.\scripts\install.ps1 --dry-run
+```
+
+Linux 使用相同参数，例如 `bash scripts/install.sh --preset slim`。`--extra` 在已有选择上添加；`--without-extra dev` 停止选择某个额外依赖组合。成功后将选择保存到安装环境的 `pa-install.json`（默认 `.venv/pa-install.json`），后续安装沿用。记录的是安装依赖组合，不是实例配置；不改变已有实例的插件启用列表。
+
+首次采用脚本时，如果环境来自手动安装，还没有此记录，应显式选择原来的 `--preset` 和所需 `--extra`。脚本使用 `--inexact` 保留环境里额外安装的独立插件和工具；取消 extra 或改成 slim 不会卸载这些包。未选中的额外包也不会因此得到锁文件升级保障，仍需声明实际使用的 extras，独立插件按自己的版本流程维护。
+
+内部使用 `uv sync --locked --python 3.12 --extra <组合> --no-default-groups --no-editable --inexact`，standard／web 会先执行前端构建，任一步失败即停止，保留上次成功的安装选项。失败不代表安装环境已回滚，恢复方式见[日常维护](../guides/operations.md#备份和升级)。脚本不负责 Pi、实例初始化、服务登记或重启；新安装继续执行安装指南中的后续步骤，更新前须先停服备份。
+
+默认设置 `UV_LINK_MODE=copy`，避免跨磁盘硬链接警告；已设置该环境变量时沿用。仍需手动执行 `uv sync` 时，不带 `--inexact` 会移除未被本次选择覆盖的包，包括独立插件和开发工具。
+
 ## 默认目录
 
 | 内容 | Windows | Linux |
@@ -28,20 +51,20 @@
 ## 自定义环境位置
 
 默认流程无需执行本节。Python 环境使用 uv 的 `UV_PROJECT_ENVIRONMENT` 指定，
-必须在 `uv sync` 前设置；之后运行命令中的 `.venv` 路径也应换成该环境路径。
+必须在运行安装脚本前设置；安装选项记录也存入此环境。之后运行命令中的 `.venv` 路径应换成该环境路径。
 Python 解释器本体由 uv 管理，不复制到实例目录。
 
 ```powershell
 # Windows 示例：可分别选择 Python 和 Pi 的位置
 $env:UV_PROJECT_ENVIRONMENT = 'D:\AgentEnvironments\personal-agent'
-uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
+.\scripts\install.ps1 --preset slim
 & "$env:UV_PROJECT_ENVIRONMENT\Scripts\pa.exe" install-pi 'D:\AgentRuntimes\pi'
 ```
 
 ```sh
 # Linux 示例：可分别选择 Python 和 Pi 的位置
 export UV_PROJECT_ENVIRONMENT="$HOME/agent-environments/personal-agent"
-uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
+bash scripts/install.sh --preset standard
 "$UV_PROJECT_ENVIRONMENT/bin/pa" install-pi "$HOME/agent-runtimes/pi"
 ```
 

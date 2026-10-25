@@ -14,10 +14,13 @@ def setup(destination=None):
     ).resolve()
     import sys
 
-    source = Path(sys.prefix) / "share/personal-agent/pi"
-    if not source.is_dir():
-        source = Path(__file__).resolve().parents[3] / "deploy/pi"
-    if not source.is_dir():
+    manifests = ("package.json", "package-lock.json")
+    candidates = (
+        Path(__file__).resolve().parents[3] / "deploy/pi",
+        Path(sys.prefix) / "share/personal-agent/pi",
+    )
+    source = next((p for p in candidates if all((p / name).is_file() for name in manifests)), None)
+    if source is None:
         raise RuntimeError("Pinned Pi installation resources are missing from this package")
     node, npm = shutil.which("node"), shutil.which("npm")
     if not node or not npm:
@@ -29,7 +32,7 @@ def setup(destination=None):
     if os.name == "nt" and not npm_cli.is_file():
         raise RuntimeError("Cannot locate npm-cli.js beside the Node installation")
     destination.mkdir(parents=True, exist_ok=True)
-    for filename in ("package.json", "package-lock.json"):
+    for filename in manifests:
         shutil.copyfile(source / filename, destination / filename)
     subprocess.run([*command, "--prefix", str(destination), "ci", "--no-audit", "--no-fund"], check=True)
     binary = destination / "node_modules/.bin" / ("pi.cmd" if os.name == "nt" else "pi")

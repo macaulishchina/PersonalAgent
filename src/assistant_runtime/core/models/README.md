@@ -8,9 +8,9 @@ Models owns immutable account/provider/model configuration, bounded no-tool infe
 
 Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets: `openai`, `claude`, `gemini`, `deepseek`. OpenCode Go presets: `opencode_go_responses`, `opencode_go_chat`, `opencode_go_anthropic`, `opencode_go_gemini`, using `OPENCODE_API_KEY`. Custom endpoints declare `protocol`, HTTPS `base_url` and `key_env`; supported protocols are `openai_responses`, `openai_chat`, `anthropic`, `gemini`. Presets cannot silently override their fixed endpoint. A local `enabled` switch does not change the supplier's data policy.
 
-Each `[model_api.entries.ALIAS]` identifies exactly one provider and upstream model. Declare `images`, `structured`, `execution_validated`, `context_window`, `reasoning_efforts` and `default_reasoning_effort` from actual acceptance. Explicit unsupported inputs/efforts fail before dispatch; images and key parameters are never silently dropped. Different providers for the same upstream model have distinct aliases. There is no implicit balancing or model inheritance.
+Each `[model_api.entries.ALIAS]` identifies exactly one provider and upstream model. Capability fields may be omitted. A route-bound `capabilities` snapshot supplies advertised metadata; explicit `images`, `structured`, `context_window` and `reasoning_efforts` remain operator overrides. `execution_validated` is separate existing operator acceptance and is never inferred from a catalog. Default effort is `auto` for new automatic entries; existing explicit lists retain their previous first-level default. Explicit unsupported inputs/efforts fail before dispatch; images and key parameters are never silently dropped. Different providers for the same upstream model have distinct aliases. There is no implicit balancing or model inheritance.
 
-See [complete example](../../../../config.example/models.toml) and [key template](../../../../deploy/model-api.env.example). Secrets live in private `.env`, never TOML or logs. Config is composed by `Config.load()` and takes effect on restart.
+See [complete example](../../../../config.example/models.toml) and [key template](../../../../deploy/model-api.env.example). Secrets live in private `.env`, never TOML or logs. Config is composed by `Config.load()` and applied through the configuration service at a safe execution boundary; external gateway changes require explicit deployment.
 
 ```sh
 pa --config config/config.toml models check
@@ -84,6 +84,22 @@ Auxiliary entry `fallbacks` expands only the primary's ordered list, once per ca
 
 Task fallback is separately configured under `tasks.model_policy.fallbacks`. It requires a structured first-turn rejection and authoritative evidence that no tool/assistant activity occurred. Complex-task upgrades require a checkpoint with no active/unknown operations; old context is archived and the new model receives confirmed progress, not supplier-private reasoning state. User-explicit model choices remain protected from Jev advice.
 
+## Operator connection checks and model directories
+
+The configuration console can inspect the current connection draft without enabling inference.
+`catalog.py` performs one authenticated metadata GET with a 12-second timeout, a 1 MiB
+response bound and at most 500 displayed entries. It never follows redirects, retries,
+calls completion endpoints or reports upstream error bodies. Authentication uses the
+configured protocol and optional bearer/session-header settings. An incomplete directory
+is marked partial; manual model IDs remain available. Directory success is distinct from
+inference capability, usage acceptance and deployment of the separate model gateway.
+
+Protocol references: [OpenAI model listing](https://platform.openai.com/docs/api-reference/models/list),
+[Anthropic model listing](https://platform.claude.com/docs/en/api/models/list),
+and [Gemini model listing](https://ai.google.dev/api/models#method:-models.list).
+Native accounts use Pi's existing local authentication check and bundled catalog, explicitly
+labelled as local checks rather than successful remote inference.
+
 ## Acceptance
 
 Run `scripts/check.py --group models --group execution --group tasks`. Native Pi/local transport tests cover tools, mixed delegation, cancellation, clarification, restart and budget enforcement without calling a supplier. Earlier Codex acceptance is not evidence for Pi. Real routes are validated separately, per capability, with synthetic data and explicit fee/data authorization.
@@ -114,3 +130,11 @@ Timeout logs include owning layer, operation, effective deadline and elapsed tim
 Timeouts never imply that a remote request or tool action did not occur: metering stays durable,
 unknown results are not replayed. Regenerate gateway assets and recreate it explicitly when
 applying new configuration; restarting the assistant alone cannot update container configuration.
+
+## Automatic capability metadata
+
+`capabilities.py` resolves one immutable snapshot for UI, CLI and runtime. Only exact official endpoint/provider/model identities auto-match the packaged models.dev catalog. A custom endpoint may explicitly select a public `provider/model` reference; this remains advertised metadata, not route acceptance. Pi native model descriptions are read without opening a credential store or making a network request. Generic gateway routes do not inherit native Pi effort mappings, because their protocol conversion is different. A reasoning boolean never generates effort levels. Unknown capability fields remain absent in metadata; explicit unsupported inputs remain rejected.
+
+Snapshots include a non-secret connection/model binding, source and revision. Saving a stale binding fails with a repair instruction. Refresh is an operator draft operation, not a startup network request. Explicit overrides survive refresh; new output budgets are bounded by advertised model output limits. Existing native `output_limit="model"` semantics and durable usage admission are unchanged. `auto` is distinct from `none`: the gateway strips automatic control before dispatch, and native Pi receives no explicit reasoning override. Normalized Pi engine `off` is translated back to the host's `auto` selection at the owned transport boundary.
+
+The MIT-licensed models.dev snapshot and license ship in the wheel. Maintainers explicitly run `python scripts/update_model_catalog.py` (or `--source <downloaded-json>`) and review the resulting metadata diff before release. Source hash and retrieval time are recorded; no runtime download or extra service is introduced. See https://github.com/anomalyco/models.dev for the source schema. Synthetic transport tests prove protocol behavior, not supplier capability acceptance.

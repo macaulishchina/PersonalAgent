@@ -186,7 +186,7 @@ class ModelPolicy:
             supported = catalog.get(selected_model, {}).get("supported_reasoning_efforts", [])
             for item in supported:
                 value = item["reasoning_effort"]
-                if value not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
+                if value not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
                     continue
                 if effort not in (None, "auto", value):
                     continue

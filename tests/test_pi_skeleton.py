@@ -146,6 +146,24 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.completed())["status"], "completed")
         self.assertEqual(self.gateway.requests[0]["reasoning"]["effort"], "max")
 
+    async def test_auto_round_trips_through_real_pi_without_becoming_none(self):
+        ident = await self.session(config={"model_reasoning_effort": "auto"})
+        await self.client.request(
+            "run.start",
+            {"session_id": ident, "effort": "auto", "input": [{"type": "text", "text": "automatic"}]},
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        self.assertEqual(self.gateway.requests[0]["reasoning"]["effort"], "auto")
+        from assistant_runtime.core.models.gateway_transport import prepare_request
+
+        wire = prepare_request(
+            {"protocol": "openai_responses", "reasoning_efforts": [], "default_reasoning_effort": "auto"},
+            self.gateway.requests[0].copy(),
+            {},
+            [],
+        )
+        self.assertNotIn("reasoning", wire)
+
     async def test_none_is_explicit_even_when_model_default_is_low(self):
         ident = await self.session()
         await self.client.request(

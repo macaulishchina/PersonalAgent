@@ -72,11 +72,34 @@ async function init(args) {
   return { initialized: true };
 }
 
+function modelMetadata(m) {
+  return {
+    id: m.id,
+    api: m.api,
+    images: m.input.includes("image"),
+    reasoning: !!m.reasoning,
+    reasoning_efforts: ai
+      .getSupportedThinkingLevels(m)
+      .map((e) => (e === "off" ? "none" : e)),
+    context_window: m.contextWindow,
+    output_limit: m.maxTokens,
+    max_output_tokens: m.maxTokens,
+  };
+}
+
 function modelFor(args) {
   const model = runtime.getModel(spec.provider, args.model);
   if (!model) throw new Error("native_model_not_in_catalog");
-  const effort = args.effort === "none" ? "off" : args.effort;
-  if (!ai.getSupportedThinkingLevels(model).includes(effort))
+  const effort =
+    args.effort === "auto"
+      ? undefined
+      : args.effort === "none"
+        ? "off"
+        : args.effort;
+  if (
+    effort !== undefined &&
+    !ai.getSupportedThinkingLevels(model).includes(effort)
+  )
     throw new Error("native_reasoning_effort_unsupported");
   if (args.images && !model.input.includes("image"))
     throw new Error("native_image_input_unsupported");
@@ -218,6 +241,20 @@ async function command(id, action, args, signal) {
       auth: Object.keys(p.auth).map((a) => (a === "apiKey" ? "api_key" : a)),
       subscription: !!p.auth.oauth?.isSubscription,
     }));
+  if (action === "describe") {
+    const selected = providers.find((p) => p.id === args.provider);
+    if (!selected) return null;
+    const directory = ai.createModels({
+      credentials: { read: async () => undefined },
+      authContext: {
+        env: async () => undefined,
+        fileExists: async () => false,
+      },
+    });
+    directory.setProvider(selected);
+    const model = directory.getModel(args.provider, args.model);
+    return model ? modelMetadata(model) : null;
+  }
   if (action === "init") return init(args);
   if (!runtime) throw new Error("native_not_initialized");
   if (action === "status")
@@ -231,18 +268,7 @@ async function command(id, action, args, signal) {
     return { connected: false };
   }
   if (action === "catalog")
-    return runtime
-      .getModels(spec.provider)
-      .map((m) => ({
-        id: m.id,
-        api: m.api,
-        images: m.input.includes("image"),
-        reasoning_efforts: ai
-          .getSupportedThinkingLevels(m)
-          .map((e) => (e === "off" ? "none" : e)),
-        context_window: m.contextWindow,
-        max_output_tokens: m.maxTokens,
-      }));
+    return runtime.getModels(spec.provider).map(modelMetadata);
   if (action === "validate") {
     const { model } = modelFor(args);
     return { max_output_tokens: model.maxTokens, api: model.api };

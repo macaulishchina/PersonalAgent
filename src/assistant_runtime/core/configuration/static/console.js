@@ -432,6 +432,7 @@ function seedValue(rule) {
 function optionLabel(rule, value, path) {
   if (!path.at(-1)?.includes("reasoning")) return String(value);
   const labels = {
+    auto: "自动 · 遵循模型默认策略",
     none: "关闭思考",
     minimal: "最低",
     low: "低",

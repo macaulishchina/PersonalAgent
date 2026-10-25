@@ -52,8 +52,9 @@
       "main_reasoning_effort": {
         "type": "string",
         "title": "主对话思考深度",
-        "default": "medium",
+        "default": "auto",
         "enum": [
+          "auto",
           "none",
           "minimal",
           "low",

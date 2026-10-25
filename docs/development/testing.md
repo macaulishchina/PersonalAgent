@@ -6,7 +6,23 @@
 
 部署安装默认使用 `--no-editable`；开发环境可省略它，并启用所需依赖组。确认不在运行中的生产环境同步依赖。
 
+使用安装脚本维护开发环境时显式加 `--extra dev`，后续会记住选择；检查安装流程用 `python scripts/check.py --test test_install_script`，预览用 `python scripts/install.py --dry-run`。脚本预览不执行前端构建或同步应用环境。
+
 以下命令在仓库根目录运行。`python` 必须来自项目 `.venv`：Windows 可用 `.\.venv\Scripts\python.exe`，Linux 可用 `.venv/bin/python`。
+
+## 源码修改何时生效
+
+可编辑安装（editable）把 Python 包指向源码目录；正式安装使用已安装的程序副本。当前安装脚本固定使用 `--no-editable`，用于正式安装，不是自动重载开发服务器。
+
+| 修改内容 | editable 安装下的生效方式 |
+| --- | --- |
+| 配置网页的 `core/configuration/static/` JS／CSS／HTML | 刷新网页；管理服务按请求读取文件 |
+| Python 后端代码 | 重启对应进程；配置管理接口代码变化需要重启管理进程 |
+| 对话网页 `frontend/` 源码 | 先执行 `npm --prefix frontend run build`，再刷新网页 |
+| 依赖、命令入口、打包元数据 | 重新安装／同步环境，必要时重启 |
+| 实例配置 | 走“保存并生效”或显式应用流程，与代码重载无关 |
+
+非 editable 安装还需要先更新安装包。`pa restart` 重启所选实例的管理和业务进程，不会执行安装或前端构建。开发与验收使用独立实例，不能为验证热更新而重启生产服务。
 
 ## 自动检查
 

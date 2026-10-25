@@ -26,10 +26,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 选择所在平台的一组命令，每条成功后再执行下一条。
 
-`uv sync` 输出提示：
-
-- `Failed to hardlink files; falling back to full copy` 表示已自动改用文件复制，常见于缓存与安装目录位于不同磁盘，不影响安装结果。若希望固定使用复制模式，在同步命令末尾加 `--link-mode=copy`。
-- 同步会按所选依赖组合调整环境；部署命令未启用开发工具，已有的 `mypy`、`ruff`、`setuptools` 等可能被卸载，属于正常现象。后续需要开发检查时，在同步命令中加 `--extra dev`。
+常用安装入口会固定 Python 3.12、使用锁文件、以非 editable 方式安装，并记住成功安装时的依赖组合。首次 Windows 默认 slim、Linux 默认 standard；已有记录时沿用原选择。它只安装应用，不创建实例、不注册系统服务，也不停止或启动后台。
 
 ### Windows / Windows Server
 
@@ -38,7 +35,7 @@ Windows 默认使用 slim，提供 CLI 和独立配置网页；需要完整功�
 ```powershell
 git clone git@github.com:macaulishchina/PersonalAgent.git .
 $env:PYTHONUTF8 = '1'
-uv sync --locked --python 3.12 --extra slim --no-default-groups --no-editable
+.\scripts\install.ps1
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 pa install-pi
 pa init "$PWD\instance" --preset slim
@@ -46,7 +43,7 @@ pa use "$PWD\instance"
 pa configuration token --management "$PWD\instance\management.toml"
 ```
 
-Windows 安装 standard 时，将上述 `--extra slim`、`--preset slim` 改为 standard；在初始化前执行 `npm --prefix frontend ci`、`npm --prefix frontend run build`，再重复一次同步命令，将聊天网页产物打包进安装环境。设备插件的额外依赖见对应模块说明，启用认证不代表默认安装所有可选依赖。
+Windows 安装 standard 时，使用 `.\scripts\install.ps1 --preset standard`，初始化时使用 `--preset standard`。安装脚本会自动构建聊天前端；设备额外依赖用 `--extra` 添加，详见[安装选项](../reference/installation.md#安装脚本选项)。
 
 ### Linux
 
@@ -54,10 +51,7 @@ Windows 安装 standard 时，将上述 `--extra slim`、`--preset slim` 改为 
 
 ```sh
 git clone git@github.com:macaulishchina/PersonalAgent.git .
-uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
-npm --prefix frontend ci
-npm --prefix frontend run build
-uv sync --locked --python 3.12 --extra standard --no-default-groups --no-editable
+bash scripts/install.sh
 export PATH="$PWD/.venv/bin:$PATH"
 pa install-pi
 pa init "$PWD/instance" --preset standard
@@ -65,7 +59,7 @@ pa use "$PWD/instance"
 pa configuration token --management "$PWD/instance/management.toml"
 ```
 
-Linux 只需 CLI 时，将两处 `--extra standard` 和 `--preset standard` 改为 slim，省略两条 npm 命令及第二次 `uv sync`。
+Linux 只需 CLI 时，使用 `bash scripts/install.sh --preset slim`，初始化时使用 `--preset slim`。slim 不构建聊天前端；显式添加 `--extra web` 时会构建。
 
 最后一条命令显示配置网页的管理员口令。Pi 安装位置会自动记录，保留默认 `pi_binary = "pi"` 即可。[自定义目录与 wheel 安装](../reference/installation.md)适用于另有部署要求的环境。
 

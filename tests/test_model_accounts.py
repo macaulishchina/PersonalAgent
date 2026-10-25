@@ -110,6 +110,18 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             "max_output_tokens": 512,
         }
 
+    async def test_auto_uses_native_defaults_without_forcing_an_effort(self):
+        payload = self.payload()
+        payload["reasoning"] = {"effort": "auto"}
+        await complete(self.accounts, payload, "automatic-fixture")
+        self.assertNotEqual(self.gateway.requests[0].get("reasoning", {}).get("effort"), "none")
+        from assistant_runtime.core.pi.accounts import describe_model
+
+        description = await describe_model("openai", "gpt-6.1-sol")
+        self.assertEqual(description["context_window"], 272000)
+        self.assertNotIn("none", description["reasoning_efforts"])
+        self.assertEqual(len(self.gateway.requests), 1)  # description never authenticates or infers
+
     async def test_native_inference_schema_images_auth_and_catalog(self):
         payload = self.payload()
         payload["text"] = {

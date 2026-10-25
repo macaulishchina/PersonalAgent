@@ -2,7 +2,7 @@
 root = ".."
 pi_binary = "pi"
 main_model = "unconfigured"
-main_reasoning_effort = "medium"
+main_reasoning_effort = "auto"
 instance_skills = []
 plugins = ["ai_usage", "models", "workfiles", "pi", "execution", "integrations", "conversation", "cli"]
 include = ["models.toml", "ai-usage.toml"]

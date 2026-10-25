@@ -199,6 +199,27 @@ class NativeAccounts:
         self.workers.clear()
 
 
+async def describe_model(provider, model, *, binary=None):
+    """Read bundled Pi metadata without initializing credentials, login or inference."""
+    worker = AccountWorker(Path.cwd(), Path.cwd(), {}, binary=binary)
+    try:
+        async with asyncio.timeout(15):
+            worker.process = await system.spawn(
+                pi_node(binary),
+                str(Path(__file__).with_suffix(".mjs")),
+                str(await installation(binary)),
+                stdin=-1,
+                stdout=-1,
+                stderr=asyncio.subprocess.DEVNULL,
+                limit=8 * 1024 * 1024,
+                env={"PATH": os.environ["PATH"], "PI_TELEMETRY": "0", "PI_OFFLINE": "1"},
+            )
+            worker.reader = asyncio.create_task(worker._read())
+            return await worker.call("describe", {"provider": provider, "model": model})
+    finally:
+        await worker.close()
+
+
 async def manage(root, settings, action, account=None, *, binary=None):
     """Explicit operator-only login. Auth prompts never go through model tools or logs."""
     accounts = NativeAccounts(root, settings, binary=binary)

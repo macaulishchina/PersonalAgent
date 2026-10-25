@@ -1908,10 +1908,9 @@ dialog.wide-dialog {
   }
   .entity-card {
     display: grid;
-    grid-template-columns: minmax(130px, 0.8fr) minmax(160px, 1.15fr) minmax(
-        170px,
-        1fr
-      ) auto;
+    grid-template-columns:
+      minmax(130px, 0.8fr) minmax(160px, 1.15fr) minmax(170px, 1fr)
+      auto;
     gap: 20px;
     align-items: center;
     padding: 20px 0;
@@ -1975,4 +1974,201 @@ dialog.wide-dialog {
   .setup-step {
     padding: 16px;
   }
+}
+
+/* Operator connection probes and bounded model-directory selection. */
+.provider-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.provider-status[hidden] {
+  display: none;
+}
+.provider-probe {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 20px 0;
+}
+.provider-probe button {
+  flex-shrink: 0;
+}
+.provider-probe .provider-status {
+  padding-top: 8px;
+}
+[data-state="error"] {
+  color: var(--red, #a13c38);
+}
+[data-state="success"] {
+  color: var(--green, #27745a);
+}
+.model-picker {
+  margin: -4px 0 20px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.model-query-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.model-picker > .hint {
+  margin: 10px 0 0;
+  line-height: 1.6;
+}
+.model-results {
+  margin-top: 16px;
+}
+.model-results > input {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.model-results > .hint {
+  display: block;
+  margin-bottom: 8px;
+}
+.model-result-list {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.model-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--line);
+}
+.model-result:last-child {
+  border: 0;
+}
+.model-result > div {
+  min-width: 0;
+}
+.model-result strong,
+.model-result code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.model-result code {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.model-result button {
+  flex-shrink: 0;
+  min-width: 74px;
+}
+.model-result .selected {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.wizard-field select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.setup-dialog[data-mode="model"] {
+  width: min(920px, calc(100vw - 64px));
+}
+.setup-dialog[data-mode="model"] #setup-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 20px 24px;
+  align-items: start;
+}
+.setup-dialog[data-mode="model"] #setup-form > .wizard-field {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.setup-dialog[data-mode="model"] .model-picker {
+  margin: 0;
+}
+.model-details {
+  min-width: 0;
+}
+.model-details .wizard-field:first-child {
+  margin-top: 0;
+}
+.setup-dialog[data-mode="model"] .dialog-actions {
+  grid-column: 1 / -1;
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  background: var(--surface, #fff);
+  border-top: 1px solid var(--line);
+}
+
+/* Connection forms follow the selected route, not the persistence schema. */
+#entry-body > .api-connection-fields {
+  padding: 24px 28px;
+}
+.api-connection-fields .connection-auth {
+  padding: 18px;
+  margin: 20px 0;
+  background: #f7faf2;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.api-connection-fields input[readonly] {
+  background: var(--bg);
+  color: var(--muted);
+}
+.connection-auth-options,
+.connection-protocol-options {
+  margin: 16px 0;
+}
+.connection-auth-options > summary,
+.connection-protocol-options > summary {
+  padding: 12px 0;
+  cursor: pointer;
+  color: var(--muted);
+}
+.connection-auth-options .wizard-field,
+.connection-protocol-options .wizard-field {
+  margin-top: 14px;
+}
+.api-connection-fields .wizard-field:has(input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.api-connection-fields input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+#entry-body > .connection-auth {
+  padding: 24px 28px;
+}
+#entry-body > .provider-probe {
+  margin: 20px 28px;
+}
+
+.capability-summary {
+  margin: 24px 32px;
+  padding: 24px;
+  border: 1px solid var(--border, #dbe2d9);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.capability-facts {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: 12px 24px;
+}
+.capability-facts dt {
+  color: var(--muted, #66756b);
+}
+.capability-facts dd {
+  margin: 0;
+  font-weight: 600;
 }
