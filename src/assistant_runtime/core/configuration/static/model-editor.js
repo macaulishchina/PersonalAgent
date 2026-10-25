@@ -29,104 +29,67 @@ async function describeModel(providerName, model, reference = "", observed) {
   return result.capabilities;
 }
 
+// Import fills ordinary settings; the snapshot records provenance, not another form.
+function modelCapabilityValues(capabilities) {
+  const values = {};
+  for (const name of [
+    "images",
+    "structured",
+    "context_window",
+    "output_limit",
+    "reasoning_efforts",
+  ])
+    if (Object.hasOwn(capabilities, name))
+      values[name] = structuredClone(capabilities[name]);
+  if (
+    capabilities.reasoning === false &&
+    !Object.hasOwn(values, "reasoning_efforts")
+  )
+    values.reasoning_efforts = [];
+  return values;
+}
+
 function renderModelEditor(field) {
   const root = $("entry-body"),
     path = field.path;
   const current = () =>
     valueAt(["model_api", "entries"], {})[path.at(-1)] || {};
-  const initial = current();
-  const copy = structuredClone(field);
-  copy.value = initial;
-  const props = copy.schema.properties;
-  delete props.capabilities;
-  delete props.execution_validated;
+  function assign(name, value) {
+    // Programmatic fills must replace the raw input cache as well as the draft.
+    drafts.delete(key([...path, name]));
+    changed([...path, name], "set", value);
+  }
+  const initial = current(),
+    cap = initial.capabilities || {};
+  const props = structuredClone(field.schema.properties);
+  const levels = initial.reasoning_efforts ?? cap.reasoning_efforts ?? [];
+  const selected = initial.default_reasoning_effort || "auto";
   props.provider.title = "使用连接";
   props.model.title = "供应商模型 ID";
-  props.default_reasoning_effort.title = "思考模式";
-  const levels =
-    initial.reasoning_efforts ?? initial.capabilities?.reasoning_efforts ?? [];
-  const choices = ["auto", ...levels];
-  const selected = initial.default_reasoning_effort || "auto";
-  if (!choices.includes(selected)) choices.push(selected);
-  props.default_reasoning_effort.enum = [...new Set(choices)];
+  props.default_reasoning_effort.title = "默认思考模式";
+  props.default_reasoning_effort.enum = [
+    ...new Set(["auto", ...levels, selected]),
+  ];
   props.default_reasoning_effort.default = "auto";
-  props.default_reasoning_effort.description =
-    "自动遵循当前适配器的默认策略；不会强行发送 medium。显式档位仅在已知支持时提供。";
-  for (const [name, definition] of Object.entries(props))
-    definition["x-advanced"] = ![
-      "provider",
-      "model",
-      "default_reasoning_effort",
-    ].includes(name);
-  props.reasoning_efforts.title = "覆盖 · 可用思考档位";
+  props.default_reasoning_effort.description = levels.length
+    ? "自动使用服务端默认策略；也可从上方启用的档位中选择默认值。"
+    : "当前未设置可用档位，因此只有自动。可在上方按供应商说明启用档位，再选择默认值。";
+  props.reasoning_efforts.title = "可用思考档位";
   props.reasoning_efforts.description =
-    "仅在明确了解当前连接支持范围时覆盖；不会为未实现的协议增加能力。留空表示仅使用自动。";
-  for (const name of ["images", "structured", "context_window"])
-    props[name].title = "覆盖 · " + props[name].title;
-  root.replaceChildren(drawField(copy));
-  const summary = node("section", undefined, "capability-summary");
-  summary.setAttribute("aria-label", "自动识别的模型能力");
-  summary.append(node("h3", "模型能力"));
-  const cap = initial.capabilities || {};
-  const rows = node("dl", undefined, "capability-facts");
-  const truth = (value) =>
-    value === true ? "支持" : value === false ? "不支持" : "未知";
-  for (const [label, key, format] of [
-    [
-      "上下文窗口",
-      "context_window",
-      (v) => (v ? v.toLocaleString() + " tokens" : "未知"),
-    ],
-    [
-      "模型最大输出",
-      "output_limit",
-      (v) => (v ? v.toLocaleString() + " tokens" : "未知"),
-    ],
-    ["图片输入", "images", truth],
-    ["结构化输出", "structured", truth],
-    ["工具调用", "tools", truth],
-  ]) {
-    const manual = Object.hasOwn(initial, key);
-    rows.append(
-      node("dt", label),
-      node(
-        "dd",
-        format(manual ? initial[key] : cap[key]) +
-          (manual ? " · 手动覆盖" : ""),
-      ),
-    );
-  }
-  summary.append(rows);
-  const efforts = cap.reasoning_efforts;
-  summary.append(
-    node(
-      "p",
-      efforts?.length
-        ? "适配器支持的思考选项：" +
-            efforts.map((e) => optionLabel({}, e, ["reasoning"])).join("、")
-        : cap.reasoning === false
-          ? "此模型未声明可调思考能力，使用自动即可。"
-          : "尚无此连接的可靠思考档位映射，默认不指定思考参数。模型声明支持推理，不等于支持所有档位。",
-      "hint",
-    ),
+    "勾选当前连接实际支持的档位，默认思考模式会同步更新。资料明确提供档位时会自动勾选；未标注时可按供应商说明设置。";
+  const summary = node(
+    "section",
+    undefined,
+    "model-parameters capability-summary",
   );
-  summary.append(
-    node(
-      "p",
-      cap.source && cap.source !== "unknown"
-        ? `资料来源：${cap.source} · ${cap.reference || initial.model} · ${cap.revision.slice(0, 12)}。能力资料不代表实际验收。`
-        : "未找到准确的能力资料。可使用高级覆盖或关联参考模型；不会按名称猜测。",
-      "hint",
-    ),
-  );
-  summary.append(
-    node(
-      "p",
-      initial.execution_validated
-        ? "执行验收：已有人工确认记录（保留原配置）。"
-        : "执行验收：尚未确认。请使用部署指南中的有界模型验收流程；查询目录不会执行工具或消耗推理额度。",
-      "hint",
-    ),
+  summary.setAttribute("aria-label", "模型参数");
+  summary.append(node("h3", "模型参数"));
+  const source = node(
+    "p",
+    cap.source && cap.source !== "unknown"
+      ? `最近采用：${cap.source} · ${cap.reference || initial.model}。下方参数可直接修改，再次填充会替换资料中已知的值。`
+      : "可手动填写，也可搜索模型资料自动填充。没有资料也能保存。",
+    "hint",
   );
   const status = node("p", "", "provider-status");
   status.setAttribute("role", "status");
@@ -140,7 +103,7 @@ function renderModelEditor(field) {
     if (busy) return;
     busy = true;
     load.disabled = true;
-    status.textContent = "正在读取模型资料，不发送推理请求…";
+    status.textContent = "正在读取模型资料…";
     const identity = [current().provider, current().model];
     try {
       const value = await describeModel(...identity, reference, observed);
@@ -150,9 +113,26 @@ function renderModelEditor(field) {
           JSON.stringify([current().provider, current().model])
       )
         return;
+      const values = modelCapabilityValues(value);
       changed([...path, "capabilities"], "set", value);
+      for (const [name, setting] of Object.entries(values))
+        assign(name, setting);
+      const mode = current().default_reasoning_effort || "auto";
+      if (
+        values.reasoning_efforts &&
+        mode !== "auto" &&
+        !values.reasoning_efforts.includes(mode)
+      )
+        assign("default_reasoning_effort", "auto");
       renderEntityEditor();
       updateSaveBar();
+      const message = root.querySelector(".provider-status");
+      message.textContent = Object.keys(values).length
+        ? "已填入模型参数，未提供的字段保留原值。可以继续修改，保存后生效。"
+        : "资料未提供可填充参数，现有值保持不变。可选择其他参考或手动填写。";
+      root
+        .querySelector(".model-parameters")
+        .scrollIntoView({ block: "start" });
     } catch (error) {
       if (root.contains(summary)) {
         status.textContent = error.message;
@@ -164,67 +144,98 @@ function renderModelEditor(field) {
     }
   }
   const load = button(
-    cap.source ? "刷新能力资料" : "自动识别能力",
+    cap.source && cap.source !== "unknown" ? "重新填充资料" : "识别并填充",
     () => refresh(),
     "secondary",
   );
-  const reset = button(
-    "恢复自动能力",
-    () => {
-      for (const name of [
-        "images",
-        "structured",
-        "context_window",
-        "reasoning_efforts",
-        "default_reasoning_effort",
-      ])
-        changed([...path, name], "default");
-      changed([...path, "default_reasoning_effort"], "set", "auto");
-      renderEntityEditor();
-      updateSaveBar();
-    },
-    "subtle",
+  const picker = renderCapabilityPicker(initial, refresh);
+  summary.append(source, load, picker, status);
+  const values = { ...modelCapabilityValues(cap), ...initial };
+  function input(name) {
+    return drawField({
+      ...field,
+      path: [...path, name],
+      value: values[name],
+      schema: props[name],
+      loaded_value: field.loaded_value?.[name],
+      explicit: Object.hasOwn(initial, name),
+    });
+  }
+  const basic = node("section", undefined, "model-basic");
+  for (const name of ["provider", "model"]) basic.append(input(name));
+  const parameters = node("div", undefined, "model-parameter-inputs");
+  for (const name of ["context_window", "output_limit", "images", "structured"])
+    parameters.append(input(name));
+  summary.append(parameters);
+  const thinking = node("section", undefined, "model-thinking");
+  thinking.append(
+    node("h3", "思考设置"),
+    input("reasoning_efforts"),
+    input("default_reasoning_effort"),
   );
-  const actions = node("div", undefined, "wizard-actions");
-  actions.append(load, reset);
-  summary.append(actions, status);
-  const reference = node("details", undefined, "advanced-fields");
-  reference.append(node("summary", "高级 · 中转或私有部署的参考模型"));
-  reference.append(
+  const advanced = node("details", undefined, "advanced-fields model-budget");
+  advanced.append(
+    node("summary", "高级设置"),
+    node("p", "运行预算与回退策略，与模型规格分开设置。", "hint"),
+  );
+  for (const name of [
+    "max_output_tokens",
+    "execution_max_output_tokens",
+    "fallbacks",
+  ])
+    advanced.append(input(name));
+  advanced.append(
     node(
       "p",
-      "仅借用公开规格，不表示中转已验证。格式：供应商/模型 ID；部署限制可在高级设置中覆盖。",
+      initial.execution_validated
+        ? "执行验收：已有人工确认记录。"
+        : "执行验收：尚未确认。采用公开资料不会标记执行能力已验收。",
       "hint",
     ),
   );
-  const ref = formInput(reference, "capability-reference", "参考模型", {
-    placeholder: "例如 openai/gpt-…",
-    value: cap.reference || "",
-  });
-  reference.append(
-    button("读取参考资料", () => refresh(ref.value.trim()), "secondary"),
+  root.replaceChildren(basic, summary, thinking, advanced);
+  // Generic controls commit and rebuild on input, before a later change event.
+  // Reconcile dependent fields during capture so the rebuild sees one coherent draft.
+  root.addEventListener(
+    "input",
+    (event) => {
+      const row = event.target.closest("[data-field-path]");
+      if (row?.dataset.fieldPath === key([...path, "reasoning_efforts"])) {
+        const supported = [...row.querySelectorAll("input:checked")].map(
+          (item) => item.value,
+        );
+        const mode = current().default_reasoning_effort || "auto";
+        if (mode !== "auto" && !supported.includes(mode))
+          assign("default_reasoning_effort", "auto");
+        const focused = event.target.value;
+        queueMicrotask(() =>
+          root
+            .querySelector(
+              `.model-thinking input[value="${CSS.escape(focused)}"]`,
+            )
+            ?.focus(),
+        );
+      }
+      if (row?.dataset.fieldPath === key([...path, "provider"])) {
+        changed([...path, "capabilities"], "default");
+        changed([...path, "execution_validated"], "set", false);
+      }
+    },
+    { capture: true, signal: editorInputController.signal },
   );
-  summary.append(reference);
-  const overrides = root.querySelector(".advanced-fields");
-  if (overrides) overrides.before(summary);
-  else root.append(summary);
   root.addEventListener(
     "change",
     (event) => {
-      const changedPath =
-        event.target.closest("[data-field-path]")?.dataset.fieldPath;
       if (
-        ["provider", "model"].some(
-          (name) => changedPath === key([...path, name]),
-        )
+        event.target.closest("[data-field-path]")?.dataset.fieldPath ===
+        key([...path, "model"])
       ) {
         changed([...path, "capabilities"], "default");
         changed([...path, "execution_validated"], "set", false);
-        status.textContent =
-          "模型或连接已更换，请重新识别能力；旧的执行验收不再沿用。";
-      }
-      if (changedPath === key([...path, "reasoning_efforts"]))
         renderEntityEditor();
+        root.querySelector(".provider-status").textContent =
+          "模型已更换，请核对参数或重新填充；旧验收已撤销。";
+      }
     },
     { signal: editorInputController.signal },
   );
@@ -234,9 +245,193 @@ function renderModelEditor(field) {
         value.reasoning_efforts ?? value.capabilities?.reasoning_efforts ?? [];
     const effort = value.default_reasoning_effort || "auto";
     if (effort !== "auto" && !supported.includes(effort)) {
-      status.textContent = "当前思考档位不受支持，请改为自动或选择支持的档位。";
+      status.textContent = "请启用对应思考档位，或将默认思考模式改为自动。";
       return false;
     }
     return true;
   };
+}
+
+// Search only suggests records. Explicit selection + apply changes the local draft.
+function renderCapabilityPicker(initial, apply) {
+  const root = node("details", undefined, "capability-picker");
+  root.open =
+    !initial.capabilities?.source || initial.capabilities.source === "unknown";
+  root.append(node("summary", "查找并选择能力参考"));
+  root.append(
+    node(
+      "p",
+      "按模型名称搜索所有服务商。选择并核对规格后填充到下方参数。资料中已知的值会替换现值，未提供的保留；不会更换连接或模型 ID。",
+      "hint",
+    ),
+  );
+  const fields = node("fieldset", undefined, "capability-picker-fields");
+  const query = formInput(fields, "capability-search", "搜索模型或服务商", {
+    type: "search",
+    value: initial.model || "",
+    placeholder: "例如 deepseek-v4.1-flash",
+  });
+  query.maxLength = 200;
+  const select = searchableSelect(
+    "匹配的参考模型",
+    "过滤服务商或模型（可输入原厂）",
+    "capability-candidates",
+    editorInputController.signal,
+  );
+  fields.append(select);
+  const status = node("p", "", "hint");
+  status.setAttribute("role", "status");
+  const preview = node("div", undefined, "capability-preview");
+  preview.hidden = true;
+  const actions = node("div", undefined, "capability-actions");
+  const adopt = button(
+    "采用并填充",
+    async () => {
+      const candidate = candidates.find(
+        (item) => item.reference === select.value,
+      );
+      if (!candidate) return;
+      fields.disabled = true;
+      try {
+        await apply(candidate.reference);
+      } finally {
+        fields.disabled = false;
+      }
+    },
+    "primary",
+  );
+  adopt.disabled = true;
+  actions.append(adopt);
+  fields.append(status, preview, actions);
+  root.append(fields);
+  let candidates = [],
+    sequence = 0,
+    timer,
+    started = false;
+  function clear() {
+    candidates = [];
+    select.setOptions([]);
+    adopt.disabled = true;
+    preview.hidden = true;
+  }
+  async function search() {
+    clearTimeout(timer);
+    const id = ++sequence;
+    const text = query.value.trim();
+    clear();
+    if (!text) {
+      status.textContent = "输入模型名，也可用服务商名称缩小范围。";
+      return;
+    }
+    status.textContent = "正在搜索本地能力目录…";
+    try {
+      const result = await api("/api/model-capabilities", {
+        action: "search",
+        query: text,
+        version: snapshot.version,
+      });
+      if (id !== sequence || !root.isConnected) return;
+      candidates = result.candidates;
+      const origins = {
+        original: "原厂目录",
+        other: "其他目录",
+        unknown: "归属未标注",
+      };
+      select.setOptions(
+        candidates.map((candidate) => {
+          const label = `${candidate.model} · ${candidate.provider} · ${origins[candidate.origin] || origins.unknown}${candidate.match === "exact" ? " · 同名" : " · 相关"}`;
+          return {
+            value: candidate.reference,
+            label,
+            search:
+              label +
+              " " +
+              candidate.canonical_model_id +
+              (candidate.origin === "original" ? " 官方" : ""),
+          };
+        }),
+      );
+      status.textContent = result.total
+        ? `共 ${result.total} 项，全部可选。原厂目录优先；下拉中输入“原厂”可筛选。${candidates.some((item) => item.origin === "original") ? "" : " 当前匹配项没有已标注的原厂记录，可缩短模型名重新搜索。"}`
+        : "没有匹配资料。可缩短名称重新搜索，或直接手动填写；不影响保存模型。";
+    } catch (error) {
+      if (id === sequence && root.isConnected)
+        status.textContent = error.message;
+    }
+  }
+  select.addEventListener("change", () => {
+    const candidate = candidates.find(
+      (item) => item.reference === select.value,
+    );
+    adopt.disabled = !candidate;
+    preview.hidden = !candidate;
+    if (!candidate) return;
+    const cap = candidate.capabilities;
+    const truth = (v) =>
+      v === true ? "支持" : v === false ? "不支持" : "未知";
+    const number = (v) => (v ? v.toLocaleString() + " tokens" : "未知");
+    const facts = node("dl", undefined, "capability-facts");
+    for (const [label, value] of [
+      ["上下文窗口", number(cap.context_window)],
+      ["最大输出", number(cap.output_limit)],
+      ["图片输入", truth(cap.images)],
+      ["结构化输出", truth(cap.structured)],
+      ["工具调用", truth(cap.tools)],
+      ["推理能力", truth(cap.reasoning)],
+      [
+        "资料中的思考档位",
+        cap.reasoning_efforts?.length
+          ? cap.reasoning_efforts
+              .map((v) => optionLabel({}, v, ["reasoning"]))
+              .join("、")
+          : "未标注",
+      ],
+    ])
+      facts.append(node("dt", label), node("dd", value));
+    preview.replaceChildren(
+      node("strong", candidate.reference),
+      node(
+        "p",
+        candidate.origin === "original"
+          ? "资料来源：原厂目录"
+          : candidate.origin === "other"
+            ? "资料来源：其他目录（不代表非官方）"
+            : "资料来源：上游未标注模型归属",
+        "hint",
+      ),
+      node(
+        "p",
+        candidate.canonical_model_id
+          ? `上游原始模型：${candidate.canonical_model_id}`
+          : "上游未提供原始模型归属",
+        "hint",
+      ),
+      facts,
+      node(
+        "p",
+        "来源：models.dev 公开目录。仅借用能力规格，不代表当前连接已验收；思考档位仍按当前连接的适配能力确定。",
+        "hint",
+      ),
+    );
+  });
+  query.addEventListener("input", () => {
+    ++sequence;
+    clear();
+    status.textContent = "等待搜索…";
+    clearTimeout(timer);
+    timer = setTimeout(() => search(), 250);
+  });
+  query.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      search();
+    }
+  });
+  root.addEventListener("toggle", () => {
+    if (root.open && !started) {
+      started = true;
+      search();
+    }
+  });
+  return root;
 }

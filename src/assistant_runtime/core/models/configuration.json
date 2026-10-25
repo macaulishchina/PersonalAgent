@@ -291,7 +291,7 @@
             },
             "capabilities": {
               "type": "object",
-              "title": "自动识别能力快照",
+              "title": "模型资料来源",
               "properties": {
                 "binding": {
                   "type": "string"
@@ -345,12 +345,20 @@
               },
               "additionalProperties": false,
               "x-advanced": true
+            },
+            "output_limit": {
+              "type": "integer",
+              "title": "模型最大输出",
+              "description": "模型支持的最大输出 token 数；实际调用还受运行预算限制。",
+              "minimum": 1,
+              "maximum": 10000000
             }
           },
           "additionalProperties": false
         },
         "propertyNames": {
-          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$",
+          "description": "模型名称须以英文字母开头，可包含字母、数字、点号、下划线或连字符，最多 64 个字符；请检查“在 PA 中的名称”。"
         }
       },
       "memory": {

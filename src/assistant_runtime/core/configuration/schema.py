@@ -104,10 +104,13 @@ def resolve(spec, raw):
             "maxLength": "内容过长",
             "pattern": "格式不符合要求",
         }
+        message = messages.get(error.validator, "配置不符合声明规则")
+        if "propertyNames" in error.absolute_schema_path:
+            message = error.schema.get("description", "条目名称不符合格式要求，请检查条目名称。")
         raise ConfigurationError(
             [*(spec.namespace.split(".") if spec.namespace else []), *error.absolute_path],
             str(error.validator),
-            messages.get(error.validator, "配置不符合声明规则"),
+            message,
         )
     return value
 

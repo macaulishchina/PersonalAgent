@@ -29,6 +29,34 @@ def compile_catalog(raw):
                 n = row.get("limit", {}).get(source)
                 if type(n) is int and 1 <= n <= 10000000:
                     value[target] = n
+            # Read explicit effort choices only. Toggle and token budgets are different controls.
+            efforts = []
+            for option in (
+                row.get("reasoning_options", []) if isinstance(row.get("reasoning_options"), list) else []
+            ):
+                if (
+                    not isinstance(option, dict)
+                    or option.get("type") != "effort"
+                    or not isinstance(option.get("values"), list)
+                ):
+                    continue
+                for effort in option["values"]:
+                    if (
+                        effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+                        and effort not in efforts
+                    ):
+                        efforts.append(effort)
+            if efforts and row.get("reasoning") is True:
+                value["reasoning_efforts"] = efforts
+            canonical = row.get("canonical_model_id")
+            if (
+                isinstance(canonical, str)
+                and len(canonical) <= 512
+                and not any(c.isspace() or ord(c) < 32 for c in canonical)
+                and canonical.partition("/")[0]
+                and canonical.partition("/")[2]
+            ):
+                value["canonical_model_id"] = canonical
             if value:
                 models[provider + "/" + ident] = value
     if not models:

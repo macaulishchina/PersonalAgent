@@ -47,7 +47,12 @@ class ProviderQueries:
         self.slots = asyncio.Semaphore(2)
 
     async def describe(self, data):
-        from assistant_runtime.core.models.capabilities import profile, public_catalog, supplier
+        from assistant_runtime.core.models.capabilities import (
+            profile,
+            public_catalog,
+            search_references,
+            supplier,
+        )
         from assistant_runtime.core.pi.accounts import describe_model
 
         version = data.get("version")
@@ -55,6 +60,11 @@ class ProviderQueries:
             snapshot = self.business.files.snapshot()
             if snapshot.version != version:
                 raise Conflict()
+            if data.get("action") == "search":
+                query = data.get("query", "")
+                if not isinstance(query, str) or len(query) > 200 or any(ord(c) < 32 for c in query):
+                    raise ProbeInput("query", "请输入 200 字符以内的模型名称或服务商。")
+                return search_references(query.strip())
             raw = {}
             for content in snapshot.contents.values():
                 merge(raw, tomllib.loads(content.decode()))
@@ -75,7 +85,7 @@ class ProviderQueries:
             if not isinstance(model, str) or not 1 <= len(model) <= 200 or any(ord(c) < 32 for c in model):
                 raise ValueError("请填写有效的模型 ID")
             if not isinstance(reference, str) or (reference and reference not in public_catalog()["models"]):
-                raise ValueError("参考模型不存在，请填写目录中的 provider/model 标识")
+                raise ProbeInput("reference", "该参考资料已不在目录中，请重新搜索并选择。")
             binary = raw.get("pi_binary", "pi")
         native = None
         owner = supplier(provider, account)

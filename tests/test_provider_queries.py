@@ -160,6 +160,105 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 409)
 
+    async def test_reference_search_is_authenticated_read_only_and_invalid_reference_is_specific(self):
+        root, business, console, client, headers = await self.management()
+        before = business.files.snapshot()
+        body = {"action": "search", "query": "deepseek-v4.1-flash", "version": before.version}
+        response = await client.post("/api/model-capabilities", json=body, headers=headers)
+        self.assertEqual(response.status, 401)
+        await client.post(
+            "/api/login", json={"token": console.access.path.read_text().strip()}, headers=headers
+        )
+        response = await client.post("/api/model-capabilities", json=body, headers=headers)
+        self.assertEqual(response.status, 200)
+        result = await response.json()
+        self.assertGreater(result["total"], 1)
+        self.assertEqual(len(result["candidates"]), result["total"])
+        self.assertGreater(result["total"], 50)
+        for patch_body, status in [
+            ({"version": "stale"}, 409),
+            ({"query": []}, 400),
+            ({"query": "x" * 201}, 400),
+            ({"query": "bad\nquery"}, 400),
+        ]:
+            response = await client.post(
+                "/api/model-capabilities", json={**body, **patch_body}, headers=headers
+            )
+            self.assertEqual(response.status, status)
+        response = await client.post(
+            "/api/model-capabilities", json=body, headers={"Origin": "http://other.invalid"}
+        )
+        self.assertEqual(response.status, 403)
+        draft = {"provider": self.spec(), "model": "private-alias", "version": before.version}
+        response = await client.post(
+            "/api/model-capabilities", json={**draft, "reference": "absent/model"}, headers=headers
+        )
+        self.assertEqual(response.status, 400)
+        self.assertEqual((await response.json())["field"], "reference")
+        selected = result["candidates"][0]["reference"]
+        response = await client.post(
+            "/api/model-capabilities", json={**draft, "reference": selected}, headers=headers
+        )
+        self.assertEqual(response.status, 200)
+        metadata = (await response.json())["capabilities"]
+        self.assertEqual(metadata["reference"], selected)
+        self.assertEqual(metadata["source"], "models.dev")
+        self.assertEqual(metadata["reasoning_efforts"], ["low", "high", "max"])
+        self.assertEqual(business.files.snapshot(), before)
+        self.assertFalse(self.requests)
+
+    async def test_dotted_model_alias_and_public_efforts_save_through_enabled_owner(self):
+        from assistant_runtime.core.models.capabilities import profile
+        from assistant_runtime.core.models.settings import ModelSettings
+
+        root, business, console, client, headers = await self.management()
+        entry_file = root / "config.toml"
+        entry_file.write_text(entry_file.read_text().replace("plugins=[]", 'plugins=["ai_usage", "models"]'))
+        await client.post(
+            "/api/login", json={"token": console.access.path.read_text().strip()}, headers=headers
+        )
+        provider = self.spec()
+        cap = profile(provider, "deepseek-v4.1-flash", reference="deepseek/deepseek-flash")
+        model = {
+            "provider": "test",
+            "model": "deepseek-v4.1-flash",
+            "capabilities": cap,
+            "reasoning_efforts": cap["reasoning_efforts"],
+            "default_reasoning_effort": "high",
+        }
+        response = await client.post(
+            "/api/configuration",
+            headers=headers,
+            json={
+                "version": business.files.snapshot().version,
+                "patches": [
+                    {"op": "set", "path": ["model_api", "entries", "deepseek-v4.1-flash"], "value": model}
+                ],
+            },
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        if business.apply_task:
+            await business.apply_task
+        saved = tomllib.loads(entry_file.read_text())["model_api"]
+        parsed = ModelSettings.parse(saved)
+        self.assertEqual(parsed.entries["deepseek-v4.1-flash"]["reasoning_efforts"], ["low", "high", "max"])
+        self.assertEqual(parsed.entries["deepseek-v4.1-flash"]["default_reasoning_effort"], "high")
+        before = business.files.snapshot()
+        response = await client.post(
+            "/api/configuration",
+            headers=headers,
+            json={
+                "version": before.version,
+                "patches": [{"op": "set", "path": ["model_api", "entries", "bad name"], "value": model}],
+            },
+        )
+        self.assertEqual(response.status, 400)
+        error = await response.json()
+        self.assertIn("模型名称", error["error"])
+        self.assertEqual(error["issues"][0]["path"], ["model_api", "entries"])
+        self.assertEqual(business.files.snapshot(), before)
+        self.assertFalse(self.requests)
+
     async def test_connection_only_save_after_probe_keeps_name_and_secret_private(self):
         root, business, console, client, headers = await self.management()
         await client.post(

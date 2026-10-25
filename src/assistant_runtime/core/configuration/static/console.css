@@ -2172,3 +2172,136 @@ dialog.wide-dialog {
   margin: 0;
   font-weight: 600;
 }
+
+.capability-picker {
+  border-top: 1px solid var(--border, #dbe2d9);
+  margin-top: 20px;
+  padding-top: 20px;
+}
+.capability-picker > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.capability-picker-fields {
+  border: 0;
+  padding: 0;
+  margin: 16px 0 0;
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+.capability-picker-fields .wizard-field {
+  margin: 0;
+  min-width: 0;
+}
+.capability-picker-fields select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+.capability-preview {
+  padding: 16px 20px;
+  background: var(--background, #f6f8f3);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.capability-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.capability-actions .primary {
+  margin-left: auto;
+}
+
+.model-parameters > .model-parameter-inputs {
+  margin: 20px -24px -24px;
+}
+.model-parameter-inputs > .field:first-child {
+  border-top: 1px solid var(--border, #dbe2d9);
+}
+.model-thinking {
+  margin: 24px 32px;
+  border: 1px solid var(--border, #dbe2d9);
+  border-radius: 12px;
+}
+.model-thinking > h3 {
+  margin: 24px;
+}
+.model-thinking > .field {
+  padding: 20px 24px;
+}
+.model-budget {
+  margin: 24px 32px;
+}
+.model-parameters > h3 {
+  margin-top: 0;
+}
+
+.searchable-select {
+  position: relative;
+  min-width: 0;
+}
+.searchable-select-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.searchable-select-trigger {
+  width: 100%;
+  display: flex;
+  text-align: left;
+  justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+.searchable-select-trigger::after {
+  content: "▾";
+  flex-shrink: 0;
+}
+.searchable-select-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin-top: 4px;
+  padding: 12px;
+  background: var(--surface, white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px #183c2826;
+}
+.searchable-select-panel > .collection-filter {
+  margin: 0 0 10px;
+}
+.searchable-select-panel .collection-filter input {
+  width: 100%;
+  min-width: 0;
+}
+.searchable-select-panel .model-result-list {
+  max-height: 260px;
+}
+.searchable-select-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.searchable-select-option:hover,
+.searchable-select-option:focus-visible,
+.searchable-select-option[aria-pressed="true"] {
+  background: var(--selected, #eaf1e4);
+}
+.searchable-select-option[hidden] {
+  display: none;
+}
+
+.searchable-select.opens-up .searchable-select-panel {
+  top: auto;
+  bottom: calc(100% + 4px);
+  margin-top: 0;
+}

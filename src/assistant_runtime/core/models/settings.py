@@ -70,11 +70,15 @@ def keys(value, allowed):
 
 
 def name(value, path=("model_api",)):
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value):
+    model_alias = tuple(path) == ("model_api", "entries")
+    pattern = r"[A-Za-z][A-Za-z0-9_.-]{0,63}" if model_alias else r"[A-Za-z][A-Za-z0-9_-]{0,63}"
+    if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise ConfigurationError(
             path,
             "invalid_registry_name",
-            "名称须以英文字母开头，可包含大小写字母、数字、下划线或连字符，最多 64 个字符。",
+            "模型名称须以英文字母开头，可包含字母、数字、点号、下划线或连字符，最多 64 个字符。"
+            if model_alias
+            else "名称须以英文字母开头，可包含大小写字母、数字、下划线或连字符，最多 64 个字符。",
         )
     return value
 
@@ -240,6 +244,7 @@ class ModelSettings:
                     "max_output_tokens",
                     "execution_max_output_tokens",
                     "context_window",
+                    "output_limit",
                     "fallbacks",
                     "capabilities",
                 },
@@ -278,6 +283,11 @@ class ModelSettings:
             window = m.get("context_window", 32768)
             if type(window) is not int or not 1 <= window <= 10000000:
                 raise ValueError("Invalid model context window")
+            output_limit = m.get("output_limit")
+            if output_limit is not None and (
+                type(output_limit) is not int or not 1 <= output_limit <= 10000000
+            ):
+                raise ValueError("Invalid model output limit")
             limit = m.get("max_output_tokens", obj.max_output_tokens)
             if type(limit) is not int or not 1 <= limit <= 16384:
                 raise ValueError("Invalid output token budget")

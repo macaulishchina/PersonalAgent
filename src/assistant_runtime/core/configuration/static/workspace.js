@@ -1270,6 +1270,127 @@ function providerTest(name) {
   );
   return { button: control, status };
 }
+// Reuse the collection filter and model directory styles for finite local choices.
+function searchableSelect(label, filterLabel, identity, signal) {
+  const root = node("div", undefined, "searchable-select");
+  const trigger = button(
+    "请选择…",
+    () => toggle(panel.hidden),
+    "secondary searchable-select-trigger",
+  );
+  trigger.setAttribute("aria-label", label);
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-expanded", "false");
+  const panel = node("div", undefined, "searchable-select-panel");
+  panel.id = "searchable-" + identity;
+  panel.hidden = true;
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", label + "筛选");
+  trigger.setAttribute("aria-controls", panel.id);
+  const list = node("div", undefined, "model-result-list");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", label + "候选");
+  root.append(node("span", label, "searchable-select-label"), trigger, panel);
+  let selected = "",
+    search;
+  function toggle(open, focus = true) {
+    panel.hidden = !open;
+    if (open) {
+      const anchor = root.getBoundingClientRect();
+      const boundary = root
+        .closest("#entry-body, dialog")
+        ?.getBoundingClientRect();
+      const below =
+        Math.min(
+          window.innerHeight - 16,
+          boundary?.bottom ?? window.innerHeight,
+        ) - anchor.bottom;
+      const above = anchor.top - Math.max(16, boundary?.top ?? 0);
+      root.classList.toggle(
+        "opens-up",
+        panel.offsetHeight > below && above > below,
+      );
+    }
+    trigger.setAttribute("aria-expanded", String(open));
+    if (focus) (open ? search : trigger)?.focus();
+  }
+  Object.defineProperty(root, "value", { get: () => selected });
+  Object.defineProperty(root, "disabled", {
+    get: () => trigger.disabled,
+    set: (value) => {
+      trigger.disabled = value;
+      if (value) toggle(false, false);
+    },
+  });
+  root.setOptions = (options) => {
+    selected = "";
+    trigger.textContent = "请选择参考模型…";
+    toggle(false, false);
+    list.replaceChildren();
+    collectionQueries.delete(identity);
+    for (const option of options) {
+      const row = button(
+        option.label,
+        () => {
+          selected = option.value;
+          trigger.textContent = option.label;
+          for (const item of list.children)
+            item.setAttribute("aria-pressed", String(item === row));
+          toggle(false);
+          root.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        "searchable-select-option",
+      );
+      row.dataset.value = option.value;
+      row.dataset.search = option.search || option.label;
+      row.setAttribute("aria-pressed", "false");
+      list.append(row);
+    }
+    const [filter, empty] = collectionFilter(list, filterLabel, identity);
+    search = filter.querySelector("input");
+    panel.replaceChildren(filter, empty, list);
+    search.addEventListener("input", () => {
+      list.scrollTop = 0;
+    });
+    root.disabled = !options.length;
+  };
+  panel.addEventListener("keydown", (event) => {
+    const rows = [...list.children].filter((row) => !row.hidden);
+    const index = rows.indexOf(document.activeElement);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      toggle(false);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const next =
+        index < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : rows.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + rows.length) %
+            rows.length;
+      rows[next]?.focus();
+    } else if (event.key === "Enter" && event.target === search) {
+      event.preventDefault();
+      rows[0]?.click();
+    }
+  });
+  root.addEventListener("focusout", (event) => {
+    if (event.relatedTarget && !root.contains(event.relatedTarget))
+      toggle(false, false);
+  });
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!root.contains(event.target)) toggle(false, false);
+    },
+    { signal },
+  );
+  root.setOptions([]);
+  return root;
+}
+
 function modelPicker(form, provider, model, name) {
   const box = node("section", undefined, "model-picker");
   box.setAttribute("aria-label", "供应商模型查询");
@@ -1330,7 +1451,7 @@ function modelPicker(form, provider, model, name) {
           selectedMetadata = { id: row.id, capabilities: row.capabilities };
           model.dispatchEvent(new Event("input", { bubbles: true }));
           if (!name.value.trim()) {
-            let alias = row.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+            let alias = row.id.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
             if (!/^[a-z]/.test(alias)) alias = "model-" + alias;
             name.value = alias.slice(0, 64);
           }
@@ -1468,9 +1589,9 @@ function openAddEntity(kind) {
   });
   const name = formInput(form, "name", "在 PA 中的名称", {
     required: true,
-    pattern: "[A-Za-z][A-Za-z0-9_-]{0,63}",
+    pattern: "[A-Za-z](?:[A-Za-z0-9_.]|-){0,63}",
     placeholder: "例如 main 或 fast",
-    hint: "保持名称稳定，用途绑定会引用它。",
+    hint: "支持点号，例如 deepseek-v4.1-flash；保持名称稳定，用途绑定会引用它。",
   });
   $("setup-dialog").dataset.mode = "model";
   const selectedMetadata = modelPicker(form, provider, model, name);
@@ -1510,6 +1631,7 @@ function openAddEntity(kind) {
       provider: provider.value,
       model: model.value.trim(),
       default_reasoning_effort: "auto",
+      ...modelCapabilityValues(capabilities),
       capabilities,
     });
     $("setup-dialog").close();
@@ -1531,7 +1653,7 @@ function openConnectionWizard() {
   });
   const name = formInput(form, "name", "连接名称", {
     required: true,
-    pattern: "[A-Za-z][A-Za-z0-9_-]{0,63}",
+    pattern: "[A-Za-z](?:[A-Za-z0-9_]|-){0,63}",
     placeholder: "例如 openai 或 team",
     hint: "可使用大小写英文字母、数字、下划线或连字符，以字母开头；连接可先单独保存。",
   });

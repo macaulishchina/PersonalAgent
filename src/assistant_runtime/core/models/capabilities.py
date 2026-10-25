@@ -4,6 +4,7 @@ from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import json
+import re
 from pathlib import Path
 
 LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -13,6 +14,73 @@ FACTS = {"images", "structured", "tools", "reasoning", "context_window", "output
 @lru_cache(maxsize=1)
 def public_catalog():
     return json.loads(Path(__file__).with_name("model_catalog.json").read_text(encoding="utf-8"))
+
+
+def catalog_identity(metadata):
+    """Use only the upstream lab/model attribution, never names or vendor lists."""
+    canonical = metadata.get("canonical_model_id")
+    if (
+        not isinstance(canonical, str)
+        or len(canonical) > 512
+        or any(c.isspace() or ord(c) < 32 for c in canonical)
+    ):
+        return "", ""
+    owner, separator, model = canonical.partition("/")
+    return (owner, canonical) if owner and separator and model else ("", "")
+
+
+def catalog_origin(provider, metadata):
+    owner, _ = catalog_identity(metadata)
+    return ("original" if provider == owner else "other") if owner else "unknown"
+
+
+def search_references(query):
+    """Rank names across all suppliers; candidates never select or apply metadata."""
+    catalog = public_catalog()
+    tokens = re.findall(r"[^\W_]+", query.casefold())
+    compact = "".join(tokens)
+    ranked = []
+    if compact:
+        for reference, metadata in catalog["models"].items():
+            provider, _, model = reference.partition("/")
+            normalized = "".join(re.findall(r"[^\W_]+", model.casefold()))
+            _, canonical = catalog_identity(metadata)
+            canonical_name = "".join(re.findall(r"[^\W_]+", canonical.partition("/")[2].casefold()))
+            searchable = (reference + " " + canonical).casefold()
+            if normalized == compact:
+                rank = 0
+            elif compact in normalized or compact == canonical_name:
+                rank = 1
+            elif compact in canonical_name or all(token in searchable for token in tokens):
+                rank = 2
+            else:
+                continue
+            ranked.append((rank, reference, provider, model, metadata))
+    ranked.sort(
+        key=lambda row: (
+            0 if catalog_origin(row[2], row[4]) == "original" else 1,
+            row[0],
+            row[1],
+        )
+    )
+    return {
+        "candidates": [
+            {
+                "reference": ref,
+                "provider": provider,
+                "model": model,
+                "match": "exact" if rank == 0 else "related",
+                "origin": catalog_origin(provider, metadata),
+                "originator": catalog_identity(metadata)[0],
+                "canonical_model_id": catalog_identity(metadata)[1],
+                "capabilities": facts(metadata),
+            }
+            for rank, ref, provider, model, metadata in ranked
+        ],
+        "total": len(ranked),
+        "source": "models.dev",
+        "revision": catalog["revision"],
+    }
 
 
 def facts(raw):
@@ -64,14 +132,10 @@ def profile(provider, model, *, account=None, native=None, remote=None, referenc
     if remote and provider.get("protocol") != "pi":
         values.update(facts(remote))
         source = "provider"
-    # A native Pi adapter's levels describe its own translations. They must not
-    # be copied to a generic gateway even when the upstream model has the same ID.
-    if provider.get("protocol") != "pi":
+    # Explicit public effort controls are usable on the generic OpenAI effort surface.
+    # Native routes retain Pi's exact mappings; toggle/budget controls are not effort levels.
+    if provider.get("protocol") not in {"pi", "openai_responses", "openai_chat"}:
         values.pop("reasoning_efforts", None)
-        if provider.get("protocol") in {"openai_responses", "openai_chat"} and remote:
-            declared = facts(remote).get("reasoning_efforts")
-            if declared:
-                values["reasoning_efforts"] = declared
     return {
         "binding": binding(provider, model, account),
         "source": source,
@@ -101,7 +165,7 @@ def resolve(entry, provider, account=None):
         if snapshot["binding"] != binding(provider, entry["model"], account):
             raise ValueError("Model connection changed; refresh capabilities or remove its stale snapshot")
     entry["capabilities"] = snapshot
-    for key in ("images", "structured", "context_window", "reasoning_efforts"):
+    for key in ("images", "structured", "context_window", "output_limit", "reasoning_efforts"):
         if key in snapshot:
             entry.setdefault(key, deepcopy(snapshot[key]))
     entry.setdefault("reasoning_efforts", [])
@@ -109,5 +173,5 @@ def resolve(entry, provider, account=None):
 
 
 def output_bound(entry, requested):
-    limit = entry.get("capabilities", {}).get("output_limit")
+    limit = entry.get("output_limit", entry.get("capabilities", {}).get("output_limit"))
     return min(requested, limit) if limit else requested

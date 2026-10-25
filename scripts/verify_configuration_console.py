@@ -42,6 +42,7 @@ def directory_fixture():
                         {
                             "id": "catalog-fast",
                             "context_window": 64000,
+                            "reasoning_efforts": ["low", "high"],
                             "output_limit": 4096,
                             "images": False,
                         },
@@ -509,18 +510,159 @@ default_reasoning_effort = "none"
                 await page.locator("#entry-dialog").get_by_role("button", name="取消编辑", exact=True).click()
                 await expect(page.locator(".entity-card[data-entity=cancelled_model]")).to_have_count(0)
 
+                # Public references suggest across suppliers, but only explicit adoption stages facts.
+                await page.get_by_role("button", name="添加模型", exact=True).click()
+                await setup.get_by_label("供应商模型 ID", exact=True).fill("deepseek-v4.1-flash")
+                await setup.get_by_label("在 PA 中的名称", exact=True).fill("reference_preview")
+                await setup.get_by_role("button", name="添加并完善设置", exact=True).click()
+                reference_editor = page.locator("#entry-dialog")
+                picker = reference_editor.locator(".capability-picker")
+                candidate = picker.get_by_role("button", name="匹配的参考模型", exact=True)
+                await expect(candidate).to_be_enabled()
+                await expect(candidate).to_have_attribute("aria-expanded", "false")
+                await expect(picker.get_by_role("button", name="采用并填充", exact=True)).to_be_disabled()
+                original_connection = await reference_editor.get_by_label(
+                    "使用连接", exact=True
+                ).input_value()
+                search_reference = picker.get_by_label("搜索模型或服务商", exact=True)
+                await search_reference.fill("no-such-reference-xyz")
+                await expect(picker).to_contain_text("没有匹配资料")
+                await expect(candidate).to_be_disabled()
+                await search_reference.fill("deepseek-v4.1-flash")
+                await expect(candidate).to_be_enabled()
+                await candidate.click()
+                filter_input = picker.get_by_role(
+                    "searchbox", name="过滤服务商或模型（可输入原厂）", exact=True
+                )
+                await expect(filter_input).to_be_focused()
+                dropdown_bounds = await picker.locator(".searchable-select-panel").bounding_box()
+                editor_bounds = await reference_editor.locator("#entry-body").bounding_box()
+                assert dropdown_bounds["y"] >= editor_bounds["y"]
+                assert (
+                    dropdown_bounds["y"] + dropdown_bounds["height"]
+                    <= editor_bounds["y"] + editor_bounds["height"] + 1
+                )
+                options = picker.locator(".searchable-select-option")
+                assert await options.count() > 50  # includes every page from the former UI
+                await filter_input.fill("官方")
+                assert await picker.locator(".searchable-select-option:visible").count() > 0
+                await expect(options.first).to_contain_text("原厂目录")
+                await filter_input.press("Escape")
+                await search_reference.fill("deepseek")
+                await expect(candidate).to_be_enabled()
+                await candidate.click()
+                await expect(options.first).to_contain_text("原厂目录")
+                await filter_input.fill("原厂")
+                original_rows = picker.locator(".searchable-select-option:visible")
+                assert await original_rows.count() > 0
+                for index in range(await original_rows.count()):
+                    assert (await original_rows.nth(index).get_attribute("data-value")).startswith(
+                        "deepseek/"
+                    )
+                await filter_input.fill("官方")
+                assert await original_rows.count() > 0
+                await filter_input.press("Escape")
+                await search_reference.fill("deepseek-v4.1-flash")
+                await expect(candidate).to_be_enabled()
+                await candidate.click()
+                selected_reference = await options.last.get_attribute("data-value")
+                selected_label = await options.last.inner_text()
+                await filter_input.press("Escape")
+                await expect(candidate).to_have_attribute("aria-expanded", "false")
+                await expect(reference_editor).to_be_visible()
+                await candidate.click()
+                await filter_input.fill("no-such-supplier-xyz")
+                await expect(picker.locator(".searchable-select-panel .search-empty")).to_be_visible()
+                await filter_input.fill(selected_label)
+                await expect(picker.locator(".searchable-select-option:visible")).to_have_count(1)
+                await capture(page, "configuration-reference-dropdown.png")
+                await filter_input.press("ArrowDown")
+                await page.keyboard.press("Enter")
+                await expect(candidate).to_have_attribute("aria-expanded", "false")
+                await candidate.click()
+                await filter_input.fill("")
+                assert (
+                    await picker.locator(".searchable-select-option:visible").count() == await options.count()
+                )
+                await filter_input.press("Escape")
+                await expect(picker.locator(".capability-preview")).to_contain_text(selected_reference)
+                await expect(reference_editor.locator(".capability-summary")).to_contain_text("可手动填写")
+                await expect(reference_editor.get_by_text("capabilities", exact=True)).to_have_count(0)
+                await picker.locator(".capability-preview").scroll_into_view_if_needed()
+                await capture(page, "configuration-model-reference.png")
+                await reference_editor.get_by_label("上下文窗口", exact=True).fill("512")
+                await reference_editor.get_by_label("支持图片", exact=True).uncheck()
+                await candidate.click()
+                await filter_input.fill("deepseek-flash · deepseek · 原厂目录")
+                original_choice = picker.locator(".searchable-select-option:visible").first
+                selected_reference = await original_choice.get_attribute("data-value")
+                await original_choice.click()
+                await picker.get_by_role("button", name="采用并填充", exact=True).click()
+                await expect(reference_editor.locator(".capability-summary")).to_contain_text(
+                    "最近采用：models.dev"
+                )
+                await expect(reference_editor.get_by_label("供应商模型 ID", exact=True)).to_have_value(
+                    "deepseek-v4.1-flash"
+                )
+                await expect(reference_editor.get_by_label("使用连接", exact=True)).to_have_value(
+                    original_connection
+                )
+                await expect(reference_editor.get_by_label("默认思考模式", exact=True)).to_have_value("auto")
+                for effort in ("low", "high", "max"):
+                    await expect(
+                        reference_editor.get_by_role("group", name="可用思考档位", exact=True).locator(
+                            f'input[value="{effort}"]'
+                        )
+                    ).to_be_checked()
+                await expect(
+                    reference_editor.get_by_role("group", name="可用思考档位", exact=True).locator(
+                        'input[value="medium"]'
+                    )
+                ).not_to_be_checked()
+                from assistant_runtime.core.models.capabilities import public_catalog
+
+                selected_facts = public_catalog()["models"][selected_reference]
+                await expect(reference_editor.get_by_label("上下文窗口", exact=True)).to_have_value(
+                    str(selected_facts["context_window"])
+                )
+                await expect(reference_editor.get_by_label("模型最大输出", exact=True)).to_have_value(
+                    str(selected_facts["output_limit"])
+                )
+                self_images = reference_editor.get_by_label("支持图片", exact=True)
+                assert await self_images.is_checked() == selected_facts["images"]
+                await reference_editor.get_by_label("上下文窗口", exact=True).fill("87654")
+                await expect(reference_editor.get_by_label("上下文窗口", exact=True)).to_have_value("87654")
+                await reference_editor.get_by_role("button", name="取消编辑", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=reference_preview]")).to_have_count(0)
+
                 # Selected metadata remains a draft, survives save, and grants no execution acceptance.
                 await page.get_by_role("button", name="添加模型", exact=True).click()
                 await setup.get_by_label("使用连接", exact=True).select_option("directory")
                 await setup.get_by_role("button", name="查询模型", exact=True).click()
                 await setup.get_by_role("button", name="选择 catalog-fast", exact=True).click()
-                await setup.get_by_label("在 PA 中的名称", exact=True).fill("automatic_model")
+                await setup.get_by_label("在 PA 中的名称", exact=True).fill("bad name")
+                assert not await setup.get_by_label("在 PA 中的名称", exact=True).evaluate(
+                    "input => input.checkValidity()"
+                )
+                await setup.get_by_label("在 PA 中的名称", exact=True).fill("automatic.model")
                 await setup.get_by_role("button", name="添加并完善设置", exact=True).click()
                 auto_editor = page.locator("#entry-dialog")
-                await expect(auto_editor.get_by_label("思考模式", exact=True)).to_have_value("auto")
-                await expect(auto_editor.locator(".capability-summary")).to_contain_text("64,000 tokens")
-                await expect(auto_editor.locator(".capability-summary")).to_contain_text("4,096 tokens")
-                assert await auto_editor.get_by_label("思考模式", exact=True).locator("option").count() == 1
+                await expect(auto_editor.get_by_label("默认思考模式", exact=True)).to_have_value("auto")
+                await expect(auto_editor.get_by_label("上下文窗口", exact=True)).to_have_value("64000")
+                await expect(auto_editor.get_by_label("模型最大输出", exact=True)).to_have_value("4096")
+                assert (
+                    await auto_editor.get_by_label("默认思考模式", exact=True).locator("option").count() == 3
+                )
+                await auto_editor.get_by_label("默认思考模式", exact=True).select_option("high")
+                await (
+                    auto_editor.get_by_role("group", name="可用思考档位", exact=True)
+                    .locator('input[value="high"]')
+                    .uncheck()
+                )
+                await expect(auto_editor.get_by_label("默认思考模式", exact=True)).to_have_value("auto")
+                await auto_editor.get_by_label("上下文窗口", exact=True).fill("64001")
+                await auto_editor.get_by_label("模型最大输出", exact=True).fill("2048")
+                await auto_editor.get_by_label("支持图片", exact=True).uncheck()
                 await capture(page, "configuration-automatic-model.png")
                 await auto_editor.get_by_role("button", name="保留修改", exact=True).click()
 
@@ -530,15 +672,15 @@ default_reasoning_effort = "none"
                     .click()
                 )
                 primary = page.locator("#entry-dialog")
-                await expect(primary.get_by_label("思考模式", exact=True)).to_be_visible()
-                await expect(primary.locator(".capability-summary")).to_contain_text("模型能力")
+                await expect(primary.get_by_label("默认思考模式", exact=True)).to_be_visible()
+                await expect(primary.locator(".capability-summary")).to_contain_text("模型参数")
                 await expect(primary.get_by_label("执行能力已经验收", exact=True)).to_have_count(0)
                 await primary.get_by_label("使用连接", exact=True).select_option("LeiHuo-OpenAI")
                 await expect(primary.get_by_label("使用连接", exact=True)).to_have_value("LeiHuo-OpenAI")
-                await primary.get_by_text("高级设置", exact=True).click()
-                efforts = primary.get_by_role("group", name="覆盖 · 可用思考档位", exact=True)
+                efforts = primary.get_by_role("group", name="可用思考档位", exact=True)
                 await efforts.locator("input[value=none]").check()
                 await efforts.locator("input[value=high]").uncheck()
+                await primary.get_by_text("高级设置", exact=True).click()
                 fallback = primary.locator(selector(["model_api", "entries", "primary", "fallbacks"]))
                 await fallback.get_by_role("button", name="添加一项", exact=True).click()
                 await fallback.get_by_label("有序回退模型 · 第 1 项", exact=True).select_option("fast")
@@ -576,9 +718,13 @@ default_reasoning_effort = "none"
                 assert native_reference.startswith("PA_CONNECTION_")
                 assert "cancelled_connection" not in saved["providers"]
                 assert "cancelled_model" not in saved["entries"]
-                automatic = saved["entries"]["automatic_model"]
+                automatic = saved["entries"]["automatic.model"]
                 assert automatic["default_reasoning_effort"] == "auto"
                 assert automatic["capabilities"]["context_window"] == 64000
+                assert automatic["context_window"] == 64001
+                assert automatic["output_limit"] == 2048
+                assert automatic["images"] is False
+                assert automatic["reasoning_efforts"] == ["low"]
                 assert not automatic.get("execution_validated", False)
                 assert "synthetic-native-key" not in models.read_text()
                 from dotenv import dotenv_values

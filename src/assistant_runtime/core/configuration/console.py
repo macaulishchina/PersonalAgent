@@ -76,6 +76,11 @@ class Console:
         except CompatibilityError as exc:
             response = web.json_response({"error": str(exc), "code": "version_incompatible"}, status=400)
         except ConfigurationError as exc:
+            log.warning(
+                "configuration_validation_failed code=%s section=%s",
+                exc.code,
+                ".".join(map(str, exc.path[:2])),
+            )
             response = web.json_response({"error": str(exc), "issues": [exc.public()]}, status=400)
         except (ValueError, TypeError, KeyError, OSError) as exc:
             # Parser and owner exception strings may contain credentials. Do not echo them.
@@ -375,7 +380,12 @@ class Console:
         )
 
     async def model_capabilities(self, request):
-        return web.json_response(await self.provider_queries.describe(await request.json()))
+        from .provider_queries import ProbeInput
+
+        try:
+            return web.json_response(await self.provider_queries.describe(await request.json()))
+        except ProbeInput as exc:
+            return web.json_response({"error": str(exc), "field": exc.field}, status=400)
 
     async def account_inventory(self, request):
         return web.json_response(await asyncio.to_thread(self.accounts.public))

@@ -4,7 +4,7 @@ from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
-from assistant_runtime.core.models.capabilities import facts, profile
+from assistant_runtime.core.models.capabilities import facts, profile, search_references
 from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 from assistant_runtime.core.models.gateway_transport import prepare_request
 from assistant_runtime.core.models.catalog import models
@@ -24,6 +24,127 @@ class CapabilityTest(unittest.TestCase):
             },
             "entries": {"m": {"provider": "p", "model": "private-alias"}},
         }
+
+    def test_reference_search_ranks_all_suppliers_without_selecting(self):
+        public = {
+            "revision": "fixture",
+            "models": {
+                "a/deepseek-v4.1-flash-preview": {"context_window": 1000},
+                "b/DeepSeek-V4.1-Flash": {"context_window": 2000},
+                "c/deepseek-v4-1-flash": {"context_window": 3000},
+                "d/other-model": {},
+            },
+        }
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=public):
+            result = search_references("deepseek-v4.1-flash")
+            self.assertEqual([c["provider"] for c in result["candidates"]], ["b", "c", "a"])
+            self.assertEqual(result["candidates"][0]["match"], "exact")
+            self.assertEqual(result["candidates"][-1]["match"], "related")
+            self.assertEqual(search_references("b deepseek")["total"], 1)
+            self.assertEqual(search_references("unmatched")["total"], 0)
+            self.assertEqual(search_references("")["total"], 0)
+            self.assertEqual(
+                profile(self.spec()["providers"]["p"], "deepseek-v4.1-flash")["source"], "unknown"
+            )
+        public["models"] = {f"supplier-{i:03}/same-model": {"tools": True} for i in range(121)}
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=public):
+            result = search_references("same-model")
+            self.assertEqual(len(result["candidates"]), 121)
+            self.assertEqual(result["total"], 121)
+            self.assertEqual(len({c["reference"] for c in result["candidates"]}), 121)
+
+    def test_catalog_origin_uses_upstream_identity_for_any_lab_and_alias(self):
+        public = {
+            "revision": "fixture",
+            "models": {
+                "relay/novel-model": {"canonical_model_id": "newlab/novel-model"},
+                "newlab/current-alias": {"canonical_model_id": "newlab/novel-model"},
+                "newlab/unattributed": {},
+                "another/cloud-alias": {"canonical_model_id": "unseen-maker/novel-model"},
+                "newlab/bad-attribution": {"canonical_model_id": "missing-separator"},
+            },
+        }
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=public):
+            results = search_references("novel-model")["candidates"]
+            self.assertEqual(results[0]["reference"], "newlab/current-alias")
+            self.assertEqual(results[0]["origin"], "original")
+            self.assertEqual(results[0]["canonical_model_id"], "newlab/novel-model")
+            self.assertEqual({r["origin"] for r in results[1:]}, {"other"})
+            self.assertEqual(search_references("unattributed")["candidates"][0]["origin"], "unknown")
+            self.assertEqual(search_references("bad-attribution")["candidates"][0]["origin"], "unknown")
+
+    def test_catalog_compiler_retains_explicit_attribution_only(self):
+        import json
+        from scripts.update_model_catalog import compile_catalog
+
+        raw = {
+            "unseen-maker": {
+                "models": {
+                    "alias": {"reasoning": True, "canonical_model_id": "unseen-maker/original"},
+                    "unknown": {"reasoning": False},
+                    "bad": {"canonical_model_id": "bad/no spaces allowed", "reasoning": True},
+                }
+            }
+        }
+        catalog = compile_catalog(json.dumps(raw).encode())
+        self.assertEqual(
+            catalog["models"]["unseen-maker/alias"]["canonical_model_id"], "unseen-maker/original"
+        )
+        self.assertNotIn("canonical_model_id", catalog["models"]["unseen-maker/unknown"])
+        self.assertNotIn("canonical_model_id", catalog["models"]["unseen-maker/bad"])
+
+    def test_public_efforts_are_imported_without_inventing_toggle_or_budget_levels(self):
+        import json
+        from scripts.update_model_catalog import compile_catalog
+
+        raw = {
+            "any-lab": {
+                "models": {
+                    "m": {
+                        "reasoning": True,
+                        "reasoning_options": [
+                            {"type": "toggle"},
+                            {"type": "budget_tokens", "min": 10, "max": 1000},
+                            {
+                                "type": "effort",
+                                "values": ["low", "high", "max", "default", None, "unsupported"],
+                            },
+                        ],
+                    },
+                    "toggle-only": {"reasoning": True, "reasoning_options": [{"type": "toggle"}]},
+                }
+            }
+        }
+        catalog = compile_catalog(json.dumps(raw).encode())
+        self.assertEqual(catalog["models"]["any-lab/m"]["reasoning_efforts"], ["low", "high", "max"])
+        self.assertNotIn("reasoning_efforts", catalog["models"]["any-lab/toggle-only"])
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=catalog):
+            provider = self.spec()["providers"]["p"]
+            for protocol in ("openai_chat", "openai_responses"):
+                metadata = profile({**provider, "protocol": protocol}, "private-alias", reference="any-lab/m")
+                self.assertEqual(metadata["reasoning_efforts"], ["low", "high", "max"])
+                for effort in metadata["reasoning_efforts"]:
+                    request = prepare_request(
+                        {
+                            "protocol": protocol,
+                            "reasoning_efforts": metadata["reasoning_efforts"],
+                            "default_reasoning_effort": "auto",
+                        },
+                        {"reasoning": {"effort": effort}},
+                        {},
+                        [],
+                    )
+                    self.assertEqual(request["reasoning"]["effort"], effort)
+            self.assertEqual(
+                profile(
+                    {"protocol": "pi"}, "m", reference="any-lab/m", native={"reasoning_efforts": ["high"]}
+                )["reasoning_efforts"],
+                ["high"],
+            )
+            self.assertNotIn(
+                "reasoning_efforts",
+                profile({**provider, "protocol": "anthropic"}, "m", reference="any-lab/m"),
+            )
 
     def test_unknown_is_automatic_not_none_or_false_claims(self):
         cfg = ModelSettings.parse(self.spec())
@@ -55,6 +176,21 @@ class CapabilityTest(unittest.TestCase):
         self.assertEqual(entry["execution_max_output_tokens"], 1024)
         self.assertEqual(entry["reasoning_efforts"], [])  # reasoning=true is not a level list
         self.assertEqual(spec["entries"]["m"]["capabilities"], snapshot)
+
+    def test_model_output_setting_is_authoritative_and_validated(self):
+        spec = self.spec()
+        spec["entries"]["m"].update(
+            capabilities=profile(spec["providers"]["p"], "private-alias", remote={"output_limit": 1024}),
+            output_limit=2048,
+        )
+        entry = ModelSettings.parse(spec).entry("m")
+        self.assertEqual(entry["max_output_tokens"], 2048)
+        self.assertEqual(entry["execution_max_output_tokens"], 2048)
+        self.assertEqual(entry["capabilities"]["output_limit"], 1024)  # provenance, not another active value
+        for value in (0, -1, True, 10000001, "large"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "output limit"):
+                spec["entries"]["m"]["output_limit"] = value
+                ModelSettings.parse(spec)
 
     def test_snapshot_cannot_follow_changed_connection_or_model(self):
         original = self.spec()
