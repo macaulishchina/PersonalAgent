@@ -448,7 +448,7 @@ p {
   border: 1px solid var(--line);
   border-radius: 22px;
   background: var(--surface);
-  padding: 8px 10px;
+  padding: 14px 16px 12px;
   box-shadow: var(--shadow);
 }
 .composer:focus-within {
@@ -460,9 +460,9 @@ p {
   border: 0;
   outline: 0;
   resize: none;
-  min-height: 38px;
+  min-height: 58px;
   max-height: 168px;
-  padding: 7px 3px;
+  padding: 12px 2px;
   background: transparent;
   color: var(--ink);
   font-size: 15px;
@@ -483,12 +483,14 @@ p {
 }
 .send {
   flex: none;
-  margin-bottom: 1px;
   background: var(--accent);
-  color: white;
-  border-radius: 50%;
-  height: 35px;
-  width: 35px;
+  color: var(--bg);
+  border-radius: 12px;
+  height: 38px;
+  padding: 0 14px;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
 }
 .send:disabled {
   opacity: 1;
@@ -502,23 +504,6 @@ p {
   color: var(--muted);
   padding: 10px 5px 0;
   letter-spacing: 0.2px;
-}
-.controls {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.controls:empty {
-  display: none;
-}
-.controls button {
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: 6px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  color: var(--muted);
 }
 .jump {
   position: absolute;
@@ -1827,4 +1812,157 @@ p {
   font-size: 10px;
   color: var(--muted);
   margin-top: 8px;
+}
+
+/* One composer, with explicit delivery mode and a single submit action. */
+.composer-context,
+.composer-toolbar,
+.composer-tools,
+.composer-context-actions,
+.composer-status,
+.delivery-modes {
+  display: flex;
+  align-items: center;
+}
+.composer-context {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 11px;
+  border-bottom: 1px solid var(--line);
+}
+.composer-status {
+  gap: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+.execution-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.composer-context-actions {
+  gap: 12px;
+}
+.composer-context-actions button {
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.composer-context-actions .cancel-execution:hover {
+  color: #bd725a;
+}
+.composer-toolbar {
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 4px;
+}
+.composer-tools {
+  gap: 10px;
+  min-width: 0;
+}
+.composer-tools .attach {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+.delivery-modes {
+  padding: 3px;
+  background: var(--bubble);
+  border-radius: 10px;
+  gap: 2px;
+}
+.delivery-modes button {
+  padding: 5px 10px;
+  min-height: 29px;
+  color: var(--muted);
+  border-radius: 7px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.delivery-modes button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.composer button:disabled {
+  cursor: not-allowed;
+}
+.composer button:focus-visible,
+.composer-queue button:focus-visible,
+.composer-queue summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.composer-question {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bubble);
+  border-radius: 10px;
+  max-height: 160px;
+  overflow: auto;
+}
+.question-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+.composer-question p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.composer-queue {
+  margin: 8px 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer-queue summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  width: fit-content;
+  list-style: none;
+  padding: 4px 0;
+}
+.composer-queue summary::-webkit-details-marker {
+  display: none;
+}
+.composer-queue[open] summary > svg:last-child {
+  transform: rotate(180deg);
+}
+.composer-queue ol {
+  margin: 7px 0 0;
+  padding: 0 12px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  max-height: 150px;
+  overflow: auto;
+}
+.composer-queue li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+}
+.composer-queue li + li {
+  border-top: 1px solid var(--line);
+}
+.composer-queue small {
+  font-family: monospace;
+  margin-left: 10px;
+  opacity: 0.65;
+}
+.composer-queue button {
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer-queue button:hover {
+  color: var(--ink);
 }
