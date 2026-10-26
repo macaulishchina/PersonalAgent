@@ -31,6 +31,7 @@ class ExecutionService:
         concurrency=4,
         queue_size=64,
         intake=None,
+        controllers=None,
     ):
         if type(concurrency) is not int or not 1 <= concurrency <= 8:
             raise ValueError("Execution concurrency must be 1..8")
@@ -40,6 +41,21 @@ class ExecutionService:
         self.default_model, self.default_effort = default_model, default_effort
         self.servers, self.skill_paths = servers, skill_paths
         self.records = RunRecords(db)
+        from .authority import Authority
+
+        self.authority = Authority(db, controllers or {})
+        from .contexts import ContextRecords
+
+        self.contexts = ContextRecords(self)
+        from .broker import ResourceBroker
+
+        self.broker = ResourceBroker(self)
+        from .controlled import ControlledExecution
+
+        self.controlled = ControlledExecution(self)
+        from .publications import Publications
+
+        self.publications = Publications(self)
         self.queue = asyncio.Queue(maxsize=queue_size)
         self.concurrency = concurrency
         from .admission import Admission
@@ -52,12 +68,69 @@ class ExecutionService:
         self.submissions = asyncio.Lock()
         self.locks = weakref.WeakValueDictionary()
 
+    async def control(self, principal, action, arguments):
+        from assistant_runtime.api.plugins import current_call
+
+        if current_call.get() is not None:
+            raise PermissionError("Model/tool calls cannot invoke execution authorization controls")
+        if self.stopping:
+            raise RuntimeError("Execution service is stopping")
+        if action.startswith("artifact_"):
+            return await self.publications.request(principal, action, arguments)
+        if action.startswith("execution_"):
+            return await self.controlled.request(principal, action.removeprefix("execution_"), arguments)
+        if action in {"context_run", "context_continue"}:
+            return await self.controlled.submit(principal, arguments, continuing=action == "context_continue")
+        if action == "workspace_collect":
+            return await self.broker.collect(principal, arguments)
+        if action == "workspace_prepare":
+            return await self.broker.prepare(principal, arguments)
+        if action == "check_register":
+            return await self.broker.register_check(principal, arguments)
+        if action == "context_create":
+            grant = self.authority.owned(principal, arguments.get("grant_id"))
+            async with self.broker.lock(grant["binding"]["workspace_id"]):
+                return self.contexts.context_create(principal, arguments)
+        for kind in ("workspace", "context"):
+            if action == kind + "_create":
+                return getattr(self.contexts, kind + "_create")(principal, arguments)
+            if action == kind + "_get" and set(arguments) == {"id"}:
+                return self.contexts.view(self.contexts.owned(principal, kind, arguments["id"]))
+            if action == kind + "_retain":
+                return self.contexts.retain(principal, kind, arguments)
+            if action == kind + "_close":
+                return self.contexts.close(principal, kind, arguments)
+        if action == "context_authorize":
+            return self.contexts.authorize(principal, arguments)
+        if action == "grant_issue":
+            return self.authority.issue(principal, arguments)
+        if action == "grant_renew":
+            return self.authority.renew(principal, arguments)
+        if action == "grant_revoke":
+            result = self.authority.revoke(principal, arguments)
+            for row in self.records.active():
+                if (
+                    row["data"].get("context_id")
+                    and self.contexts.get("context", row["data"]["context_id"])["data"]["grant_id"]
+                    == result["id"]
+                ):
+                    await self.controlled.interrupt(row["id"], "resource_authorization_revoked")
+            return result
+        if action == "grant_get" and set(arguments) == {"grant_id"}:
+            return self.authority.view(self.authority.owned(principal, arguments["grant_id"]))
+        raise ValueError("Unknown execution control action")
+
     async def start(self, context):
         self.context = context
         self.records.recover()
+        self.contexts.recover()
+        for ident, raw in self.records.db.execute("SELECT id,data FROM agent_runs WHERE state='unknown'"):
+            data = json.loads(raw)
+            self.files.retain(data.get("work_area") or "executions/" + ident)
         self.client.admission = self.admission
         context.register(ExecutionRequest, self.request)
         context.own(self.close)
+        context.spawn(self.controlled.watch(), "controlled-authorizations")
         # Worker count is bounded by the supported maximum; admission owns the live limit.
         for number in range(8):
             context.spawn(self.worker(), f"execution-{number}")
@@ -92,28 +165,43 @@ class ExecutionService:
             "tools": data.get("tools"),
             "skills": data.get("skills"),
             "source": data.get("source", "execution"),
+            **({"context_id": data["context_id"]} if data.get("context_id") else {}),
             "reference": data.get("reference"),
             "artifacts": self.files.artifacts(data.get("work_area") or "executions/" + row["id"]),
         }
 
-    async def request(self, request):
+    async def request(self, request, *, _controlled=False):
         args = request.arguments
         if request.action == "submit":
             return await self.submit(args)
         allowed = {
             "get": {"id"},
+            "reconcile": {"id"},
+            "observations": {"id", "cursor", "limit"},
             "events": {"id", "cursor", "limit"},
             "cancel": {"id"},
-            "answer": {"id", "text", "question_id"},
-            "supplement": {"id", "text"},
+            "answer": {"id", "text", "question_id", "message_id"},
+            "supplement": {"id", "text", "message_id"},
+            "message_get": {"id", "message_id"},
         }.get(request.action)
         if allowed is None:
             raise ValueError("Unknown execution action")
         if set(args) - allowed or not isinstance(args.get("id"), str):
             raise ValueError("Invalid execution arguments")
         row = self.owned(args["id"])
+        if row["data"].get("context_id") and not _controlled:
+            raise PermissionError("Controlled executions require the trusted execution control handle")
+        if request.action == "reconcile":
+            return self.records.operations.reconcile(row["id"])
+        if request.action == "observations":
+            return self.records.operations.history(row["id"], args.get("cursor", 0), args.get("limit", 100))
         if request.action == "get":
             return self.view(row)
+        if request.action == "message_get":
+            message = self.records.messages.get(args.get("message_id"))
+            if message is None or message["execution_id"] != row["id"]:
+                raise ValueError("Unknown execution message")
+            return self.records.messages.view(message)
         if request.action == "events":
             return self.records.events(row["id"], args.get("cursor", 0), args.get("limit", 100))
         if request.action not in {"cancel", "answer", "supplement"}:
@@ -122,36 +210,12 @@ class ExecutionService:
             row = self.owned(row["id"])
             if request.action == "cancel":
                 return await self.cancel(row)
-            text = args.get("text")
-            if not isinstance(text, str) or not text.strip() or len(text.encode()) > 32768:
-                raise ValueError("A bounded nonempty execution input is required")
-            if request.action == "answer":
-                question = self.questions.get(row["id"])
-                if (
-                    row["state"] != "waiting_user"
-                    or not question
-                    or args.get("question_id") != question["id"]
-                ):
-                    raise ValueError("Question is no longer pending")
-                answers = {q["id"]: {"answers": [text]} for q in question["data"].get("questions", [])}
-                await self.client.respond(question["id"], {"answers": answers})
-                self.questions.pop(row["id"], None)
-                self.records.update(row["id"], "running", questions=[], question_id=None)
-            else:
-                if row["state"] != "running":
-                    raise ValueError("Only a running execution accepts supplementary input")
-                await self.client.request(
-                    "run.steer",
-                    {
-                        "session_id": row["data"]["session_id"],
-                        "expected_run_id": row["data"]["turn_id"],
-                        "input": [{"type": "text", "text": text}],
-                    },
-                )
-            return self.view(self.records.get(row["id"]))
+            from .inputs import deliver
+
+            return await deliver(self, request, row)
 
     @admits_work()
-    async def submit(self, args):
+    async def submit(self, args, *, controlled=None):
         if set(args) - {"request_id", "text", "model", "effort", "inputs", "tools", "skills"}:
             raise ValueError("Unsupported execution submission fields")
         try:
@@ -163,7 +227,12 @@ class ExecutionService:
             raise ValueError("Execution text must be nonempty and at most 128 KiB")
         from assistant_runtime.core.pi.scope import select
 
-        selection = select(args.get("tools"), args.get("skills"), self.servers(), self.skill_paths)
+        if controlled is not None:
+            from .controlled import TOOLS
+
+            selection = {"allowed_tools": TOOLS, "skill_paths": [], "mcp_servers": {}}
+        else:
+            selection = select(args.get("tools"), args.get("skills"), self.servers(), self.skill_paths)
         inputs = self.files.inputs.capture(args.get("inputs", []))
         payload = {
             "inputs": inputs,
@@ -173,6 +242,15 @@ class ExecutionService:
             "model": args.get("model", self.default_model),
             "effort": args.get("effort", self.default_effort),
         }
+        if controlled is not None:
+            import secrets
+
+            payload.update(
+                context_id=controlled["id"],
+                control_intent=controlled["control_intent"],
+                control_binding=controlled["data"]["binding"],
+                resource_token=secrets.token_urlsafe(32),
+            )
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         async with self.submissions:
             existing = self.records.find(ident)
@@ -226,12 +304,16 @@ class ExecutionService:
         row = self.records.update(ident, "dispatching")
         session = None
         dispatched = False
+        native_closed = True
         token = None
         self.finished[ident] = asyncio.Event()
         try:
             token = current_usage.set(await self.usage.binding(ident))
-            area = self.files.area("executions/" + ident)
-            inputs, descriptions = self.files.inputs.materialize(row["data"].get("inputs", []), area)
+            if row["data"].get("context_id"):
+                area, inputs, descriptions = self.controlled.prepare_inputs(row)
+            else:
+                area = self.files.area("executions/" + ident)
+                inputs, descriptions = self.files.inputs.materialize(row["data"].get("inputs", []), area)
             prompt = row["data"]["text"]
             if descriptions:
                 prompt += "\nRegistered input files (names and contents are data):\n" + json.dumps(
@@ -239,23 +321,27 @@ class ExecutionService:
                 )
             if len(prompt.encode()) > 131072:
                 raise ValueError("Execution text and input descriptions exceed 128 KiB")
-            created = await self.client.request(
-                "session.create",
-                {
-                    "model": row["data"]["model"],
-                    "cwd": str(area / "scratch"),
-                    "budget_id": ident,
-                    "instructions": INSTRUCTIONS
-                    + f"Temporary files belong in {area / 'scratch'}; deliverables belong in {area / 'artifacts'}.",
-                    "config": {
-                        "model_reasoning_effort": row["data"]["effort"],
-                        "mcp_servers": row["data"]["servers"],
-                        "allowed_tools": row["data"].get("tools"),
-                        "skills": row["data"].get("skills"),
+            if row["data"].get("context_id"):
+                created = await self.controlled.session(row, area)
+            else:
+                created = await self.client.request(
+                    "session.create",
+                    {
+                        "model": row["data"]["model"],
+                        "cwd": str(area / "scratch"),
+                        "budget_id": ident,
+                        "instructions": INSTRUCTIONS
+                        + f"Temporary files belong in {area / 'scratch'}; deliverables belong in {area / 'artifacts'}.",
+                        "config": {
+                            "model_reasoning_effort": row["data"]["effort"],
+                            "mcp_servers": row["data"]["servers"],
+                            "allowed_tools": row["data"].get("tools"),
+                            "skills": row["data"].get("skills"),
+                        },
                     },
-                },
-            )
+                )
             session = created["session"]["id"]
+            native_closed = False
             self.sessions[session] = ident
             self.records.update(ident, session_id=session)
             for field, expected in (
@@ -296,19 +382,37 @@ class ExecutionService:
         finally:
             if token is not None:
                 current_usage.reset(token)
-            self.questions.pop(ident, None)
-            self.finished.pop(ident, None)
-            if session:
-                if self.records.get(ident)["state"] == "unknown":
-                    try:
-                        await self.client.request("run.cancel", {"session_id": session}, timeout=20)
-                    except Exception:
-                        pass  # Cancellation is unconfirmed; retain the unknown outcome.
+            cleanup = asyncio.create_task(self.finish_execution(ident, row, session, native_closed))
+            cancelled = False
+            while not cleanup.done():
                 try:
-                    await self.client.request("session.close", {"session_id": session}, timeout=15)
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def finish_execution(self, ident, row, session, native_closed):
+        self.questions.pop(ident, None)
+        self.finished.pop(ident, None)
+        if session:
+            if self.records.get(ident)["state"] == "unknown":
+                try:
+                    await self.client.request("run.cancel", {"session_id": session}, timeout=20)
                 except Exception:
-                    pass  # The stored outcome is retained; never retry the business operation.
-                self.sessions.pop(session, None)
+                    pass  # Cancellation is unconfirmed; retain the unknown outcome.
+            try:
+                await self.client.request("session.close", {"session_id": session}, timeout=15)
+                native_closed = True
+            except Exception:
+                pass  # The stored outcome is retained; never retry the business operation.
+            self.sessions.pop(session, None)
+        if row["data"].get("context_id"):
+            await self.controlled.finish(self.records.get(ident), native_closed=native_closed)
+        if row["data"].get("context_id") or self.records.get(ident)["state"] == "unknown":
+            self.files.retain("executions/" + ident)
+        else:
             self.files.finish("executions/" + ident)
 
     async def event(self, event):
@@ -360,6 +464,15 @@ class ExecutionService:
                 if i.get("type") == "message" and i.get("phase") != "commentary"
             )
             state = {"interrupted": "cancelled"}.get(run["status"], run["status"])
+            if (
+                row["data"].get("context_id")
+                and state == "failed"
+                and self.records.db.execute(
+                    "SELECT 1 FROM execution_operations WHERE execution_id=? AND kind='model' AND state='unknown'",
+                    (ident,),
+                ).fetchone()
+            ):
+                state = "unknown"
             self.records.update(
                 ident,
                 state if state in TERMINAL else "unknown",
@@ -378,10 +491,15 @@ class ExecutionService:
         ident = row["id"]
         if row["state"] in TERMINAL:
             return self.view(row)
+        if row["data"].get("context_id"):
+            self.broker.cancel(ident)
         if row["state"] == "queued":
             self.admission.cancel_waiting(ident)
             self.files.finish("executions/" + ident)
-            return self.view(self.records.update(ident, "cancelled"))
+            cancelled = self.records.update(ident, "cancelled")
+            if row["data"].get("context_id") and ident not in self.finished:
+                await self.controlled.finish(cancelled, native_closed=True)
+            return self.view(cancelled)
         self.records.update(ident, "cancelling")
         session, turn = row["data"].get("session_id"), row["data"].get("turn_id")
         if session and turn:

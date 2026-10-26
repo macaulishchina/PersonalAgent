@@ -67,6 +67,9 @@ class Ledger:
             cost REAL NOT NULL, cost_unknown INTEGER NOT NULL,
             PRIMARY KEY(day,service,provider,model));
         """)
+        from .controlled import install
+
+        install(self.db)
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             row = self.db.execute("SELECT value FROM metadata WHERE key='policy'").fetchone()
@@ -92,6 +95,11 @@ class Ledger:
         if self.owner:
             self.owner.close()
             self.owner = None
+
+    def controlled_budget(self, work, caller, caps):
+        from .controlled import configure
+
+        return configure(self, work, caller, caps)
 
     def bind(self, ident, scope):
         with self.db:
@@ -214,6 +222,9 @@ class Ledger:
             reserve_input, reserve_output = bounds.get("input_tokens"), bounds.get("output_tokens")
             price = self.price(provider, model)
             reserve_cost = self.cost(price, reserve_input, reserve_output)
+            from .controlled import enforce
+
+            enforce(self, meta, (reserve_input, reserve_output, reserve_cost), compaction, now)
             for rule in self.matching(meta):
                 if reason:
                     break
@@ -536,6 +547,9 @@ class Ledger:
                 (cutoff,),
             ).fetchall()
             for ident, created, service, provider, model, inp, out, cost, work, task, compact in rows:
+                from .controlled import archive
+
+                archive(self.db, ident)
                 state = self.db.execute("SELECT state FROM calls WHERE id=?", (ident,)).fetchone()[0]
                 if state != "not_sent":
                     day = time.strftime("%Y-%m-%d", time.gmtime(created))

@@ -82,12 +82,36 @@ def main():
     )
     prepare.add_argument("destination")
     executions = sub.add_parser("executions", help="Submit and inspect individual agent executions")
-    executions.add_argument("action", choices=["submit", "get", "events", "cancel", "answer", "supplement"])
+    executions.add_argument(
+        "action",
+        choices=[
+            "submit",
+            "get",
+            "events",
+            "cancel",
+            "answer",
+            "supplement",
+            "message_get",
+            "reconcile",
+            "observations",
+        ],
+    )
     executions.add_argument(
         "arguments", help="JSON operation arguments; submit requires a stable request_id UUID"
     )
     files = sub.add_parser("files", help="Register and inspect bounded input resources")
-    files.add_argument("action", choices=["put", "get"])
+    files.add_argument(
+        "action",
+        choices=[
+            "put",
+            "get",
+            "finalize",
+            "artifact_get",
+            "artifact_read",
+            "artifact_retain",
+            "artifact_release",
+        ],
+    )
     files.add_argument("arguments", help="JSON: put accepts name, base64 data, and optional kind=file|image")
     management = sub.add_parser("configuration", help="Independent operator configuration console")
     management.add_argument("action", choices=["serve", "token", "reset-token", "check", "apply", "status"])

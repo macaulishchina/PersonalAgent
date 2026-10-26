@@ -88,6 +88,9 @@ class UsageService:
             else:
                 self.pending -= 1
 
+    async def controlled_budget(self, work, caller, caps):
+        return await self.call("controlled_budget", work, caller, caps)
+
     async def bind(self, ident, scope):
         return UsageScope(**await self.call("bind", ident, scope))
 

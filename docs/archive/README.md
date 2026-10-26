@@ -4,6 +4,8 @@
 
 | 文档 | 范围 |
 | --- | --- |
+| [受控执行联合设计](controlled-execution-design-2026-10.md) | 设计与分阶段状态：授权、上下文、消息、事件、核对、用量与不可变产物 |
+| [Windows 隔离原型](windows-isolation-prototype-2026-10-26.md) | 2026-10-26 Server 固定合成检查 12 项通过；生产工具链与授权撤销未验收 |
 | [早期需求](requirements-2026-10.md) | 2026 年 10 月的语音助手需求及旧 Codex 路线 |
 | [早期验收](validation-2026-10.md) | 2026-10-12 至 10-18 的重构、音频及设备记录 |
 | [配置后台设计计划](configuration-console-plan.md) | 已实施的设计依据，最终契约见配置模块 |

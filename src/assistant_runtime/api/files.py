@@ -1,4 +1,4 @@
-"""Registered input resources; bytes are supplied, never arbitrary host paths."""
+"""Registered inputs and immutable publications; never arbitrary host path access."""
 
 from dataclasses import dataclass, field
 from typing import Any

@@ -119,7 +119,7 @@ class InputFiles:
             raise ValueError("At most four input images are allowed")
         return records
 
-    def materialize(self, records, area):
+    def materialize(self, records, area, *, directory="scratch"):
         inputs, descriptions = [], []
         for record in records:
             if record.get("storage") == "media":
@@ -132,7 +132,7 @@ class InputFiles:
             if len(raw) != record["bytes"] or hashlib.sha256(raw).hexdigest() != record["sha256"]:
                 raise ValueError("Registered input file changed")
             # Do not use the display name as a filesystem path or an instruction.
-            path = area / "scratch" / ("input-" + record["id"] + Path(record["name"]).suffix)
+            path = area / directory / ("input-" + record["id"] + Path(record["name"]).suffix)
             if path.is_symlink():
                 raise ValueError("Input destination cannot be a symlink")
             with path.open("xb") as stream:

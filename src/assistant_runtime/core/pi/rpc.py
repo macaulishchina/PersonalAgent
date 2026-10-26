@@ -134,6 +134,9 @@ class PiSessionWorker:
         env["ASSISTANT_PI_POLICY"] = json.dumps(self.meta.get("policy") or {}, ensure_ascii=False)
         env["ASSISTANT_PI_ENABLE_USER_INPUT"] = "1" if self.meta.get("enable_user_input") else "0"
         env["ASSISTANT_PI_ENABLE_GOAL"] = "1" if self.meta.get("enable_goal") else "0"
+        env["ASSISTANT_CONTROL_TOKEN"] = self.meta.get("control_token", "")
+        env["ASSISTANT_CONTROL_SESSION"] = self.execution_session_id
+        env["ASSISTANT_CONTROL_URL"] = self.parent.transport.url or ""
 
         self.compacting = False
         model = self.meta["model"]
@@ -163,7 +166,7 @@ class PiSessionWorker:
         # -ne disables built-ins too. Retain the pinned engine's capabilities
         # explicitly without discovering project or user-installed extensions.
         # Discovery composes Pi's public tool-search factory in our extension.
-        for extension in ("mcp", "codemode", "llama.cpp"):
+        for extension in () if self.meta.get("controlled_context") else ("mcp", "codemode", "llama.cpp"):
             args.extend(["-e", "builtin:" + extension])
         for selected_path in self.meta.get("skill_paths", self.parent.skill_paths):
             path = Path(selected_path)
@@ -182,6 +185,8 @@ class PiSessionWorker:
             limit=MAX_FRAME_BYTES,
             start_new_session=True,
         )
+        self.launch_id = str(uuid.uuid4())
+        self.observe_process()
         self.readers = [
             asyncio.create_task(self._read_stdout()),
             asyncio.create_task(self._read_stderr()),
@@ -375,6 +380,15 @@ class PiSessionWorker:
             call_id = msg.get("toolCallId") or uuid.uuid4().hex
             tool_name = msg.get("toolName") or ""
             args = msg.get("args") or {}
+            if self.parent.admission:
+                self.parent.admission.operation(
+                    self.execution_session_id,
+                    "tool",
+                    call_id,
+                    tool=tool_name,
+                    turn_id=turn_id,
+                    model_request_id=getattr(self, "last_usage_call", None),
+                )
             item = self._to_tool_item(call_id, tool_name, args, status="running")
             # Execution ownership must not depend on whether the UI renders this tool.
             self.meta.setdefault("pending_operations", {})[call_id] = item or {
@@ -399,6 +413,13 @@ class PiSessionWorker:
                     }
                 )
         elif mtype == "tool_execution_end":
+            if self.parent.admission and msg.get("toolCallId"):
+                self.parent.admission.operation(
+                    self.execution_session_id,
+                    "tool",
+                    msg["toolCallId"],
+                    "failed" if msg.get("isError") else "completed",
+                )
             call_id = msg.get("toolCallId") or ""
             tool_name = msg.get("toolName") or ""
             args = msg.get("args") or {}
@@ -590,6 +611,20 @@ class PiSessionWorker:
             }
         )
 
+    def observe_process(self):
+        if self.process is not None and self.parent.admission:
+            self.parent.admission.process_observed(
+                self.execution_session_id,
+                {
+                    "launch_id": self.launch_id,
+                    "pid": self.process.pid,
+                    "leader": "running" if self.process.returncode is None else "exited",
+                    "returncode": self.process.returncode,
+                    "tree": "unknown",
+                    "scope": "owned_leader_only",
+                },
+            )
+
     async def close(self):
         # A full host event queue must not prevent process/pipes from settling.
         for task in self.readers:
@@ -613,6 +648,7 @@ class PiSessionWorker:
                 for task in drains:
                     task.cancel()
                 await asyncio.gather(*drains, return_exceptions=True)
+        self.observe_process()
         self.process = None
 
 
@@ -692,6 +728,11 @@ class PiClient:
         self.counter += 1
         self.ui_requests[self.counter] = (worker, ui_id, method)
         return self.counter
+
+    def track_input(self, session, turn, ident, role, text, tool_call_id=None):
+        from .input_receipts import track
+
+        track(self, session, turn, ident, role, text, tool_call_id)
 
     async def respond(self, ident, result):
         worker, ui_id, _ = self.ui_requests.pop(ident)
@@ -801,6 +842,8 @@ class PiClient:
                 "budget_scope": p.get("budget_id"),
                 "shell_env": cfg.get("shell_environment_policy.set", {}),
                 "allowed_tools": scope["allowed_tools"],
+                "controlled_context": cfg.get("controlled_context"),
+                "control_token": cfg.get("control_token", ""),
                 "skill_paths": scope["skill_paths"],
             }
             self._write_configuration(meta, p.get("instructions", ""))
@@ -965,6 +1008,19 @@ class PiClient:
             if meta.get("model_binding") != self._binding(meta["model"]):
                 raise RpcError("Saved model binding changed; a fresh verified execution context is required")
             meta.update(model=model, model_binding=self._binding(model), reasoning_effort=effort)
+            if meta.get("controlled_context"):
+                if (
+                    cfg.get("controlled_context") != meta["controlled_context"]
+                    or not cfg.get("control_token")
+                    or not p.get("budget_id")
+                ):
+                    raise RpcError(
+                        "Controlled continuation requires the original context and a new round binding"
+                    )
+                meta["control_token"] = cfg["control_token"]
+                meta["budget_scope"] = p["budget_id"]
+            elif cfg.get("controlled_context"):
+                raise RpcError("Cannot convert a full-permission session into a controlled context")
             if "mcp_servers" in cfg:
                 meta["mcp_servers"] = cfg["mcp_servers"]
             self._write_configuration(meta, p.get("instructions"))
@@ -1037,6 +1093,7 @@ class PiClient:
                 await self.usage.bind(meta["budget_id"], UsageScope(meta["budget_id"], "foreground"))
             self.last_work_id = meta["budget_id"]
             meta["active_run"] = run_id
+            meta["public_inputs"] = {}
             user_item = {
                 "id": run_id + "-input",
                 "type": "input",

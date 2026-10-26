@@ -1,3 +1,4 @@
+import { registerControlled } from "./controlled_tools.ts";
 import { registerDiscovery } from "./discovery.ts";
 import { Type } from "typebox";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -37,7 +38,8 @@ function loadPolicy(): PolicySpec {
 }
 
 export default function (pi: any) {
-  if (process.platform === "win32") {
+  registerControlled(pi);
+  if (process.platform === "win32" && !process.env.ASSISTANT_CONTROL_TOKEN) {
     pi.registerTool(
       createPowerShellToolDefinition(process.cwd(), {
         operations: windowsShellOperations("powershell"),
@@ -144,6 +146,7 @@ export default function (pi: any) {
                   Authorization:
                     "Bearer " + process.env.PA_EXECUTION_TOKEN,
                   ...provider.headers,
+                  "x-assistant-control": process.env.ASSISTANT_CONTROL_TOKEN || "",
                 },
                 body: JSON.stringify(payload),
               });
@@ -264,7 +267,7 @@ export default function (pi: any) {
           "__assistant_rpc__",
           JSON.stringify({
             kind: "input.requested",
-            data: { questions: params.questions },
+            data: { questions: params.questions, tool_call_id: _id },
           }),
         );
         if (!reply) {

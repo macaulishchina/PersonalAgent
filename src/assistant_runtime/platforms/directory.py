@@ -105,8 +105,12 @@ class Directory:
             os.mkdir(name, mode, dir_fd=self.fd)
         self.sync()
 
-    def open_file(self, name, flags, mode=0o600):
+    def open_file(self, name, flags, mode=0o600, *, frozen=False, exclusive=False):
         component(name)
+        if exclusive and sys.platform != "win32":
+            raise ValueError("Exclusive managed writes currently require Windows")
+        if frozen and (sys.platform != "win32" or flags != os.O_RDONLY):
+            raise ValueError("Frozen source handles currently require Windows read-only access")
         if sys.platform != "win32":
             return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=self.fd)
         import msvcrt
@@ -125,7 +129,9 @@ class Directory:
             handle = win32file.CreateFile(
                 str(self.path / name),
                 access,
-                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
+                win32con.FILE_SHARE_READ
+                if frozen or exclusive
+                else (win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE),
                 security_attributes(),
                 creation,
                 win32file.FILE_FLAG_OPEN_REPARSE_POINT,
@@ -176,6 +182,15 @@ class Directory:
             os.unlink(self.path / name)
         else:
             os.unlink(name, dir_fd=self.fd)
+        self.sync()
+
+    def rmdir(self, name):
+        component(name)
+        self.stat(name)  # Reject reparse entries before removing an empty directory.
+        if sys.platform == "win32":
+            os.rmdir(self.path / name)
+        else:
+            os.rmdir(name, dir_fd=self.fd)
         self.sync()
 
     def sync(self):

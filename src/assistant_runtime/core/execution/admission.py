@@ -16,6 +16,31 @@ class Admission:
         self.external = set()
         self.dispatching = set()
 
+    def process_observed(self, session, evidence):
+        ident = self.service.sessions.get(session)
+        if ident is not None:
+            with self.service.records.db:
+                self.service.records.operations.observe(ident, None, {"kind": "local_process", **evidence})
+
+    def operation(self, session, kind, native_id, state=None, **details):
+        if kind == "model" and state is None:
+            self.service.controlled.authorize_session(session)
+        ident = self.service.sessions.get(session)
+        if ident is None:
+            return None
+        operations = self.service.records.operations
+        if state is None:
+            return operations.begin(ident, kind, native_id, **details)
+        operations.settle(ident, kind, native_id, state)
+
+    def inputs_consumed(self, session, turn, model_request, identities):
+        ident = self.service.sessions.get(session)
+        if ident is None:
+            return
+        row = self.service.records.get(ident)
+        if row["state"] not in TERMINAL and row["data"].get("turn_id") == turn:
+            self.service.records.messages.consumed(ident, turn, model_request, identities)
+
     def release(self, ident):
         if ident in self.leases:
             self.leases.remove(ident)

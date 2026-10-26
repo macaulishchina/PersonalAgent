@@ -71,6 +71,16 @@ def resources_for(host, name, keys):
             from assistant_runtime.api.system import system
 
             resources[key] = system
+        elif key == "execution_control":
+            from assistant_runtime.api.control import ExecutionControl
+
+            async def control(action, arguments, principal=name):
+                service = getattr(host.backend, "executions", None)
+                if service is None:
+                    raise RuntimeError("Execution control is unavailable")
+                return await service.control(principal, action, arguments)
+
+            resources[key] = ExecutionControl(control)
         elif key == "usage":
             usage = host.ai_usage
             resources[key] = UsageAccess(usage.scope, usage.service.admit, usage.service.settle)

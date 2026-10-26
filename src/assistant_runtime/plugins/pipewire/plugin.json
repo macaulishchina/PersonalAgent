@@ -17,9 +17,9 @@
   },
   "schema_version": 1,
   "id": "pipewire",
-  "version": "1.0.0",
-  "api_version": 1,
-  "requires_core": ">=0.3.0,<0.4.0",
+  "version": "1.1.0",
+  "api_version": 2,
+  "requires_core": ">=0.4.0,<0.5.0",
   "requires": {},
   "optional": {},
   "critical": false

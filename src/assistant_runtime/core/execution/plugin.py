@@ -17,6 +17,7 @@ class ExecutionPlugin:
         service = self.service
         previous = (service.concurrency, service.queue.maxsize, service.default_model, service.default_effort)
         previous_skills = service.skill_paths
+        previous_controllers = service.authority.controllers
 
         def update(concurrency, queue_size, model, effort):
             service.concurrency = concurrency
@@ -25,6 +26,7 @@ class ExecutionPlugin:
             service.default_model, service.default_effort = model, effort
 
         async def commit():
+            service.authority.controllers = incoming["controllers"]
             service.skill_paths = getattr(config, "_prepared_skill_paths", previous_skills)
             update(
                 incoming["concurrency"],
@@ -34,6 +36,7 @@ class ExecutionPlugin:
             )
 
         async def rollback():
+            service.authority.controllers = previous_controllers
             service.skill_paths = previous_skills
             update(*previous)
 

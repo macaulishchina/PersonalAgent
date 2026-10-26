@@ -66,3 +66,28 @@ def admits_work(predicate=lambda *a, **kw: True):
         return call
 
     return decorate
+
+
+async def wait_thread(function, *args, completed=None, cancel=None):
+    """Retain an async owner's lease until its bounded worker actually exits.
+
+    Cancellation can request an OS stop through cancel, but never detaches the
+    thread. Completion publication stays on the owning event loop.
+    """
+    import asyncio
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+            if cancel is not None:
+                cancel()
+    result = task.result()
+    if completed is not None:
+        completed(result)
+    if cancelled:
+        raise asyncio.CancelledError
+    return result

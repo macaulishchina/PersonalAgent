@@ -51,6 +51,9 @@ async def forward(transport, request, worker):
     )
     if images and not entry.get("images"):
         raise web.HTTPBadRequest()
+    transport.authenticate(request)
+    if worker.meta.get("controlled_context"):
+        client.admission.service.controlled.authorize_session(worker.execution_session_id, required=True)
     account, args, native_bound = await client.accounts.route(alias, payload["effort"], images=images)
     maximum = entry.get("execution_max_output_tokens", client.settings.execution_max_output_tokens)
     ident = worker.meta["budget_id"]
@@ -58,7 +61,9 @@ async def forward(transport, request, worker):
         scope = await client.usage.binding(worker.meta.get("budget_scope") or ident) or UsageScope(
             ident, worker.meta.get("budget_scope") or "foreground"
         )
-        if (await client.usage.snapshot(ident)).get("unknown_execution_requests"):
+        if not worker.meta.get("controlled_context") and (await client.usage.snapshot(ident)).get(
+            "unknown_execution_requests"
+        ):
             raise UsageError("usage_execution_unresolved", ident)
         ticket = await client.usage.admit(
             scope,
@@ -92,10 +97,28 @@ async def forward(transport, request, worker):
             ticket["id"], state=state, usage=usage, http_status=status, provider_request_id=request_id
         )
         settled = True
+        if client.admission:
+            client.admission.operation(
+                worker.execution_session_id, "model", ticket["id"], "failed" if state == "rejected" else state
+            )
 
     worker.last_usage_call = ticket["id"]
     started = time.monotonic()
     try:
+        transport.authenticate(request)
+        if worker.meta.get("controlled_context"):
+            client.admission.service.controlled.authorize_session(worker.execution_session_id, required=True)
+        if client.admission:
+            client.admission.operation(
+                worker.execution_session_id,
+                "model",
+                ticket["id"],
+                compaction=worker.compacting,
+                turn_id=worker.active_turn,
+            )
+        from .input_receipts import consumed
+
+        consumed(client, worker, context, ticket["id"])
         await response.prepare(request)
         args.update(
             context=payload["context"],

@@ -51,7 +51,9 @@ can be provided in the request. Local operator calls are trusted; plugin calls i
 host-bound ownership and the current work budget.
 
 Other operations: `events` (`id`, optional `cursor`/`limit`), `cancel` (`id`),
-`supplement` (`id`, `text`), and `answer` (`id`, current `question_id`, `text`). The returned
+`supplement` (`id`, stable UUID `message_id`, `text`), and `answer`
+(`id`, stable UUID `message_id`, current `question_id`, `text`). Both return a message
+receipt; query it with `message_get` (`id`, `message_id`). The returned
 question identifier is required so a delayed answer cannot accidentally answer a newer
 question. Plugins declare `uses=(ExecutionRequest,)` and invoke the same operations.
 
@@ -59,7 +61,11 @@ Receipts include state, model, effort, result, usage and registered work-area ar
 Scratch files and deliverables use `state/work/executions/<id>/scratch` and `artifacts`.
 Events retain the most recent 512 entries per execution, at most 16 KiB each; oversized
 event payloads are explicitly marked truncated. Cursor queries return the earliest retained
-cursor. Final text is bounded to 65,536 characters with an explicit `result_truncated` flag;
+cursor, latest cursor, deleted-through watermark, `gap`, `has_more` and execution state.
+Global sequence gaps caused by other executions are not data loss. For rows created before
+watermark tracking, `history_origin_known=false`; a query into that unknown prefix returns
+`gap=null`, not a fabricated complete history. Oversized payloads retain bounded object IDs.
+Final text is bounded to 65,536 characters with an explicit `result_truncated` flag;
 artifacts carry larger deliverables.
 
 ## Lifecycle guarantees
@@ -111,3 +117,60 @@ MCP definitions are discovered through Pi's native tool search, with the same bo
 loadout as conversation and tasks. `tools` is still the exact business-call ceiling;
 the host adds the discovery infrastructure without allowing additional business tools.
 See [Pi discovery](../pi/README.md#native-tool-discovery-and-bounded-declarations).
+
+## Durable input receipts (API 2)
+
+Supplementary text and clarification answers require a caller-generated stable UUID
+`message_id`. Same ID/content/execution returns its original receipt; changed content or
+another execution is rejected. The current host CallIdentity is recorded as call evidence,
+not inferred project authorization. At most 64 unconsumed inputs may be pending per run.
+
+- `accepted`: persisted and queued/submitted to the engine; not yet observed in a model request.
+- `consumed`: matched the exact host-marked input in a specific Pi model-request context;
+  includes `turn_id`, durable usage `model_request_id`, and `consumed_at`.
+- `not_consumed`: known not dispatched, for example a new supplement arriving after termination.
+- `unknown`: dispatch or consumption cannot be proved; never automatically re-send.
+
+A small host-generated correlation marker is included in the user/tool input. The Pi adapter
+matches role, body and (for answers) native tool-call identity at the metered model-input
+boundary. This proves inclusion in that local model request, not remote acceptance,
+understanding, use or business completion. Unobservable transformations/compaction or
+interruption may leave a message unknown. No claim of supplier-internal exactly-once delivery.
+
+The durable intent is written before dispatch. A lost response, duplicate query, restart or
+late acknowledgement cannot send the input twice or clear a newer clarification question.
+Terminal execution and unresolved message settlement share a database transaction.
+
+Use `files finalize` for immutable publications rather than retaining the mutable artifact
+names in a run receipt; see the workfiles contract. Unknown executions keep their scratch
+area retained pending future explicit settlement; they do not enter timed cleanup.
+
+API 2 requires the stable message ID and returns a message receipt. API 1 integrations must adapt before declaring compatibility.
+
+
+## Operation observations
+
+`observations` accepts `id`, optional `cursor` and `limit` (1..100). Its append-only
+records are separate from the rolling UI event window. Native model requests (including
+compaction) use their usage-ticket identity; tool calls get execution-scoped stable IDs,
+with their parent request when observed. Arguments, file contents and credentials are
+not copied into this journal. It records only the Pi native observation boundary, not
+arbitrary plugin I/O or external services.
+
+`reconcile` accepts `id` and appends a scope-specific observation. The response includes
+recorded model-operation counts and the last observed local leader, with a host startup
+ID and a per-launch ID. A PID is not used as sufficient identity. Local leader exit is
+not process-tree, write-fence or remote-stop proof. The current full-permission backend
+therefore reports `local_writes=unfenced`, missing scopes as `unknown`, and
+`safe_to_retry=false`. The controlled broker must supply stronger evidence before this
+can allow a conflicting retry. Controlled contexts add broker fencing; legacy full-permission execution stays unfenced.
+
+Terminating an execution marks unsettled operations unknown. A late completion appends
+evidence without rewriting that operation or the original execution outcome. Observations
+survive restart; the new process has a distinct startup ID. These are observations, not
+an authorization to access resources or a substitute for an upstream role decision.
+
+
+## Controlled contexts
+
+The injected `execution_control` resource binds the trusted installed controller. It is unavailable to model calls and disabled by default through an empty `execution.controllers` allowlist. See the complete [control API and lifecycle](../../../../docs/development/controlled-execution.md). Context, workspace, grant, execution, operation, usage scope and immutable publication identities are distinct. Windows fixed-command isolation is explicitly selected by this control API, never inferred from ordinary execution or a platform tag.

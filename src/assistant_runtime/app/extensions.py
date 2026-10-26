@@ -67,10 +67,12 @@ def discover(names, builtins=()):
             raise ValueError("Invalid plugin declaration: " + name)
         if definition.internal_factory is not None or definition.create is None:
             raise ValueError("Installed plugins require a public-context factory")
-        if set(definition.resources) - {"system_io"}:
+        if set(definition.resources) - {"system_io", "execution_control"}:
             raise ValueError(
                 "Installed plugin requested unsupported direct resources; use declared capabilities"
             )
+        if "execution_control" in definition.resources and "execution" not in definition.manifest.requires:
+            raise ValueError("Execution control requires the execution dependency")
         if set(definition.supported_platforms) != set(platforms):
             raise PlatformCertificationError(
                 f"Plugin {name} cannot enable on {system.name}; certified platforms: {', '.join(platforms)}; "

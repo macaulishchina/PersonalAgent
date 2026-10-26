@@ -6,7 +6,7 @@
   "schema_version": 1,
   "id": "assistant",
   "version": "core",
-  "api_version": 1,
+  "api_version": 2,
   "requires_core": "core",
   "requires": {
     "conversation": "core",

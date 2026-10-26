@@ -2,6 +2,7 @@
 
 from .configuration import ConfigurationSpec
 from .files import FileRequest
+from .control import ExecutionControl
 from .runs import ExecutionRequest
 from .conversation import ConversationRequest
 from .backends import BackendSpec, PlatformInfo
@@ -22,6 +23,7 @@ __all__ = [
     "plugin_manifest",
     "identifier",
     "ExecutionRequest",
+    "ExecutionControl",
     "ConversationRequest",
     "FileRequest",
 ]

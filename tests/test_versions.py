@@ -110,7 +110,10 @@ class VersionTest(unittest.TestCase):
             check_dependencies(records, ["b"])
 
     def test_core_and_api_incompatibility_rejected_before_import_and_config_save(self):
-        for changes in ({"requires_core": ">=0.4.0,<0.5.0"}, {"api_version": 2}):
+        for changes in (
+            {"requires_core": ">=999.0.0,<1000.0.0"},
+            {"api_version": framework()["api_version"] + 1},
+        ):
             entry = self.entry(release_data(**changes))
             with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
                 with self.assertRaises(CompatibilityError):
@@ -131,7 +134,7 @@ class VersionTest(unittest.TestCase):
             entry.load.assert_not_called()
 
     def test_disabled_incompatible_plugin_is_visible_and_removable(self):
-        records = {"sample": descriptor(release_data(requires_core=">=0.4.0,<0.5.0"))}
+        records = {"sample": descriptor(release_data(requires_core=">=999.0.0,<1000.0.0"))}
         self.assertFalse(inspect({"plugins": ["sample"]}, records)["compatible"])
         report = inspect({"plugins": []}, records)
         self.assertTrue(report["compatible"])
@@ -162,7 +165,7 @@ class VersionTest(unittest.TestCase):
 
     def test_incompatible_dependency_marks_its_dependent(self):
         records = {
-            "a": descriptor(release_data("a", api_version=2)),
+            "a": descriptor(release_data("a", api_version=framework()["api_version"] + 1)),
             "b": descriptor(release_data("b", requires={"a": ">=1.0.0,<2.0.0"})),
         }
         result = inspect({"plugins": ["a", "b"]}, records)
@@ -181,7 +184,7 @@ class VersionTest(unittest.TestCase):
         self.assertFalse((self.root / "state/release-state.json").exists())
         self.assertEqual(len(result["artifacts"][0]["sha256"]), 64)
         with patch("assistant_runtime.app.release_inventory.releases", return_value=({}, {})):
-            result = preflight(entry, wheel(self.root, "0.4.0"))
+            result = preflight(entry, wheel(self.root, "999.0.0"))
         self.assertFalse(result["compatible"])
         self.assertTrue(any(b["plugin"] == "web" for b in result["blockers"]))
 
@@ -353,7 +356,7 @@ class VersionConsoleTest(unittest.IsolatedAsyncioTestCase):
             def candidate(name):
                 result = release(name)
                 if name == "web":
-                    result["requires_core"] = ">=0.4.0,<0.5.0"
+                    result["requires_core"] = ">=999.0.0,<1000.0.0"
                 return result
 
             with patch("assistant_runtime.core.plugin_catalog.release", side_effect=candidate):
@@ -366,7 +369,7 @@ class VersionConsoleTest(unittest.IsolatedAsyncioTestCase):
                     catalog = await (await client.get("/api/catalog")).json()
                     row = next(p for p in catalog["plugins"] if p["id"] == "web")
                     self.assertFalse(row["version_compatible"])
-                    self.assertIn("0.4.0", row["version_error"])
+                    self.assertIn("999.0.0", row["version_error"])
                     snapshot = await (await client.get("/api/configuration")).json()
                     original = entry.read_bytes()
                     for enabled, status in ((["web"], 400), ([], 200)):

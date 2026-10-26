@@ -3,7 +3,7 @@ from typing import Any
 import time
 import uuid
 
-API_VERSION = 1
+API_VERSION = 2
 
 
 @dataclass(frozen=True)

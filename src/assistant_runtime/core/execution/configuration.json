@@ -20,6 +20,19 @@
         "default": 64,
         "minimum": 1,
         "maximum": 1024
+      },
+      "controllers": {
+        "type": "object",
+        "title": "可信执行控制服务",
+        "description": "仅显式信任的已安装插件可签发资源授权；每项列出其可代表的资源所有者，不支持通配符。模型工具不能使用此控制入口。",
+        "default": {},
+        "advanced": true,
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   },

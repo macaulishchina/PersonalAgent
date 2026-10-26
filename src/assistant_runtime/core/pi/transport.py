@@ -16,13 +16,14 @@ class ExecutionTransport:
     async def start(self):
         app = web.Application(client_max_size=32 * 1024 * 1024)
         app.router.add_post("/v1/native", self.forward)
+        app.router.add_post("/v1/resources", self.resources)
         self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=2, handler_cancellation=True)
         await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await site.start()
         self.url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/v1"
 
-    async def forward(self, request):
+    def authenticate(self, request):
         from hmac import compare_digest
 
         key = self.client.environment.get("PA_EXECUTION_TOKEN", "")
@@ -35,11 +36,43 @@ class ExecutionTransport:
             or not worker.meta.get("budget_id")
         ):
             raise web.HTTPForbidden()
+        if worker.meta.get("controlled_context"):
+            token = worker.meta.get("control_token", "")
+            if not token or not compare_digest(request.headers.get("x-assistant-control", ""), token):
+                raise web.HTTPForbidden()
+        return worker
+
+    async def resources(self, request):
+        worker = self.authenticate(request)
+        if not worker.meta.get("controlled_context") or not self.client.admission:
+            raise web.HTTPForbidden()
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) != {"operation_id", "action", "arguments"}:
+            raise web.HTTPBadRequest()
+        self.authenticate(request)
+        service = self.client.admission.service
+        execution = service.sessions.get(worker.execution_session_id)
+        if execution is None:
+            raise web.HTTPForbidden()
+        try:
+            result = await service.broker.request(
+                execution, payload["operation_id"], payload["action"], payload["arguments"]
+            )
+            return web.json_response(result)
+        except PermissionError as error:
+            return web.json_response({"error": str(error)}, status=403)
+        except (ValueError, FileNotFoundError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+
+    async def forward(self, request):
+        worker = self.authenticate(request)
         if self.pending >= self.client.settings.queue_size + self.client.settings.concurrency:
             raise web.HTTPServiceUnavailable()
         self.pending += 1
         try:
             async with self.slots:
+                if self.authenticate(request) is not worker:
+                    raise web.HTTPForbidden()
                 return await self._native(request, worker)
         finally:
             self.pending -= 1

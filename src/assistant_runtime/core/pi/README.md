@@ -218,3 +218,10 @@ repeated search/eviction/reload, bounded historical schema projection, oversized
 forged out-of-scope calls, restart, foreground-to-task delegation, native-account mixed
 execution and installed plugins through slim's public execution. They do not establish
 new paid-provider parity.
+
+
+Public execution message receipts are correlated at the metered native model-input boundary.
+The host supplies an opaque marker for explicit supplements/answers; matching additionally
+checks the active run, native role and answer tool-call ID. A successful steer RPC only means
+accepted. Consumed receipts include the durable usage call ID and prove input inclusion,
+not provider processing or task success. The adapter never resends an uncertain public input.

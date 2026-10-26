@@ -13,9 +13,12 @@ from assistant_runtime.api import plugin_manifest
 class WorkFiles:
     def __init__(self, state, db, settings=None):
         settings = settings or {}
-        if set(settings) - {"root", "retention_days"}:
+        if set(settings) - {"root", "retention_days", "artifact_storage_bytes"}:
             raise ValueError("Unknown work_files settings")
         self.root = Path(settings.get("root", state / "work")).expanduser().absolute()
+        self.artifact_storage_bytes = settings.get("artifact_storage_bytes", 512 * 1024 * 1024)
+        if type(self.artifact_storage_bytes) is not int or not 0 <= self.artifact_storage_bytes <= 1024**4:
+            raise ValueError("artifact_storage_bytes must be 0..1099511627776")
         self.days = settings.get("retention_days", 7)
         if type(self.days) is not int or not 1 <= self.days <= 365:
             raise ValueError("retention_days must be 1..365")
@@ -27,6 +30,14 @@ class WorkFiles:
         self.db = db
         db.execute("CREATE TABLE IF NOT EXISTS work_areas (owner TEXT PRIMARY KEY, ended REAL)")
         db.commit()
+        from .artifacts import ArtifactFiles
+
+        self.publications = ArtifactFiles(self)
+
+    async def request(self, request):
+        if request.action == "finalize" or request.action.startswith("artifact_"):
+            return await self.publications.request(request)
+        return await self.inputs.request(request)
 
     def area(self, owner):
         if not re.fullmatch(r"(?:tasks|conversations|executions)/[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)?", owner):
@@ -138,15 +149,21 @@ class WorkFilesMaintenance:
         days = config.work_files.get("retention_days", 7)
         if type(days) is not int or not 1 <= days <= 365:
             raise ConfigurationError(["work_files", "retention_days"], "range", "保留时间必须为 1–365 天")
-        return attributes([(self.files, "days", days)])
+        quota = config.work_files.get("artifact_storage_bytes", 512 * 1024 * 1024)
+        if type(quota) is not int or not 0 <= quota <= 1024**4:
+            raise ConfigurationError(
+                ["work_files", "artifact_storage_bytes"], "range", "Invalid artifact quota"
+            )
+        return attributes([(self.files, "days", days), (self.files, "artifact_storage_bytes", quota)])
 
     async def start(self, context):
         from assistant_runtime.api.files import FileRequest
 
-        context.register(FileRequest, self.files.inputs.request)
+        context.register(FileRequest, self.files.request)
         context.spawn(self.maintain(), "retention")
 
     async def maintain(self):
         while True:
             await self.files.collect(True)
+            await self.files.publications.collect()
             await asyncio.sleep(3600)

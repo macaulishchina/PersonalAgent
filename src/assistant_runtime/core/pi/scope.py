@@ -4,7 +4,20 @@ from copy import deepcopy
 import re
 
 NATIVE_TOOLS = frozenset(
-    {"read", "write", "edit", "bash", "powershell", "grep", "find", "ls", "request_user_input"}
+    {
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "powershell",
+        "grep",
+        "find",
+        "ls",
+        "request_user_input",
+        "pa_read",
+        "pa_write",
+        "pa_check",
+    }
 )
 
 

@@ -33,6 +33,15 @@
             "default": 7,
             "minimum": 1,
             "maximum": 365
+          },
+          "artifact_storage_bytes": {
+            "type": "integer",
+            "title": "产物暂存空间上限（字节）",
+            "default": 536870912,
+            "minimum": 0,
+            "maximum": 1099511627776,
+            "x-advanced": true,
+            "description": "默认 512 MiB。0 禁止新发布；每次发布预留最多 64 MiB。降低上限不删除已有产物，已过期产物由维护任务回收。"
           }
         }
       }

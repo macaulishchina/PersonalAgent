@@ -8,7 +8,7 @@ Before adapting this example, read the [plugin contract](../../docs/development/
 
 The shipped example is certified for Linux only. `plugin.json` is included in
 the wheel and read by its `PluginDefinition`; static and runtime certifications
-must match. The same descriptor declares version `1.0.0`, API 1 and core range `>=0.3.0,<0.4.0`; `plugin_manifest(__file__)` creates the runtime manifest. The plugin release must match the distribution version. Windows and Windows Server refuse to enable this example. Certify a
+must match. The same descriptor declares version `1.1.0`, API 2 and core range `>=0.4.0,<0.5.0`; `plugin_manifest(__file__)` creates the runtime manifest. The plugin release must match the distribution version. Windows and Windows Server refuse to enable this example. Certify a
 new platform through an explicit release change after appropriate validation.
 
 For a new release, update `pyproject.toml` and `plugin.json` together. Keep the

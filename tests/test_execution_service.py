@@ -34,6 +34,9 @@ class Client:
         self.starting = asyncio.Event()
         self.release = asyncio.Event()
 
+    def track_input(self, *args):
+        pass
+
     async def send(self, message):
         self.responses.append(message)
 
@@ -164,10 +167,16 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ValueError, "no longer pending"):
             await self.service.request(
-                ExecutionRequest("answer", {"id": ident, "question_id": 9, "text": "one"})
+                ExecutionRequest(
+                    "answer", {"id": ident, "question_id": 9, "text": "one", "message_id": str(uuid.uuid4())}
+                )
             )
-        await self.service.request(ExecutionRequest("answer", {"id": ident, "question_id": 8, "text": "one"}))
-        self.assertEqual(self.client.responses, [(8, {"answers": {"q": {"answers": ["one"]}}})])
+        await self.service.request(
+            ExecutionRequest(
+                "answer", {"id": ident, "question_id": 8, "text": "one", "message_id": str(uuid.uuid4())}
+            )
+        )
+        self.assertEqual(self.client.responses[0][1]["answers"], {"q": {"answers": ["one"]}})
         await self.event(
             ident,
             "run.completed",
@@ -217,6 +226,10 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             while not any(c[0] == "session.close" for c in self.client.calls):
                 await asyncio.sleep(0.001)
         self.assertTrue(any(c[0] == "run.cancel" for c in self.client.calls))
+        area = self.store.db.execute(
+            "SELECT ended FROM work_areas WHERE owner=?", ("executions/" + row["id"],)
+        ).fetchone()
+        self.assertIsNone(area[0], "Uncertain execution must not enter scratch cleanup")
         self.assertEqual((await self.service.submit(args))["state"], "unknown")
         self.assertEqual(len([c for c in self.client.calls if c[0] == "run.start"]), 1)
 
@@ -328,7 +341,16 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            gateway = FakeResponsesGateway(lambda step, body: sse_text_reply("done", "BASE_OK"))
+            import threading
+
+            release_first = threading.Event()
+
+            def reply(step, body):
+                if step == 1:
+                    release_first.wait(10)
+                return sse_text_reply("done", "BASE_OK")
+
+            gateway = FakeResponsesGateway(reply)
             (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             config = Config(
                 root=root,
@@ -370,12 +392,39 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 row = await runtime.invoke(
                     ExecutionRequest("submit", {"request_id": str(uuid.uuid4()), "text": "Return BASE_OK"})
                 )
+                async with asyncio.timeout(10):
+                    while not gateway.requests:
+                        await asyncio.sleep(0.01)
+                input_args = {"id": row["id"], "message_id": str(uuid.uuid4()), "text": "SUPPLEMENT_EVIDENCE"}
+                try:
+                    accepted = await runtime.invoke(ExecutionRequest("supplement", input_args))
+                    self.assertEqual(accepted["state"], "accepted")
+                    await runtime.invoke(ExecutionRequest("supplement", input_args))
+                finally:
+                    release_first.set()
                 async with asyncio.timeout(20):
                     while row["state"] not in {"completed", "failed", "unknown"}:
                         await asyncio.sleep(0.05)
                         row = await runtime.invoke(ExecutionRequest("get", {"id": row["id"]}))
                 self.assertEqual(row["state"], "completed", row)
                 self.assertIn("BASE_OK", row["result"])
+                receipt = await runtime.invoke(
+                    ExecutionRequest(
+                        "message_get",
+                        {
+                            "id": row["id"],
+                            "message_id": input_args["message_id"],
+                        },
+                    )
+                )
+                self.assertEqual(receipt["state"], "consumed", receipt)
+                self.assertEqual(len(gateway.requests), 2)
+                observation = await runtime.invoke(ExecutionRequest("reconcile", {"id": row["id"]}))
+                self.assertEqual(observation["recorded_model_operations"].get("completed"), 2)
+                self.assertFalse(observation["safe_to_retry"])
+                process = observation["last_local_observation"]
+                self.assertTrue(process["launch_id"])
+                self.assertEqual(process["scope"], "owned_leader_only")
                 self.assertTrue(row["usage"])
                 self.assertNotIn("executions", store.__dict__)
                 tables = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -529,6 +578,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
             host = AssistantService(config)
             task = asyncio.create_task(host.run())
             args = {"request_id": str(uuid.uuid4()), "text": "Reply RUN_OK. Do not use tools."}
+            answer_id = str(uuid.uuid4())
             try:
                 await asyncio.wait_for(host.runtime.ready.wait(), 20)
                 submitted = await request(
@@ -550,6 +600,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                                         "id": row["id"],
                                         "question_id": row["question_id"],
                                         "text": "Synthetic report",
+                                        "message_id": answer_id,
                                     },
                                 },
                             )
@@ -558,8 +609,44 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.05)
                 self.assertEqual(row["state"], "completed", row)
                 self.assertIn("RUN_OK", row["result"])
+                receipt = await request(
+                    config,
+                    {
+                        "command": "executions",
+                        "action": "message_get",
+                        "arguments": {"id": row["id"], "message_id": answer_id},
+                    },
+                )
+                self.assertEqual(receipt["state"], "consumed", receipt)
+                self.assertTrue(receipt["model_request_id"])
                 self.assertTrue(row["usage"])
                 self.assertEqual(row["artifacts"], [{"name": "report.txt", "bytes": 9}])
+                if __import__("sys").platform == "win32":
+                    import time
+
+                    published = await request(
+                        config,
+                        {
+                            "command": "files",
+                            "action": "finalize",
+                            "arguments": {
+                                "finalize_id": str(uuid.uuid4()),
+                                "execution_id": row["id"],
+                                "name": "report.txt",
+                                "expires_at": time.time() + 3600,
+                            },
+                        },
+                    )
+                    self.assertEqual(published["state"], "published")
+                    fetched = await request(
+                        config,
+                        {
+                            "command": "files",
+                            "action": "artifact_read",
+                            "arguments": {"id": published["id"]},
+                        },
+                    )
+                    self.assertEqual(__import__("base64").b64decode(fetched["data"]), b"SYNTHETIC")
                 duplicate = await request(
                     config, {"command": "executions", "action": "submit", "arguments": args}
                 )

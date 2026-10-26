@@ -26,7 +26,8 @@ Windows 和 Windows Server 默认使用 slim；Linux 默认 standard。两类平
 2. [插件开发](development/plugins.md)：公共接口、版本／平台声明、配置描述与生命周期。
 3. [开发与验证](development/testing.md)：环境、针对性测试、全量检查和实机验收。
 4. [发布与切换](development/release.md)：版本递增规则、候选包检查、发布切换和数据回退。
-5. [文档维护](development/documentation.md)：文档放置规则与修改检查。
+5. [受控执行接入](development/controlled-execution.md)：可信授权、多轮上下文、Windows 隔离、停止核对和不可变产物。
+6. [文档维护](development/documentation.md)：文档放置规则与修改检查。
 
 工程约束以根目录 [AGENTS.md](../AGENTS.md) 为准。模块 README 保留在所属代码旁，由[模块索引](reference/modules.md)统一导航。
 

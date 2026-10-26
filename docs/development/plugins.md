@@ -58,13 +58,13 @@ windows = "directshow"
 {
   "schema_version": 1,
   "id": "sample",
-  "version": "1.0.0",
-  "api_version": 1,
-  "requires_core": ">=0.3.0,<0.4.0",
+  "version": "1.1.0",
+  "api_version": 2,
+  "requires_core": ">=0.4.0,<0.5.0",
   "supported_platforms": ["linux"],
   "requires": {
-    "execution": ">=0.3.0,<0.4.0",
-    "workfiles": ">=0.3.0,<0.4.0"
+    "execution": ">=0.4.0,<0.5.0",
+    "workfiles": ">=0.4.0,<0.5.0"
   },
   "optional": {},
   "critical": false
@@ -86,7 +86,7 @@ windows = "directshow"
    ```toml
    [project]
    name = "personal-agent-sample"
-   version = "1.0.0"
+   version = "1.1.0"
 
    [project.entry-points."personal_agent.plugins"]
    sample = "personal_agent_sample:definition"
@@ -348,3 +348,7 @@ See the [configuration guide](../../src/assistant_runtime/core/configuration/REA
 ### 运行健康信息
 
 插件遇到使功能不可用的部署或运行问题，应通过 `context.set_health("degraded", "简短原因及修复线索")` 报告；恢复后调用 `context.set_health("ready")` 清除错误。错误不要包含凭据、用户消息或供应商原始响应。管理状态接口统一聚合，配置页持续显示；不要另建插件通知系统，也不要把捕获异常当作成功。未捕获的后台任务异常仍由框架报告。
+
+## 受控执行集成
+
+API 2 的可信服务插件使用 `execution_control` 注入资源；必须声明 execution 依赖并配置 owner 白名单。授权、上下文、轮次、用量、产物与 Windows 隔离范围见[受控执行接入](controlled-execution.md)。模型工具不能使用该控制句柄，不能用 work_id 代替项目授权。
