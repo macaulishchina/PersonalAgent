@@ -18,6 +18,8 @@ class ProbeInput(ValueError):
 
 def validation_message(message):
     # Match owner validation codes, never echo submitted values or parser messages.
+    if "catalog" in message.lower():
+        return "catalog", "模型目录：请填写与推理接口同源的完整地址，并选择目录响应格式。"
     if "session header" in message or "Session header" in message:
         return (
             "session_header",

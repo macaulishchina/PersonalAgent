@@ -165,6 +165,28 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(parsed.providers["test"]["session_header"], "x-opencode-session")
             self.assertEqual(parsed.providers["test"]["auth_scheme"], "bearer")
 
+    def test_custom_catalog_validates_origin_format_and_leaves_inference_unchanged(self):
+        provider = {
+            "protocol": "gemini",
+            "base_url": "https://compatible.example/google/v1beta",
+            "key_env": "CUSTOM_KEY",
+            "auth_scheme": "bearer",
+        }
+        catalog = {"url": "https://compatible.example/shared/models", "format": "openai"}
+        parsed = ModelSettings.parse(settings(providers={"test": {**provider, "catalog": catalog}}))
+        self.assertEqual(parsed.providers["test"]["base_url"], provider["base_url"])
+        self.assertEqual(parsed.providers["test"]["catalog"], catalog)
+        for invalid in (
+            {**catalog, "url": "https://other.example/models"},
+            {**catalog, "url": "http://compatible.example/models"},
+            {**catalog, "url": "https://compatible.example:8443/models"},
+            {**catalog, "url": "https://user:secret@compatible.example/models"},
+            {**catalog, "format": "unknown"},
+            {"url": catalog["url"]},
+        ):
+            with self.subTest(catalog=invalid), self.assertRaises(ValueError):
+                ModelSettings.parse(settings(providers={"test": {**provider, "catalog": invalid}}))
+
     def test_official_presets_and_custom_protocol(self):
         for preset in PRESETS:
             raw = settings(providers={"test": {"preset": preset}})

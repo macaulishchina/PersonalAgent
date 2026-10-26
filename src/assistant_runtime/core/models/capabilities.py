@@ -100,8 +100,9 @@ def facts(raw):
 
 def binding(provider, model, account=None):
     # Credentials never enter metadata. Changes of endpoint, protocol or native identity
-    # invalidate the snapshot; enabling a connection does not change its identity.
-    route = {k: v for k, v in provider.items() if k not in {"enabled", "key_env"}}
+    # invalidate the snapshot. Enablement, credentials and directory metadata
+    # do not change the inference route or invalidate accepted model facts.
+    route = {k: v for k, v in provider.items() if k not in {"enabled", "key_env", "catalog"}}
     native = {k: v for k, v in (account or {}).items() if k in {"provider", "auth"}}
     return hashlib.sha256(json.dumps([route, model, native], sort_keys=True).encode()).hexdigest()
 

@@ -6,6 +6,10 @@ const providerLabels = {
   claude: "Anthropic",
   gemini: "Google Gemini",
   deepseek: "DeepSeek",
+  opencode_responses: "OpenCode Console · OpenAI Responses",
+  opencode_chat: "OpenCode Console · Chat Completions",
+  opencode_anthropic: "OpenCode Console · Anthropic",
+  opencode_gemini: "OpenCode Console · Gemini",
   opencode_go_responses: "OpenCode Go · OpenAI Responses",
   opencode_go_chat: "OpenCode Go · Chat Completions",
   opencode_go_anthropic: "OpenCode Go · Anthropic",
@@ -215,6 +219,31 @@ function apiConnectionFields(
     hint: "通常留空，仅在供应商明确要求时填写，例如 x-session-id。这里不是会话编号。",
   });
   header.dataset.connectionField = "session_header";
+  const catalogUrl = formInput(
+    advanced,
+    prefix + "-catalog-url",
+    "模型目录地址",
+    {
+      type: "url",
+      value: initial.catalog?.url || "",
+      hint: "通常留空。供应商使用独立目录时填写完整地址，须与推理接口同源。",
+    },
+  );
+  catalogUrl.dataset.connectionField = "catalog.url";
+  const catalogFormat = formInput(
+    advanced,
+    prefix + "-catalog-format",
+    "模型目录格式",
+    {
+      choices: [
+        ["openai", "OpenAI"],
+        ["anthropic", "Anthropic"],
+        ["gemini", "Gemini"],
+      ],
+      value: initial.catalog?.format || "openai",
+    },
+  );
+  catalogFormat.dataset.connectionField = "catalog.format";
   box.append(advanced);
   const enabled = formInput(box, prefix + "-enabled", "启用此连接", {
     type: "checkbox",
@@ -226,13 +255,19 @@ function apiConnectionFields(
     url: endpoint.value,
     scheme: scheme.value,
     header: header.value,
+    catalogUrl: catalogUrl.value,
+    catalogFormat: catalogFormat.value,
   };
   function refresh() {
     const spec = presets[type.value];
     protocol.closest("label").hidden = Boolean(spec);
     protocol.disabled = Boolean(spec);
     advanced.hidden = Boolean(spec);
-    scheme.disabled = header.disabled = Boolean(spec);
+    scheme.disabled =
+      header.disabled =
+      catalogUrl.disabled =
+      catalogFormat.disabled =
+        Boolean(spec);
     endpoint.readOnly = Boolean(spec);
     if (spec) {
       endpoint.value = spec.base_url;
@@ -254,6 +289,11 @@ function apiConnectionFields(
       provider.base_url = endpoint.value.trim();
       if (scheme.value !== "native") provider.auth_scheme = scheme.value;
       if (header.value.trim()) provider.session_header = header.value.trim();
+      if (catalogUrl.value.trim())
+        provider.catalog = {
+          url: catalogUrl.value.trim(),
+          format: catalogFormat.value,
+        };
     }
     return { provider, secret: credential.secret };
   }
@@ -275,6 +315,8 @@ function apiConnectionFields(
         url: endpoint.value,
         scheme: scheme.value,
         header: header.value,
+        catalogUrl: catalogUrl.value,
+        catalogFormat: catalogFormat.value,
       };
     const before = endpoint.value;
     if (type.value === "custom") {
@@ -285,12 +327,16 @@ function apiConnectionFields(
           url: previous.base_url,
           scheme: previous.auth_scheme || "native",
           header: previous.session_header || "",
+          catalogUrl: previous.catalog?.url || "",
+          catalogFormat: previous.catalog?.format || "openai",
         };
       }
       protocol.value = custom.protocol;
       endpoint.value = custom.url || before;
       scheme.value = custom.scheme;
       header.value = custom.header;
+      catalogUrl.value = custom.catalogUrl;
+      catalogFormat.value = custom.catalogFormat;
     }
     refresh();
     if (endpoint.value !== before) {
@@ -301,7 +347,15 @@ function apiConnectionFields(
     previousType = type.value;
     notify();
   });
-  for (const control of [protocol, endpoint, scheme, header, enabled])
+  for (const control of [
+    protocol,
+    endpoint,
+    scheme,
+    header,
+    catalogUrl,
+    catalogFormat,
+    enabled,
+  ])
     control.addEventListener("input", notify);
   refresh();
   return { read, valid, element: box };

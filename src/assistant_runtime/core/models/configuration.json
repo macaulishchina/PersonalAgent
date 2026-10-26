@@ -89,6 +89,10 @@
                 "claude",
                 "gemini",
                 "deepseek",
+                "opencode_responses",
+                "opencode_chat",
+                "opencode_anthropic",
+                "opencode_gemini",
                 "opencode_go_responses",
                 "opencode_go_chat",
                 "opencode_go_anthropic",
@@ -135,6 +139,32 @@
             "session_header": {
               "type": "string",
               "title": "会话请求头"
+            },
+            "catalog": {
+              "type": "object",
+              "title": "模型目录",
+              "x-advanced": true,
+              "required": [
+                "url",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "title": "模型目录地址",
+                  "description": "完整目录地址，须与推理接口同源；不改变推理地址。"
+                },
+                "format": {
+                  "type": "string",
+                  "title": "目录响应格式",
+                  "enum": [
+                    "openai",
+                    "anthropic",
+                    "gemini"
+                  ]
+                }
+              }
             }
           },
           "additionalProperties": false

@@ -60,7 +60,10 @@ async def query(provider, key):
     endpoint = base + (
         "/v1/models" if protocol == "anthropic" and not urlsplit(base).path.endswith("/v1") else "/models"
     )
-    headers = {"Accept": "application/json"}
+    catalog = provider.get("catalog", {})
+    endpoint = catalog.get("url", endpoint)
+    format = catalog.get("format", protocol)
+    headers = {"Accept": "application/json", "User-Agent": "Personal-Agent/model-catalog"}
     if provider.get("auth_scheme") == "bearer" or protocol in {"openai_chat", "openai_responses"}:
         headers["Authorization"] = "Bearer " + key
     elif protocol == "anthropic":
@@ -71,10 +74,10 @@ async def query(provider, key):
         return result(False, "unsupported", "此连接不支持远程模型目录查询，可手工填写模型 ID。")
     if provider.get("session_header"):
         headers[provider["session_header"]] = "pa-catalog-" + uuid.uuid4().hex
-    if protocol == "anthropic":
+    if format == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
     params = (
-        {"limit": "100"} if protocol == "anthropic" else {"pageSize": "500"} if protocol == "gemini" else None
+        {"limit": "100"} if format == "anthropic" else {"pageSize": "500"} if format == "gemini" else None
     )
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12), trust_env=False) as session:
@@ -117,12 +120,12 @@ async def query(provider, key):
                             False, "response_limit", "模型目录响应过大，请缩小供应商目录或手工填写模型 ID。"
                         )
                 payload = json.loads(content)
-                rows = payload.get("models" if protocol == "gemini" else "data")
-                values = models(rows, gemini=protocol == "gemini")
+                rows = payload.get("models" if format == "gemini" else "data")
+                values = models(rows, gemini=format == "gemini")
                 return result(
                     True,
                     "reachable",
-                    "模型目录接口已连通；尚未验证模型推理。",
+                    "模型目录接口已连通；尚未验证模型调用权限、额度或推理。",
                     models=values,
                     source="remote",
                     truncated=bool(

@@ -14,6 +14,7 @@ from assistant_runtime.app.management import BusinessProcess
 from assistant_runtime.core.configuration.console import Console
 from assistant_runtime.core.configuration.settings import ManagementSettings
 from assistant_runtime.core.models.catalog import query, models
+from assistant_runtime.core.models.settings import ModelSettings
 
 
 class QueryTest(unittest.IsolatedAsyncioTestCase):
@@ -75,6 +76,44 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Authorization", self.requests[-1][2])
         self.assertTrue(self.requests[-1][2]["x-session"].startswith("pa-catalog-"))
+
+    async def test_opencode_protocols_share_their_declared_openai_directory(self):
+        for prefix, path in (("opencode", "/inference"), ("opencode_go", "/inference/go")):
+            for suffix in ("responses", "chat", "anthropic", "gemini"):
+                with self.subTest(preset=prefix + "_" + suffix):
+                    spec = ModelSettings.parse(
+                        {"providers": {"test": {"preset": prefix + "_" + suffix}}}
+                    ).providers["test"]
+                    self.assertEqual(
+                        spec["catalog"],
+                        {"url": "https://opencode.ai" + path + "/v1/models", "format": "openai"},
+                    )
+                    inference = spec["base_url"]
+                    spec["catalog"]["url"] = str(self.provider.make_url(path + "/v1/models"))
+                    response = await query(spec, "private-test-key")
+                    self.assertTrue(response["ok"])
+                    self.assertEqual([m["id"] for m in response["models"]], ["model-a", "model-b"])
+                    method, actual_path, headers, params = self.requests[-1]
+                    self.assertEqual((method, actual_path), ("GET", path + "/v1/models"))
+                    self.assertEqual(params, {})
+                    self.assertEqual(headers["Authorization"], "Bearer private-test-key")
+                    self.assertNotIn("x-goog-api-key", headers)
+                    self.assertNotIn("x-api-key", headers)
+                    self.assertNotIn("anthropic-version", headers)
+                    self.assertEqual(spec["base_url"], inference)
+                    self.assertNotIn("private-test-key", json.dumps(response))
+
+    async def test_shared_directory_errors_retain_their_meaning(self):
+        spec = {
+            **self.spec("gemini"),
+            "auth_scheme": "bearer",
+            "catalog": {"url": str(self.provider.make_url("/shared/models")), "format": "openai"},
+        }
+        for status, code in ((401, "authentication"), (404, "catalog_unavailable"), (429, "rate_limited")):
+            self.status = status
+            response = await query(spec, "private-test-key")
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["code"], code)
 
     async def test_errors_redact_bodies_and_unsupported_directory_is_not_success(self):
         self.body = b"private-test-key upstream body"

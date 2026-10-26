@@ -231,6 +231,23 @@ class CapabilityTest(unittest.TestCase):
         original["providers"]["p"]["enabled"] = False
         ModelSettings.parse(original)  # disabled settings remain editable
 
+    def test_directory_changes_preserve_existing_inference_capability_snapshots(self):
+        for prefix in ("opencode", "opencode_go"):
+            for suffix in ("responses", "chat", "anthropic", "gemini"):
+                with self.subTest(preset=prefix + "_" + suffix):
+                    raw = {"providers": {"p": {"preset": prefix + "_" + suffix}}}
+                    provider = ModelSettings.parse(raw).providers["p"]
+                    before = {k: v for k, v in provider.items() if k != "catalog"}
+                    snapshot = profile(before, "private-alias")
+                    raw["entries"] = {
+                        "m": {"provider": "p", "model": "private-alias", "capabilities": snapshot}
+                    }
+                    self.assertEqual(ModelSettings.parse(raw).entries["m"]["capabilities"], snapshot)
+        original = self.spec()
+        original["entries"]["m"]["capabilities"] = profile(original["providers"]["p"], "private-alias")
+        original["providers"]["p"]["catalog"] = {"url": "https://relay.example/catalog", "format": "gemini"}
+        self.assertEqual(ModelSettings.parse(original).entries["m"]["model"], "private-alias")
+
     def test_public_reference_is_explicit_and_cannot_invent_thinking_levels(self):
         public = {
             "revision": "test",

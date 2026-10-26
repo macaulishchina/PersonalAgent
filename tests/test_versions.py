@@ -27,7 +27,8 @@ from release_fixture import release_data
 SOURCE = Path(__file__).resolve().parents[1]
 
 
-def wheel(root, target="0.3.1", *, sample=None):
+def wheel(root, target=None, *, sample=None):
+    target = target or framework()["version"]
     package = "personal_agent_sample" if sample else "personal_agent"
     v = sample["version"] if sample else target
     path = root / f"{package}-{v}-py3-none-any.whl"
@@ -175,7 +176,7 @@ class VersionTest(unittest.TestCase):
         with patch("assistant_runtime.app.release_inventory.releases", return_value=({}, {})):
             result = preflight(entry, wheel(self.root))
         self.assertTrue(result["compatible"], result)
-        self.assertEqual(result["core"]["version"], "0.3.1")
+        self.assertEqual(result["core"]["version"], framework()["version"])
         self.assertFalse(result["installation_performed"])
         self.assertFalse((self.root / "state/release-state.json").exists())
         self.assertEqual(len(result["artifacts"][0]["sha256"]), 64)

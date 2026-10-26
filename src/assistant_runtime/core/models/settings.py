@@ -49,19 +49,24 @@ PRESETS = {
 
 
 # Named third-party presets; never silently substitute their URLs for official ones.
-for _suffix, _protocol, _path in (
-    ("responses", "openai_responses", "openai/v1"),
-    ("chat", "openai_chat", "openai/v1"),
-    ("anthropic", "anthropic", "anthropic"),
-    ("gemini", "gemini", "google/v1beta"),
+for _prefix, _root in (
+    ("opencode", "https://opencode.ai/inference"),
+    ("opencode_go", "https://opencode.ai/inference/go"),
 ):
-    PRESETS["opencode_go_" + _suffix] = {
-        "protocol": _protocol,
-        "base_url": "https://opencode.ai/inference/go/" + _path,
-        "key_env": "OPENCODE_API_KEY",
-        "auth_scheme": "bearer",
-        "session_header": "x-opencode-session",
-    }
+    for _suffix, _protocol, _path in (
+        ("responses", "openai_responses", "openai/v1"),
+        ("chat", "openai_chat", "openai/v1"),
+        ("anthropic", "anthropic", "anthropic"),
+        ("gemini", "gemini", "google/v1beta"),
+    ):
+        PRESETS[_prefix + "_" + _suffix] = {
+            "protocol": _protocol,
+            "base_url": _root + "/" + _path,
+            "key_env": "OPENCODE_API_KEY",
+            "auth_scheme": "bearer",
+            "session_header": "x-opencode-session",
+            "catalog": {"url": _root + "/v1/models", "format": "openai"},
+        }
 
 
 def keys(value, allowed):
@@ -142,7 +147,10 @@ class ModelSettings:
                 if preset not in PRESETS:
                     raise ValueError("Unknown provider preset")
                 keys(provider, {"preset", "key_env", "enabled"})
-                providers[ident] = {**PRESETS[preset], **{k: v for k, v in provider.items() if k != "preset"}}
+                providers[ident] = {
+                    **deepcopy(PRESETS[preset]),
+                    **{k: v for k, v in provider.items() if k != "preset"},
+                }
         obj = cls(**value)
         if type(obj.enabled) is not bool:
             raise ValueError("models.enabled must be boolean")
@@ -202,7 +210,7 @@ class ModelSettings:
                 continue
             keys(
                 p,
-                {"protocol", "base_url", "key_env", "enabled", "auth_scheme", "session_header"},
+                {"protocol", "base_url", "key_env", "enabled", "auth_scheme", "session_header", "catalog"},
             )
             if p.get("auth_scheme", "native") not in {"native", "bearer"}:
                 raise ValueError("Unsupported provider authentication scheme")
@@ -217,6 +225,20 @@ class ModelSettings:
             if p.get("protocol") not in PROTOCOLS:
                 raise ValueError("Unsupported model protocol")
             p["base_url"] = url(p.get("base_url"))
+            if "catalog" in p:
+                catalog = p["catalog"]
+                keys(catalog, {"url", "format"})
+                catalog["url"] = url(catalog.get("url"))
+                if catalog.get("format") not in {"openai", "anthropic", "gemini"}:
+                    raise ValueError("Unsupported catalog format")
+                base, directory = urlsplit(p["base_url"]), urlsplit(catalog["url"])
+                default_port = 443 if base.scheme == "https" else 80
+                if (base.scheme, base.hostname, base.port or default_port) != (
+                    directory.scheme,
+                    directory.hostname,
+                    directory.port or default_port,
+                ):
+                    raise ValueError("Catalog URL must use the same origin as the inference endpoint")
             if not isinstance(p.get("key_env"), str) or not re.fullmatch(
                 r"[A-Z][A-Z0-9_]{0,127}", p["key_env"]
             ):
