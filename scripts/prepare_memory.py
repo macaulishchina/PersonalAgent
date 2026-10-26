@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+from pathlib import Path
+import tempfile
 from assistant_runtime.app.config import Config
 from assistant_runtime.core.memory.mem0 import Mem0Memory
 
@@ -18,13 +20,15 @@ async def prepare(config):
         threads=2,
     )
     await asyncio.to_thread(lambda: list(model.embed(["初始化本地记忆模型"])))
-    memory = Mem0Memory(config.state_dir / "mem0", cache, project=config.workspace)
-    try:
-        await memory.start()
-        await memory.search("记忆服务初始化", "user")
-        print("Local Mem0 and embedding model ready; no model inference performed")
-    finally:
-        await memory.close()
+    # Validate in a disposable index: never contend with the running instance's Qdrant lock.
+    with tempfile.TemporaryDirectory(prefix="pa-memory-prepare-") as folder:
+        memory = Mem0Memory(Path(folder) / "mem0", cache, project=config.workspace)
+        try:
+            await memory.start()
+            await memory.search("记忆服务初始化", "user")
+            print(f"Local Mem0 and embedding model ready: {cache}; no cloud inference or live index changes")
+        finally:
+            await memory.close()
 
 
 if __name__ == "__main__":

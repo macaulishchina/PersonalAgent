@@ -151,6 +151,26 @@ class BusinessProcess:
                 result["business"] = await self.request({"command": "status"})
             except (OSError, ValueError, TimeoutError):
                 result["business"] = {"state": "unavailable"}
+            business = result["business"]
+            result["plugin_issues"] = [
+                {
+                    "id": name,
+                    "state": item.get("state"),
+                    "error": item.get("error") or "插件未就绪，请检查业务日志。",
+                }
+                for name, item in business.get("plugins", {}).items()
+                if item.get("state") in {"failed", "degraded", "blocked"} or item.get("error")
+            ]
+            if business.get("state") == "unavailable":
+                result["plugin_issues"].append(
+                    {
+                        "id": "business",
+                        "state": "unavailable",
+                        "error": "无法读取业务状态；请检查业务进程和 business.log。",
+                    }
+                )
+            if self.outcome in {"running", "degraded"}:
+                result["state"] = "degraded" if result["plugin_issues"] else "running"
         return result
 
     async def request(self, payload):
@@ -342,33 +362,7 @@ class BusinessProcess:
                 shutil.rmtree(path)
 
     def application_steps(self, snapshot):
-        import tomllib
-        from assistant_runtime.core.models.settings import ModelSettings
-        from assistant_runtime.core.models.gateway import application_steps
-
-        def settings(value):
-            raw = {}
-            for content in value.contents.values():
-                incoming = tomllib.loads(content.decode())
-                from assistant_runtime.core.configuration.fields import merge
-
-                merge(raw, incoming)
-            from .presets import default_plugins
-
-            if "models" not in raw.get("plugins", default_plugins()):
-                return ModelSettings.parse({})
-            return ModelSettings.parse(raw.get("model_api", {}))
-
-        steps = application_steps(
-            settings(self.loaded_snapshot) if self.loaded_snapshot else None,
-            settings(snapshot),
-            self.loaded_snapshot.resources if self.loaded_snapshot else None,
-            snapshot.resources,
-        )
-        # Outstanding external work cannot disappear merely because another business
-        # restart succeeds. Only the operator's explicit version-bound acknowledgement clears it.
-        pending = self.application.get("required_steps", [])
-        return list({step["component"]: step for step in [*pending, *steps]}.values())
+        return []
 
     def accept_snapshot(self, snapshot):
         self.loaded, self.loaded_snapshot = snapshot.version, snapshot

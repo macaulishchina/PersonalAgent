@@ -30,7 +30,6 @@ def shell_call(ident, bash, powershell=None):
 def configuration(url):
     return {
         "enabled": True,
-        "gateway_url": url,
         "memory": "model-a",
         "providers": {
             "local": {"protocol": "openai_responses", "base_url": url, "key_env": "TEST_KEY", "enabled": True}
@@ -39,7 +38,6 @@ def configuration(url):
             name: {
                 "provider": "local",
                 "model": name,
-                "execution_validated": True,
                 "images": True,
                 "structured": True,
                 "reasoning_efforts": ["none", "low", "medium", "high", "max"],
@@ -55,6 +53,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        (self.root / ".env").write_text("TEST_KEY=synthetic-key\n")
         self.gateway = FakeResponsesGateway(lambda step, body: sse_text_reply(f"msg{step}", "已完成"))
         self.settings = ModelSettings.parse(configuration(self.gateway.base_url))
         from assistant_runtime.core.ai_usage.service import UsageService
@@ -64,7 +63,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.client = PiClient(
             cwd=str(self.root),
             settings=self.settings,
-            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic-key"},
+            environment={"PA_EXECUTION_TOKEN": "synthetic-key"},
             runtime_dir=self.root / "executions",
             usage=self.usage,
         )
@@ -90,6 +89,9 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
                     return event["data"]["run"]
 
     async def test_real_model_effort_auth_and_restart_resume(self):
+        catalog = await self.client.request("models.list", {})
+        self.assertEqual({row["id"] for row in catalog["data"]}, {"model-a", "model-b"})
+        self.assertTrue(all("execution_validated" not in row for row in catalog["data"]))
         ident = await self.session()
         for model, effort in (("model-a", "low"), ("model-b", "high")):
             result = await self.client.request(
@@ -153,16 +155,10 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
             {"session_id": ident, "effort": "auto", "input": [{"type": "text", "text": "automatic"}]},
         )
         self.assertEqual((await self.completed())["status"], "completed")
-        self.assertEqual(self.gateway.requests[0]["reasoning"]["effort"], "auto")
-        from assistant_runtime.core.models.gateway_transport import prepare_request
-
-        wire = prepare_request(
-            {"protocol": "openai_responses", "reasoning_efforts": [], "default_reasoning_effort": "auto"},
-            self.gateway.requests[0].copy(),
-            {},
-            [],
-        )
-        self.assertNotIn("reasoning", wire)
+        # The endpoint now receives the final supplier payload. Auto must not
+        # become an explicit disable, and no later intermediary can remove it.
+        self.assertEqual(len(self.gateway.requests), 1)
+        self.assertNotIn("reasoning", self.gateway.requests[0])
 
     async def test_none_is_explicit_even_when_model_default_is_low(self):
         ident = await self.session()
@@ -749,7 +745,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         store = Store(self.root / "state/assistant.sqlite3")
         store.set("thread_id", "old-codex")
         store.transcripts.append("user", "old dialogue must not be injected")
-        (self.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+        (self.root / ".env").write_text("TEST_KEY=synthetic-key\n")
         cfg = Config(
             root=self.root,
             workspace=str(self.root),

@@ -6,9 +6,8 @@ import os
 MODEL_SESSION_HEADER = "x-assistant-session"
 
 
-def pi_models_config(settings, *, session_id=None):
+def pi_models_config(settings, *, session_id=None, transport_url=""):
     models = {}
-    gateway_url = settings.gateway_url
     max_tokens = getattr(settings, "execution_max_output_tokens", 16384) if settings else 16384
     if settings and getattr(settings, "entries", None):
         for ident, entry in settings.entries.items():
@@ -18,7 +17,7 @@ def pi_models_config(settings, *, session_id=None):
             models[ident] = {
                 "id": ident,
                 "name": ident,
-                "api": "assistant-native" if provider_cfg.get("protocol") == "pi" else "openai-responses",
+                "api": "assistant-native",
                 "reasoning": any(e != "none" for e in entry["reasoning_efforts"]),
                 "thinkingLevelMap": {
                     ("off" if level == "none" else level): (
@@ -36,9 +35,9 @@ def pi_models_config(settings, *, session_id=None):
         "providers": {
             "assistant_api": {
                 "name": "Assistant API",
-                "baseUrl": gateway_url,
+                "baseUrl": transport_url,
                 "api": "openai-responses",
-                "apiKey": "$ASSISTANT_MODEL_GATEWAY_KEY",
+                "apiKey": "$PA_EXECUTION_TOKEN",
                 "authHeader": True,
                 **({"headers": {MODEL_SESSION_HEADER: session_id}} if session_id else {}),
                 "models": list(models.values()),
@@ -47,10 +46,10 @@ def pi_models_config(settings, *, session_id=None):
     }
 
 
-def write_pi_models(folder, settings, *, session_id=None):
+def write_pi_models(folder, settings, *, session_id=None, transport_url=""):
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = folder / "models.json"
     fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as stream:
-        json.dump(pi_models_config(settings, session_id=session_id), stream)
+        json.dump(pi_models_config(settings, session_id=session_id, transport_url=transport_url), stream)
     return str(path)

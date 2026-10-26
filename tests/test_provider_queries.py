@@ -131,6 +131,7 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
                 web.post("/api/login", console.login),
                 web.post("/api/provider-query", console.provider_query),
                 web.post("/api/model-capabilities", console.model_capabilities),
+                web.post("/api/model-test", console.model_test),
                 web.post("/api/configuration", console.save),
             ]
         )
@@ -159,6 +160,45 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
             "/api/model-capabilities", json={**body, "version": "stale"}, headers=headers
         )
         self.assertEqual(response.status, 409)
+
+    async def test_model_probe_auth_draft_revision_and_no_secret_persistence(self):
+        import uuid
+
+        root, business, console, client, headers = await self.management()
+        before = business.files.snapshot()
+        business.request = AsyncMock(
+            return_value={"ok": True, "code": "completed", "message": "ok", "reply": "OK"}
+        )
+        body = {
+            "request_id": str(uuid.uuid4()),
+            "version": before.version,
+            "name": "unsaved",
+            "draft": {
+                "entry": {"provider": "new-connection", "model": "synthetic"},
+                "connection": {"provider": self.spec(), "key": "private-draft-model-key"},
+            },
+        }
+        response = await client.post("/api/model-test", json=body, headers=headers)
+        self.assertEqual(response.status, 401)
+        business.request.assert_not_called()
+        await client.post(
+            "/api/login", json={"token": console.access.path.read_text().strip()}, headers=headers
+        )
+        response = await client.post("/api/model-test", json=body, headers={"Origin": "http://other.invalid"})
+        self.assertEqual(response.status, 403)
+        response = await client.post("/api/model-test", json={**body, "version": "stale"}, headers=headers)
+        self.assertEqual(response.status, 409)
+        business.request.assert_not_called()
+        response = await client.post("/api/model-test", json=body, headers=headers)
+        self.assertEqual(response.status, 200)
+        result = await response.json()
+        self.assertTrue(result["ok"])
+        self.assertNotIn("private-draft-model-key", json.dumps(result))
+        sent = business.request.call_args.args[0]
+        self.assertEqual(sent["command"], "model-test")
+        self.assertEqual(sent["arguments"]["key"], "private-draft-model-key")
+        self.assertEqual(sent["arguments"]["entry"], body["draft"]["entry"])
+        self.assertEqual(business.files.snapshot(), before)
 
     async def test_reference_search_is_authenticated_read_only_and_invalid_reference_is_specific(self):
         root, business, console, client, headers = await self.management()

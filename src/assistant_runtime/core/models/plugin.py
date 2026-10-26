@@ -16,25 +16,13 @@ import uuid
 from assistant_runtime.api.models import ModelRequest, ModelCallError
 from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
-from assistant_runtime.core.models.gateway import gateway_credential
-from assistant_runtime.core.models.client import GatewayClient
+from assistant_runtime.core.models.client import ModelClient
 
 log = logging.getLogger(__name__)
 
 
 class ModelsPlugin:
     manifest = DECLARATION.manifest
-
-    async def configuration_action(self, action, arguments):
-        if action != "connection" or arguments:
-            raise ValueError("Unknown model configuration action")
-        if not self.client:
-            return {"reachable": False, "message": "请先配置并启用模型服务"}
-        result = await self.client.health()
-        return {
-            "reachable": result["reachable"],
-            "message": "模型网关连通" if result["reachable"] else "模型网关不可用",
-        }
 
     def __init__(self, host, client=None):
         self.host = host
@@ -51,19 +39,33 @@ class ModelsPlugin:
         )
         with self.db:
             self.db.execute("UPDATE model_calls SET state='unknown' WHERE state='submitted'")
+        from .probe import ModelProbes
+
+        self.probes = ModelProbes(self)
+
+    @admits_work()
+    async def test_model(self, arguments):
+        if self.stopping:
+            raise RuntimeError("Model service stopping")
+        task = asyncio.current_task()
+        self.active.add(task)
+        try:
+            return await self.probes.test(arguments)
+        finally:
+            self.active.discard(task)
 
     async def start(self, context):
         self.context = context
         context.register(ModelRequest, self.request, timeout=self.settings.timeout_seconds + 30)
+        context.own(self.close)
         if not self.settings.enabled:
             return
         try:
             if self.client is None:
                 from assistant_runtime.core.pi.accounts import NativeAccounts
 
-                self.client = GatewayClient(
+                self.client = ModelClient(
                     self.settings,
-                    gateway_credential(self.host.config.root, self.settings),
                     accounts=NativeAccounts(
                         self.host.config.root,
                         self.settings,
@@ -74,9 +76,8 @@ class ModelsPlugin:
                 )
             context.own(self.client.close)
             await self.client.start()
-            context.own(self.close)
         except Exception:
-            self.error = "gateway_initialization_failed"
+            self.error = "model_initialization_failed"
 
     async def maintenance_cancel(self):
         for task in list(self.active):
@@ -92,9 +93,8 @@ class ModelsPlugin:
         previous = self.settings, self.client, self.semaphore, self.error
         client = None
         if settings.enabled:
-            client = GatewayClient(
+            client = ModelClient(
                 settings,
-                gateway_credential(config.root, settings),
                 accounts=NativeAccounts(config.root, settings, binary=config.pi_binary),
             )
             try:
@@ -261,7 +261,7 @@ class ModelsPlugin:
         if prior is not None:
             return prior
         if not self.client or self.error:
-            raise RuntimeError("Model gateway unavailable")
+            raise RuntimeError("Model service unavailable")
         if self.pending >= self.settings.concurrency + self.settings.queue_size:
             raise RuntimeError("Model request queue full")
         self.pending += 1

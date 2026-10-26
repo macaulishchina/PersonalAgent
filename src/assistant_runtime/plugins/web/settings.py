@@ -3,7 +3,6 @@ from assistant_runtime.api.configuration import configuration_default
 from dataclasses import dataclass, field
 from pathlib import Path
 import ipaddress
-import re
 
 
 @dataclass(frozen=True)
@@ -12,9 +11,6 @@ class WebSettings:
     host: str = field(default_factory=lambda: configuration_default(__file__, "host"))
     port: int = field(default_factory=lambda: configuration_default(__file__, "port"))
     token_file: str = field(default_factory=lambda: configuration_default(__file__, "token_file"))
-    approved_short_password_sha256: str = field(
-        default_factory=lambda: configuration_default(__file__, "approved_short_password_sha256")
-    )
 
     @classmethod
     def parse(cls, value):
@@ -30,11 +26,6 @@ class WebSettings:
         ipaddress.ip_address(settings.host)
         if not isinstance(settings.token_file, str):
             raise ValueError("web.token_file must be a path")
-        fingerprint = settings.approved_short_password_sha256
-        if not isinstance(fingerprint, str) or (
-            fingerprint and not re.fullmatch(r"[a-f0-9]{64}", fingerprint)
-        ):
-            raise ValueError("Invalid approved web password fingerprint")
         return settings
 
     def credential_path(self, root):

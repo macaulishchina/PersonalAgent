@@ -132,9 +132,18 @@ def profile(provider, model, *, account=None, native=None, remote=None, referenc
     if remote and provider.get("protocol") != "pi":
         values.update(facts(remote))
         source = "provider"
-    # Explicit public effort controls are usable on the generic OpenAI effort surface.
-    # Native routes retain Pi's exact mappings; toggle/budget controls are not effort levels.
-    if provider.get("protocol") not in {"pi", "openai_responses", "openai_chat"}:
+    # Import declared levels only where the adapter has a matching control.
+    # Google's adapter accepts these levels; it owns level/budget wire encoding.
+    # A reasoning boolean or token budget must never invent a level list.
+    if provider.get("protocol") == "gemini" and "reasoning_efforts" in values:
+        values["reasoning_efforts"] = [
+            level
+            for level in values["reasoning_efforts"]
+            if level in {"none", "minimal", "low", "medium", "high"}
+        ]
+        if not values["reasoning_efforts"]:
+            values.pop("reasoning_efforts")
+    elif provider.get("protocol") not in {"pi", "openai_responses", "openai_chat"}:
         values.pop("reasoning_efforts", None)
     return {
         "binding": binding(provider, model, account),

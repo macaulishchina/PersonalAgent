@@ -189,7 +189,7 @@ class ConfigurationRuntime:
                 for path in paths
             )
         for resource in resources:
-            affected = {"models", "pi"} if resource in {"credentials", "gateway_key"} else set()
+            affected = {"models", "pi"} if resource == "credentials" else set()
             if resource == "credentials":
                 affected.update(
                     name

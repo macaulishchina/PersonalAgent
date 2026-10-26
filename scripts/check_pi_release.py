@@ -9,7 +9,7 @@ from assistant_runtime.app.bootstrap import assistant_skill_paths
 from assistant_runtime.app.config import Config
 from assistant_runtime.core.ai_usage.settings import UsageSettings
 from assistant_runtime.core.integrations.registry import McpRegistry
-from assistant_runtime.core.models.gateway import credential, gateway_credential
+from assistant_runtime.core.models.credentials import credential
 from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 from assistant_runtime.core.tasks.settings import TaskSettings
 
@@ -34,8 +34,6 @@ def check(config, *, native=True):
         if {"codex", "keyword", "browser_speech", "sherpa_speech"} & set(config.plugins):
             raise ValueError("Unaccepted or retired voice/execution path enabled")
         entry = settings.entry(config.main_model)
-        if not entry.get("execution_validated"):
-            raise ValueError("Main execution model is not accepted")
         reasoning_effort(entry, config.main_reasoning_effort)
         return {"model": config.main_model, "effort": config.main_reasoning_effort}
 
@@ -46,14 +44,10 @@ def check(config, *, native=True):
         selection = ModelPolicy.parse(policy.model_policy)
         for row in selection.profiles.values():
             entry = settings.entry(row["model"])
-            if not entry.get("execution_validated"):
-                raise ValueError("Task profile uses an unaccepted executor")
             reasoning_effort(entry, row["reasoning_effort"])
         for candidates in selection.fallbacks.values():
             for row in candidates:
                 entry = settings.entry(row["model"])
-                if not entry.get("execution_validated"):
-                    raise ValueError("Fallback uses an unaccepted executor")
                 reasoning_effort(entry, row["reasoning_effort"])
         return {"profiles": list(selection.profiles), "concurrency": policy.concurrency}
 
@@ -85,7 +79,6 @@ def check(config, *, native=True):
                             raise ValueError("Incomplete native OAuth credential")
                 else:
                     credential(config.root, spec["key_env"])
-        gateway_credential(config.root, settings)
         return "referenced_credentials_present"
 
     def sources():

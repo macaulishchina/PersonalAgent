@@ -12,18 +12,6 @@
         "title": "启用",
         "default": false
       },
-      "gateway_url": {
-        "type": "string",
-        "title": "模型网关地址",
-        "default": "http://127.0.0.1:4010/v1",
-        "x-advanced": true
-      },
-      "gateway_key_env": {
-        "type": "string",
-        "title": "网关密钥环境变量",
-        "default": "ASSISTANT_MODEL_GATEWAY_KEY",
-        "x-advanced": true
-      },
       "concurrency": {
         "type": "integer",
         "title": "并发数量",
@@ -255,10 +243,6 @@
               "type": "boolean",
               "title": "支持结构化结果"
             },
-            "execution_validated": {
-              "type": "boolean",
-              "title": "执行能力已经验收"
-            },
             "context_window": {
               "type": "integer",
               "minimum": 1,
@@ -392,14 +376,6 @@
         "title": "记忆使用的模型",
         "order": 4
       },
-      "gateway_url": {
-        "advanced": true,
-        "order": 20
-      },
-      "gateway_key_env": {
-        "advanced": true,
-        "order": 20
-      },
       "concurrency": {
         "advanced": true,
         "order": 20
@@ -431,28 +407,6 @@
       "execution_max_output_tokens": {
         "advanced": true,
         "order": 20
-      }
-    },
-    "actions": {
-      "connection": {
-        "title": "检查模型网关连接",
-        "read_only": true,
-        "output": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "reachable": {
-              "type": "boolean"
-            },
-            "message": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "reachable",
-            "message"
-          ]
-        }
       }
     }
   },

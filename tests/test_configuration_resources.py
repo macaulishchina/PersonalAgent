@@ -24,6 +24,20 @@ class ResourceTests(ConfigurationFixture, unittest.TestCase):
     def save_resource(self, operations):
         return self.files.patch(self.files.fields()["version"], [], resource_changes=operations)
 
+    def test_web_password_accepts_six_characters_without_approval(self):
+        from assistant_runtime.plugins.web.configuration_resources import validate_candidate
+
+        for password in ("123456", "abcdef", "六个汉字密码"):
+            self.save_resource([{"id": "web_access", "op": "replace_secret", "value": password}])
+            saved = (self.root / "state/web-access-token").read_bytes()
+            validate_candidate({"enable": True}, True, saved)
+            self.assertEqual(saved.decode().strip(), password)
+        for password in ("12345", "五个中文字"):
+            with self.assertRaises(ValueError):
+                self.save_resource([{"id": "web_access", "op": "replace_secret", "value": password}])
+            with self.assertRaises(ValueError):
+                validate_candidate({"enable": True}, True, password.encode())
+
     def test_secret_replace_private_backup_restore_and_environment_provenance(self):
         with self.files.locked():
             before = self.files.snapshot()
@@ -99,7 +113,7 @@ class ResourceTests(ConfigurationFixture, unittest.TestCase):
             )
 
     def test_frozen_credentials_used_until_restart_even_if_source_deleted(self):
-        from assistant_runtime.core.models.gateway import credential
+        from assistant_runtime.core.models.credentials import credential
 
         frozen = self.root / "frozen.env"
         frozen.write_text("DEEPSEEK_API_KEY=frozen\n")
@@ -175,22 +189,14 @@ class ResourceTests(ConfigurationFixture, unittest.TestCase):
                 repair["version"], {"config.toml": 'root="../outside"\nplugins=[]\ninclude=["usage.toml"]\n'}
             )
 
-    def test_gateway_requires_deployment_for_changed_credentials_only(self):
-        from assistant_runtime.core.models.settings import ModelSettings
-        from assistant_runtime.core.models.gateway import application_steps
+    def test_model_configuration_registers_no_external_runtime_secret(self):
+        from assistant_runtime.core.models.configuration_resources import credential_names
 
-        settings = ModelSettings.parse(
-            {
-                "enabled": True,
-                "providers": {"deepseek": {"preset": "deepseek", "enabled": True}},
-                "entries": {
-                    "fast": {"provider": "deepseek", "model": "synthetic", "reasoning_efforts": ["none"]}
-                },
-            }
+        self.assertEqual(
+            credential_names({"model_api": {"providers": {"p": {"preset": "deepseek"}}}}),
+            {"DEEPSEEK_API_KEY"},
         )
-        before = {"credentials": b"DEEPSEEK_API_KEY=before\n"}
-        after = {"credentials": b"DEEPSEEK_API_KEY=after\n"}
-        self.assertTrue(application_steps(settings, settings, before, after))
-        self.assertFalse(application_steps(settings, settings, before, before))
-        unrelated = {"credentials": b"DEEPSEEK_API_KEY=before\nTYPESAFE_API_KEY=unrelated\n"}
-        self.assertFalse(application_steps(settings, settings, before, unrelated))
+        self.assertEqual(
+            set(self.files.resources.registered(self.files.snapshot().contents)),
+            {"credentials", "management", "mcp", "web_access"},
+        )

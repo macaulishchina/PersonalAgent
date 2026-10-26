@@ -1,8 +1,8 @@
 """Real local Mem0 engine with deterministic model transport; no cloud requests."""
 
 import asyncio
-import copy
 import os
+import copy
 from pathlib import Path
 import tempfile
 import time
@@ -40,11 +40,29 @@ class ProvenanceTest(unittest.TestCase):
             validate_facts({"facts": ["x"] * 13, "provenance": []}, source)
 
 
+class StartupDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_embedding_is_actionable_and_worker_is_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            provider = Mem0Memory(root / "mem0", root / "missing-cache")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "prepare_memory.py"):
+                    await provider.start()
+                self.assertIsNone(provider.process)
+                self.assertTrue((root / "mem0/worker.log").exists())
+            finally:
+                await provider.close()
+
+
 class LocalMem0Test(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        cache = Path(__file__).resolve().parents[1] / "models/memory-embedding"
+        cache = Path(
+            os.environ.get(
+                "PA_TEST_MEMORY_CACHE", str(Path(__file__).resolve().parents[1] / "models/memory-embedding")
+            )
+        )
         if not cache.exists():
             self.tmp.cleanup()
             self.skipTest("Prepare the local memory embedding model for real-engine contract tests")
@@ -90,6 +108,57 @@ class LocalMem0Test(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(changed["records"][0]["revision"], 2)
         self.assertIn("绿茶", (await self.provider.read(original["id"]))["text"])
 
+    async def test_search_filters_unrelated_memories_and_keeps_semantic_matches(self):
+        for ident, text, scope, project in (
+            ("zebra", "井自检标记/ZEBRA", "user", ""),
+            ("nginx", "nginx upstream keepalive 反向代理连接池配置", "user", ""),
+            ("tea", "我喜欢喝乌龙茶，不加糖。", "user", ""),
+            ("project-nginx", "nginx upstream keepalive 反向代理连接池配置", "project", "/test/project"),
+            ("other-nginx", "nginx upstream keepalive 反向代理连接池配置", "project", "/other/project"),
+        ):
+            await self.provider.upsert(
+                {
+                    "id": ident,
+                    "scope": scope,
+                    "project": project,
+                    "title": ident,
+                    "text": text,
+                    "revision": 1,
+                    "updated": 1,
+                    "source": {"kind": "test"},
+                }
+            )
+        for query, scope, expected in (
+            ("nginx upstream keepalive 反向代理配置", "user", ["nginx"]),
+            ("nginx upstream keepalive 反向代理配置", "project", ["project-nginx"]),
+            ("井自检标记/ZEBRA", "user", ["zebra"]),
+            ("我平时喜欢喝什么茶？", "user", ["tea"]),
+            ("如何用 Python 做图像分割和 OpenCV 轮廓检测", "user", []),
+            ("如何用 Python 做图像分割和 OpenCV 轮廓检测", "project", []),
+        ):
+            with self.subTest(query=query, scope=scope):
+                self.assertEqual([r["id"] for r in await self.provider.search(query, scope)], expected)
+        await self.provider.close()
+        self.assertEqual(
+            [r["id"] for r in await self.provider.search("我平时喜欢喝什么茶？", "user")], ["tea"]
+        )
+        self.assertEqual(self.model_calls, 0)
+
+    async def test_single_unrelated_memory_does_not_become_a_match(self):
+        await self.provider.upsert(
+            {
+                "id": "zebra",
+                "scope": "user",
+                "title": "test",
+                "text": "井自检标记/ZEBRA",
+                "revision": 1,
+                "updated": 1,
+                "source": {"kind": "test"},
+            }
+        )
+        self.assertEqual(await self.provider.search("如何用 Python 做图像分割和 OpenCV 轮廓检测", "user"), [])
+        self.assertEqual([r["id"] for r in await self.provider.search("井自检标记/ZEBRA", "user")], ["zebra"])
+
     async def test_explicit_crud_and_scope_isolation(self):
         for ident, scope, project in (
             ("user", "user", ""),
@@ -132,8 +201,9 @@ class LocalMem0Test(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        from platform_support import process_alive
+
+        self.assertFalse(process_alive(pid))
         self.assertEqual(await self.provider.export(), [])
 
     async def test_missing_provenance_is_not_silent_success(self):

@@ -4,7 +4,7 @@ import asyncio
 import tomllib
 
 from assistant_runtime.core.models.catalog import models, query, result
-from assistant_runtime.core.models.gateway import credential
+from assistant_runtime.core.models.credentials import credential
 from assistant_runtime.core.models.settings import ModelSettings
 from .fields import merge
 from .files import Conflict
@@ -45,6 +45,55 @@ class ProviderQueries:
     def __init__(self, business, accounts):
         self.business, self.accounts = business, accounts
         self.slots = asyncio.Semaphore(2)
+
+    def capture_model(self, data):
+        import uuid
+
+        if not isinstance(data.get("request_id"), str):
+            raise ProbeInput("model", "测试编号无效，请重新点击测试。")
+        ident = str(uuid.UUID(data["request_id"]))
+        if ident != data["request_id"]:
+            raise ProbeInput("model", "测试编号无效，请重新点击测试。")
+        version, name = data.get("version"), data.get("name")
+        draft = data.get("draft", {})
+        if not isinstance(name, str) or not isinstance(draft, dict) or set(draft) - {"entry", "connection"}:
+            raise ProbeInput("model", "模型测试参数无效。")
+        with self.business.files.locked():
+            snapshot = self.business.files.snapshot()
+            if version != snapshot.version:
+                raise Conflict()
+            raw = {}
+            for content in snapshot.contents.values():
+                merge(raw, tomllib.loads(content.decode()))
+            registry = raw.get("model_api", {})
+            entry = draft.get("entry", registry.get("entries", {}).get(name))
+            if not isinstance(entry, dict):
+                raise ProbeInput("model", "请先填写模型 ID 和连接。")
+            connection = draft.get("connection")
+            saved_accounts = registry.get("accounts", {})
+        provider, key = self.capture(entry.get("provider"), version, connection)
+        account = provider.get("account")
+        accounts = {account: saved_accounts[account]} if account else {}
+        if account and accounts[account].get("key_env"):
+            key = credential(self.business.settings.root, accounts[account]["key_env"])
+        return {
+            "request_id": ident,
+            "name": name,
+            "entry": entry,
+            "provider": provider,
+            "accounts": accounts,
+            "key": key,
+        }
+
+    async def test_model(self, data):
+        try:
+            arguments = await asyncio.to_thread(self.capture_model, data)
+        except ProbeInput as exc:
+            return result(False, "configuration", str(exc), field=exc.field)
+        try:
+            return await self.business.request({"command": "model-test", "arguments": arguments})
+        except (OSError, ValueError, TimeoutError):
+            return result(False, "unavailable", "模型测试未完成，请检查业务服务是否就绪；不会自动重试。")
 
     async def describe(self, data):
         from assistant_runtime.core.models.capabilities import (

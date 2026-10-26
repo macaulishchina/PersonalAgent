@@ -122,7 +122,7 @@ async def query(provider, key):
                 return result(
                     True,
                     "reachable",
-                    "模型目录接口已连通；尚未验证模型推理或本地网关部署。",
+                    "模型目录接口已连通；尚未验证模型推理。",
                     models=values,
                     source="remote",
                     truncated=bool(

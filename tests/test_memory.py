@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from assistant_runtime.api.contracts import MemoryRequest
 from assistant_runtime.core.memory.service import MemoryPlugin
@@ -103,6 +103,30 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
             "source_id": 1,
             "evidence": "我喜欢乌龙茶，不加糖。",
         }
+
+    async def test_capture_failure_stays_visible_during_retry_wait_and_clears_on_success(self):
+        self.batch()
+        self.plugin.context = SimpleNamespace(state="ready", error=None)
+        self.plugin.process_job = AsyncMock(side_effect=[RuntimeError("model unavailable"), None])
+        cycles = 0
+
+        async def next_cycle(_):
+            nonlocal cycles
+            cycles += 1
+            if cycles <= 2:
+                self.assertEqual(self.plugin.context.state, "degraded")
+                self.assertEqual(self.plugin.context.error, "model unavailable")
+                if cycles == 2:
+                    self.plugin.retry_after = 0
+            else:
+                self.assertEqual(self.plugin.context.state, "ready")
+                self.assertIsNone(self.plugin.context.error)
+                raise asyncio.CancelledError()
+
+        with patch("assistant_runtime.core.memory.service.asyncio.sleep", next_cycle):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.plugin.run()
+        self.assertEqual(self.plugin.process_job.await_count, 2)
 
     async def test_auto_capture_chinese_fact_idempotent_and_persistent(self):
         job = self.batch()

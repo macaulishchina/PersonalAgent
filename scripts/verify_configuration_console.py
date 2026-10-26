@@ -1,4 +1,4 @@
-"""Isolated desktop console acceptance: synthetic files, no model or device calls.
+"""Isolated desktop console acceptance: synthetic files/local model replies, no paid or device calls.
 
 Requires Playwright, its Chromium browser and the installed sample plugin. Use a
 separate validation environment, never install test dependencies into a running service.
@@ -26,6 +26,55 @@ def directory_fixture():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
+
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.path.endswith("/responses")
+            assert payload["max_output_tokens"] <= 1024
+            assert "connectivity test" in json.dumps(payload)
+            assert not payload.get("tools")
+            item = {"id": "probe", "type": "message", "role": "assistant", "content": []}
+            events = [
+                {"type": "response.created", "response": {"id": "probe", "status": "in_progress"}},
+                {"type": "response.output_item.added", "output_index": 0, "item": item},
+                {
+                    "type": "response.content_part.added",
+                    "item_id": "probe",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": ""},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "probe",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "OK",
+                },
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        **item,
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "OK"}],
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "probe",
+                        "status": "completed",
+                        "usage": {"input_tokens": 20, "output_tokens": 1},
+                    },
+                },
+            ]
+            body = "".join("data: " + json.dumps(event) + "\n\n" for event in events).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_GET(self):
             if self.path.startswith("/slow/"):
@@ -159,6 +208,9 @@ enabled = false
 [model_api.providers.deepseek]
 preset = "deepseek"
 enabled = false
+[model_api.providers.gemini]
+preset = "gemini"
+enabled = false
 [model_api.entries.primary]
 provider = "openai"
 model = "gpt-6.1-sol"
@@ -229,6 +281,22 @@ default_reasoning_effort = "none"
                 pid = initial["pid"]
                 await expect(page.locator("#health")).to_have_text("业务运行中")
                 assert not errors, errors
+
+                async def plugin_failure(route):
+                    response = await route.fetch()
+                    data = await response.json()
+                    data["state"] = "degraded"
+                    data["plugin_issues"] = [
+                        {"id": "fixture-plugin", "state": "failed", "error": "缺少本地资源，请完成插件部署。"}
+                    ]
+                    await route.fulfill(response=response, json=data)
+
+                await page.route("**/api/status", plugin_failure)
+                await expect(page.locator("#plugin-health")).to_contain_text("fixture-plugin", timeout=12000)
+                await expect(page.locator("#health")).to_have_text("部分功能不可用")
+                await page.unroute("**/api/status", plugin_failure)
+                await expect(page.locator("#plugin-health")).to_be_hidden(timeout=12000)
+                await expect(page.locator("#health")).to_have_text("业务运行中")
                 await capture(page, "configuration-desktop-access.png")
                 await page.get_by_role("button", name="功能与插件", exact=True).click()
                 release_catalog = await (await page.request.get(origin + "/api/catalog")).json()
@@ -305,20 +373,10 @@ default_reasoning_effort = "none"
                 assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == pid
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
                 await page.get_by_role("tab", name="高级", exact=True).click()
-                gateway = page.locator(".gateway-deployment")
-                gateway_url = gateway.get_by_label("本机网关地址（PA → LiteLLM）", exact=True)
-                await expect(gateway_url).to_be_hidden()
-                await expect(
-                    gateway.get_by_role("button", name="检查模型网关连接", exact=True)
-                ).to_be_hidden()
-                await gateway.locator(":scope > summary").click()
-                await expect(gateway_url).to_be_visible()
-                await expect(gateway).to_contain_text("新增连接不会继承此处的值")
-                await expect(gateway.get_by_label("网关认证密钥的环境变量名", exact=True)).to_be_visible()
-                await capture(page, "configuration-gateway-maintenance.png")
-                await gateway.locator(":scope > summary").click()
+                await expect(page.get_by_text("部署维护 · 本机模型网关", exact=True)).to_have_count(0)
+                await expect(page.get_by_label("本机网关地址", exact=True)).to_have_count(0)
+                await capture(page, "configuration-model-policy.png")
                 await page.get_by_role("tab", name="连接", exact=True).click()
-                await expect(page.get_by_label("本机网关地址（PA → LiteLLM）", exact=True)).to_have_count(0)
                 await page.get_by_role("tab", name="连接", exact=True).focus()
                 await page.keyboard.press("ArrowRight")
                 await expect(page.get_by_role("tab", name="模型库", exact=True)).to_be_focused()
@@ -439,11 +497,11 @@ default_reasoning_effort = "none"
                 await page.get_by_role("button", name="添加连接", exact=True).click()
                 setup = page.locator("#setup-dialog")
                 await capture(page, "configuration-desktop-connection-wizard.png")
-                await setup.get_by_role("radio", name="通过 API 网关", exact=True).check()
+                await setup.get_by_role("radio", name="通过 API 连接", exact=True).check()
                 await setup.get_by_label("连接名称", exact=True).fill("LeiHuo-OpenAI")
                 await setup.get_by_label("接口类型", exact=True).select_option("custom")
                 await setup.get_by_label("接口地址", exact=True).fill(directory + "/draft")
-                await setup.locator("#setup-gateway-key").fill("synthetic-draft-key")
+                await setup.locator("#setup-api-key").fill("synthetic-draft-key")
                 await setup.get_by_role("button", name="添加连接", exact=True).click()
                 await expect(page.locator(".entity-card[data-entity=LeiHuo-OpenAI]")).to_be_visible()
                 # A new unsaved connection uses its own draft endpoint/key without saving.
@@ -482,7 +540,7 @@ default_reasoning_effort = "none"
                 await expect(page.locator(".entity-card[data-entity=cancelled_connection]")).to_have_count(0)
                 # Creating a connection is still a draft; switching model tabs must retain it.
                 await page.get_by_role("button", name="添加连接", exact=True).click()
-                await setup.get_by_role("radio", name="通过 API 网关", exact=True).check()
+                await setup.get_by_role("radio", name="通过 API 连接", exact=True).check()
                 await setup.get_by_label("连接名称", exact=True).fill("discard_me")
                 await setup.get_by_label("接口类型", exact=True).select_option("deepseek")
                 await setup.get_by_role("button", name="添加连接", exact=True).click()
@@ -635,6 +693,33 @@ default_reasoning_effort = "none"
                 await reference_editor.get_by_role("button", name="取消编辑", exact=True).click()
                 await expect(page.locator(".entity-card[data-entity=reference_preview]")).to_have_count(0)
 
+                # Gemini imports explicit public levels into checkboxes and default choices.
+                await page.get_by_role("button", name="添加模型", exact=True).click()
+                await setup.get_by_label("使用连接", exact=True).select_option("gemini")
+                await setup.get_by_label("供应商模型 ID", exact=True).fill("gemini-3.1-pro-preview")
+                await setup.get_by_label("在 PA 中的名称", exact=True).fill("gemini_preview")
+                await setup.get_by_role("button", name="添加并完善设置", exact=True).click()
+                await picker.locator("summary").click()
+                await candidate.click()
+                await picker.locator(
+                    '.searchable-select-option[data-value="google/gemini-3.1-pro-preview"]'
+                ).click()
+                await picker.get_by_role("button", name="采用并填充", exact=True).click()
+                await expect(reference_editor.locator(".capability-summary")).to_contain_text(
+                    "最近采用：models.dev"
+                )
+                levels = reference_editor.get_by_role("group", name="可用思考档位", exact=True)
+                for effort in ("low", "medium", "high"):
+                    await expect(levels.locator(f'input[value="{effort}"]')).to_be_checked()
+                for effort in ("none", "minimal", "xhigh", "max", "ultra"):
+                    await expect(levels.locator(f'input[value="{effort}"]')).not_to_be_checked()
+                default_effort = reference_editor.get_by_label("默认思考模式", exact=True)
+                await expect(default_effort).to_have_value("auto")
+                await default_effort.select_option("medium")
+                await expect(default_effort).to_have_value("medium")
+                await reference_editor.get_by_role("button", name="取消编辑", exact=True).click()
+                await expect(page.locator(".entity-card[data-entity=gemini_preview]")).to_have_count(0)
+
                 # Selected metadata remains a draft, survives save, and grants no execution acceptance.
                 await page.get_by_role("button", name="添加模型", exact=True).click()
                 await setup.get_by_label("使用连接", exact=True).select_option("directory")
@@ -665,6 +750,18 @@ default_reasoning_effort = "none"
                 await auto_editor.get_by_label("支持图片", exact=True).uncheck()
                 await capture(page, "configuration-automatic-model.png")
                 await auto_editor.get_by_role("button", name="保留修改", exact=True).click()
+
+                # One click tests an unsaved model through the real operator/usage/Pi path.
+                draft_card = page.locator('.entity-card[data-entity="automatic.model"]')
+                config_before_probe = models.read_bytes()
+                await draft_card.get_by_role("button", name="测试模型", exact=True).click()
+                await expect(draft_card.locator(".provider-status")).to_contain_text(
+                    "文本推理可用", timeout=30000
+                )
+                await expect(draft_card.locator(".provider-status")).to_contain_text("回复：OK")
+                await expect(draft_card).not_to_contain_text("执行待验收")
+                await expect(draft_card).not_to_contain_text("执行已验收")
+                assert models.read_bytes() == config_before_probe
 
                 await (
                     page.locator(".entity-card[data-entity=primary]")
@@ -725,7 +822,7 @@ default_reasoning_effort = "none"
                 assert automatic["output_limit"] == 2048
                 assert automatic["images"] is False
                 assert automatic["reasoning_efforts"] == ["low"]
-                assert not automatic.get("execution_validated", False)
+                assert "execution_validated" not in automatic
                 assert "synthetic-native-key" not in models.read_text()
                 from dotenv import dotenv_values
 
@@ -816,7 +913,7 @@ default_reasoning_effort = "none"
                 await page.get_by_role("button", name="关闭变更记录").click()
                 await page.get_by_role("button", name="修改密码", exact=True).click()
                 await expect(page.locator("#password-dialog")).to_be_visible()
-                assert await page.locator("#new-password").get_attribute("minlength") == "7"
+                assert await page.locator("#new-password").get_attribute("minlength") == "6"
                 await page.keyboard.press("Escape")
                 await expect(page.locator("#password-dialog")).not_to_be_visible()
                 await page.get_by_role("button", name="实例管理", exact=True).click()
@@ -835,16 +932,16 @@ default_reasoning_effort = "none"
                 await page.get_by_label("当前密码", exact=True).fill(
                     (root / "state/configuration/admin-token").read_text().strip()
                 )
-                await page.get_by_label("新密码", exact=True).fill("1234567")
+                await page.get_by_label("新密码", exact=True).fill("123456")
                 await page.get_by_label("再次输入新密码", exact=True).fill("different")
                 await page.get_by_role("button", name="保存新密码", exact=True).click()
                 await expect(page.locator("#password-dialog .dialog-notice")).to_have_text(
                     "两次输入的新密码不一致。"
                 )
-                await page.get_by_label("再次输入新密码", exact=True).fill("1234567")
+                await page.get_by_label("再次输入新密码", exact=True).fill("123456")
                 await page.get_by_role("button", name="保存新密码", exact=True).click()
                 await expect(page.locator("#login-screen")).to_be_visible()
-                await page.get_by_label("管理员密码", exact=True).fill("1234567")
+                await page.get_by_label("管理员密码", exact=True).fill("123456")
                 await page.get_by_role("button", name="登录", exact=True).click()
                 await expect(page.locator("#editor")).to_be_visible()
                 assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == applied[
@@ -875,7 +972,8 @@ default_reasoning_effort = "none"
                         "automatic_model_capabilities": "passed",
                         "confirmed_restart": "passed",
                         "entry_removal": "passed",
-                        "seven_character_password_dialog": "passed",
+                        "six_character_password_dialog": "passed",
+                        "live_plugin_failure_and_recovery": "passed",
                         "apply_history_password_dialogs": "passed",
                         "broken_configuration_repair": "passed",
                         "javascript_errors": errors,

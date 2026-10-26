@@ -12,7 +12,10 @@ from assistant_runtime.api.ai_usage import UsageError, UsageScope
 
 def telemetry(message):
     usage = message.get("usage")
-    if not isinstance(usage, dict):
+    if not isinstance(usage, dict) or not any(
+        isinstance(usage.get(key), (int, float)) and usage[key] > 0
+        for key in ("input", "output", "cacheRead", "cacheWrite")
+    ):
         return None
     return {
         "input_tokens": usage.get("input", 0) + usage.get("cacheRead", 0) + usage.get("cacheWrite", 0),
@@ -34,10 +37,21 @@ async def forward(transport, request, worker):
     if payload.get("model") != alias or payload.get("effort") != worker.meta["reasoning_effort"]:
         raise web.HTTPBadRequest()
     entry = client.settings.entry(alias)
-    provider = client.settings.providers[entry["provider"]]
-    if provider["protocol"] != "pi" or not client.accounts:
+    if not client.accounts:
         raise web.HTTPBadRequest()
-    account, args, native_bound = await client.accounts.route(alias, payload["effort"])
+    context = payload.get("context")
+    if not isinstance(context, dict) or not isinstance(context.get("messages"), list):
+        raise web.HTTPBadRequest()
+    images = any(
+        part.get("type") == "image"
+        for message in context["messages"]
+        if isinstance(message, dict)
+        for part in message.get("content", [])
+        if isinstance(part, dict)
+    )
+    if images and not entry.get("images"):
+        raise web.HTTPBadRequest()
+    account, args, native_bound = await client.accounts.route(alias, payload["effort"], images=images)
     maximum = entry.get("execution_max_output_tokens", client.settings.execution_max_output_tokens)
     ident = worker.meta["budget_id"]
     try:

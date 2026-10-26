@@ -344,3 +344,7 @@ changes wait for an explicit restart, and failed candidates are not retried auto
 Linux guardian ownership closes escaped subprocesses after manager loss; unknown
 operations never replay. External gateway deployment remains an explicit operator step.
 See the [configuration guide](../../src/assistant_runtime/core/configuration/README.md).
+
+### 运行健康信息
+
+插件遇到使功能不可用的部署或运行问题，应通过 `context.set_health("degraded", "简短原因及修复线索")` 报告；恢复后调用 `context.set_health("ready")` 清除错误。错误不要包含凭据、用户消息或供应商原始响应。管理状态接口统一聚合，配置页持续显示；不要另建插件通知系统，也不要把捕获异常当作成功。未捕获的后台任务异常仍由框架报告。

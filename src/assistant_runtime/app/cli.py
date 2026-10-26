@@ -254,7 +254,7 @@ def main():
     usage.add_argument("action", choices=["check", "status", "summary", "calls", "stats", "extend"])
     usage.add_argument("arguments", nargs="?", default="{}")
     models = sub.add_parser("models", help="Model API configuration and bounded inference")
-    models.add_argument("action", choices=["check", "gateway-config", "list", "status", "health", "infer"])
+    models.add_argument("action", choices=["check", "list", "status", "health", "infer"])
     models.add_argument("arguments", nargs="?", default="{}")
     accounts = sub.add_parser(
         "model-accounts", help="Pi-native model provider accounts; explicit operator login"
@@ -432,21 +432,16 @@ def main():
                     }
                 )
             )
-        elif args.command == "models" and args.action in {"check", "gateway-config"}:
+        elif args.command == "models" and args.action == "check":
             from assistant_runtime.core.models.settings import ModelSettings
-            from assistant_runtime.core.models.gateway import configuration
 
             settings = ModelSettings.parse(config.model_api)
-            result = (
-                configuration(settings)
-                if args.action == "gateway-config"
-                else {
-                    "valid": True,
-                    "enabled": settings.enabled,
-                    "models": settings.catalog(),
-                    "revision": settings.fingerprint(),
-                }
-            )
+            result = {
+                "valid": True,
+                "enabled": settings.enabled,
+                "models": settings.catalog(),
+                "revision": settings.fingerprint(),
+            }
             print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.command == "doctor":
             import shutil

@@ -1,6 +1,7 @@
 """Independent local-owner authentication for the configuration console."""
 
 from assistant_runtime.api.system import system
+from assistant_runtime.api.passwords import MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH, validate_password
 
 import hashlib
 import hmac
@@ -15,8 +16,8 @@ class PasswordPolicyError(ValueError):
 
 
 class AdminAccess:
-    MIN_PASSWORD_LENGTH = 7
-    MAX_PASSWORD_LENGTH = 256
+    MIN_PASSWORD_LENGTH = MIN_PASSWORD_LENGTH
+    MAX_PASSWORD_LENGTH = MAX_PASSWORD_LENGTH
 
     @classmethod
     def password_policy(cls):
@@ -76,16 +77,10 @@ class AdminAccess:
 
     def change_password(self, current_password, new_password, confirmation, peer):
         self.verify(current_password, peer)
-        if (
-            not isinstance(new_password, str)
-            or not self.MIN_PASSWORD_LENGTH <= len(new_password) <= self.MAX_PASSWORD_LENGTH
-            or new_password != new_password.strip()
-            or any(c in new_password for c in ("\n", "\r", "\x00"))
-        ):
-            raise PasswordPolicyError(
-                f"新密码须为 {self.MIN_PASSWORD_LENGTH}–{self.MAX_PASSWORD_LENGTH} 个字符，"
-                "首尾不能有空白，不能包含换行或空字符。"
-            )
+        try:
+            validate_password(new_password)
+        except ValueError as exc:
+            raise PasswordPolicyError(str(exc)) from exc
         if not isinstance(confirmation, str) or not hmac.compare_digest(
             new_password.encode(), confirmation.encode()
         ):

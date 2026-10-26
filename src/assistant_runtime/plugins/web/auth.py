@@ -1,6 +1,7 @@
 """Single-owner login; no model credentials are exposed to the browser."""
 
 from assistant_runtime.api.system import system
+from assistant_runtime.api.passwords import validate_password
 
 import hashlib
 import hmac
@@ -11,7 +12,7 @@ from collections import OrderedDict
 
 
 class Access:
-    def __init__(self, path, db, *, approved_short_password_sha256=""):
+    def __init__(self, path, db):
         from assistant_runtime.api.configuration_io import configuration_path
 
         path = configuration_path(path)
@@ -25,9 +26,7 @@ class Access:
         system.private(path)
         token = path.read_text(encoding="utf-8").strip()
         digest = hashlib.sha256(token.encode()).digest()
-        approved = len(token) >= 8 and hmac.compare_digest(digest.hex(), approved_short_password_sha256)
-        if len(token) < 24 and not approved:
-            raise ValueError("Web access token must have at least 24 characters")
+        validate_password(token)
         self.digest = digest
         self.db = db
         db.execute(
@@ -84,5 +83,5 @@ class Access:
 class AuthRepository(Access):
     """Web-owned repository constructor for the framework's scoped store factory."""
 
-    def __init__(self, db, path, fingerprint):
-        super().__init__(path, db, approved_short_password_sha256=fingerprint)
+    def __init__(self, db, path):
+        super().__init__(path, db)

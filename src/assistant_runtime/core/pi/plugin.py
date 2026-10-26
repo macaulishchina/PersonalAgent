@@ -48,10 +48,9 @@ class PiPlugin:
     async def prepare_configuration(self, config):
         from assistant_runtime.api.configuration import ConfigurationUpdate, ConfigurationPending
         from assistant_runtime.core.models.settings import ModelSettings
-        from assistant_runtime.core.models.gateway import gateway_credential
+        import secrets
         from assistant_runtime.core.pi.accounts import NativeAccounts
         import asyncio
-        import aiohttp
 
         backend, client = self.backend, self.backend.client
 
@@ -68,18 +67,20 @@ class PiPlugin:
         previous = (
             client.settings,
             client.accounts,
-            client.transport.transport,
             client.transport.slots,
             client.cwd,
             dict(client.environment),
             backend.config,
         )
         started = client.started
-        key = gateway_credential(config.root, settings) if settings.enabled else None
+        key = secrets.token_urlsafe(32) if settings.enabled else None
         accounts = NativeAccounts(config.root, settings, binary=config.pi_binary)
-        transport = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=settings.timeout_seconds), trust_env=False
-        )
+        if settings.enabled:
+            try:
+                await accounts.validate_configuration()
+            except BaseException:
+                await accounts.close()
+                raise
         previous_skills = client.skill_paths
         previous_meta = {ident: dict(worker.meta) for ident, worker in client.workers.items()}
 
@@ -93,12 +94,11 @@ class PiPlugin:
                 await worker.close()
             client.settings, client.accounts, client.cwd = settings, accounts, config.workspace
             client.skill_paths = skill_paths
-            client.transport.transport = transport
             client.transport.slots = asyncio.Semaphore(settings.concurrency)
             if key:
-                client.environment["ASSISTANT_MODEL_GATEWAY_KEY"] = key
+                client.environment["PA_EXECUTION_TOKEN"] = key
             else:
-                client.environment.pop("ASSISTANT_MODEL_GATEWAY_KEY", None)
+                client.environment.pop("PA_EXECUTION_TOKEN", None)
             for ident, worker in client.workers.items():
                 # Explicitly scoped task skills retain their original authorization.
                 if worker.meta.get("skill_paths") == [str(p) for p in previous_skills]:
@@ -118,7 +118,6 @@ class PiPlugin:
             (
                 client.settings,
                 client.accounts,
-                client.transport.transport,
                 client.transport.slots,
                 client.cwd,
                 client.environment,
@@ -133,12 +132,7 @@ class PiPlugin:
 
         async def release(committed):
             old_accounts = previous[1] if committed else accounts
-            old_transport = previous[2] if committed else transport
             if old_accounts:
                 await old_accounts.close()
-            if old_transport:
-                await old_transport.close()
-            if committed and not started:
-                await transport.close()  # backend.start created its own transport.
 
         return ConfigurationUpdate(commit, rollback, release)

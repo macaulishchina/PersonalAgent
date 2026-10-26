@@ -22,14 +22,12 @@ class Resources:
             Resource("credentials", self.root / ".env", "dotenv", "私有环境凭据", True),
             Resource("management", self.root / "management.toml", "management", "管理服务地址与生命周期"),
         ]
-        from assistant_runtime.core.models.configuration_resources import registered as model_resources
         from assistant_runtime.core.integrations.configuration_resources import (
             registered as integration_resources,
         )
         from assistant_runtime.plugins.web.configuration_resources import registered as web_resources
 
-        for registered in (model_resources, integration_resources):
-            result.extend(registered(self.root, data))
+        result.extend(integration_resources(self.root, data))
         result.extend(web_resources(self.root, data.get("web", {})))
         for name in data.get("instance_skills", []):
             if not re.fullmatch("[a-z][a-z0-9-]{0,63}", name):
@@ -173,11 +171,11 @@ class Resources:
                 if not settings.entry.is_relative_to(self.root):
                     raise ValueError("Configuration entry migration requires local maintenance")
         elif resource.kind == "credential":
-            if (
-                len(text.strip()) < (8 if resource.id == "web_access" else 24)
-                or len(text) > 4096
-                or any(c.isspace() for c in text.strip())
-            ):
+            if resource.id == "web_access":
+                from assistant_runtime.api.passwords import validate_password
+
+                validate_password(text.rstrip("\r\n"))
+            elif len(text.strip()) < 24 or len(text) > 4096 or any(c.isspace() for c in text.strip()):
                 raise ValueError("Access credentials require at least 24 non-whitespace characters")
         elif resource.kind == "skill":
             if not text.strip() or len(raw) > 128 * 1024:

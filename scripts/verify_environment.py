@@ -109,13 +109,17 @@ async def pipeline(config, ident, query, execution, report):
                         ]
                     )
                 if execution:
-                    from assistant_runtime.core.models.gateway import gateway_credential
+                    from assistant_runtime.core.models.credentials import credential
                     from assistant_runtime.core.models.settings import ModelSettings
 
                     settings = ModelSettings.parse(config.model_api)
                     private_key = Path(folder) / ".env"
                     private_key.write_text(
-                        settings.gateway_key_env + "=" + gateway_credential(config.root, settings) + "\n"
+                        "\n".join(
+                            p["key_env"] + "=" + json.dumps(credential(config.root, p["key_env"]))
+                            for p in settings.providers.values()
+                            if p.get("key_env") and p.get("enabled")
+                        )
                     )
                     private_key.chmod(0o600)
 

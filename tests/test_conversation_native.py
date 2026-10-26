@@ -51,9 +51,7 @@ class ConversationNativeTest(unittest.IsolatedAsyncioTestCase):
                     await host.configuration.apply(entry, revision)
                 self.assertFalse(host.backend.client.started)
                 self.assertFalse(host.config.model_api["enabled"])
-                (config.root / ".env").write_text(
-                    "ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n", encoding="utf-8"
-                )
+                (config.root / ".env").write_text("TEST_KEY=synthetic-key\n", encoding="utf-8")
                 result = await host.configuration.apply(entry, revision)
                 self.assertEqual(result["phase"], "applied", result)
                 terminal = Chat(
@@ -111,7 +109,7 @@ class ConversationNativeTest(unittest.IsolatedAsyncioTestCase):
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
             )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)
             running = asyncio.create_task(host.run())
             try:
@@ -208,7 +206,7 @@ class ConversationNativeTest(unittest.IsolatedAsyncioTestCase):
                 model_api=configuration(gateway.base_url),
                 execution={"concurrency": 1, "queue_size": 8},
             )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)
             running = asyncio.create_task(host.run())
 
@@ -278,7 +276,7 @@ class ConversationNativeTest(unittest.IsolatedAsyncioTestCase):
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
             )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)
             running = asyncio.create_task(host.run())
 

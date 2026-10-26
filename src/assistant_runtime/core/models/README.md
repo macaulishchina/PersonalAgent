@@ -1,6 +1,6 @@
 # Unified model access
 
-Models owns immutable account/provider/model configuration, bounded no-tool inference and durable receipts. Pi owns the only agent loop and its tools/Skill/session protocol. Tasks owns selection, authorization, schedules, goals and handoff. LiteLLM is an isolated API protocol gateway; native accounts reuse Pi's provider library. Voice is an unavailable placeholder; subscription models do not introduce a second executor.
+Models owns immutable account/provider/model configuration, bounded no-tool inference and durable receipts. Pi owns the only agent loop and its tools/Skill/session protocol. Tasks owns selection, authorization, schedules, goals and handoff. All API and account routes reuse Pi's pinned provider library. Voice is an unavailable placeholder; subscription models do not introduce a second executor.
 
 ## Configuration
 
@@ -8,17 +8,16 @@ Models owns immutable account/provider/model configuration, bounded no-tool infe
 
 Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets: `openai`, `claude`, `gemini`, `deepseek`. OpenCode Go presets: `opencode_go_responses`, `opencode_go_chat`, `opencode_go_anthropic`, `opencode_go_gemini`, using `OPENCODE_API_KEY`. Custom endpoints declare `protocol`, HTTPS `base_url` and `key_env`; supported protocols are `openai_responses`, `openai_chat`, `anthropic`, `gemini`. Presets cannot silently override their fixed endpoint. A local `enabled` switch does not change the supplier's data policy.
 
-Each `[model_api.entries.ALIAS]` identifies exactly one provider and upstream model. Capability fields may be omitted. A route-bound `capabilities` snapshot supplies advertised metadata; ordinary `images`, `structured`, `context_window`, `output_limit` and `reasoning_efforts` settings are authoritative. `execution_validated` is separate existing operator acceptance and is never inferred from a catalog. Default effort is `auto` for new automatic entries; existing explicit lists retain their previous first-level default. Explicit unsupported inputs/efforts fail before dispatch; images and key parameters are never silently dropped. Different providers for the same upstream model have distinct aliases. There is no implicit balancing or model inheritance.
+Each `[model_api.entries.ALIAS]` identifies exactly one provider and upstream model. Capability fields may be omitted. A route-bound `capabilities` snapshot supplies advertised metadata; ordinary `images`, `structured`, `context_window`, `output_limit` and `reasoning_efforts` settings are authoritative. Default effort is `auto` for new automatic entries; existing explicit lists retain their previous first-level default. Explicit unsupported inputs/efforts fail before dispatch; images and key parameters are never silently dropped. Different providers for the same upstream model have distinct aliases. There is no implicit balancing or model inheritance.
 
-See [complete example](../../../../config.example/models.toml) and [key template](../../../../deploy/model-api.env.example). Secrets live in private `.env`, never TOML or logs. Config is composed by `Config.load()` and applied through the configuration service at a safe execution boundary; external gateway changes require explicit deployment.
+See [complete example](../../../../config.example/models.toml) and [key template](../../../../deploy/model-api.env.example). Secrets live in private `.env`, never TOML or logs. Config is composed by `Config.load()` and applied through the configuration service at a safe execution boundary; provider changes take effect at a safe boundary, without separate deployment.
 
 ```sh
 pa --config config/config.toml models check
 pa --config config/config.toml models list
-.venv/bin/python -m scripts.prepare_model_gateway --config config/config.toml
 ```
 
-The preparer generates a private Compose manifest and secret-free gateway assets. The LiteLLM image is pinned by digest and uses its own dependencies, loopback listener, authentication and bounded resources. Do not print its manifest/environment. Gateway outages must not block event ingestion or device observation. Regeneration/recreation is explicit after checking in-flight work; it never constitutes task cancellation.
+API connections declare a protocol, endpoint and credential reference. The owned Pi helper registers these models with the corresponding upstream SDK adapter. No container, extra listener or instance transport key is required. Operator-only account login retains the existing isolated credential store. The execution loop sees only a host-authenticated local transport; supplier keys never enter model sessions. New route preparation captures credentials without inference, and failed updates retain the previous effective settings.
 
 ## Auxiliary inference
 
@@ -72,7 +71,7 @@ The official [Sign in with ChatGPT flow](https://developers.openai.com/siwc/quic
 
 **Output limit exception:** ChatGPT subscription does not accept `max_output_tokens`. Configuration therefore requires explicit `output_limit="model"`; global/per-entry request token caps cannot constrain that upstream request. Usage reserves the native catalog's advertised maximum and records actual reported tokens. This is not proof that the supplier enforces that maximum. Work request limits, deadlines, stream bounds and accounting still apply. If strict monetary/token admission cannot reserve the request, it blocks. Other native routes must express a requested output cap in their built payload or fail before sending; no silent drop is accepted. Do not copy Pi's API price estimate into subscription financial charges.
 
-No new provider is enabled or selected automatically. Register an alias with capabilities marked unaccepted, validate bounded synthetic requests, then enable only accepted uses. Native paths work without sending model traffic through LiteLLM; API endpoint paths keep the pinned gateway. Both execution and no-tool inference share existing durable usage admission and no-replay behavior.
+No new provider is enabled or selected automatically. Register an alias with capabilities marked unaccepted, validate bounded synthetic requests, then enable only accepted uses. Both native accounts and custom API connections use the shared Pi adapter. Both execution and no-tool inference share existing durable usage admission and no-replay behavior.
 
 ## AI usage admission
 
@@ -92,7 +91,7 @@ response bound and at most 500 displayed entries. It never follows redirects, re
 calls completion endpoints or reports upstream error bodies. Authentication uses the
 configured protocol and optional bearer/session-header settings. An incomplete directory
 is marked partial; manual model IDs remain available. Directory success is distinct from
-inference capability, usage acceptance and deployment of the separate model gateway.
+inference capability and usage acceptance.
 
 Protocol references: [OpenAI model listing](https://platform.openai.com/docs/api-reference/models/list),
 [Anthropic model listing](https://platform.claude.com/docs/en/api/models/list),
@@ -101,6 +100,19 @@ Native accounts use Pi's existing local authentication check and bundled catalog
 labelled as local checks rather than successful remote inference.
 
 ## Acceptance
+
+The model-library **测试模型** button performs one bounded text inference against the
+current draft, without saving or enabling it. `probe.py` uses the same Pi adapters,
+model concurrency semaphore and durable usage service as normal inference. Its fixed
+synthetic prompt has no history, images or tools; the selected default effort is retained,
+the deadline is 45 seconds and the output cap is at most 1,024 tokens. Native account
+routes which cannot enforce this cap are reported unsupported for this bounded test.
+There are no retries or fallbacks. Request IDs have durable receipts so disconnected or
+repeated submissions do not replay uncertain calls. Draft API keys stay in memory and
+never replace saved credentials. A successful text reply does not assert image/tool/schema support.
+Model selection has no manual acceptance flag; connection, credential and parameter
+validation still applies. The authenticated management endpoint
+forwards an operator-only `model-test` control command; it exposes no assistant tool.
 
 Run `scripts/check.py --group models --group execution --group tasks`. Native Pi/local transport tests cover tools, mixed delegation, cancellation, clarification, restart and budget enforcement without calling a supplier. Earlier Codex acceptance is not evidence for Pi. Real routes are validated separately, per capability, with synthetic data and explicit fee/data authorization.
 
@@ -123,19 +135,18 @@ These are total deadlines, including streaming output; one task may contain many
 The models capability owns its configured inference deadline plus 30 seconds for settlement;
 public plugin callers inherit it unless they explicitly supply a shorter deadline. Auxiliary
 inference includes admission and configured fallback attempts in its total budget.
-The gateway and Pi outer provider envelope use the larger configured deadline plus 60 seconds;
+The Pi outer provider envelope use the larger configured deadline plus 60 seconds;
 local CLI/MCP transports allow further return margin. They do not extend the inner deadline.
 Jev advisory fallback and device cancellation retain independent short deadlines.
 Timeout logs include owning layer, operation, effective deadline and elapsed time, not payloads.
 Timeouts never imply that a remote request or tool action did not occur: metering stays durable,
-unknown results are not replayed. Regenerate gateway assets and recreate it explicitly when
-applying new configuration; restarting the assistant alone cannot update container configuration.
+unknown results are not replayed. Configuration updates prepare a replacement adapter and switch at an idle boundary, preserving active execution context.
 
 ## Automatic capability metadata
 
-`capabilities.py` resolves one immutable snapshot for UI, CLI and runtime. Only exact official endpoint/provider/model identities auto-match the packaged models.dev catalog. A custom endpoint may explicitly select a public `provider/model` reference; this remains advertised metadata, not route acceptance. Pi native model descriptions are read without opening a credential store or making a network request. Generic gateway routes do not inherit native Pi effort mappings, because their protocol conversion is different. A reasoning boolean never generates effort levels. Unknown capability fields remain absent in metadata; explicit unsupported inputs remain rejected.
+`capabilities.py` resolves one immutable snapshot for UI, CLI and runtime. Only exact official endpoint/provider/model identities auto-match the packaged models.dev catalog. A custom endpoint may explicitly select a public `provider/model` reference; this remains advertised metadata, not route acceptance. Pi native model descriptions are read without opening a credential store or making a network request. Custom API connections use the declared protocol and explicit capability fields; account catalog metadata is not guessed for an unrelated endpoint. A reasoning boolean never generates effort levels. Unknown capability fields remain absent in metadata; explicit unsupported inputs remain rejected.
 
-Snapshots include a non-secret connection/model binding, source and revision. Saving a stale binding fails with a repair instruction. Refresh is an operator draft operation, not a startup network request. Explicit adoption or refill copies known facts into ordinary settings, replacing their old values; absent facts leave settings unchanged. Model `output_limit` bounds output budgets and remains directly editable; snapshots supply defaults only for omitted settings. Existing native `output_limit="model"` semantics and durable usage admission are unchanged. `auto` is distinct from `none`: the gateway strips automatic control before dispatch, and native Pi receives no explicit reasoning override. Normalized Pi engine `off` is translated back to the host's `auto` selection at the owned transport boundary.
+Snapshots include a non-secret connection/model binding, source and revision. Saving a stale binding fails with a repair instruction. Refresh is an operator draft operation, not a startup network request. Explicit adoption or refill copies known facts into ordinary settings, replacing their old values; absent facts leave settings unchanged. Model `output_limit` bounds output budgets and remains directly editable; snapshots supply defaults only for omitted settings. Existing native `output_limit="model"` semantics and durable usage admission are unchanged. `auto` is distinct from `none`: the API adapter omits automatic control before dispatch, and native Pi receives no explicit reasoning override. Normalized Pi engine `off` is translated back to the host's `auto` selection at the owned transport boundary.
 
 The MIT-licensed models.dev snapshot and license ship in the wheel. Maintainers explicitly run `python scripts/update_model_catalog.py` (or `--source <downloaded-json>`) and review the resulting metadata diff before release. Source hash and retrieval time are recorded; no runtime download or extra service is introduced. See https://github.com/anomalyco/models.dev for the source schema. Synthetic transport tests prove protocol behavior, not supplier capability acceptance.
 
@@ -143,4 +154,4 @@ Public capability references use a searchable dropdown with all matching records
 
 Catalog origin comes exclusively from the upstream `canonical_model_id` lab/model attribution retained by the compiler. Matching provider/lab IDs identify the original catalog; different IDs mean other catalogs, not proof of unofficial service. Missing or malformed attribution stays unknown. Search includes canonical identities to find service aliases, and original catalog entries rank first. No vendor allowlists or name-prefix heuristics participate. See [upstream attribution](https://github.com/anomalyco/models.dev#api-reference).
 
-Model aliases accept letters, digits, dots, underscores and hyphens, beginning with a letter (64 characters maximum). The UI and owner schema share this rule; invalid names produce a name-specific error without echoing values. The catalog compiler retains explicit `reasoning_options` effort lists. Generic OpenAI routes import these lists, native Pi uses its adapter metadata first, and budget/toggle controls are not converted into guessed effort levels. Other protocol mappings remain explicit.
+Model aliases accept letters, digits, dots, underscores and hyphens, beginning with a letter (64 characters maximum). The UI and owner schema share this rule; invalid names produce a name-specific error without echoing values. The catalog compiler retains explicit `reasoning_options` effort lists. Generic OpenAI routes import these lists. Gemini routes import explicitly declared none/minimal/low/medium/high controls; Pi owns their level or token-budget wire mapping. Unsupported levels are not copied or silently downgraded. Native Pi uses its adapter metadata first, and budget/toggle controls are not converted into guessed effort levels. Adopting metadata fills the normal effort settings and retains auto as the default unless the operator has selected a supported explicit level. Other protocol mappings remain explicit.

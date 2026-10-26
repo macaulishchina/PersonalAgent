@@ -30,14 +30,6 @@
         "default": "",
         "readOnly": true,
         "description": "由本机部署维护，修改前需检查路径或访问配置。"
-      },
-      "approved_short_password_sha256": {
-        "type": "string",
-        "title": "弱口令例外指纹",
-        "default": "",
-        "readOnly": true,
-        "description": "由本机部署维护，修改前需检查路径或访问配置。",
-        "writeOnly": true
       }
     },
     "x-listeners": [

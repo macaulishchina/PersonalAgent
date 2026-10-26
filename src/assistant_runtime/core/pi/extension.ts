@@ -142,7 +142,7 @@ export default function (pi: any) {
                 headers: {
                   "Content-Type": "application/json",
                   Authorization:
-                    "Bearer " + process.env.ASSISTANT_MODEL_GATEWAY_KEY,
+                    "Bearer " + process.env.PA_EXECUTION_TOKEN,
                   ...provider.headers,
                 },
                 body: JSON.stringify(payload),

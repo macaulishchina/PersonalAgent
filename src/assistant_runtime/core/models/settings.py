@@ -92,15 +92,13 @@ def url(value, *, local=False):
     _ = p.port  # Reject malformed/out-of-range ports during config validation.
     loopback = p.hostname in {"127.0.0.1", "localhost", "::1"}
     if (local and not loopback) or p.scheme not in ({"http", "https"} if loopback else {"https"}):
-        raise ValueError("Gateway must be loopback; remote model endpoints require HTTPS")
+        raise ValueError("Remote model endpoints require HTTPS; local endpoints must use loopback")
     return value.rstrip("/")
 
 
 @dataclass(frozen=True)
 class ModelSettings:
     enabled: bool = field(default_factory=lambda: configuration_default(__file__, "enabled"))
-    gateway_url: str = field(default_factory=lambda: configuration_default(__file__, "gateway_url"))
-    gateway_key_env: str = field(default_factory=lambda: configuration_default(__file__, "gateway_key_env"))
     concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
     queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
     timeout_seconds: int = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
@@ -130,8 +128,6 @@ class ModelSettings:
     def parse(cls, value):
         keys(value, cls.__dataclass_fields__)
         value = deepcopy(value)
-        if "gateway_url" in value:
-            value["gateway_url"] = url(value["gateway_url"], local=True)
         providers = value.get("providers", {})
         if not isinstance(providers, dict):
             raise ValueError("Model providers must be a table")
@@ -150,9 +146,6 @@ class ModelSettings:
         obj = cls(**value)
         if type(obj.enabled) is not bool:
             raise ValueError("models.enabled must be boolean")
-        url(obj.gateway_url, local=True)
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", obj.gateway_key_env):
-            raise ValueError("Invalid gateway credential reference")
         for key, maximum in (
             ("concurrency", 16),
             ("queue_size", 64),
@@ -238,7 +231,6 @@ class ModelSettings:
                     "model",
                     "images",
                     "structured",
-                    "execution_validated",
                     "reasoning_efforts",
                     "default_reasoning_effort",
                     "max_output_tokens",
@@ -262,7 +254,7 @@ class ModelSettings:
                     "model_capabilities_invalid",
                     "Invalid or changed model capability snapshot；连接或模型已变化，请刷新能力资料。",
                 ) from None
-            for flag in ("images", "structured", "execution_validated"):
+            for flag in ("images", "structured"):
                 if type(m.get(flag, False)) is not bool:
                     raise ValueError("Model capabilities must be boolean")
             efforts = m.get("reasoning_efforts")
@@ -335,7 +327,6 @@ class ModelSettings:
                 "available": self.enabled and self.providers[m["provider"]].get("enabled", False),
                 "images": m.get("images", False),
                 "structured": m.get("structured", False),
-                "execution_validated": m.get("execution_validated", False),
                 "fallbacks": m.get("fallbacks", []),
                 "default_reasoning_effort": reasoning_effort(m),
                 "supported_reasoning_efforts": [

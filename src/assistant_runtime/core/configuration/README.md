@@ -54,6 +54,15 @@ are validated. Owner validation maps to safe field-specific errors; the browser 
 field and rejects results if inputs change in flight. Testing does not save, enable, apply or
 mark capabilities accepted. Native login remains an explicit account management operation.
 
+`POST /api/model-test` is the separate paid-inference operation initiated by the model-row
+button. It captures only the selected model/connection draft and transient credential under
+the same administrator/origin/revision checks, then delegates to the models owner through
+operator-only IPC. The models owner enforces one synthetic text call, bounded output/time,
+shared usage admission, lifecycle tracking and durable request deduplication. No draft is
+saved, connection enabled or execution certification granted. The management page remains
+available when business is down; the test reports unavailable rather than starting another
+inference service. Successful results are plain text, never HTML.
+
 Extension rows display Linux/Windows certification from packaged `plugin.json`,
 without importing runtime code. Windows includes Windows Server. Missing or invalid
 metadata is shown as uncertified. An incompatible checked entry can be unchecked,
@@ -89,7 +98,7 @@ listener failures remain separately pending and can be retried without restartin
 
 Plugin composition, process foundation, fixed main voice bindings and storage migration
 remain explicit restart/maintenance operations. A page is applied atomically: if its related
-changes require restart, the candidate waits as a whole. External gateway steps stay pending
+changes require restart, the candidate waits as a whole. External integration steps stay pending
 until the operator explicitly confirms them. Manual edits are detected but never auto-applied.
 
 ## Files and credentials
@@ -99,7 +108,7 @@ The public API and initialization/settings code share the shipped defaults. Star
 save use the same owner semantic validators in addition to JSON Schema. Local schema
 references are bounded and acyclic; remote references and frontend code are unsupported.
 
-Registered resources include `.env`, management bootstrap, private gateway key, web access
+Registered resources include `.env`, management bootstrap, web access
 credential, revisioned MCP registry, explicitly selected instance skills and their bounded
 assets, and selected/configured external plugins' declared private resources. Resource
 files outside the instance are read-only and require local maintenance. Instance/install
@@ -150,9 +159,9 @@ and audit. The business process has no configuration-management model tool.
   business configuration, absent model login and plugin failure leave management reachable.
   There is no business restart loop. Optional failures are reported as partially applied.
 - Application receipts and pending external deployment steps survive manager restart.
-  Gateway configuration **or credential** changes require an operator deployment step;
-  another successful worker restart cannot clear that step. Confirmation is version-bound
-  and does not run container commands or establish provider acceptance.
+  Model configuration and credential changes prepare a new local provider adapter, then
+  commit or roll back with the other affected owners. No external deployment step is
+  required. Provider capability acceptance remains separate from saving settings.
 - Management listener changes bind the new endpoint before retiring the old one. Failed
   binding preserves the working endpoint and an explicit outstanding step. Root/entry
   relocation is forbidden. The installer manages one unit and the owned process tree.

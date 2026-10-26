@@ -5,8 +5,12 @@ import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { findPackageJSON } from "node:module";
 import { pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
+// Never forward configured credentials to a redirected host.
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (input, init) =>
+  nativeFetch(input, { ...init, redirect: "error" });
 const installation = process.argv[2];
 const load = (path) => import(pathToFileURL(join(installation, path)).href);
 // npm ci may hoist dependencies alongside the agent instead of nesting them.
@@ -21,7 +25,7 @@ const ai = await loadAI("index.js");
 const { builtinProviders } = await loadAI("providers/all.js");
 const { AuthStorage } = await load("dist/core/auth-storage.js");
 const providers = builtinProviders();
-let runtime, spec, folder, storage;
+let runtime, spec, folder, storage, argsKey;
 const active = new Map(),
   prompts = new Map();
 let writing = Promise.resolve();
@@ -41,10 +45,12 @@ function provider(id) {
 
 async function init(args) {
   spec = args.spec;
+  argsKey = args.key;
   folder = args.folder;
   await mkdir(folder, { recursive: true, mode: 0o700 });
   await chmod(folder, 0o700);
   storage = AuthStorage.create(join(folder, "auth.json"));
+  if (spec.protocol && spec.protocol !== "pi") return initConnection(args);
   const selected = provider(spec.provider);
   const method = spec.auth === "api_key" ? "apiKey" : "oauth";
   if (!selected.auth[method]) throw new Error("native_auth_method_unavailable");
@@ -72,6 +78,53 @@ async function init(args) {
   return { initialized: true };
 }
 
+async function initConnection(args) {
+  const protocols = {
+    openai_responses: ["openai-responses", "openAIResponsesApi"],
+    openai_chat: ["openai-completions", "openAICompletionsApi"],
+    anthropic: ["anthropic-messages", "anthropicMessagesApi"],
+    gemini: ["google-generative-ai", "googleGenerativeAIApi"],
+  };
+  const [api, factory] = protocols[spec.protocol] || [];
+  if (!api) throw new Error("unsupported_connection_protocol");
+  const implementation = await loadAI(`api/${api}.lazy.js`);
+  const { envApiKeyAuth } = await loadAI("auth/helpers.js");
+  runtime = ai.createModels({
+    credentials: { read: async () => ({ type: "api_key", key: args.key }) },
+    authContext: { env: async () => undefined, fileExists: async () => false },
+  });
+  const models = Object.entries(spec.entries).map(([alias, entry]) => ({
+    id: alias,
+    name: entry.model,
+    api,
+    provider: spec.provider,
+    baseUrl: spec.base_url,
+    reasoning: entry.reasoning_efforts.some((level) => level !== "none"),
+    thinkingLevelMap: Object.fromEntries(
+      ["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(
+        (level) => [
+          level === "none" ? "off" : level,
+          entry.reasoning_efforts.includes(level) ? level : null,
+        ],
+      ),
+    ),
+    input: entry.images ? ["text", "image"] : ["text"],
+    contextWindow: entry.context_window || 32768,
+    maxTokens: entry.output_limit || 131072,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }));
+  runtime.setProvider(
+    ai.createProvider({
+      id: spec.provider,
+      baseUrl: spec.base_url,
+      auth: { apiKey: envApiKeyAuth("Configured API key", []) },
+      models,
+      api: implementation[factory](),
+    }),
+  );
+  return { initialized: true };
+}
+
 function modelMetadata(m) {
   return {
     id: m.id,
@@ -88,7 +141,12 @@ function modelMetadata(m) {
 }
 
 function modelFor(args) {
-  const model = runtime.getModel(spec.provider, args.model);
+  const configured = runtime.getModel(
+    spec.provider,
+    spec.entries ? args.alias : args.model,
+  );
+  const model =
+    configured && spec.entries ? { ...configured, id: args.model } : configured;
   if (!model) throw new Error("native_model_not_in_catalog");
   const effort =
     args.effort === "auto"
@@ -107,6 +165,7 @@ function modelFor(args) {
     args.schema &&
     ![
       "openai-responses",
+      "openai-completions",
       "anthropic-messages",
       "google-generative-ai",
     ].includes(model.api)
@@ -143,9 +202,38 @@ async function run(id, args, signal) {
     // Reuse already processed input through Pi's normal provider cache/session
     // affinity. This does not enable cache warming or automatic model requests.
     cacheRetention: "short",
-    sessionId: args.session_id,
+    sessionId: args.session_id || undefined,
+    transformHeaders: async (headers) => {
+      if (!spec.protocol || spec.protocol === "pi") return headers;
+      const result = { ...headers };
+      if (spec.auth_scheme === "bearer") {
+        for (const name of Object.keys(result))
+          if (
+            ["authorization", "x-api-key", "x-goog-api-key"].includes(
+              name.toLowerCase(),
+            )
+          )
+            delete result[name];
+        result.Authorization = `Bearer ${argsKey}`;
+      }
+      if (spec.session_header) {
+        if (!args.session_id) throw new Error("connection_session_required");
+        result[spec.session_header] = createHash("sha256")
+          .update(args.session_id)
+          .digest("hex");
+      }
+      return result;
+    },
     onPayload: async (payload) => {
       if (signal.aborted) throw new Error("native_cancelled");
+      if (spec.entries && args.effort === "auto") {
+        delete payload.reasoning;
+        delete payload.reasoning_effort;
+        delete payload.thinking;
+        if (payload.config) delete payload.config.thinkingConfig;
+        if (payload.generationConfig)
+          delete payload.generationConfig.thinkingConfig;
+      }
       if (args.schema) {
         const format = {
           type: "json_schema",
@@ -155,6 +243,11 @@ async function run(id, args, signal) {
         };
         if (model.api === "openai-responses")
           payload.text = { ...payload.text, format };
+        else if (model.api === "openai-completions")
+          payload.response_format = {
+            type: "json_schema",
+            json_schema: { name: "result", schema: args.schema, strict: true },
+          };
         else if (model.api === "anthropic-messages")
           payload.output_config = {
             ...payload.output_config,

@@ -18,9 +18,7 @@ from assistant_runtime.api.models import ModelRequest
 from assistant_runtime.kernel.runtime import Runtime
 from assistant_runtime.app.store import Store
 from assistant_runtime.core.models.settings import ModelSettings, PRESETS
-from assistant_runtime.core.models.gateway import configuration
-from assistant_runtime.core.models.gateway_transport import upstream_headers, prepare_request
-from assistant_runtime.core.pi.catalog import MODEL_SESSION_HEADER
+from assistant_runtime.core.pi.catalog import pi_models_config
 from assistant_runtime.core.models.plugin import ModelsPlugin
 from assistant_runtime.core.models.tools import create_server
 
@@ -63,7 +61,7 @@ class SettingsTest(unittest.TestCase):
                 settings(timeout_seconds=normal, compaction_timeout_seconds=compaction)
             )
             self.assertEqual(
-                configuration(parsed)["model_list"][0]["litellm_params"]["timeout"],
+                parsed.outer_timeout_seconds,
                 max(normal, compaction) + 60,
             )
 
@@ -104,12 +102,8 @@ class SettingsTest(unittest.TestCase):
         )
         parsed = ModelSettings.parse(raw)
         self.assertEqual(parsed.catalog()[0]["default_reasoning_effort"], "low")
-        from assistant_runtime.core.pi.catalog import pi_models_config
 
         self.assertTrue(pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]["reasoning"])
-        route = configuration(parsed)["model_list"][0]["litellm_params"]
-        self.assertEqual(route["max_tokens"], parsed.execution_max_output_tokens)
-        self.assertEqual(route["timeout"], 660)  # Gateway leaves settlement margin beyond the model deadline.
         for invalid in (
             {"default_reasoning_effort": "medium"},
             {"reasoning_efforts": ["low", "low"]},
@@ -121,48 +115,22 @@ class SettingsTest(unittest.TestCase):
                     settings(entries={"test-model": {**raw["entries"]["test-model"], **invalid}})
                 )
 
-    def test_gateway_preserves_effort_and_disables_anthropic_thinking_explicitly(self):
-        for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
-            route = {
-                "protocol": protocol,
-                "reasoning_efforts": ["low", "high"],
-                "default_reasoning_effort": "low",
-            }
-            self.assertEqual(prepare_request(route, {}, {}, [])["reasoning"], {"effort": "low"})
-            self.assertEqual(
-                prepare_request(route, {"reasoning": {"effort": "high"}}, {}, [])["reasoning"],
-                {"effort": "high"},
-            )
-            self.assertEqual(
-                prepare_request(route, {"reasoning": {"effort": None}, "reasoning_effort": "high"}, {}, [])[
-                    "reasoning"
-                ],
-                {"effort": "high"},
-            )
-            with self.assertRaisesRegex(ValueError, "Unsupported"):
-                prepare_request(route, {"reasoning": {"effort": "medium"}}, {}, [])
-        route = {
-            "protocol": "anthropic",
-            "reasoning_efforts": ["none", "high"],
-            "default_reasoning_effort": "high",
-        }
-        result = prepare_request(route, {"reasoning": {"effort": "none"}}, {}, [])
-        self.assertEqual(result["thinking"], {"type": "disabled"})
-        self.assertEqual(result["reasoning"], {"effort": "none"})
-        with self.assertRaisesRegex(ValueError, "Conflicting"):
-            prepare_request(route, {"reasoning": {"effort": "high"}, "reasoning_effort": "none"}, {}, [])
-        with self.assertRaisesRegex(ValueError, "Invalid"):
-            prepare_request(route, {"reasoning": "high"}, {}, [])
+    def test_execution_catalog_preserves_explicit_effort_choices(self):
+        raw = settings()
+        raw["entries"]["test-model"].update(
+            reasoning_efforts=["none", "high"], default_reasoning_effort="high"
+        )
+        model = pi_models_config(ModelSettings.parse(raw))["providers"]["assistant_api"]["models"][0]
+        self.assertEqual(model["thinkingLevelMap"]["off"], "none")
+        self.assertEqual(model["thinkingLevelMap"]["high"], "high")
+        self.assertIsNone(model["thinkingLevelMap"]["medium"])
 
     def test_disabled_provider_cannot_be_called_or_routed(self):
-        from assistant_runtime.core.pi.catalog import pi_models_config
-
         for enabled in (False, True):
             parsed = ModelSettings.parse(
                 settings(providers={"test": {"preset": "deepseek", "enabled": enabled}})
             )
             self.assertEqual(parsed.catalog()[0]["available"], enabled)
-            self.assertEqual(bool(configuration(parsed)["model_list"]), enabled)
             self.assertEqual(bool(pi_models_config(parsed)["providers"]["assistant_api"]["models"]), enabled)
             if enabled:
                 self.assertEqual(parsed.entry("test-model")["provider"], "test")
@@ -175,64 +143,27 @@ class SettingsTest(unittest.TestCase):
             with self.subTest(switch=switch), self.assertRaises(ValueError):
                 ModelSettings.parse(settings(providers={"test": {"preset": "deepseek", **switch}}))
 
-    def test_native_protocols_normalize_only_the_nonsemantic_cache_hint(self):
-        data = {
-            "prompt_cache_key": "cache-hint",
-            "tools": [{"type": "custom"}],
-            "input": [{"type": "input_image"}],
-            "reasoning": {"effort": "low"},
-            "text": {"format": {"type": "json_schema"}},
-            "extra_headers": {"Authorization": "untrusted"},
-        }
-        result = prepare_request(PRESETS["claude"], data.copy(), {}, [])
-        self.assertNotIn("prompt_cache_key", result)
-        for key in ("tools", "input", "reasoning", "text"):
-            self.assertEqual(result[key], data[key])
-        self.assertNotIn("Authorization", result["extra_headers"])
-        gemini = prepare_request(PRESETS["gemini"], data.copy(), {}, [])
-        self.assertNotIn("prompt_cache_key", gemini)
-        for key in ("tools", "input", "reasoning", "text"):
-            self.assertEqual(gemini[key], data[key])
-        result = prepare_request(PRESETS["openai"], data.copy(), {}, [])
-        self.assertEqual(result["prompt_cache_key"], "cache-hint")
-
-    def test_gemini_explicit_gateway_bases_include_api_version(self):
-        for preset in ("gemini", "opencode_go_gemini"):
+    def test_protocol_selection_does_not_change_model_identity(self):
+        for preset in PRESETS:
             parsed = ModelSettings.parse(settings(providers={"test": {"preset": preset, "enabled": True}}))
-            route = configuration(parsed)["model_list"][0]["litellm_params"]
-            self.assertTrue(route["api_base"].endswith("/v1beta"))
+            model = pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]
+            self.assertEqual(model["id"], "test-model")
+            self.assertEqual(model["api"], "assistant-native")
 
-    def test_go_routes_authentication_and_conversation_isolation(self):
-        for suffix in ("responses", "chat", "anthropic", "gemini"):
-            provider = PRESETS["opencode_go_" + suffix]
-            self.assertIn("/inference/go/", provider["base_url"])
-            incoming = {
-                "Authorization": "Bearer local-only",
-                "x-api-key": "do-not-forward",
-                "x-assistant-session": "conversation-one",
-            }
-            headers = upstream_headers(provider, incoming, {"OPENCODE_API_KEY": "upstream-only"})
-            self.assertEqual(headers["Authorization"], "Bearer upstream-only")
-            self.assertNotIn("x-api-key", headers)
-            self.assertNotIn("local-only", str(headers))
-            again = upstream_headers(
-                provider,
-                {MODEL_SESSION_HEADER: "conversation-one"},
-                {"OPENCODE_API_KEY": "upstream-only"},
-                (MODEL_SESSION_HEADER,),
-            )
-            self.assertEqual(headers, again)
-            other = upstream_headers(
-                provider,
-                {MODEL_SESSION_HEADER: "conversation-two"},
-                {"OPENCODE_API_KEY": "upstream-only"},
-                (MODEL_SESSION_HEADER,),
-            )
-            self.assertNotEqual(headers["x-opencode-session"], other["x-opencode-session"])
-            with self.assertRaisesRegex(ValueError, "conversation identity"):
-                upstream_headers(provider, {}, {"OPENCODE_API_KEY": "upstream-only"})
-        official = upstream_headers(PRESETS["claude"], incoming, {})
-        self.assertEqual(set(official), {"User-Agent"})
+    def test_gemini_config_retains_supplier_endpoint(self):
+        parsed = ModelSettings.parse(settings(providers={"test": {"preset": "gemini", "enabled": True}}))
+        self.assertIn("v1beta", parsed.providers["test"]["base_url"])
+
+    def test_custom_session_header_and_authentication_are_declared(self):
+        for preset in (
+            "opencode_go_responses",
+            "opencode_go_chat",
+            "opencode_go_anthropic",
+            "opencode_go_gemini",
+        ):
+            parsed = ModelSettings.parse(settings(providers={"test": {"preset": preset, "enabled": True}}))
+            self.assertEqual(parsed.providers["test"]["session_header"], "x-opencode-session")
+            self.assertEqual(parsed.providers["test"]["auth_scheme"], "bearer")
 
     def test_official_presets_and_custom_protocol(self):
         for preset in PRESETS:
@@ -258,7 +189,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_invalid_config_rejected_before_use(self):
         for changes in (
-            {"gateway_url": "http://192.168.1.2:4010"},
+            {"unknown_option": "invalid"},
             {"queue_size": 0},
             {"timeout_seconds": 3601},
             {"memory": "missing"},
@@ -279,21 +210,13 @@ class SettingsTest(unittest.TestCase):
                 settings(memory="test-model", providers={"test": {"preset": "deepseek", "enabled": False}})
             )
 
-    def test_four_protocol_routes_have_no_retry_or_fallback(self):
-        protocols = {p["protocol"] for p in PRESETS.values()}
-        self.assertEqual(len(protocols), 4)
+    def test_four_protocol_routes_share_metered_pi_transport(self):
+        self.assertEqual(len({p["protocol"] for p in PRESETS.values()}), 4)
         for preset in PRESETS:
             parsed = ModelSettings.parse(settings(providers={"test": {"preset": preset, "enabled": True}}))
-            config = configuration(parsed)
-            params = config["model_list"][0]["litellm_params"]
-            self.assertEqual(params["num_retries"], 0)
-            self.assertTrue(params["api_key"].startswith("os.environ/"))
-            self.assertEqual(config["router_settings"]["fallbacks"], [])
-            self.assertFalse(config["litellm_settings"]["drop_params"])
-            self.assertEqual(
-                params.get("use_chat_completions_api", False),
-                parsed.providers["test"]["protocol"] == "openai_chat",
-            )
+            config = pi_models_config(parsed, transport_url="http://127.0.0.1:1234/v1")
+            self.assertEqual(config["providers"]["assistant_api"]["baseUrl"], "http://127.0.0.1:1234/v1")
+            self.assertNotIn(parsed.providers["test"]["key_env"], json.dumps(config))
 
 
 class ModelsTest(unittest.IsolatedAsyncioTestCase):
@@ -606,31 +529,15 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DeploymentTest(unittest.TestCase):
-    def test_only_referenced_secrets_are_private_and_inputs_are_derived(self):
-        import os
-        from unittest.mock import patch
-        from assistant_runtime.app.config import Config
-        from scripts.prepare_model_gateway import prepare, IMAGE
+    def test_execution_configuration_never_contains_provider_secrets(self):
+        from assistant_runtime.core.pi.catalog import write_pi_models
 
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / ".env").write_text(
-                "DEEPSEEK_API_KEY=synthetic-provider-secret\nUNRELATED_KEY=never-export\n"
+            path = Path(
+                write_pi_models(
+                    Path(folder), ModelSettings.parse(settings()), transport_url="http://127.0.0.1:1234/v1"
+                )
             )
-            config = Config(root=root, plugins=["models"], model_api=settings())
-            with patch.dict(os.environ, {}, clear=True):
-                path = prepare(config)
-            manifest = json.loads(path.read_text())
-            gateway = manifest["services"]["gateway"]
-            self.assertEqual(gateway["image"], IMAGE)
-            self.assertIn("@sha256:", IMAGE)
-            self.assertEqual(gateway["ports"], ["127.0.0.1:4010:4000"])
-            self.assertNotIn("UNRELATED_KEY", gateway["environment"])
-            self.assertNotIn("never-export", path.read_text())
             self.assertEqual(private_mode(path), 0o600)
-            self.assertEqual(private_mode(path.parent), 0o700)
-            self.assertNotIn("synthetic-provider-secret", (path.parent / "gateway/config.yaml").read_text())
-            self.assertEqual(
-                (path.parent / "revision").read_text().strip(),
-                ModelSettings.parse(config.model_api).fingerprint(),
-            )
+            self.assertNotIn("DEEPSEEK_API_KEY", path.read_text())
+            self.assertIn("PA_EXECUTION_TOKEN", path.read_text())

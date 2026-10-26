@@ -184,15 +184,6 @@ function renderModelEditor(field) {
     "fallbacks",
   ])
     advanced.append(input(name));
-  advanced.append(
-    node(
-      "p",
-      initial.execution_validated
-        ? "执行验收：已有人工确认记录。"
-        : "执行验收：尚未确认。采用公开资料不会标记执行能力已验收。",
-      "hint",
-    ),
-  );
   root.replaceChildren(basic, summary, thinking, advanced);
   // Generic controls commit and rebuild on input, before a later change event.
   // Reconcile dependent fields during capture so the rebuild sees one coherent draft.
@@ -218,7 +209,6 @@ function renderModelEditor(field) {
       }
       if (row?.dataset.fieldPath === key([...path, "provider"])) {
         changed([...path, "capabilities"], "default");
-        changed([...path, "execution_validated"], "set", false);
       }
     },
     { capture: true, signal: editorInputController.signal },
@@ -231,10 +221,9 @@ function renderModelEditor(field) {
         key([...path, "model"])
       ) {
         changed([...path, "capabilities"], "default");
-        changed([...path, "execution_validated"], "set", false);
         renderEntityEditor();
         root.querySelector(".provider-status").textContent =
-          "模型已更换，请核对参数或重新填充；旧验收已撤销。";
+          "模型已更换，请核对参数或重新填充。";
       }
     },
     { signal: editorInputController.signal },

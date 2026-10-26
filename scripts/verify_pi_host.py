@@ -10,7 +10,7 @@ import uuid
 
 from assistant_runtime.app.host import AssistantService
 from assistant_runtime.app.config import Config
-from assistant_runtime.core.models.gateway import gateway_credential
+from assistant_runtime.core.models.credentials import credential
 from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 
 
@@ -20,8 +20,6 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
     settings = ModelSettings.parse(config.model_api)
     for ident in {main_model, task_model}:
         entry = settings.entry(ident)
-        if not entry.get("execution_validated"):
-            raise ValueError("Host acceptance needs an accepted basic executor")
         reasoning_effort(entry, effort)
     evidence = {"scope": "isolated_synthetic_host", "state": "failed", "production_changed": False}
     with tempfile.TemporaryDirectory(prefix="pi-release-host-") as folder:
@@ -33,8 +31,8 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
         raw["providers"] = {name: raw["providers"][name] for name in owners}
         for entry in raw["entries"].values():
             entry.update(fallbacks=[], max_output_tokens=max_tokens, execution_max_output_tokens=max_tokens)
-        key = gateway_credential(config.root, settings)
-        (root / ".env").write_text(settings.gateway_key_env + "=" + key + "\n")
+        names = {p["key_env"] for p in settings.providers.values() if p.get("key_env") and p.get("enabled")}
+        (root / ".env").write_text("\n".join(k + "=" + json.dumps(credential(config.root, k)) for k in names))
         (root / ".env").chmod(0o600)
         isolated = Config(
             root=root,

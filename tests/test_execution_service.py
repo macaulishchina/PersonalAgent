@@ -329,7 +329,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             gateway = FakeResponsesGateway(lambda step, body: sse_text_reply("done", "BASE_OK"))
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             config = Config(
                 root=root,
                 workspace=str(root),
@@ -420,7 +420,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 main_model="model-a",
                 main_reasoning_effort="low",
             )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)
             host.mcp_registry.configure(
                 "sample",
@@ -506,7 +506,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 return sse_text_reply(f"message{step}", "RUN_OK")
 
             gateway = FakeResponsesGateway(script)
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             from dataclasses import replace
             from assistant_runtime.app.initialize import initialize
 
@@ -518,7 +518,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 model_api=configuration(gateway.base_url),
                 web={"enable": False},
             )
-            (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             config = replace(config, instance_skills=["selected", "omitted"])
             for name in config.instance_skills:
                 folder = config.root / "config/skills" / name

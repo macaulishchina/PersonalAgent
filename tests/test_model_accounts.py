@@ -35,7 +35,6 @@ def configuration(auth="api_key"):
             "subscription": {
                 "provider": "native",
                 "model": "gpt-6.1-sol",
-                "execution_validated": True,
                 "structured": True,
                 "images": True,
                 "reasoning_efforts": ["low", "medium", "high"],
@@ -60,6 +59,18 @@ def local_package(root, installed, url):
         '{"name":"@earendil-works/pi-ai","type":"module","main":"./dist/index.js"}'
     )
     (api / "index.js").write_text(f"export * from {json.dumps((actual / 'index.js').as_uri())};")
+    # The fixture replaces built-in account endpoints, while custom API
+    # connections must still exercise the real SDK's protocol factories.
+    for relative in (
+        "auth/helpers.js",
+        "api/openai-responses.lazy.js",
+        "api/openai-completions.lazy.js",
+        "api/anthropic-messages.lazy.js",
+        "api/google-generative-ai.lazy.js",
+    ):
+        target = api / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"export * from {json.dumps((actual / relative).as_uri())};")
     (api / "providers/all.js").write_text(f"""
 import {{ openaiProvider }} from {json.dumps((actual / "providers/openai.js").as_uri())};
 export function builtinProviders() {{
@@ -249,7 +260,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         client = PiClient(
             cwd=str(self.root),
             settings=self.settings,
-            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            environment={"PA_EXECUTION_TOKEN": "synthetic"},
             runtime_dir=self.root / "executions",
             usage=usage,
             accounts=self.accounts,
@@ -311,7 +322,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         client = PiClient(
             cwd=str(self.root),
             settings=self.settings,
-            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            environment={"PA_EXECUTION_TOKEN": "synthetic"},
             runtime_dir=self.root / "executions",
             usage=usage,
             accounts=self.accounts,
@@ -352,7 +363,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         client = PiClient(
             cwd=str(self.root),
             settings=settings,
-            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            environment={"PA_EXECUTION_TOKEN": "synthetic"},
             runtime_dir=self.root / "executions",
             usage=usage,
             accounts=self.accounts,
@@ -440,7 +451,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         client = PiClient(
             cwd=str(self.root),
             settings=self.settings,
-            environment={"ASSISTANT_MODEL_GATEWAY_KEY": "synthetic"},
+            environment={"PA_EXECUTION_TOKEN": "synthetic"},
             runtime_dir=self.root / "executions",
             usage=usage,
             accounts=self.accounts,
@@ -532,12 +543,10 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         self.gateway.script_fn = script
         raw = configuration()
         gateway = gateway_config(self.gateway.base_url)
-        raw["gateway_url"] = self.gateway.base_url
+        self.assertEqual(gateway["providers"]["local"]["base_url"], self.gateway.base_url)
         raw["providers"].update(gateway["providers"])
         raw["entries"].update(gateway["entries"])
-        (self.root / ".env").write_text(
-            "TEST_MODEL_KEY=sk-synthetic-test\nASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n"
-        )
+        (self.root / ".env").write_text("TEST_MODEL_KEY=sk-synthetic-test\nTEST_KEY=synthetic-key\n")
         config = Config(root=self.root, model_api=raw)
 
         result = await verify(config, "subscription", "model-b", effort="low", max_requests=6)
@@ -563,9 +572,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             store=store,
             runtime=runtime,
         )
-        (self.root / ".env").write_text(
-            "TEST_MODEL_KEY=sk-synthetic-test\nASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n"
-        )
+        (self.root / ".env").write_text("TEST_MODEL_KEY=sk-synthetic-test\nTEST_KEY=synthetic-key\n")
         attach_usage(host, runtime)
         runtime.add(ModelsPlugin(host))
         await runtime.start()
@@ -605,11 +612,11 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "request caps unsupported"):
             ModelSettings.parse(value)
 
-    def test_native_credentials_never_enter_litellm_configuration(self):
-        from assistant_runtime.core.models.gateway import configuration as gateway
+    def test_native_credentials_never_enter_execution_configuration(self):
+        from assistant_runtime.core.pi.catalog import pi_models_config
 
         settings = ModelSettings.parse(configuration())
-        self.assertEqual(gateway(settings)["model_list"], [])
+        self.assertNotIn("TEST_MODEL_KEY", json.dumps(pi_models_config(settings)))
 
 
 if __name__ == "__main__":

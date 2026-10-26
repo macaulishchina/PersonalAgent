@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from assistant_runtime.core.models.capabilities import facts, profile, search_references
 from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
-from assistant_runtime.core.models.gateway_transport import prepare_request
 from assistant_runtime.core.models.catalog import models
 
 
@@ -124,17 +123,10 @@ class CapabilityTest(unittest.TestCase):
                 metadata = profile({**provider, "protocol": protocol}, "private-alias", reference="any-lab/m")
                 self.assertEqual(metadata["reasoning_efforts"], ["low", "high", "max"])
                 for effort in metadata["reasoning_efforts"]:
-                    request = prepare_request(
-                        {
-                            "protocol": protocol,
-                            "reasoning_efforts": metadata["reasoning_efforts"],
-                            "default_reasoning_effort": "auto",
-                        },
-                        {"reasoning": {"effort": effort}},
-                        {},
-                        [],
+                    self.assertEqual(
+                        reasoning_effort({"reasoning_efforts": metadata["reasoning_efforts"]}, effort), effort
                     )
-                    self.assertEqual(request["reasoning"]["effort"], effort)
+                    self.assertIn(effort, metadata["reasoning_efforts"])
             self.assertEqual(
                 profile(
                     {"protocol": "pi"}, "m", reference="any-lab/m", native={"reasoning_efforts": ["high"]}
@@ -152,7 +144,39 @@ class CapabilityTest(unittest.TestCase):
         self.assertEqual(reasoning_effort(entry), "auto")
         self.assertEqual(entry["reasoning_efforts"], [])
         self.assertNotIn("images", entry["capabilities"])
-        self.assertFalse(entry.get("execution_validated", False))
+
+    def test_gemini_reference_fills_declared_levels_into_normal_settings(self):
+        catalog = {
+            "revision": "fixture",
+            "models": {
+                "google/example": {"reasoning": True, "reasoning_efforts": ["low", "medium", "high"]},
+                "google/budget-only": {"reasoning": True},
+                "other/example": {"reasoning_efforts": ["minimal", "high", "max", "ultra"]},
+            },
+        }
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=catalog):
+            raw = self.spec()
+            raw["providers"]["p"]["protocol"] = "gemini"
+            provider = raw["providers"]["p"]
+            selected = profile(provider, "private-alias", reference="google/example")
+            openai = profile(
+                {**provider, "protocol": "openai_responses"}, "private-alias", reference="google/example"
+            )
+            self.assertEqual(selected["reasoning_efforts"], openai["reasoning_efforts"])
+            raw["entries"]["m"]["capabilities"] = selected
+            entry = ModelSettings.parse(raw).entry("m")
+            self.assertEqual(entry["reasoning_efforts"], ["low", "medium", "high"])
+            self.assertEqual(reasoning_effort(entry), "auto")
+            for level in entry["reasoning_efforts"]:
+                self.assertEqual(reasoning_effort(entry, level), level)
+            self.assertNotIn(
+                "reasoning_efforts", profile(provider, "private-alias", reference="google/budget-only")
+            )
+            self.assertEqual(
+                profile(provider, "private-alias", reference="other/example")["reasoning_efforts"],
+                ["minimal", "high"],
+            )
+        self.assertNotIn("execution_validated", entry)
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             reasoning_effort(entry, "none")
 
@@ -245,32 +269,20 @@ class CapabilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "snapshot"):
             ModelSettings.parse(spec)
 
-    def test_gateway_auto_omits_control_but_none_is_explicit(self):
-        for protocol in ("openai_chat", "openai_responses", "anthropic", "gemini"):
-            route = {
-                "protocol": protocol,
-                "reasoning_efforts": ["none", "high"],
-                "default_reasoning_effort": "auto",
-            }
-            for incoming in ({}, {"reasoning": {"effort": "auto"}}, {"reasoning_effort": "auto"}):
-                result = prepare_request(route, deepcopy(incoming), {}, [])
-                self.assertNotIn("reasoning", result)
-                self.assertNotIn("reasoning_effort", result)
-                self.assertNotIn("thinking", result)
-            result = prepare_request(route, {"reasoning": {"effort": "none"}}, {}, [])
-            self.assertEqual(result["reasoning"]["effort"], "none")
-            if protocol == "anthropic":
-                self.assertEqual(result["thinking"], {"type": "disabled"})
+    def test_automatic_and_explicit_none_remain_distinct(self):
+        entry = {"reasoning_efforts": ["none", "high"], "default_reasoning_effort": "auto"}
+        self.assertEqual(reasoning_effort(entry), "auto")
+        self.assertEqual(reasoning_effort(entry, "none"), "none")
+        with self.assertRaises(ValueError):
+            reasoning_effort(entry, "medium")
 
-    def test_gateway_effort_update_requires_external_application(self):
-        from assistant_runtime.core.models.gateway import application_steps
-
+    def test_effort_update_is_part_of_normal_configuration_revision(self):
         raw = self.spec()
         before = ModelSettings.parse(raw)
         raw["entries"]["m"].update(reasoning_efforts=["low"], default_reasoning_effort="low")
         after = ModelSettings.parse(raw)
-        self.assertTrue(application_steps(before, after))
-        self.assertFalse(application_steps(after, after))
+        self.assertNotEqual(before.fingerprint(), after.fingerprint())
+        self.assertEqual(after.entries["m"]["default_reasoning_effort"], "low")
 
     def test_directory_keeps_only_bounded_capabilities(self):
         value = models(

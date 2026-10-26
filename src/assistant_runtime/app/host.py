@@ -120,6 +120,16 @@ class AssistantService:
         try:
             d = json.loads(await asyncio.wait_for(reader.readline(), 5))
             action = d["command"]
+            if action == "model-test":
+                if d.get("execution_session"):
+                    raise ValueError("Model testing is operator-only")
+                plugin = self.runtime.plugins.get("models")
+                if plugin is None:
+                    raise ValueError("Models plugin unavailable")
+                result = await plugin.test_model(d.get("arguments", {}))
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
             if action == "configuration-action":
                 if d.get("execution_session"):
                     raise ValueError("Configuration control is operator-only")
@@ -516,7 +526,7 @@ class AssistantService:
             response = {"ok": True, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": str(exc)[:200]}
-            if action in {"configuration-update", "configuration-action"}:
+            if action in {"configuration-update", "configuration-action", "model-test"}:
                 from assistant_runtime.api.configuration import ConfigurationError
 
                 response = {"ok": False, "error": "Configuration operation failed"}

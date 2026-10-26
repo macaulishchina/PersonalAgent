@@ -93,7 +93,7 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
                         }
                     },
                 )
-                (config.root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+                (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
                 host = AssistantService(config)
                 running = asyncio.create_task(host.run())
                 await asyncio.wait_for(host.runtime.ready.wait(), 20)

@@ -39,7 +39,7 @@ class AdminPasswordTest(unittest.TestCase):
     def test_invalid_new_password_or_confirmation_preserves_credential_and_session(self):
         cases = [
             ("short", "short"),
-            ("123456", "123456"),
+            ("12345", "12345"),
             ("a" * 257, "a" * 257),
             (" leading-space-password", " leading-space-password"),
             ("trailing-space-password ", "trailing-space-password "),
@@ -65,8 +65,8 @@ class AdminPasswordTest(unittest.TestCase):
         self.assertEqual(self.path.read_text().strip(), self.original)
         self.assertTrue(self.admin.valid(self.session))
 
-    def test_seven_digits_or_letters_are_accepted_without_complexity_requirement(self):
-        for password in ("1234567", "abcdefg", "Abc1234"):
+    def test_six_digits_or_letters_are_accepted_without_complexity_requirement(self):
+        for password in ("123456", "abcdef", "Abc123", "六个汉字密码"):
             with self.subTest(password_kind=password):
                 self.admin.change_password(self.original, password, password, "browser")
                 self.assertTrue(self.admin.valid(self.admin.login(password, "browser")))

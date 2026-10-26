@@ -1,1 +1,1 @@
-"""Optional API inference, configuration and protocol gateway integration."""
+"""Model configuration and bounded inference through the Pi provider adapter."""

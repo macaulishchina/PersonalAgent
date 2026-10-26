@@ -57,7 +57,7 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
             try:
                 with tempfile.TemporaryDirectory() as folder:
                     root = Path(folder)
-                    (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+                    (root / ".env").write_text("TEST_KEY=synthetic-key\n")
                     config = Config(root=root, model_api=configuration(gateway.base_url))
 
                     result = await verify_host(config, "model-a", "model-b", max_requests=cap)
@@ -81,7 +81,7 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
         try:
             with tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+                (root / ".env").write_text("TEST_KEY=synthetic-key\n")
                 config = Config(root=root, model_api=configuration(gateway.base_url))
                 result = await verify(config, "model-a", case="memory", max_requests=1)
                 self.assertEqual(result["state"], "completed", result)
@@ -98,7 +98,7 @@ class AcceptanceTest(unittest.IsolatedAsyncioTestCase):
         try:
             with tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+                (root / ".env").write_text("TEST_KEY=synthetic-key\n")
                 config = Config(root=root, model_api=configuration(gateway.base_url))
                 for case in ("text", "image"):
                     result = await verify(config, "model-a", case=case, max_requests=1)

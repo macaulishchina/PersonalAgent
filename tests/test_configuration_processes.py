@@ -8,7 +8,8 @@ import socket
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
 
 from assistant_runtime.app.management import BusinessProcess
 from assistant_runtime.app.management_bootstrap import ensure_management
@@ -16,6 +17,36 @@ from assistant_runtime.core.configuration.settings import ManagementSettings
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_plugin_failure_recovery_and_status_disconnect(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            entry = root / "config.toml"
+            entry.write_text("plugins=[]\n")
+            business = BusinessProcess(ManagementSettings(root, entry))
+            business.process = SimpleNamespace(returncode=None, pid=123)
+            business.outcome = "running"
+            business.application = {"phase": "applied"}
+            business.request = AsyncMock(
+                return_value={
+                    "plugins": {
+                        "memory": {"state": "degraded", "error": "embedding missing"},
+                        "web": {"state": "ready", "error": None},
+                    }
+                }
+            )
+            status = await business.status()
+            self.assertEqual(status["state"], "degraded")
+            self.assertEqual([i["id"] for i in status["plugin_issues"]], ["memory"])
+            self.assertEqual(status["application"]["phase"], "applied")
+            business.outcome = "degraded"
+            business.request.return_value = {"plugins": {"memory": {"state": "ready", "error": None}}}
+            self.assertEqual((await business.status())["state"], "running")
+            self.assertEqual((await business.status())["plugin_issues"], [])
+            business.request.side_effect = TimeoutError()
+            status = await business.status()
+            self.assertEqual(status["state"], "degraded")
+            self.assertEqual(status["plugin_issues"][0]["id"], "business")
+
     @unittest.skipUnless(
         sys.platform == "linux", "Linux guardian-specific contract; Windows uses Job Object tests"
     )
@@ -111,7 +142,9 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "phase": "restarting",
                         "version": "version",
-                        "required_steps": [{"component": "model_gateway", "message": "operator deployment"}],
+                        "required_steps": [
+                            {"component": "external_service", "message": "operator deployment"}
+                        ],
                     }
                 )
             )
@@ -120,11 +153,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(business.application["interrupted"])
             business.loaded = "version"
             with self.assertRaises(ValueError):
-                business.complete_step("version", "model_gateway", True)
+                business.complete_step("version", "external_service", True)
             business.application["phase"] = "partially_applied"
             with self.assertRaises(ValueError):
-                business.complete_step("version", "model_gateway", False)
-            business.complete_step("version", "model_gateway", True)
+                business.complete_step("version", "external_service", False)
+            business.complete_step("version", "external_service", True)
             restarted = BusinessProcess(ManagementSettings(root, entry))
             self.assertEqual(restarted.application["phase"], "applied")
             self.assertFalse(restarted.application["required_steps"])

@@ -9,5 +9,5 @@ tool_result_max_chars = 6000
 # Maximum discovered MCP tools declared per model request; native tools are separate.
 max_loaded_tools = 12
 # Native account example: configure an account/provider/model, set main_model,
-# enable model_api and finish operator login. Native routes do not require LiteLLM.
+# enable model_api and finish operator login. All routes use the installed Pi provider adapter.
 # API route examples and accepted capability declarations: core/models/README.md.

@@ -128,6 +128,7 @@ class Console:
                 web.get("/api/accounts", self.account_inventory),
                 web.post("/api/account", self.account_action),
                 web.post("/api/provider-query", self.provider_query),
+                web.post("/api/model-test", self.model_test),
                 web.post("/api/model-capabilities", self.model_capabilities),
                 web.post("/api/account-answer", self.account_answer),
                 web.post("/api/account-cancel", self.account_cancel),
@@ -378,6 +379,9 @@ class Console:
                 data.get("name"), data.get("action"), data.get("version"), data.get("draft")
             )
         )
+
+    async def model_test(self, request):
+        return web.json_response(await self.provider_queries.test_model(await request.json()))
 
     async def model_capabilities(self, request):
         from .provider_queries import ProbeInput

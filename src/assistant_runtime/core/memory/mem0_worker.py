@@ -12,6 +12,10 @@ import time
 from datetime import datetime
 
 
+# Similarity floor for the fixed multilingual MiniLM embedder, not a probability.
+SEARCH_MIN_SCORE = 0.5
+
+
 class Channel:
     def __init__(self, read, write):
         self.read, self.write = read, write
@@ -149,7 +153,11 @@ class Engine:
 
     def search(self, query, scope, project):
         result = self.memory.search(
-            query, user_id=self.identity(scope, project), agent_id="personal_agent", limit=8
+            query,
+            user_id=self.identity(scope, project),
+            agent_id="personal_agent",
+            limit=8,
+            threshold=SEARCH_MIN_SCORE,
         )
         return [r for p in result["results"] if (r := self.record(p)) is not None]
 
@@ -265,8 +273,18 @@ def main():
     )
     logging.basicConfig(level=logging.ERROR)
     channel = Channel(sys.stdin, sys.stdout)
-    with contextlib.redirect_stdout(sys.stderr):
-        engine = Engine(root, cache, channel)
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            engine = Engine(root, cache, channel)
+    except Exception as exc:
+        logging.exception("Mem0 startup failed")
+        message = "记忆引擎启动失败，请检查 worker.log。"
+        if isinstance(exc, ValueError) and "Could not load model" in str(exc):
+            message = "本地记忆嵌入模型缺失或损坏；请运行 python scripts/prepare_memory.py --config <实例配置文件> 准备模型。"
+        elif isinstance(exc, ImportError):
+            message = "记忆插件依赖未安装完整，请同步包含 memory 的安装环境。"
+        channel.emit({"ready": False, "error": message})
+        return
     channel.emit({"ready": True, "engine": "mem0", "model_auth": "chatgpt"})
     try:
         while line := channel.read.readline(4 * 1024 * 1024 + 1):

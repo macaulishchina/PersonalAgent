@@ -55,7 +55,7 @@ class PiIntegrations:
         )
 
     def credential_environment(self, spec):
-        from assistant_runtime.core.models.gateway import credential
+        from assistant_runtime.core.models.credentials import credential
 
         transport = spec["transport"]
         refs = (

@@ -78,15 +78,16 @@ function signedOut() {
   clearTimeout(accountTimer);
   accountTimer = undefined;
 }
-async function api(path, body) {
+async function api(path, body, signal) {
   const response = await fetch(
     path,
     body === undefined
-      ? {}
+      ? { signal }
       : {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          signal,
         },
   );
   if (response.status === 401) {
@@ -987,6 +988,7 @@ async function load() {
       starting: "业务启动中",
     }[status.state] || status.state;
   $("health").dataset.state = status.state;
+  renderPluginHealth(status);
   render();
   await applicationStatus();
 }
@@ -1155,7 +1157,37 @@ load().catch((error) => {
   if (error.status !== 401) showNotice(error.message);
 });
 
+function renderPluginHealth(status) {
+  const panel = $("plugin-health"),
+    issues = status.plugin_issues || [];
+  const signature = JSON.stringify(issues);
+  if (panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
+  panel.hidden = !issues.length;
+  panel.replaceChildren();
+  if (!issues.length) return;
+  panel.append(node("strong", `${issues.length} 项功能需要处理`));
+  const list = node("ul");
+  for (const issue of issues) {
+    const row = node("li");
+    row.append(
+      node("strong", issue.id + "："),
+      document.createTextNode(issue.error),
+    );
+    list.append(row);
+  }
+  panel.append(
+    list,
+    node(
+      "p",
+      "故障功能可能不可用；其余功能可继续使用。状态会自动刷新，恢复后提示消失。",
+      "hint",
+    ),
+  );
+}
 let applicationTimer;
+let statusPolling = false;
+
 async function applicationStatus() {
   const status = await api("/api/status"),
     application = status.application || { phase: "idle" };
@@ -1199,6 +1231,7 @@ async function applicationStatus() {
       starting: "业务启动中",
     }[status.state] || status.state;
   $("health").dataset.state = status.state;
+  renderPluginHealth(status);
   const workLabels = {
     queued: "等待执行",
     dispatching: "正在启动",
@@ -1302,12 +1335,29 @@ async function applicationStatus() {
   $("abort-apply").disabled = !["preparing", "waiting"].includes(
     application.phase,
   );
-  if (active && !applicationTimer)
-    applicationTimer = setInterval(() => action(applicationStatus), 1000);
-  if (!active && applicationTimer) {
-    clearInterval(applicationTimer);
-    applicationTimer = undefined;
-  }
+  if (!applicationTimer)
+    applicationTimer = setInterval(async () => {
+      if (statusPolling || $("editor").hidden) return;
+      statusPolling = true;
+      try {
+        await applicationStatus();
+      } catch {
+        if (!$("editor").hidden) {
+          $("health").textContent = "状态连接中断";
+          $("health").dataset.state = "degraded";
+          renderPluginHealth({
+            plugin_issues: [
+              {
+                id: "连接",
+                error: "暂时无法获取运行状态，正在重试；现有编辑不会丢失。",
+              },
+            ],
+          });
+        }
+      } finally {
+        statusPolling = false;
+      }
+    }, 5000);
 }
 async function applyConfiguration(mode) {
   if (dirty() || invalid.size) throw Error("请先保存或放弃尚未保存的编辑");
@@ -1382,7 +1432,6 @@ function resourceGroup(resource) {
       mcp: "connections",
       management: "access",
       web_access: "plugin:web",
-      gateway_key: "models",
     }[resource.id] ||
     (resource.kind === "skill"
       ? "resources"
@@ -1526,6 +1575,14 @@ function drawResources(target = $("documents"), filter) {
         updateSaveBar();
       });
       content.append(input);
+      if (resource.id === "web_access")
+        content.append(
+          node(
+            "p",
+            "至少 6 个字符，无需大小写或数字组合；留空保持当前密码。",
+            "hint",
+          ),
+        );
       if (resource.id === "management")
         content.append(
           node(

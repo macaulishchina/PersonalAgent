@@ -142,7 +142,11 @@ class ApplyTest(unittest.IsolatedAsyncioTestCase):
     async def test_worker_restart_does_not_claim_external_deployment_is_complete(self):
         from unittest.mock import patch
 
-        step = {"component": "model_gateway", "state": "manual_action_required", "message": "Deploy gateway"}
+        step = {
+            "component": "external_service",
+            "state": "manual_action_required",
+            "message": "Deploy gateway",
+        }
         with patch.object(self.business, "application_steps", return_value=[step]):
             version = self.business.files.fields()["version"]
             self.assertEqual(self.business.preview()["required_steps"], [step])

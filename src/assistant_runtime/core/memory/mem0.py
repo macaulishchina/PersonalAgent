@@ -46,8 +46,11 @@ class Mem0Memory:
                 log.close()
             try:
                 line = await asyncio.wait_for(self.process.stdout.readline(), 90)
-                if not line or not json.loads(line).get("ready"):
-                    raise RuntimeError("Mem0 startup failed; inspect its local worker log")
+                reply = json.loads(line) if line else {}
+                if not reply.get("ready"):
+                    raise RuntimeError(
+                        (reply.get("error") or "记忆引擎启动失败。") + f" 日志：{self.root / 'worker.log'}"
+                    )
             except BaseException:
                 await self.close()
                 raise

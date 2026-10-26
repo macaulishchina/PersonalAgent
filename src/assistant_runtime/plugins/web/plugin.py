@@ -37,7 +37,6 @@ class WebPlugin:
         self.auth = self.api.repository(
             AuthRepository,
             self.settings.credential_path(self.api.state_dir.parent),
-            self.settings.approved_short_password_sha256,
         )
         static = Path(__file__).with_name("static")
         if not (static / "index.html").exists():
@@ -84,7 +83,6 @@ class WebPlugin:
             self.api.repository(
                 AuthRepository,
                 settings.credential_path(self.api.state_dir.parent),
-                settings.approved_short_password_sha256,
             )
             if settings.enable
             else previous_auth

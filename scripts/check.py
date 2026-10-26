@@ -22,6 +22,8 @@ GROUPS = {
         "models_transport",
         "model_fallbacks",
         "model_accounts",
+        "model_connections",
+        "model_probes",
         "model_capabilities",
         "provider_queries",
     },

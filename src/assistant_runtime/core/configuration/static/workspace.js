@@ -427,33 +427,6 @@ function renderModels() {
     );
     const limits = advancedGroup("model-runtime-limits");
     limits.firstChild.textContent = "超时、上下文与输出限制";
-    const gateway = advancedGroup("model-gateway-deployment");
-    gateway.classList.add("gateway-deployment");
-    gateway.firstChild.textContent = "部署维护 · 本机模型网关";
-    gateway.append(
-      node(
-        "p",
-        "仅在部署或维护 LiteLLM 网关时调整。普通模型配置无需修改；只使用原生账号路线时无需配置此处。",
-        "inline-note",
-      ),
-    );
-    gateway.append(
-      node(
-        "p",
-        "这些设置用于 PA 连接本机网关。供应商地址和 API Key 在“连接”中分别配置，新增连接不会继承此处的值。",
-        "inline-note",
-      ),
-    );
-    const gatewayFields = {
-      gateway_url: [
-        "本机网关地址（PA → LiteLLM）",
-        "PA 访问本机网关的地址，通常保持默认。这里不是模型供应商的接口地址。",
-      ],
-      gateway_key_env: [
-        "网关认证密钥的环境变量名",
-        "填写变量名，不是密钥值。用于 PA 与本机网关之间的认证；不提供时使用实例私有网关密钥文件，不会作为供应商 API Key。",
-      ],
-    };
     for (const field of snapshot.fields.filter(
       (f) =>
         fieldGroup(f) === "models" &&
@@ -463,30 +436,12 @@ function renderModels() {
         f.path.length > 1,
     )) {
       const displayed = prettyField(field);
-      const gatewayCopy = gatewayFields[field.path[1]];
-      if (gatewayCopy) {
-        displayed.schema.title = gatewayCopy[0];
-        displayed.schema.description = gatewayCopy[1];
-        gateway.append(drawField(displayed));
-      } else if (["concurrency", "queue_size"].includes(field.path[1]))
+      if (["concurrency", "queue_size"].includes(field.path[1]))
         panel.append(drawField(displayed));
       else limits.append(drawField(displayed));
     }
     panel.append(limits);
     $("documents").append(panel);
-    drawActions(
-      inventory.plugins.find((p) => p.id === "models"),
-      gateway,
-    );
-    drawResources(gateway, (r) => r.id === "gateway_key");
-    gateway.append(
-      node(
-        "p",
-        "保存设置不会自动部署或更新外部网关；请按生效状态中的部署步骤完成维护。",
-        "inline-note",
-      ),
-    );
-    $("documents").append(gateway);
   }
   const body = node("div", undefined, "model-panel");
   body.id = "model-panel";
@@ -599,7 +554,7 @@ function renderModelCollection(panel, kind) {
         kind === "providers"
           ? value.account
             ? "原生账号 · " + value.account
-            : "API 网关 · " + (value.preset || value.protocol || "待配置")
+            : "API 连接 · " + (value.preset || value.protocol || "待配置")
           : value.model || "尚未填写模型 ID",
         "entity-description",
       ),
@@ -608,17 +563,15 @@ function renderModelCollection(panel, kind) {
       const chips = node("div", undefined, "entity-tags");
       chips.append(node("span", value.provider || "未选择连接", "badge"));
       if (value.images) chips.append(node("span", "图片", "badge"));
-      chips.append(
-        node(
-          "span",
-          value.execution_validated ? "执行已验收" : "执行待验收",
-          "badge",
-        ),
-      );
       card.append(chips);
     }
     const actions = node("div", undefined, "entity-actions");
     let probeStatus;
+    if (kind === "entries") {
+      const probe = modelTest(name);
+      actions.append(probe.button);
+      probeStatus = probe.status;
+    }
     actions.append(button("编辑", () => openEntity(kind, name)));
     if (kind === "providers") {
       const probe = providerTest(name);
@@ -1270,6 +1223,113 @@ function providerTest(name) {
   );
   return { button: control, status };
 }
+
+const modelTestResults = new Map();
+function modelTestId() {
+  // getRandomValues also works on remote HTTP management pages.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function modelTest(name) {
+  // Completed results belong to the tested draft; a rebuilt form starts fresh.
+  if (modelTestResults.has(name) && !modelTestResults.get(name).pending)
+    modelTestResults.delete(name);
+  const status = node("p", "", "provider-status");
+  status.setAttribute("role", "status");
+  const current = () => {
+    const entry = valueAt(["model_api", "entries"], {})[name];
+    if (!entry?.provider || !entry?.model)
+      throw Error("请先填写模型 ID 和使用连接。");
+    return {
+      entry: structuredClone(entry),
+      connection: providerDraft(entry.provider),
+    };
+  };
+  const control = button(
+    "测试模型",
+    async () => {
+      let draft;
+      try {
+        draft = current();
+      } catch (error) {
+        status.hidden = false;
+        status.textContent = error.message;
+        status.dataset.state = "error";
+        return;
+      }
+      const state = {
+        pending: true,
+        message: "正在测试文本推理，最长等待 45 秒…",
+        ok: null,
+      };
+      modelTestResults.set(name, state);
+      show();
+      try {
+        const result = await api(
+          "/api/model-test",
+          {
+            name,
+            version: snapshot.version,
+            request_id: modelTestId(),
+            draft,
+          },
+          AbortSignal.timeout(60000),
+        );
+        if (JSON.stringify(current()) !== JSON.stringify(draft)) {
+          state.ok = false;
+          state.message =
+            "设置已修改，本次结果属于测试开始时的设置，请重新测试。";
+        } else {
+          state.ok = result.ok;
+          state.message = result.message;
+          if (Number.isFinite(result.elapsed_ms))
+            state.message += ` 耗时 ${(result.elapsed_ms / 1000).toFixed(1)} 秒。`;
+          if (result.ok && result.reply)
+            state.message += ` 回复：${result.reply}`;
+        }
+      } catch (error) {
+        state.ok = false;
+        state.message = ["TimeoutError", "AbortError"].includes(error.name)
+          ? "未能取得测试结果，请检查服务连接；不会自动重试。"
+          : error.message;
+      } finally {
+        state.pending = false;
+        show();
+        // A tab switch may have replaced this row while the request was in flight.
+        for (const row of document.querySelectorAll(
+          '.entity-grid[data-kind="entries"] .entity-card',
+        )) {
+          if (row.dataset.entity === name)
+            row.dispatchEvent(new Event("model-test-result"));
+        }
+      }
+    },
+    "secondary",
+  );
+  function show() {
+    const state = modelTestResults.get(name);
+    status.hidden = !state;
+    status.textContent = state?.message || "";
+    status.dataset.state = state?.pending
+      ? "loading"
+      : state?.ok
+        ? "success"
+        : "error";
+    control.disabled = !!state?.pending;
+    control.textContent = state?.pending ? "测试中…" : "测试模型";
+  }
+  // Register after insertion so reconstructed rows can receive the completed result.
+  queueMicrotask(() =>
+    control
+      .closest(".entity-card")
+      ?.addEventListener("model-test-result", show),
+  );
+  show();
+  return { button: control, status };
+}
 // Reuse the collection filter and model directory styles for finite local choices.
 function searchableSelect(label, filterLabel, identity, signal) {
   const root = node("div", undefined, "searchable-select");
@@ -1578,7 +1638,7 @@ function openAddEntity(kind) {
         p,
         p +
           " · " +
-          (item.account ? "原生账号" : "API 网关") +
+          (item.account ? "原生账号" : "API 连接") +
           (item.enabled ? "" : "（未启用）"),
       ];
     }),
@@ -1647,8 +1707,8 @@ function openConnectionWizard() {
   const route = formInput(form, "route", "接入方式", {
     cards: true,
     choices: [
-      ["native", "直接连接账号", "OAuth / API Key，无需部署网关"],
-      ["gateway", "通过 API 网关", "预设或自定义接口，需要单独部署网关"],
+      ["native", "直接连接账号", "使用供应商原生 OAuth 或 API Key"],
+      ["api", "通过 API 连接", "预设或自定义地址，使用 API Key 直接连接"],
     ],
   });
   const name = formInput(form, "name", "连接名称", {
@@ -1679,12 +1739,12 @@ function openConnectionWizard() {
     type: "password",
     placeholder: "粘贴 API Key，或保存后通过账号授权录入",
   });
-  const gateway = node("fieldset", undefined, "wizard-route");
-  form.append(gateway);
+  const apiSection = node("fieldset", undefined, "wizard-route");
+  form.append(apiSection);
   const apiFields = apiConnectionFields(
-    gateway,
+    apiSection,
     { enabled: true },
-    { prefix: "setup-api", inputId: "setup-gateway-key" },
+    { prefix: "setup-api", inputId: "setup-api-key" },
   );
   const nativeReference = newCredentialReference();
   const note = node("p", "", "inline-note");
@@ -1693,13 +1753,13 @@ function openConnectionWizard() {
     const useNative = route.value === "native";
     native.hidden = !useNative;
     native.disabled = !useNative;
-    gateway.hidden = useNative;
-    gateway.disabled = useNative;
+    apiSection.hidden = useNative;
+    apiSection.disabled = useNative;
     credential.closest("label").hidden = auth.value === "oauth";
     credential.disabled = auth.value === "oauth";
     note.textContent = useNative
       ? "账号和连接将一起添加。OAuth 授权需要先保存，再在账号授权区域登录；不会自动发起模型请求。"
-      : "此路线需要单独部署模型网关。配置保存后，按生效状态中的提示完成外部部署。";
+      : "填写供应商接口和凭据。保存并生效后，可为此连接添加模型。";
   }
   for (const input of [route, auth]) input.addEventListener("change", refresh);
   refresh();

@@ -642,7 +642,11 @@ class PiClient:
         from assistant_runtime.core.pi.transport import ExecutionTransport
 
         self.usage = usage
-        self.accounts = accounts
+        from assistant_runtime.core.pi.accounts import NativeAccounts
+        import secrets
+
+        self.accounts = accounts or NativeAccounts(Path(cwd), settings, binary=self.pi_binary)
+        self.environment["PA_EXECUTION_TOKEN"] = secrets.token_urlsafe(32)
         self.transport = ExecutionTransport(self)
 
     async def start(self):
@@ -736,7 +740,7 @@ class PiClient:
     async def _request(self, command, p):
         if command == Command.MODELS:
             return {
-                "data": [m for m in self.settings.catalog() if m["available"] and m["execution_validated"]],
+                "data": [m for m in self.settings.catalog() if m["available"]],
                 "next_cursor": None,
             }
         if command == Command.CONFIGURATION:
@@ -817,8 +821,6 @@ class PiClient:
 
     def _selection(self, model, effort):
         entry = self.settings.entry(model)
-        if not entry.get("execution_validated"):
-            raise ValueError("Execution model is not validated")
         if (effort != "auto" and effort not in entry["reasoning_efforts"]) or effort not in THINKING_MAP:
             raise ValueError("Unsupported execution reasoning effort")
 
@@ -850,7 +852,7 @@ class PiClient:
                 and "--execution-session" not in args
             ):
                 spec["args"] = [*args, "--execution-session", meta["id"]]
-        write_pi_models(folder, self.transport.settings(), session_id=meta["id"])
+        write_pi_models(folder, self.settings, session_id=meta["id"], transport_url=self.transport.url)
         for name, data in (
             ("mcp.json", to_pi_mcp_json(meta["mcp_servers"])),
             (

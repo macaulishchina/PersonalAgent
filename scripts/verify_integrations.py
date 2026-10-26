@@ -63,7 +63,6 @@ async def verify(binary):
                     "model": "synthetic",
                     "reasoning_efforts": ["low"],
                     "default_reasoning_effort": "low",
-                    "execution_validated": True,
                 }
             },
         }

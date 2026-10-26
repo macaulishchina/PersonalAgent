@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import uuid
 
-from assistant_runtime.core.models.gateway import credential
+from assistant_runtime.core.models.credentials import credential
 from assistant_runtime.platforms.executables import pi_command, pi_executable, pi_node
 
 
@@ -63,9 +63,10 @@ async def installation(binary=None):
 
 
 class AccountWorker:
-    def __init__(self, root, folder, spec, *, binary=None):
+    def __init__(self, root, folder, spec, *, binary=None, credential_value=None):
         self.root, self.folder, self.spec = Path(root), Path(folder), spec
         self.binary = binary
+        self.credential_value = credential_value
         self.process = self.reader = None
         self.initialized = False
         self.pending = {}
@@ -98,7 +99,11 @@ class AccountWorker:
             self.reader = asyncio.create_task(self._read())
             args = {"folder": str(self.folder), "spec": self.spec}
             if self.spec.get("key_env"):
-                args["key"] = credential(self.root, self.spec["key_env"])
+                args["key"] = (
+                    self.credential_value
+                    if self.credential_value is not None
+                    else credential(self.root, self.spec["key_env"])
+                )
             await self.call("init", args)
             self.initialized = True
 
@@ -168,9 +173,10 @@ class AccountWorker:
 
 
 class NativeAccounts:
-    def __init__(self, root, settings, *, state_dir=None, binary=None):
+    def __init__(self, root, settings, *, state_dir=None, binary=None, credentials=None):
         self.root, self.settings = Path(root), settings
         self.binary = binary
+        self.credentials = dict(credentials or {})
         self.folder = Path(state_dir) if state_dir else self.root / "state/model-accounts"
         self.workers = {}
 
@@ -179,16 +185,52 @@ class NativeAccounts:
             raise ValueError("Unknown configured model account")
         if name not in self.workers:
             self.workers[name] = AccountWorker(
-                self.root, self.folder / name, self.settings.accounts[name], binary=self.binary
+                self.root,
+                self.folder / name,
+                self.settings.accounts[name],
+                binary=self.binary,
+                credential_value=self.credentials.get(self.settings.accounts[name].get("key_env")),
             )
         worker = self.workers[name]
         await worker.start()
         return worker
 
+    async def validate_configuration(self):
+        """Validate enabled routes and capture credentials without sending inference."""
+        for alias, entry in self.settings.entries.items():
+            if self.settings.providers[entry["provider"]].get("enabled", False):
+                await self.route(alias, entry["default_reasoning_effort"])
+
+    async def connection(self, name):
+        provider = self.settings.providers[name]
+        if provider["protocol"] == "pi":
+            return await self.account(provider["account"])
+        ident = ("connection", name)
+        if ident not in self.workers:
+            spec = {
+                **provider,
+                "provider": "pa-api",
+                "auth": "api_key",
+                "entries": {
+                    alias: entry
+                    for alias, entry in self.settings.entries.items()
+                    if entry["provider"] == name
+                },
+            }
+            self.workers[ident] = AccountWorker(
+                self.root,
+                self.folder / ".connections" / name,
+                spec,
+                binary=self.binary,
+                credential_value=self.credentials.get(spec.get("key_env")),
+            )
+        worker = self.workers[ident]
+        await worker.start()
+        return worker
+
     async def route(self, alias, effort, *, images=False, schema=None):
         entry = self.settings.entry(alias)
-        provider = self.settings.providers[entry["provider"]]
-        worker = await self.account(provider["account"])
+        worker = await self.connection(entry["provider"])
         args = {"model": entry["model"], "alias": alias, "effort": effort, "images": images, "schema": schema}
         validation = await worker.call("validate", args)
         bound = validation["max_output_tokens"] if worker.spec.get("output_limit") == "model" else None

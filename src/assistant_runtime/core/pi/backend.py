@@ -93,15 +93,13 @@ class PiBackend:
         return self.active_task is not None
 
     async def start(self):
-        from assistant_runtime.core.models.gateway import gateway_credential
+        import secrets
 
         if not self.client.settings.enabled:
             if self.foreground:
                 self.session_id = self.session_id or self.store.executions.logical_session("local", "main")
             return  # Web/configuration remains available; no provider is dispatched.
-        self.client.environment["ASSISTANT_MODEL_GATEWAY_KEY"] = gateway_credential(
-            self.config.root, self.client.settings
-        )
+        self.client.environment["PA_EXECUTION_TOKEN"] = secrets.token_urlsafe(32)
         await self.client.start()
         if self.integrations:
             await self.integrations.start()

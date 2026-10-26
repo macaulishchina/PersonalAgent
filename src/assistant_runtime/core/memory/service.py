@@ -241,13 +241,13 @@ class MemoryPlugin:
                     await self.provider.start()
                     await self.refresh()
                     self.ready = True
+                    self.context.error = None
+                    self.context.state = "ready"
                 # Retry failed physical deletes; tombstones already exclude recall.
                 for (ident,) in self.store.db.execute(
                     "SELECT id FROM memory_items WHERE deleted=1"
                 ).fetchall():
                     await self.provider.delete(ident)
-                self.context.error = None
-                self.context.state = "ready"
                 if (
                     not self.foreground()
                     and self.config.memory_auto_capture
@@ -265,6 +265,8 @@ class MemoryPlugin:
                         self.current = asyncio.create_task(self.process_job(row))
                         try:
                             await self.current
+                            self.context.error = None
+                            self.context.state = "ready"
                         except asyncio.CancelledError:
                             if asyncio.current_task().cancelling():
                                 raise
@@ -280,6 +282,7 @@ class MemoryPlugin:
                             )
                             self.store.db.commit()
                             self.context.error = str(exc)[:200]
+                            self.context.state = "degraded"
                             attempts = self.store.db.execute(
                                 "SELECT attempts FROM memory_jobs WHERE id=?", (row[0],)
                             ).fetchone()[0]

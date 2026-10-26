@@ -44,13 +44,12 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 'plugins=["ai_usage", "workfiles", "devices", "assistant", "conversation", "execution", "models","pi","voice_disabled","web"]\n'
                 f'[web]\nenable=true\nhost="127.0.0.1"\nport={port}\n'
                 "[model_api]\nenabled=true\n"
-                f'gateway_url="{gateway.base_url}"\n'
                 '[model_api.providers.local]\nprotocol="openai_responses"\n'
                 f'base_url="{gateway.base_url}"\nkey_env="TEST_KEY"\nenabled=true\n'
                 '[model_api.entries.model-a]\nprovider="local"\nmodel="model-a"\n'
-                'execution_validated=true\nimages=true\nreasoning_efforts=["low"]\n'
+                'images=true\nreasoning_efforts=["low"]\n'
             )
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             from assistant_runtime.app.management_bootstrap import ensure_management
 
             management = ensure_management(root, path)
@@ -166,7 +165,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 return sse_text_reply("done", "Completed")
 
             gateway = FakeResponsesGateway(script)
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             cfg = Config(
                 root=root,
                 workspace=folder,
@@ -278,7 +277,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 return sse_text_reply("final" + str(step), "已完成" if model == "model-b" else "已委派")
 
             gateway = FakeResponsesGateway(script)
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             cfg = Config(
                 root=root,
                 workspace=folder,
@@ -453,7 +452,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
 
             gateway = FakeResponsesGateway(discover_extension)
             self.addCleanup(gateway.close)
-            (root / ".env").write_text("ASSISTANT_MODEL_GATEWAY_KEY=synthetic-key\n")
+            (root / ".env").write_text("TEST_KEY=synthetic-key\n")
             with patch("assistant_runtime.app.extensions.entry_points", return_value=[entry]):
                 config = Config(
                     root=root,

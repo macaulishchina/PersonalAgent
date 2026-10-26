@@ -33,10 +33,7 @@ class ReleasePreflightTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             config = self.config(root)
-            with (
-                patch("scripts.check_pi_release.credential", return_value="secret"),
-                patch("scripts.check_pi_release.gateway_credential", return_value="secret"),
-            ):
+            with patch("scripts.check_pi_release.credential", return_value="secret"):
                 result = check(config, native=False)
             self.assertEqual(result["state"], "passed")
             self.assertEqual(list(root.iterdir()), [])
@@ -59,10 +56,7 @@ class ReleasePreflightTest(unittest.TestCase):
             config = self.config(Path(folder))
             config.model_api.pop("memory")
             config.plugins.remove("ai_usage")
-            with (
-                patch("scripts.check_pi_release.credential"),
-                patch("scripts.check_pi_release.gateway_credential"),
-            ):
+            with patch("scripts.check_pi_release.credential"):
                 result = check(config, native=False)
             failures = {r["check"] for r in result["checks"] if r["state"] == "failed"}
             self.assertEqual(failures, {"execution_binding", "memory_binding"})

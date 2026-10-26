@@ -10,7 +10,10 @@ from types import SimpleNamespace
 import unittest
 import uuid
 from aiohttp import web
-from assistant_runtime.core.models.client import GatewayClient, timing_header
+from assistant_runtime.core.models.client import ModelClient
+from assistant_runtime.core.pi.accounts import NativeAccounts
+from pi_gateway import sse_text_reply, sse_tool_call
+from dataclasses import replace
 from assistant_runtime.core.models.settings import ModelSettings
 from assistant_runtime.core.models.plugin import ModelsPlugin
 from assistant_runtime.api.models import ModelRequest
@@ -20,25 +23,34 @@ from test_models import settings
 
 
 class TransportTest(unittest.IsolatedAsyncioTestCase):
-    def test_optional_gateway_timing_cannot_invent_or_corrupt_receipts(self):
-        for value in (None, "None", "NaN", "inf", "-1", "invalid"):
-            self.assertIsNone(timing_header({"timing": value}, "timing"))
-        self.assertIsNone(timing_header({}, "timing"))
-        self.assertEqual(timing_header({"timing": "3.25"}, "timing"), 3.25)
+    async def test_native_timing_is_optional_and_usage_is_provider_owned(self):
+        result = await self.client.complete(self.payload())
+        self.assertEqual(result["usage"]["output_tokens"], 12)
+        self.assertIsInstance(result["transport_timings"], dict)
+
+    def payload(self):
+        return {
+            "model": "test-model",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "synthetic"}]}],
+            "reasoning": {"effort": "auto"},
+            "max_output_tokens": 128,
+        }
 
     async def test_continuous_output_still_has_total_deadline_without_retry(self):
         import time
         from dataclasses import replace
 
-        await self.client.close()
-        self.client = GatewayClient(replace(self.client.settings, timeout_seconds=0.15), "private-key")
-        await self.client.start()
+        # Load the real SDK before measuring a streaming deadline. Cold module
+        # import latency must not turn this into a pre-dispatch timeout test.
+        await self.client.complete(self.payload())
+        before = len(self.requests)
+        self.client.settings = replace(self.client.settings, timeout_seconds=0.3)
         self.mode = "streaming-slow"
         started = time.monotonic()
         with self.assertRaises(TimeoutError):
-            await self.client.complete({"model": "synthetic", "input": []})
-        self.assertLess(time.monotonic() - started, 0.8)
-        self.assertEqual(len(self.requests), 1)
+            await self.client.complete(self.payload())
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(len(self.requests), before + 1)
 
     async def asyncSetUp(self):
         self.mode, self.requests, self.headers = "sse", [], []
@@ -52,12 +64,28 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
-        self.client = GatewayClient(ModelSettings(gateway_url=f"http://127.0.0.1:{port}/v1"), "private-key")
+        self.area = tempfile.TemporaryDirectory()
+        self.root = Path(self.area.name)
+        (self.root / ".env").write_text("TEST_KEY=private-key\n")
+        raw = settings(
+            providers={
+                "test": {
+                    "protocol": "openai_responses",
+                    "base_url": f"http://127.0.0.1:{port}/v1",
+                    "key_env": "TEST_KEY",
+                    "enabled": True,
+                }
+            }
+        )
+        self.client = ModelClient(
+            ModelSettings.parse(raw), accounts=NativeAccounts(self.root, ModelSettings.parse(raw))
+        )
         await self.client.start()
 
     async def asyncTearDown(self):
         await self.client.close()
         await self.runner.cleanup()
+        self.area.cleanup()
 
     async def handle(self, request):
         self.requests.append(await request.json())
@@ -103,31 +131,38 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
                 await response.write(raw[i : i + 3])
             await response.write_eof()
             return response
-        events = [{"type": "response.output_text.delta", "delta": "合成结果"}]
-        if self.mode == "incomplete":
-            events.append({"type": "response.incomplete"})
-        elif self.mode != "truncated":
-            events.append({"type": "response.completed", "response": result})
+        events = sse_text_reply("upstream-id", "合" * 30000 if self.mode == "large-sse" else "合成结果")
+        if self.mode == "tool":
+            events = sse_tool_call("call", "shell", {})
+        elif self.mode in {"truncated", "incomplete"}:
+            events = events[:-1]
         body = b"".join(b"event: message\ndata: " + json.dumps(e).encode() + b"\n\n" for e in events)
         return web.Response(body=body, content_type="text/event-stream")
 
     async def test_sse_completion_and_chunked_json(self):
-        for mode in ("sse", "json"):
+        for mode in ("sse",):
             self.mode = mode
-            result = await self.client.complete({"model": "test", "store": False, "input": "synthetic"})
+            result = await self.client.complete(self.payload())
             self.assertEqual(result["text"], "合成结果")
-            self.assertEqual(result["provider_request_id"], "upstream-id")
+            self.assertEqual(result["provider_request_id"], "resp_upstream-id")
         self.assertTrue(all(r["stream"] and not r["store"] for r in self.requests))
         self.assertTrue((await self.client.health())["reachable"])
+        self.mode = "json"
+        before = len(self.requests)
+        # A provider ignoring the requested streaming protocol is not a confirmed
+        # completion. The adapter must reject it without retrying another request.
+        with self.assertRaises(RuntimeError):
+            await self.client.complete(self.payload())
+        self.assertEqual(len(self.requests), before + 1)
 
     async def test_session_identity_is_a_header_not_model_content(self):
-        await self.client.complete({"model": "test", "input": "synthetic"}, session_id="bound-session")
-        self.assertEqual(self.headers[-1]["x-assistant-session"], "bound-session")
-        self.assertNotIn("bound-session", json.dumps(self.requests[-1]))
+        await self.client.complete(self.payload(), session_id="bound-session")
+        self.assertEqual(self.requests[-1]["prompt_cache_key"], "bound-session")
+        self.assertNotIn("bound-session", json.dumps(self.requests[-1]["input"]))
 
     async def test_large_completion_event_within_response_budget(self):
         self.mode = "large-sse"
-        result = await self.client.complete({"model": "test", "input": "synthetic"})
+        result = await self.client.complete(self.payload())
         self.assertEqual(result["text"], "合" * 30000)
         self.assertEqual(len(self.requests), 1)
 
@@ -137,30 +172,33 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             ("http-401", "model_http_401"),
             ("http-403", "model_http_403"),
             ("http-500", "model_http_500"),
-            ("redirect", "model_http_307"),
-            ("truncated", "without confirmed"),
-            ("incomplete", "failed or incomplete"),
-            ("tool", "cannot request"),
-            ("oversized", "too large"),
+            ("redirect", "unknown"),
+            ("truncated", "unknown"),
+            ("incomplete", "unknown"),
+            ("tool", "complete text"),
+            ("oversized", "unknown"),
         ):
             self.mode = mode
             before = len(self.requests)
             with self.subTest(mode=mode), self.assertRaisesRegex((RuntimeError, ValueError), expected):
-                await self.client.complete({"model": "test"})
+                await self.client.complete(self.payload())
             self.assertEqual(len(self.requests), before + 1)
 
     async def test_deadline_closes_slow_request_and_reuses_healthy_client(self):
         self.mode = "slow"
         try:
+            job = asyncio.create_task(self.client.complete(self.payload()))
+            async with asyncio.timeout(5):
+                while not self.requests:
+                    await asyncio.sleep(0.01)
             with self.assertRaises(TimeoutError):
-                async with asyncio.timeout(0.05):
-                    await self.client.complete({"model": "test"})
+                await asyncio.wait_for(job, 0.05)
             self.assertEqual(len(self.requests), 1)
             self.assertTrue((await self.client.health())["reachable"])
         finally:
             self.gate.set()
-        self.mode = "json"
-        self.assertEqual((await self.client.complete({"model": "test"}))["text"], "合成结果")
+        self.mode = "sse"
+        self.assertEqual((await self.client.complete(self.payload()))["text"], "合成结果")
 
     async def test_real_http_overload_is_bounded_and_management_stays_responsive(self):
         self.mode = "slow"
@@ -173,9 +211,8 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
                 runtime=runtime,
             )
             # A separate pooled client is owned by the real plugin runtime.
-            client = GatewayClient(
-                ModelSettings(gateway_url=self.client.settings.gateway_url, concurrency=2), "private-key"
-            )
+            limited = replace(self.client.settings, concurrency=2)
+            client = ModelClient(limited, accounts=NativeAccounts(self.root, limited))
             attach_usage(host, runtime)
             plugin = ModelsPlugin(host, client)
             runtime.add(plugin)
@@ -189,7 +226,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
 
             jobs = [asyncio.create_task(runtime.invoke(request())) for _ in range(4)]
             try:
-                async with asyncio.timeout(2):
+                async with asyncio.timeout(8):
                     while self.inflight != 2 or plugin.pending != 4:
                         await asyncio.sleep(0.005)
                 with self.assertRaisesRegex(RuntimeError, "queue full"):

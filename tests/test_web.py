@@ -3,7 +3,6 @@
 import asyncio
 from dataclasses import replace
 import io
-import hashlib
 from pathlib import Path
 import socket
 import tempfile
@@ -315,31 +314,25 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             r = await self.client.post(self.base + "/api/" + route, json=[])
             self.assertEqual(r.status, 400)
 
-    async def test_explicitly_approved_existing_password_survives_reload_without_general_bypass(self):
+    async def test_six_character_password_survives_reload_and_rotation(self):
         path = self.host.config.state_dir / "web-access-token"
-        self.token = "fixture8"
+        self.token = "123456"
         path.write_text(self.token + "\n")
-        approval = hashlib.sha256(self.token.encode()).hexdigest()
         await self.plugin.close()
-        self.host.config = replace(
-            self.host.config, web={**self.host.config.web, "approved_short_password_sha256": approval}
-        )
         self.plugin = WebPlugin(context_for(self.host, "web"))
         await self.plugin.start(self.context)
-        r = await self.client.post(self.base + "/api/login", json={"token": "wrong123"})
-        self.assertEqual(r.status, 401)
-        r = await self.client.get(self.base + "/api/messages")
-        self.assertEqual(r.status, 401)
         await self.login()
-        self.plugin.auth = Access(path, self.host.store.db, approved_short_password_sha256=approval)
-        r = await self.client.get(self.base + "/api/messages")
-        self.assertEqual(r.status, 200)
-        self.assertEqual(path.read_text(), self.token + "\n")
-        with self.assertRaisesRegex(ValueError, "at least 24"):
-            Access(path, self.host.store.db)
-        path.write_text("other123\n")
-        with self.assertRaisesRegex(ValueError, "at least 24"):
-            Access(path, self.host.store.db, approved_short_password_sha256=approval)
+        old_session = self.plugin.auth.login(self.token, "test")
+        path.write_text("abcdef\n")
+        self.plugin.auth = Access(path, self.host.store.db)
+        self.assertFalse(self.plugin.auth.valid(old_session))
+        with self.assertRaises(PermissionError):
+            self.plugin.auth.login(self.token, "old")
+        self.assertTrue(self.plugin.auth.valid(self.plugin.auth.login("abcdef", "new")))
+        for token in ("12345", "五个中文字"):
+            path.write_text(token + "\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                Access(path, self.host.store.db)
 
     async def test_wrong_password_attempts_remain_rate_limited(self):
         for _ in range(10):
@@ -490,8 +483,6 @@ class WebSettingsTest(unittest.TestCase):
             {"host": "external.example"},
             {"enable": "false"},
             {"extra": 1},
-            {"approved_short_password_sha256": "invalid"},
-            {"approved_short_password_sha256": True},
         ):
             with self.assertRaises(ValueError):
                 WebSettings.parse(value)

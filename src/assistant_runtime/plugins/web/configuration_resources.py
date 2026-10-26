@@ -26,10 +26,10 @@ def prepare_defaults(value, cleared, writable, settings, selected):
 
 
 def validate_candidate(settings, selected, token):
-    if selected and settings.get("enable", True) and token is not None and len(token.strip()) < 24:
-        import hashlib
-        import hmac
+    from assistant_runtime.api.passwords import validate_password
 
-        fingerprint = settings.get("approved_short_password_sha256", "")
-        if not hmac.compare_digest(hashlib.sha256(token.strip()).hexdigest(), fingerprint):
-            raise ConfigurationError(["web", "token_file"], "credential", "短访问口令尚未明确批准")
+    if selected and settings.get("enable", True) and token is not None:
+        try:
+            validate_password(token.decode("utf-8").rstrip("\r\n"))
+        except ValueError as exc:
+            raise ConfigurationError(["web", "token_file"], "credential", str(exc)) from exc
