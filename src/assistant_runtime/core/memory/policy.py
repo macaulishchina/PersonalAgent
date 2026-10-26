@@ -59,7 +59,10 @@ def validate_facts(response, sources):
         quote = item.get("evidence", "")
         if not source or not isinstance(quote, str) or not quote.strip() or quote not in source["text"]:
             raise ValueError("Memory fact lacks exact user source evidence")
-        provenance[item.get("fact")] = {"id": source["id"], "time": source["time"], "evidence": quote}
+        provenance[item.get("fact")] = {
+            **{k: v for k, v in source.items() if k not in {"role", "text"}},
+            "evidence": quote,
+        }
     for fact in facts:
         if not isinstance(fact, str) or not fact.strip() or len(fact) > 4000 or fact not in provenance:
             raise ValueError("Memory fact lacks bounded text and source evidence")

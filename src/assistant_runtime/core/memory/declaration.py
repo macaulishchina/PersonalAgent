@@ -16,7 +16,12 @@ def build(host):
             lambda messages, schema: complete(host, messages, schema),
             host.config.workspace,
         ),
-        lambda: bool(host.assistant and host.assistant.active) or host.backend.busy,
+        lambda: bool(host.assistant and host.assistant.active)
+        or host.backend.busy
+        or bool(
+            getattr(host, "conversations", None)
+            and any(chat.backend.busy or chat.queue() for chat in host.conversations.opened.values())
+        ),
     )
 
 

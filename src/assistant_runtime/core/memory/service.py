@@ -8,6 +8,7 @@ import uuid
 
 from assistant_runtime.api.contracts import MemoryRequest
 from assistant_runtime.api.ai_usage import UsageScope, current_usage
+from assistant_runtime.api.conversation import current_conversation
 
 
 class MemoryPlugin:
@@ -33,10 +34,22 @@ class MemoryPlugin:
         context.spawn(self.run(), "memory-worker")
 
     async def prepare_configuration(self, config):
-        from assistant_runtime.core.configuration.updates import attributes
+        from assistant_runtime.api.configuration import ConfigurationUpdate
 
         # Captures already accepted keep their work identity; policy applies to new captures.
-        return attributes([(self, "config", config)])
+        previous = self.config
+        cutoff = self.store.get("memory.chat_start", 0)
+
+        async def commit():
+            if previous.memory_auto_capture != config.memory_auto_capture:
+                self.store.set("memory.chat_start", self.store.transcripts.chat_position())
+            self.config = config
+
+        async def rollback():
+            self.config = previous
+            self.store.set("memory.chat_start", cutoff)
+
+        return ConfigurationUpdate(commit, rollback)
 
     def maintenance_pause(self):
         self.draining = True
@@ -93,7 +106,7 @@ class MemoryPlugin:
                 record.setdefault("scope", "user")
                 record["source"] = {
                     "kind": "explicit",
-                    "session": self.store.get("session_id"),
+                    "session": current_conversation.get() or self.store.get("session_id"),
                     "transcript_id": self.store.transcripts.last_id(),
                     "time": time.time(),
                 }
@@ -111,6 +124,7 @@ class MemoryPlugin:
         # from later input, but forgetting cannot resurrect it from an old source range.
         self.store.set("memory.epoch", self.store.get("memory.epoch", 0) + 1)
         self.store.set("memory.cursor", self.store.transcripts.last_id())
+        self.store.set("memory.chat_start", self.store.transcripts.chat_position())
 
     async def _save(self, record, epoch, imported=False):
         if epoch != self.store.get("memory.epoch", 0):
@@ -203,7 +217,7 @@ class MemoryPlugin:
                     await self.provider.capture(
                         sources,
                         scope,
-                        getattr(self.config, "workspace", ""),
+                        sources[0].get("workspace", getattr(self.config, "workspace", "")),
                         f"{epoch}:{start}:{end}:{scope}",
                     )
                     if sources
@@ -237,6 +251,9 @@ class MemoryPlugin:
                 continue
             self.maintenance_busy = True
             try:
+                self.records.collect_conversations(
+                    self.config.memory_auto_capture, getattr(self.config, "workspace", "")
+                )
                 if not self.ready:
                     await self.provider.start()
                     await self.refresh()

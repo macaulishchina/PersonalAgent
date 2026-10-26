@@ -23,6 +23,12 @@ by `execution.queue_size`; native dispatch shares execution admission and AI usa
 with direct execution and tasks. Supplement/answer/cancel validate the current request;
 answers additionally validate the question identity. Explicit inputs remain in history.
 
+`transcripts.completed_inputs()` exposes bounded user evidence from completed queued
+turns across all sessions, including explicit supplements/answers. Memory owns capture
+policy and jobs; conversation owns source identity and history. Copied transcript evidence
+has a unique message ID and session/request/turn/entrance provenance. Assistant and task
+reports, cancelled inputs and uncertain executions are excluded. See [memory](../memory/README.md).
+
 Web stays bound to `web`; CLI bindings use `cli:<operator>`. A client's live selection
 is local to that client. Model sessions are adapter-owned views of one shared Pi client,
 with separate locks, callbacks, context, questions and MCP refresh state. Pi owns context

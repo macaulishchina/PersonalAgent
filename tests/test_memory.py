@@ -185,8 +185,7 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.store.transcripts.append("assistant", "我喜欢乌龙茶，不加糖。")
         self.plugin.enqueue()
         job = self.store.db.execute("SELECT id,start_id,end_id,epoch FROM memory_jobs").fetchone()
-        self.curator.return_value = [self.candidate()]
-        await self.plugin.process_job(job)
+        self.assertIsNone(job)
         self.curator.assert_not_awaited()
         self.assertEqual(await self.provider.export(), [])
 
