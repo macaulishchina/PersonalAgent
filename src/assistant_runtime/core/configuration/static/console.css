@@ -2326,3 +2326,52 @@ dialog.wide-dialog {
   margin: 0;
   color: inherit;
 }
+
+.memory-debug {
+  margin-top: 24px;
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, white);
+}
+.memory-debug > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.memory-debug-body {
+  padding-top: 14px;
+}
+.memory-debug-toolbar {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 150px auto auto;
+  align-items: center;
+  gap: 12px;
+}
+.memory-debug-toolbar input,
+.memory-debug-toolbar select {
+  width: 100%;
+  min-width: 0;
+}
+.memory-debug-record {
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+.memory-debug-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.memory-debug-record p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.memory-debug-record pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: var(--bg, #f5f7f3);
+  border-radius: 6px;
+}

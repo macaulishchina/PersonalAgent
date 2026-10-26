@@ -4,6 +4,16 @@ Memory uses upstream Mem0, local FastEmbed and the configured `model_api.memory`
 The plugin owns jobs, capture policy, revision/tombstone metadata and a ready recall snapshot.
 Conversation owns transcript evidence. There is no separate extraction agent or vector store.
 
+## Operator debugging
+
+The configuration page's collapsed memory debug panel lists the latest 20 saved records,
+or matches a keyword literally in their title/text (case-insensitive). It uses the memory
+owner's ready snapshot through the authenticated read-only `query` configuration action.
+Scope filtering excludes other workspaces and tombstones. Results include ID, revision,
+time and source evidence; browsing does not call models, change configuration or extract
+new memories. The snapshot is refreshed after successful memory writes/capture. Unready
+memory reports an explicit diagnostic rather than an empty successful result.
+
 ## Automatic capture
 
 - Initialize a persisted chat cutoff once at installation/first enable; do not backfill old

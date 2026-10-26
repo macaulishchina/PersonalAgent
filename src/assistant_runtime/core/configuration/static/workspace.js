@@ -703,6 +703,122 @@ function renderSettingsPage() {
     if (panel.querySelector("select")) $("documents").append(panel);
   }
   drawResources();
+  if (selected === "resources" || selected === "plugin:memory")
+    drawMemoryDebug($("documents"), enabled.includes("memory"));
+}
+function drawMemoryDebug(parent, enabled) {
+  const box = node("details", undefined, "memory-debug card"),
+    summary = node("summary", "调试 · 查询已保存记忆"),
+    body = node("div", undefined, "memory-debug-body"),
+    form = node("form", undefined, "memory-debug-toolbar"),
+    query = node("input"),
+    scope = node("select"),
+    status = node("p", "", "hint"),
+    results = node("div", undefined, "memory-debug-results");
+  query.type = "search";
+  query.maxLength = 200;
+  query.placeholder = "关键词，匹配标题或正文";
+  query.setAttribute("aria-label", "记忆关键词");
+  scope.setAttribute("aria-label", "记忆范围");
+  for (const [value, title] of [
+    ["all", "全部范围"],
+    ["user", "个人记忆"],
+    ["project", "当前项目"],
+  ]) {
+    const option = node("option", title);
+    option.value = value;
+    scope.append(option);
+  }
+  const submit = node("button", "查询", "primary"),
+    recent = button("最近保存", () => {
+      query.value = "";
+      load();
+    });
+  recent.type = "button";
+  form.append(query, scope, submit, recent);
+  status.setAttribute("role", "status");
+  body.append(
+    node(
+      "p",
+      "只读调试：留空查看最近 20 条；关键词按标题和正文匹配，不触发模型调用。",
+      "hint",
+    ),
+    form,
+    status,
+    results,
+  );
+  box.append(summary, body);
+  parent.append(box);
+  let loaded = false;
+  async function load() {
+    if (submit.disabled) return;
+    loaded = true;
+    submit.disabled = recent.disabled = true;
+    query.disabled = scope.disabled = true;
+    status.textContent = "查询中…";
+    results.replaceChildren();
+    try {
+      const reply = await api("/api/configuration-action", {
+        owner: "memory",
+        action: "query",
+        arguments: { query: query.value, scope: scope.value, limit: 20 },
+      });
+      status.textContent = reply.total
+        ? `共 ${reply.total} 条，显示最近 ${reply.records.length} 条`
+        : query.value.trim()
+          ? "没有匹配的记忆。"
+          : "尚无已保存的记忆。";
+      for (const record of reply.records) {
+        const item = node("article", undefined, "memory-debug-record"),
+          heading = node("div", undefined, "memory-debug-heading"),
+          date = new Date(record.updated * 1000),
+          detail = node("details"),
+          metadata = {
+            id: record.id,
+            revision: record.revision,
+            project: record.project,
+            source: record.source,
+          };
+        heading.append(
+          node("strong", record.title || "未命名记忆"),
+          node("span", record.scope === "project" ? "项目" : "个人", "tag"),
+        );
+        item.append(
+          heading,
+          node("p", record.text),
+          node(
+            "p",
+            Number.isNaN(date.getTime())
+              ? "保存时间未知"
+              : date.toLocaleString(),
+            "hint",
+          ),
+        );
+        detail.append(
+          node("summary", "ID 与来源"),
+          node("pre", JSON.stringify(metadata, null, 2)),
+        );
+        item.append(detail);
+        results.append(item);
+      }
+    } catch (error) {
+      status.textContent = "查询失败：" + error.message;
+    } finally {
+      submit.disabled = recent.disabled = false;
+      query.disabled = scope.disabled = false;
+    }
+  }
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    load();
+  });
+  if (!enabled) {
+    status.textContent = "记忆插件未启用，请先启用并应用配置。";
+    submit.disabled = recent.disabled = query.disabled = scope.disabled = true;
+  }
+  box.addEventListener("toggle", () => {
+    if (box.open && enabled && !loaded) load();
+  });
 }
 function renderPlugins() {
   const release = inventory.core_release;

@@ -86,6 +86,57 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
     async def call(self, action, **kw):
         return await self.plugin.handle(MemoryRequest(action, kw))
 
+    async def test_debug_query_recent_keyword_scope_and_no_inference(self):
+        from assistant_runtime.app.configuration_updates import ConfigurationRuntime
+
+        self.plugin.config.workspace = "project"
+        self.plugin.ready = True
+        for ident, text, scope, project, updated in (
+            ("tea", "I prefer oolong tea", "user", "", 1),
+            ("python", "Use PYTHON", "project", "project", 2),
+            ("other", "Use PYTHON elsewhere", "project", "other-project", 3),
+            ("deleted", "Deleted preference", "user", "", 4),
+        ):
+            self.plugin.cache.append(
+                dict(
+                    id=ident,
+                    title=ident,
+                    text=text,
+                    scope=scope,
+                    project=project,
+                    updated=updated,
+                    source={"session_id": "session"},
+                )
+            )
+        self.store.db.execute("INSERT INTO memory_items VALUES('deleted',1,1,0,0)")
+        self.store.db.commit()
+        runtime = ConfigurationRuntime(
+            SimpleNamespace(runtime=SimpleNamespace(plugins={"memory": self.plugin}))
+        )
+        result = await runtime.action("memory", "query", {"limit": 1})
+        self.assertEqual(result["total"], 2)
+        self.assertEqual([r["id"] for r in result["records"]], ["python"])
+        result = await runtime.action("memory", "query", {"query": " python ", "scope": "project"})
+        self.assertEqual([r["id"] for r in result["records"]], ["python"])
+        self.assertEqual(result["records"][0]["source"]["session_id"], "session")
+        self.assertEqual((await runtime.action("memory", "query", {"query": "missing"}))["total"], 0)
+        self.curator.assert_not_awaited()
+        self.assertEqual(self.provider.capture_calls, 0)
+
+    async def test_debug_query_not_ready_and_invalid_parameters_are_rejected(self):
+        from assistant_runtime.app.configuration_updates import ConfigurationRuntime
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        runtime = ConfigurationRuntime(
+            SimpleNamespace(runtime=SimpleNamespace(plugins={"memory": self.plugin}))
+        )
+        with self.assertRaisesRegex(ConfigurationError, "记忆尚未就绪"):
+            await runtime.action("memory", "query", {})
+        self.plugin.ready = True
+        for arguments in ({"limit": 51}, {"query": "x" * 201}, {"scope": "other"}):
+            with self.assertRaises(ConfigurationError):
+                await runtime.action("memory", "query", arguments)
+
     def batch(self, text="我喜欢乌龙茶，不加糖。"):
         self.store.transcripts.append("user", text)
         self.plugin.enqueue()

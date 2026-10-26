@@ -51,6 +51,25 @@ class MemoryPlugin:
 
         return ConfigurationUpdate(commit, rollback)
 
+    async def configuration_action(self, action, arguments):
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        if action != "query":
+            raise ValueError("Unknown memory management action")
+        if not self.ready:
+            raise ConfigurationError(["memory"], "unavailable", "记忆尚未就绪，请查看插件运行诊断")
+        query = arguments["query"].strip().casefold()
+        scope = arguments["scope"]
+        records = [
+            r
+            for r in self.cache
+            if self.visible(r)
+            and (scope == "all" or r["scope"] == scope)
+            and (not query or query in (r.get("title", "") + "\n" + r["text"]).casefold())
+        ]
+        records.sort(key=lambda r: (r.get("updated", 0), r["id"]), reverse=True)
+        return {"records": records[: arguments["limit"]], "total": len(records)}
+
     def maintenance_pause(self):
         self.draining = True
 

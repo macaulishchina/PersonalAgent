@@ -25,5 +25,53 @@
     "*": "boundary",
     "memory_enabled": "restart"
   },
-  "requires": []
+  "requires": [],
+  "interface": {
+    "actions": {
+      "query": {
+        "title": "查询已保存记忆",
+        "read_only": true,
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "type": "string",
+              "maxLength": 200,
+              "default": ""
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["all", "user", "project"],
+              "default": "all"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["records", "total"],
+          "properties": {
+            "records": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object"
+              }
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
 }
