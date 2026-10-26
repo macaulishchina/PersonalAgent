@@ -305,9 +305,21 @@ class MigrationTest(unittest.TestCase):
             try:
                 chat = ConversationStore(store)
                 chat.put("old-message", "old-session", text="preserved", status="complete")
+                store.db.execute(
+                    "CREATE TABLE chat_result_receipts (id TEXT PRIMARY KEY, session TEXT NOT NULL, "
+                    "state TEXT NOT NULL, message_id TEXT NOT NULL)"
+                )
+                store.db.execute(
+                    "INSERT INTO chat_result_receipts VALUES('receipt','report-session','delivered','report')"
+                )
                 store.set("session_id", "old-session")
                 sessions = Sessions(store)
                 self.assertEqual(sessions.bound("web"), "old-session")
+                self.assertEqual(sessions.get("report-session")["id"], "report-session")
+                self.assertEqual(
+                    store.db.execute("SELECT state FROM chat_result_receipts WHERE id='receipt'").fetchone(),
+                    ("delivered",),
+                )
                 self.assertEqual(Sessions(store).get("old-session")["id"], "old-session")
                 self.assertEqual(len(list(Path(folder).glob("conversation-before-migration-*.sqlite3"))), 1)
                 self.assertEqual(chat.get("old-message")["text"], "preserved")

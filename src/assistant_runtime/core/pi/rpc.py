@@ -825,7 +825,14 @@ class PiClient:
             raise ValueError("Unsupported execution reasoning effort")
 
     def _write_configuration(self, meta, instructions=None):
-        folder = Path(meta["agent_dir"])
+        previous = Path(meta["agent_dir"])
+        # Pi migrates JSONL files found directly in its agent configuration directory.
+        # Keep generated configuration separate from the explicitly owned session file.
+        folder = self.runtime_dir / meta["id"] / "agent"
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if previous != folder and instructions is None and (previous / "SYSTEM.md").is_file():
+            instructions = (previous / "SYSTEM.md").read_text(encoding="utf-8")
+        meta["agent_dir"] = str(folder)
         meta["mcp_enabled"] = any(spec.get("enabled", True) for spec in meta["mcp_servers"].values())
         meta["policy"] = {
             "allowed_tools": meta.get("allowed_tools"),

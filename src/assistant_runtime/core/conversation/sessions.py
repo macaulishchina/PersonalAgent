@@ -18,9 +18,9 @@ class Sessions:
         old = set()
         if "chat_messages" in tables:
             old.update(r[0] for r in self.db.execute("SELECT DISTINCT session_id FROM chat_messages"))
-        for table in ("chat_requests", "chat_result_receipts"):
+        for table, column in (("chat_requests", "session_id"), ("chat_result_receipts", "session")):
             if table in tables:
-                old.update(r[0] for r in self.db.execute(f"SELECT DISTINCT session_id FROM {table}"))
+                old.update(r[0] for r in self.db.execute(f"SELECT DISTINCT {column} FROM {table}"))
         if "job_result_claims" in tables:
             for (raw,) in self.db.execute("SELECT context FROM job_result_claims"):
                 context = json.loads(raw)

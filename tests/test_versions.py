@@ -261,7 +261,9 @@ class VersionTest(unittest.TestCase):
         release_state.attempted(self.root, {"web": "1.0.0"})
         release_state.successful(self.root, {"web": "1.0.0"})
         previous = release_state.read(self.root)["last_successful"]
-        newer = {**framework(), "version": "0.3.1"}
+        current = framework()
+        major, minor, patch_number = map(int, current["version"].split("."))
+        newer = {**current, "version": f"{major}.{minor}.{patch_number + 1}"}
         with patch("assistant_runtime.app.release_state.framework", return_value=newer):
             release_state.attempted(self.root)
         self.assertEqual(release_state.read(self.root)["last_successful"], previous)
