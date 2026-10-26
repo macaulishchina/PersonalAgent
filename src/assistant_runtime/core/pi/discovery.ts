@@ -1,10 +1,154 @@
-/** Bound the native Pi loadout; ranking/discovery stays in Pi's tool_search. */
+/** Exact identity lookup around Pi's native metadata search and bounded loadout. */
+import { createToolSearchExtension } from "@earendil-works/pi-coding-agent";
+
+function nativeSearch(pi: any) {
+  let definition: any;
+  createToolSearchExtension()({
+    ...pi,
+    registerTool: (tool: any) => {
+      definition = tool;
+    },
+  });
+  return definition;
+}
+
+function exactMatches(query: string, tools: any[]) {
+  const shortName = (tool: any) =>
+    tool.name.startsWith("mcp__")
+      ? tool.name.slice(5).split("__").slice(1).join("__")
+      : tool.name;
+  const namespaces = (tool: any) => [
+    tool.name.startsWith("mcp__")
+      ? tool.name.slice(5).split("__")[0]
+      : undefined,
+    tool.namespace?.name,
+    ...(tool.namespace?.aliases || []),
+  ];
+  const qualifiedName = query
+    .trim()
+    .match(/^([A-Za-z][A-Za-z0-9_-]*)[.:/]([A-Za-z][A-Za-z0-9_-]+)$/);
+  if (qualifiedName)
+    return {
+      explicit: true,
+      tools: tools.filter(
+        (tool) =>
+          shortName(tool) === qualifiedName[2] &&
+          namespaces(tool).includes(qualifiedName[1]),
+      ),
+    };
+  const words = new Set(query.match(/[A-Za-z0-9_-]+/g) || []);
+  const full = [...words].filter((word) => word.startsWith("mcp__"));
+  if (full.length)
+    return {
+      explicit: true,
+      tools: tools.filter((tool) => words.has(tool.name)),
+    };
+  const matches = tools.filter((tool) => {
+    const short = shortName(tool);
+    return words.has(short) && (short.includes("_") || query.trim() === short);
+  });
+  // A namespace qualifies a short name when multiple servers export it.
+  const qualified = matches.filter((tool) =>
+    namespaces(tool).some((name) => words.has(name)),
+  );
+  return {
+    explicit: matches.length > 0,
+    tools: qualified.length ? qualified : matches,
+  };
+}
+
 export function registerDiscovery(
   pi: any,
   allowed: string[] | undefined,
   enabled: boolean,
   limit: number,
 ) {
+  const searchable = () =>
+    pi
+      .getAllTools()
+      .filter(
+        (tool: any) =>
+          ["deferred", "codemode"].includes(tool.exposure) &&
+          (!Array.isArray(allowed) || allowed.includes(tool.name)),
+      );
+  const native = nativeSearch({ ...pi, getAllTools: searchable });
+  const report = (ctx: any, mode: string, names: string[]) =>
+    ctx.ui.notify(
+      "__assistant_discovery__:" + JSON.stringify({ mode, tools: names }),
+      "info",
+    );
+  pi.registerTool({
+    ...native,
+    description:
+      native.description +
+      "\nWhen a tool name is known, query its exact full name (mcp__server__tool) or qualified name (server.tool_name). Exact names take priority, including already loaded tools. A short name shared by multiple servers requires qualification. Loading never executes an operation.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(id: string, input: any, signal: any, update: any, ctx: any) {
+      if (!enabled)
+        throw new Error(
+          "Tool discovery is unavailable in this execution scope",
+        );
+      const count = input.limit ?? 8;
+      if (!Number.isInteger(count) || count < 1 || count > limit)
+        throw new Error(`Search limit must be between 1 and ${limit}`);
+      if (signal?.aborted) throw new Error("Tool discovery cancelled");
+      const exact = exactMatches(input.query, searchable());
+      if (!exact.explicit) {
+        const result = await native.execute(id, input, signal, update, ctx);
+        report(ctx, "metadata", result.details?.loaded || []);
+        return result;
+      }
+      const names = exact.tools.map((tool: any) => tool.name);
+      const full = input.query.trim().startsWith("mcp__");
+      if (names.length > 1 && !full) {
+        report(ctx, "ambiguous", names.slice(0, count));
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "Tool name is ambiguous. Search an exact full name:\n" +
+                names.slice(0, count).join("\n"),
+            },
+          ],
+          details: {
+            loaded: [],
+            discovery: "ambiguous",
+            candidates: names.slice(0, count),
+          },
+        };
+      }
+      if (names.length > count)
+        throw new Error("Too many exact tools; use a focused query");
+      pi.setActiveTools([...pi.getActiveTools(), ...names]);
+      report(ctx, names.length ? "exact" : "unavailable", names);
+      return {
+        content: [
+          {
+            type: "text",
+            text: names.length
+              ? "Tools are loaded and available from your next call:\n" +
+                exact.tools
+                  .map(
+                    (tool: any) =>
+                      `- ${tool.name}: ${tool.description.trim().split(/\r?\n/)[0]}`,
+                  )
+                  .join("\n")
+              : "No available tool matches this exact name in the current execution scope. Nothing was executed.",
+          },
+        ],
+        details: {
+          loaded: names,
+          discovery: names.length ? "exact" : "unavailable",
+        },
+      };
+    },
+  });
   let tick = 0;
   const used = new Map<string, number>();
   const base = () =>
@@ -17,12 +161,80 @@ export function registerDiscovery(
     pi.setActiveTools([...base(), ...(enabled ? ["tool_search"] : [])]);
   };
   pi.on("session_start", reset);
-  pi.on("before_agent_start", reset);
+  pi.on("before_agent_start", () => {
+    // Reuse a bounded warm loadout in this live session, but drop removed or
+    // newly hidden identities before the model sees them. Resume starts cold.
+    const available = new Set(searchable().map((tool: any) => tool.name));
+    const warm = enabled
+      ? pi
+          .getActiveTools()
+          .filter(
+            (name: string) => name.startsWith("mcp__") && available.has(name),
+          )
+      : [];
+    pi.setActiveTools([
+      ...base(),
+      ...(enabled ? ["tool_search"] : []),
+      ...warm,
+    ]);
+  });
   pi.on("tool_result", async (event: any) => {
     if (event.toolName === "tool_search") {
       for (const name of event.details?.loaded || []) used.set(name, ++tick);
     } else if (event.toolName.startsWith("mcp__"))
       used.set(event.toolName, ++tick);
+  });
+  pi.on("message_end", async (event: any, ctx: any) => {
+    // A deferred direct call was rejected before execution. Load only that known,
+    // permitted identity; never execute/replay the business operation here.
+    const message = event.message;
+    if (
+      !enabled ||
+      message.role !== "toolResult" ||
+      !message.isError ||
+      message.durationMs !== undefined ||
+      !message.toolName?.startsWith("mcp__") ||
+      pi.getActiveTools().includes(message.toolName) ||
+      message.content?.length !== 1 ||
+      message.content[0]?.type !== "text" ||
+      message.content[0].text !== `Tool ${message.toolName} not found`
+    )
+      return;
+    const loaded = searchable().some(
+      (tool: any) => tool.name === message.toolName,
+    );
+    if (loaded) {
+      pi.setActiveTools([...pi.getActiveTools(), message.toolName]);
+      used.set(message.toolName, ++tick);
+    }
+    report(
+      ctx,
+      loaded ? "load_after_not_found" : "unavailable",
+      loaded ? [message.toolName] : [],
+    );
+    return {
+      message: {
+        ...message,
+        content: [
+          {
+            type: "text",
+            text:
+              `Tool ${message.toolName} was not found in the active loadout, so this call did not execute. ` +
+              (loaded
+                ? "It is now loaded for your next call. "
+                : `Use tool_search with query="${message.toolName}" to wait for discovery and check availability in this scope. `) +
+              "Submit the intended call once after loading, preserving its request ID if present; do not repeat any other completed or unknown operation.",
+          },
+        ],
+        details: {
+          ...message.details,
+          discovery: loaded
+            ? "loaded_not_executed"
+            : "unavailable_not_executed",
+          loaded: loaded ? [message.toolName] : [],
+        },
+      },
+    };
   });
   // Runs after the preceding tool batch settles, before the next model call.
   // Never deactivate tools while parallel business operations are in flight.

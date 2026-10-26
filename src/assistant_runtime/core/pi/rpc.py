@@ -162,7 +162,8 @@ class PiSessionWorker:
         ]
         # -ne disables built-ins too. Retain the pinned engine's capabilities
         # explicitly without discovering project or user-installed extensions.
-        for extension in ("mcp", "tool-search", "codemode", "llama.cpp"):
+        # Discovery composes Pi's public tool-search factory in our extension.
+        for extension in ("mcp", "codemode", "llama.cpp"):
             args.extend(["-e", "builtin:" + extension])
         for selected_path in self.meta.get("skill_paths", self.parent.skill_paths):
             path = Path(selected_path)
@@ -246,6 +247,14 @@ class PiSessionWorker:
             method = msg.get("method")
             if method == "notify":
                 text = str(msg.get("message", ""))
+                if text.startswith("__assistant_discovery__:"):
+                    discovery = json.loads(text.split(":", 1)[1])
+                    log.info(
+                        "Pi tool discovery session=%s mode=%s tools=%s",
+                        self.execution_session_id,
+                        discovery["mode"],
+                        discovery["tools"],
+                    )
                 if text.startswith("__assistant_tools__:"):
                     state = json.loads(text.split(":", 1)[1])
                     log.info(

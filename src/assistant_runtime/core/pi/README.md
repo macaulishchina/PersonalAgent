@@ -37,7 +37,8 @@ Skill selection belongs to the composition root: enabled plugins contribute thei
 packaged operational skills; private `config/skills/<name>/SKILL.md` entries require
 `instance_skills = ["name"]`. The adapter receives explicit paths, shared by main
 and task sessions. Pi runs with `-na -np -ns -nc -ne` and an explicit extension,
-and explicitly retained native MCP/tool-search/codemode/llama.cpp extensions,
+and explicitly retained native MCP/codemode/llama.cpp extensions plus the public
+native tool-search factory composed by the adapter,
 so Coding AI `.agents/`, project `AGENTS.md`/`CLAUDE.md`, local prompts and extensions
 are not discovered. Instance skill selection is optional, restart-only and validated;
 missing files and bundled-name collisions fail startup rather than silently losing
@@ -113,17 +114,22 @@ The response indicator continues to follow execution state while no text is avai
 
 All entrances (foreground, background jobs, public execution/slim) use this adapter's
 MCP mapping: allowed tools have native Pi `deferred` exposure, disabled/disallowed tools
-remain `hidden`. The built-in Pi `tool_search` performs metadata ranking, connects the
-needed MCP servers, and activates matches; there is no separate discovery service,
-model router or agent loop. Native search uses English metadata terms; queries should
-use meaningful server/tool keywords and can be refined when the first matches miss.
+remain `hidden`. The adapter composes Pi's public `createToolSearchExtension` factory
+as the single `tool_search` registration. Pi still owns metadata ranking, MCP readiness
+and tool activation; there is no separate discovery service, model router or agent loop.
+Known full names (`mcp__server__tool`) and qualified names (`server.tool_name`) resolve
+exactly, including tools already loaded. A unique short name such as `capture_image`
+takes priority over metadata ranking; names shared by multiple servers require
+qualification rather than silently selecting one. Unknown qualified names do not
+fall through to a different server. Natural-language queries retain Pi's native
+English metadata search. Neither path executes a business operation.
 The native compact server directory is bounded by Pi and does not include full schemas.
 
 `model_api.max_loaded_tools=12` (1..64) bounds discovered MCP definitions per model
 request, separately from the small native execution/clarification tools. Search batches
 cannot exceed this limit. Newly loaded and recently used tools take priority; eviction
 occurs at the next model boundary, after the preceding parallel tool batch settles.
-Evicted tools remain registered and searchable. A new top-level run starts fresh;
+Evicted tools remain registered and searchable. A new engine session starts fresh;
 resume does not eagerly restore every previously used MCP definition. A missing match
 or disconnected server is an explicit tool result, never an excuse to expose all tools.
 
@@ -146,6 +152,21 @@ retry tools, or grant approvals. Model turns still consume the same shared AI al
 evicted names and declared schema character count (not estimated tokens). No tool
 arguments, results or credentials enter those logs. This bounds tool-definition growth;
 ordinary task data still needs pagination, file references and native compaction.
+
+The live session keeps its bounded warm loadout across user turns. Before a new turn,
+removed/hidden/out-of-scope identities are excluded; process restart and session resume
+start cold. This avoids searching again for recently used tools without accumulating
+their schemas. The same behavior applies to conversations, background jobs and slim.
+
+A direct call to an undeclared tool can be rejected by Pi before any execution. Only
+Pi's exact missing-tool result with no execution duration is eligible for recovery.
+If that exact identity is registered and permitted, the adapter loads it and preserves
+the error while explaining that no operation ran; otherwise it requests exact discovery
+through `tool_search`, which owns MCP readiness. It never invokes or retries the operation.
+Real tool failures, unknown outcomes and denied tools are not relabeled as loading errors.
+Discovery logs record session, lookup mode and permitted tool names, without raw queries,
+arguments, schemas or credentials. These distinguish exact/metadata/ambiguous/unavailable
+lookup and loading after a missing-tool error.
 
 ## Native prompt-cache reuse and timings
 

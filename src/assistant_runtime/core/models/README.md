@@ -109,8 +109,10 @@ The model-library **测试模型** button performs one bounded text inference ag
 current draft, without saving or enabling it. `probe.py` uses the same Pi adapters,
 model concurrency semaphore and durable usage service as normal inference. Its fixed
 synthetic prompt has no history, images or tools; the selected default effort is retained,
-the deadline is 45 seconds and the output cap is at most 1,024 tokens. Native account
-routes which cannot enforce this cap are reported unsupported for this bounded test.
+and the deadline is 45 seconds. Tests use the model/global inference output budget,
+without a separate test-only token cap or a requirement that accounts enforce one.
+Native `output_limit="model"` accounts use the existing adapter and native model bound
+for usage reservation; that bound is not presented as an enforced request cap.
 There are no retries or fallbacks. Request IDs have durable receipts so disconnected or
 repeated submissions do not replay uncertain calls. Draft API keys stay in memory and
 never replace saved credentials. A successful text reply does not assert image/tool/schema support.

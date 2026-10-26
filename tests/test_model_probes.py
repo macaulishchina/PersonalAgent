@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -137,16 +138,36 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.requests), 1)
         self.assertFalse(self.plugin.active)
 
-    async def test_unenforceable_native_output_cap_prevents_inference(self):
+    async def test_native_output_bound_does_not_prevent_single_metered_inference(self):
         fake = SimpleNamespace(
             start=AsyncMock(),
             close=AsyncMock(),
             output_bound=AsyncMock(return_value=32768),
-            complete=AsyncMock(),
+            complete=AsyncMock(
+                return_value={"text": "OK", "usage": {"input_tokens": 10, "output_tokens": 1}}
+            ),
         )
-        with patch("assistant_runtime.core.models.probe.ModelClient", return_value=fake):
-            result = await self.plugin.test_model(self.arguments())
-        self.assertEqual(result["code"], "output_limit")
-        fake.complete.assert_not_called()
+        args = self.arguments()
+        usage = self.host.ai_usage.service
+        with (
+            patch("assistant_runtime.core.models.probe.ModelClient", return_value=fake),
+            patch.object(usage, "admit", AsyncMock(wraps=usage.admit)) as admission,
+        ):
+            result = await self.plugin.test_model(args)
+            self.assertEqual(await self.plugin.test_model(args), result)
+        self.assertTrue(result["ok"], result)
+        fake.complete.assert_awaited_once()
+        self.assertEqual(admission.call_count, 1)
+        self.assertEqual(admission.call_args.kwargs["bounds"]["output_tokens"], 32768)
         fake.close.assert_awaited_once()
         self.assertFalse(self.requests)
+
+    async def test_probe_uses_configured_output_budgets_without_a_separate_test_cap(self):
+        self.plugin.settings = replace(self.plugin.settings, max_output_tokens=4096)
+        args = self.arguments()
+        self.assertTrue((await self.plugin.test_model(args))["ok"])
+        self.assertEqual(self.requests[-1][2]["max_output_tokens"], 4096)
+        args = self.arguments()
+        args["entry"]["max_output_tokens"] = 2048
+        self.assertTrue((await self.plugin.test_model(args))["ok"])
+        self.assertEqual(self.requests[-1][2]["max_output_tokens"], 2048)

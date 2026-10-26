@@ -16,7 +16,6 @@ from .settings import ModelSettings, reasoning_effort
 
 log = logging.getLogger(__name__)
 TIMEOUT = 45
-MAX_TOKENS = 1024
 PROMPT = "This is a text connectivity test. Please reply briefly with OK."
 
 
@@ -73,7 +72,7 @@ class ModelProbes:
                     "entries": {name: entry},
                     "accounts": accounts,
                     "timeout_seconds": TIMEOUT,
-                    "max_output_tokens": MAX_TOKENS,
+                    "max_output_tokens": self.owner.settings.max_output_tokens,
                 }
             )
             selected = settings.entry(name)
@@ -82,7 +81,7 @@ class ModelProbes:
                 "model": name,
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": PROMPT}]}],
                 "reasoning": {"effort": effort},
-                "max_output_tokens": min(MAX_TOKENS, selected.get("output_limit", MAX_TOKENS)),
+                "max_output_tokens": selected["max_output_tokens"],
             }
             key_env = provider.get("key_env") or accounts.get(provider.get("account"), {}).get("key_env")
             key = arguments.get("key")
@@ -111,29 +110,24 @@ class ModelProbes:
                 async with self.owner.semaphore:
                     await client.start()
                     bound = await client.output_bound(payload)
-                    if bound > MAX_TOKENS:
-                        result = response(
-                            False, "output_limit", "此账号不支持单次输出上限，暂不能进行有界文本测试。"
-                        )
-                    else:
-                        reply = await metered(
-                            self.owner.host.ai_usage.service,
-                            UsageScope("model-test:" + ident, "configuration"),
-                            "inference",
-                            selected["provider"],
-                            selected["model"],
-                            lambda: client.complete(payload, session_id="model-test:" + ident),
-                            bounds={"input_tokens": 1024, "output_tokens": bound},
-                            body=payload,
-                        )
-                        result = response(
-                            True,
-                            "completed",
-                            "文本推理可用；未验证图片、工具调用或结构化输出。",
-                            reply=reply["text"][:240],
-                            first_text_ms=reply.get("first_text_ms"),
-                            reasoning_effort=effort,
-                        )
+                    reply = await metered(
+                        self.owner.host.ai_usage.service,
+                        UsageScope("model-test:" + ident, "configuration"),
+                        "inference",
+                        selected["provider"],
+                        selected["model"],
+                        lambda: client.complete(payload, session_id="model-test:" + ident),
+                        bounds={"input_tokens": 1024, "output_tokens": bound},
+                        body=payload,
+                    )
+                    result = response(
+                        True,
+                        "completed",
+                        "文本推理可用；未验证图片、工具调用或结构化输出。",
+                        reply=reply["text"][:240],
+                        first_text_ms=reply.get("first_text_ms"),
+                        reasoning_effort=effort,
+                    )
         except TimeoutError:
             result = response(False, "timeout", "测试超时；上游是否完成未知，不会自动重试。")
         except UsageError:

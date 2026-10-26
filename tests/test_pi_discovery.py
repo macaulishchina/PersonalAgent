@@ -15,14 +15,17 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
     session = fixture.PiSkeletonTest.session
     completed = fixture.PiSkeletonTest.completed
 
-    async def configured(self, *, tools=None, limit=2):
+    async def configured(self, *, tools=None, limit=2, second=False):
         self.client.settings = replace(self.settings, max_loaded_tools=limit)
         script = self.root / "catalog.py"
         script.write_text(
-            "from fastmcp import FastMCP\nm=FastMCP('catalog')\n"
+            "from fastmcp import FastMCP\nfrom pathlib import Path\nm=FastMCP('catalog')\n"
             "for i in range(30):\n"
             " def make(i):\n"
-            "  def action(): return 'verified:'+str(i)\n"
+            "  def action():\n"
+            f"   with Path({str(self.root / 'calls.txt')!r}).open('a') as f: f.write(str(i)+'\\n')\n"
+            "   if i == 28: raise RuntimeError('Tool mcp__catalog__action_28 not found')\n"
+            "   return 'verified:'+str(i)\n"
             "  return action\n"
             " m.tool(name='action_'+str(i),description='Catalog action '+str(i)+'\\nSCHEMA_SENTINEL '+('catalog operation '+str(i)+' ')*80)(make(i))\n"
             "m.run(transport='stdio',show_banner=False)\n"
@@ -40,6 +43,8 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         }
         if tools is not None:
             config["allowed_tools"] = tools
+        if second:
+            config["mcp_servers"]["alternate-catalog"] = dict(config["mcp_servers"]["catalog"])
         return await self.session(config=config)
 
     async def run_prompt(self, ident):
@@ -99,6 +104,136 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         self.gateway.script_fn = script
         await self.run_prompt(ident)
         self.assertEqual(len(self.gateway.requests), 4)
+
+    async def test_exact_name_beats_noisy_search_and_already_loaded_match_is_retained(self):
+        ident = await self.configured()
+
+        def script(step, body):
+            names = [t.get("name", "") for t in body.get("tools", [])]
+            if step == 1:
+                return sse_tool_call(
+                    "search", "tool_search", {"query": "catalog action_3 background execution", "limit": 1}
+                )
+            if step == 2:
+                self.assertIn("mcp__catalog__action_3", names)
+                return sse_tool_call("repeat", "tool_search", {"query": "mcp__catalog__action_3", "limit": 1})
+            if step == 3:
+                self.assertIn("mcp__catalog__action_3", names)
+                self.assertEqual(sum(n.startswith("mcp__") for n in names), 1)
+                return sse_tool_call("call", "mcp__catalog__action_3", {})
+            return sse_text_reply("done", "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertIn("verified:3", json.dumps(self.gateway.requests[-1]))
+        self.assertEqual(len(self.gateway.requests), 4)
+
+    async def test_unloaded_call_is_prepared_without_replaying_business_operation(self):
+        ident = await self.configured()
+
+        def script(step, body):
+            names = [t.get("name", "") for t in body.get("tools", [])]
+            if step == 1:
+                return sse_tool_call("warm", "tool_search", {"query": "action_1", "limit": 1})
+            if step == 2:
+                self.assertNotIn("mcp__catalog__action_3", names)
+                return sse_tool_call("unloaded", "mcp__catalog__action_3", {})
+            if step == 3:
+                self.assertIn("mcp__catalog__action_3", names)
+                self.assertIn("this call did not execute", str(body))
+                self.assertNotIn("verified:3", str(body))
+                return sse_tool_call("call", "mcp__catalog__action_3", {})
+            return sse_text_reply("done", "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual(len(self.gateway.requests), 4)
+        self.assertEqual(json.dumps(self.gateway.requests[-1]).count("verified:3"), 1)
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["3"])
+
+    async def test_ambiguous_short_name_requires_namespace_and_metadata_search_still_works(self):
+        ident = await self.configured(second=True)
+
+        def script(step, body):
+            names = [t.get("name", "") for t in body.get("tools", [])]
+            if step == 1:
+                return sse_tool_call("ambiguous", "tool_search", {"query": "action_3", "limit": 2})
+            if step == 2:
+                self.assertFalse(any(n.startswith("mcp__") for n in names))
+                self.assertIn("Tool name is ambiguous", str(body))
+                return sse_tool_call(
+                    "qualified", "tool_search", {"query": "alternate-catalog.action_3", "limit": 1}
+                )
+            if step == 3:
+                self.assertIn("mcp__alternate_catalog__action_3", names)
+                self.assertNotIn("mcp__catalog__action_3", names)
+                return sse_tool_call("call", "mcp__alternate_catalog__action_3", {})
+            return sse_text_reply("done", "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["3"])
+
+    async def test_native_metadata_search_and_real_business_failure_are_not_replayed(self):
+        ident = await self.configured()
+
+        def script(step, body):
+            names = [t.get("name", "") for t in body.get("tools", [])]
+            if step == 1:
+                return sse_tool_call("semantic", "tool_search", {"query": "Catalog operation 28", "limit": 1})
+            if step == 2:
+                self.assertIn("mcp__catalog__action_28", names)
+                return sse_tool_call("fails", "mcp__catalog__action_28", {})
+            self.assertNotIn("this call did not execute", str(body))
+            return sse_text_reply("done", "failure reported")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual(len(self.gateway.requests), 3)
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["28"])
+
+    async def test_exact_lookup_does_not_reveal_hidden_tools(self):
+        ident = await self.configured(tools=["mcp__catalog__action_3"])
+
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call(
+                    "hidden", "tool_search", {"query": "mcp__catalog__action_29", "limit": 1}
+                )
+            if step == 2:
+                self.assertFalse(any(t.get("name", "").startswith("mcp__") for t in body.get("tools", [])))
+                self.assertIn("No available tool matches", str(body))
+                return sse_tool_call("wrong-server", "tool_search", {"query": "missing.action_3", "limit": 1})
+            if step == 3:
+                self.assertFalse(any(t.get("name", "").startswith("mcp__") for t in body.get("tools", [])))
+                self.assertIn("No available tool matches", str(body))
+                return sse_tool_call(
+                    "allowed", "tool_search", {"query": "mcp__catalog__action_3", "limit": 1}
+                )
+            return sse_text_reply("done", "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual(len(self.gateway.requests), 4)
+
+    async def test_live_session_keeps_bounded_warm_tools_between_user_turns(self):
+        ident = await self.configured(limit=1)
+
+        def script(step, body):
+            names = [t.get("name", "") for t in body.get("tools", [])]
+            self.assertLessEqual(sum(n.startswith("mcp__") for n in names), 1)
+            if step == 1:
+                return sse_tool_call("load", "tool_search", {"query": "action_3", "limit": 1})
+            if step in (2, 4):
+                self.assertIn("mcp__catalog__action_3", names)
+                return sse_tool_call("call-" + str(step), "mcp__catalog__action_3", {})
+            return sse_text_reply("done-" + str(step), "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        await self.run_prompt(ident)
+        self.assertEqual(len(self.gateway.requests), 5)
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["3", "3"])
 
     async def test_many_searches_remain_bounded_and_evicted_tool_can_be_reloaded(self):
         ident = await self.configured()
