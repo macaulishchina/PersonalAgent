@@ -529,14 +529,30 @@ function renderModelCollection(panel, kind) {
       value.provider,
       value.account,
       value.preset,
+      ...(kind === "entries"
+        ? Object.values(taskRecommendations())
+            .filter((item) => item.model === name)
+            .map((item) => item.name)
+        : []),
     ]
       .filter(Boolean)
       .join(" ");
     const head = node("div", undefined, "entity-heading");
-    head.append(
-      node("span", name.slice(0, 2).toUpperCase(), "entity-avatar"),
-      node("h3", name),
-    );
+    head.append(node("span", name.slice(0, 2).toUpperCase(), "entity-avatar"));
+    if (kind === "entries") {
+      const identity = node("div", undefined, "entity-name-and-usage");
+      identity.append(node("h3", name));
+      if (valueAt(["main_model"], "") === name)
+        identity.append(node("span", "主对话", "badge configured"));
+      for (const item of Object.values(taskRecommendations())) {
+        if (item.model !== name) continue;
+        const badge = node("span", item.name, "badge recommendation-badge");
+        badge.title = `${item.reasoning_effort || "auto"} · ${item.reason}
+${item.description}`;
+        identity.append(badge);
+      }
+      head.append(identity);
+    } else head.append(node("h3", name));
     if (kind === "providers")
       head.append(
         node(
@@ -545,8 +561,7 @@ function renderModelCollection(panel, kind) {
           value.enabled ? "badge configured" : "badge",
         ),
       );
-    else if (valueAt(["main_model"], "") === name)
-      head.append(node("span", "主对话", "badge configured"));
+
     card.append(
       head,
       node(
@@ -657,7 +672,12 @@ function renderSettingsPage() {
       const displayed = prettyField(field);
       const isAdvanced =
         displayed.interface?.advanced ?? displayed.schema["x-advanced"];
-      const editor = drawField(displayed);
+      const editor =
+        key(field.path) === key(["tasks", "model_policy"])
+          ? renderTaskPolicy(displayed)
+          : key(field.path) === key(["tasks", "execution"])
+            ? renderTaskDefaults(displayed)
+            : drawField(displayed);
       if (items.length === 1 && editor.classList.contains("object-field"))
         editor.classList.add("panel-fields");
       (isAdvanced ? advanced : panel).append(editor);
@@ -1109,13 +1129,22 @@ function renderEntityEditor() {
   if (!activeEditor) return;
   const { kind, name, field } = activeEditor;
   $("entry-title").textContent =
-    { providers: "编辑连接", entries: "编辑模型", accounts: "编辑账号" }[kind] +
+    {
+      providers: "编辑连接",
+      entries: "编辑模型",
+      accounts: "编辑账号",
+      recommendations: "编辑推荐",
+    }[kind] +
     " · " +
     name;
   $("entry-description").textContent =
     "修改先保留在本页，完成后统一保存并生效。";
   const copy = structuredClone(field),
     props = copy.schema.properties;
+  if (kind === "recommendations") {
+    renderTaskRecommendation(field);
+    return;
+  }
   if (kind === "entries") {
     renderModelEditor(field);
     return;
@@ -1147,7 +1176,7 @@ function finishEntity(discard = false) {
     !discard &&
     [...invalid.keys()].some(
       (id) =>
-        JSON.parse(id).slice(0, 3).join(".") ===
+        JSON.parse(id).slice(0, activeEditor.field.path.length).join(".") ===
         activeEditor.field.path.join("."),
     )
   ) {
@@ -1341,7 +1370,7 @@ function providerTest(name) {
 }
 
 const modelTestResults = new Map();
-function modelTestId() {
+function configurationRequestId() {
   // getRandomValues also works on remote HTTP management pages.
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -1389,7 +1418,7 @@ function modelTest(name) {
           {
             name,
             version: snapshot.version,
-            request_id: modelTestId(),
+            request_id: configurationRequestId(),
             draft,
           },
           AbortSignal.timeout(60000),

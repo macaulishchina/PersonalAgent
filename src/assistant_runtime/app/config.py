@@ -185,7 +185,11 @@ class Config(ModuleSettings):
         from assistant_runtime.core.models.settings import ModelSettings
 
         if "models" in self.enabled_plugins:
-            ModelSettings.parse(self.model_api)
+            model_settings = ModelSettings.parse(self.model_api)
+            if self.tasks:
+                from assistant_runtime.core.tasks.settings import TaskSettings
+
+                TaskSettings.parse(self.tasks).validate_bindings(model_settings.entries)
         if "assistant" in self.enabled_plugins and self.interaction != {}:
             from assistant_runtime.core.speech.interaction.settings import InteractionSettings
 

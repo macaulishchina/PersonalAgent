@@ -30,7 +30,7 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
         owners = {entry["provider"] for entry in raw["entries"].values()}
         raw["providers"] = {name: raw["providers"][name] for name in owners}
         for entry in raw["entries"].values():
-            entry.update(fallbacks=[], max_output_tokens=max_tokens, execution_max_output_tokens=max_tokens)
+            entry.update(max_output_tokens=max_tokens, execution_max_output_tokens=max_tokens)
         names = {p["key_env"] for p in settings.providers.values() if p.get("key_env") and p.get("enabled")}
         (root / ".env").write_text("\n".join(k + "=" + json.dumps(credential(config.root, k)) for k in names))
         (root / ".env").chmod(0o600)
@@ -57,15 +57,12 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
             model_api=raw,
             ai_usage={"max_requests": max_requests, "work_limits": {"max_seconds": 120}},
             tasks={
+                "execution": {"model": task_model, "reasoning_effort": effort},
                 "concurrency": 4,
                 "max_goal_rounds": 1,
                 "model_policy": {
                     "max_upgrades": 0,
                     "review_mode": "off",
-                    "profiles": {
-                        name: {"model": task_model, "reasoning_effort": effort}
-                        for name in ("fast", "balanced", "deep", "ultra")
-                    },
                 },
             },
             notifications={"channels": ["chat"], "voice_enabled": False},

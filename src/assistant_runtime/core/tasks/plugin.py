@@ -34,7 +34,6 @@ from assistant_runtime.core.tasks.self_schedule import (
     policy as schedule_policy,
     completion_policy,
 )
-from assistant_runtime.core.tasks.fallbacks import ModelFallbacks
 from assistant_runtime.core.tasks.feedback import TaskFeedback
 
 
@@ -82,9 +81,7 @@ class TasksPlugin:
         self.trace = TaskTrace(self.repo)
         self.upgrades = ModelUpgrades(self)
         self.self_schedule = SelfSchedule(self)
-        self.fallbacks = ModelFallbacks(self)
         self.model_review = ModelReview(self)
-        self.falling_back = set()
         self.upgrading = set()
         self.scheduler = None
         self.launching = set()
@@ -93,6 +90,13 @@ class TasksPlugin:
         self.started = False
         self.notification_error = None
         self.run_locks = weakref.WeakValueDictionary()
+
+    def model_defaults(self):
+        """Configured main binding, captured at selection; never a parent's incidental model."""
+        return {
+            "model": self.host.config.main_model,
+            "reasoning_effort": self.host.config.main_reasoning_effort,
+        }
 
     async def start(self, context):
         self.context = context
@@ -104,15 +108,6 @@ class TasksPlugin:
         self.scheduler.start(paused=True)
         for run in self.repo.pending():
             if run["state"] in {"dispatching", "running", "waiting_user"}:
-                fallback = run["data"].get("model_fallback", {})
-                if fallback.get("phase") in {"ready", "dispatching"}:
-                    self.repo.update_run(
-                        run["id"],
-                        "unknown",
-                        model_fallback={**fallback, "phase": "unknown"},
-                        progress="模型切换期间服务中断，需明确核查后继续；未自动重放。",
-                    )
-                    continue
                 upgrade = pending_upgrade(run)
                 if upgrade and upgrade["phase"] == "dispatching":
                     self.repo.update_run(
@@ -332,12 +327,6 @@ class TasksPlugin:
             data["attachments"] = self.host.workfiles.media.resolve(data["attachments"])
             self.host.workfiles.inputs.grant(data["attachments"], ident)
         state, data = self.upgrades.boundary(run, state, data)
-        pending_fallback = run["data"].get("model_fallback", {})
-        if pending_fallback.get("phase") == "ready":
-            return False  # Late old-thread notifications cannot revive rejected work.
-        if pending_fallback.get("phase") == "dispatching" and state == "running":
-            data["model_fallback"] = {**pending_fallback, "phase": "applied"}
-        state, data = self.fallbacks.boundary(run, state, data)
         if "provider_selection" in data and run["data"].get("model_selections"):
             history = [dict(item) for item in run["data"]["model_selections"]]
             history[-1]["provider"] = data["provider_selection"]
@@ -480,22 +469,22 @@ class TasksPlugin:
         else:
             s.pop("parent_id", None)
         requested = s["execution"]
+        if preserved_execution is not None:
+            s["execution"] = json.loads(json.dumps(preserved_execution))
+            return s
         if not isinstance(requested, dict) or set(requested) - {
             "model",
             "reasoning_effort",
             "reason",
             "kind",
             "device_id",
-            "profile",
+            "recommendation",
             "selection",
             "assessment",
             "model_source",
             "effort_source",
         }:
             raise ValueError("Invalid task execution")
-        if preserved_execution is not None:
-            s["execution"] = json.loads(json.dumps(preserved_execution))
-            return s
         if requested.get("kind", "agent") not in {"agent", "reminder", "device_query"}:
             raise ValueError("Unknown execution kind")
         if requested.get("kind") == "device_query":
@@ -621,7 +610,9 @@ class TasksPlugin:
             return {
                 "models": models,
                 "configuration": self.settings.execution,
-                "model_policy": self.model_policy.describe(models),
+                "model_policy": self.model_policy.describe(
+                    models, self.model_defaults(), self.settings.execution
+                ),
             }
         if a == "list":
             definitions, before, removed, updates = self.repo.definition_page(args)
@@ -840,8 +831,6 @@ class TasksPlugin:
                         replacement.update({key: old_execution[key], source: "user"})
                 args = {**args, "changes": {**args["changes"], "execution": replacement}}
             combined = {**d["spec"], **args["changes"]}
-            if "execution" not in args["changes"] and combined["execution"].get("profile") == "custom":
-                combined["execution"] = {k: v for k, v in combined["execution"].items() if k != "profile"}
             combined.pop("depth", None)
             if {"trigger", "long_term"}.intersection(args["changes"]) and "auto_archive" not in args[
                 "changes"
@@ -971,13 +960,13 @@ class TasksPlugin:
                     for key, value in self.settings.execution.items()
                 ):
                     requested = {
-                        k: v for k, v in spec["execution"].items() if k not in {"selection", "profile"}
+                        k: v for k, v in spec["execution"].items() if k not in {"selection", "recommendation"}
                     }
                     requested["reason"] = "执行前应用实例固定配置"
                     assessment_data = spec["execution"].get("assessment", {})
                     prior = spec["execution"].get("selection", {}).get("prior_execution")
                     spec["execution"] = await self.model_policy.resolve(
-                        self.executor, requested, self.settings.execution
+                        self.executor, requested, self.settings.execution, self.model_defaults()
                     )
                     spec["execution"]["assessment"] = assessment_data
                     spec["execution"]["selection"]["prior_execution"] = prior
@@ -1006,13 +995,6 @@ class TasksPlugin:
             await configuration_boundary(self.context)
             runs = self.repo.pending()
             for r in runs:
-                if (
-                    r["state"] == "running"
-                    and r["data"].get("model_fallback", {}).get("phase") == "ready"
-                    and r["id"] not in self.falling_back
-                ):
-                    self.falling_back.add(r["id"])
-                    self.context.spawn(self.fallback_run(r["id"]), "model-fallback:" + r["id"])
                 upgrade = pending_upgrade(r)
                 if (
                     r["state"] == "running"
@@ -1154,12 +1136,6 @@ class TasksPlugin:
             return
         finally:
             self.delivering_results.discard(r["id"])
-
-    async def fallback_run(self, ident):
-        try:
-            await self.fallbacks.apply(ident)
-        finally:
-            self.falling_back.discard(ident)
 
     async def upgrade_run(self, ident):
         try:

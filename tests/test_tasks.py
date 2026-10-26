@@ -42,14 +42,44 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.store = Store(self.root / "state.sqlite")
-        self.config = Config(root=self.root, workspace=str(self.root), plugins=["pi", "tasks"])
+        self.config = Config(
+            root=self.root,
+            workspace=str(self.root),
+            plugins=["pi", "tasks"],
+            main_model="gpt-6-luna",
+            main_reasoning_effort="low",
+        )
         self.config.tasks = {
             "model_policy": {
-                "profiles": {
-                    "fast": {"model": "gpt-6-luna", "reasoning_effort": "low"},
-                    "balanced": {"model": "gpt-6.1-sol", "reasoning_effort": "low"},
-                    "deep": {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
-                    "ultra": {"model": "gpt-6-astra", "reasoning_effort": "high"},
+                "recommendations": {
+                    "brief": {
+                        "name": "brief",
+                        "model": "gpt-6-luna",
+                        "reasoning_effort": "low",
+                        "reason": "Configured test candidate",
+                        "description": "Known workflow and verification",
+                    },
+                    "explore": {
+                        "name": "explore",
+                        "model": "gpt-6.1-sol",
+                        "reasoning_effort": "low",
+                        "reason": "Configured test candidate",
+                        "description": "Known workflow and verification",
+                    },
+                    "investigate": {
+                        "name": "investigate",
+                        "model": "gpt-6.1-sol",
+                        "reasoning_effort": "medium",
+                        "reason": "Configured test candidate",
+                        "description": "Known workflow and verification",
+                    },
+                    "research": {
+                        "name": "research",
+                        "model": "gpt-6-astra",
+                        "reasoning_effort": "high",
+                        "reason": "Configured test candidate",
+                        "description": "Known workflow and verification",
+                    },
                 }
             }
         }
@@ -594,11 +624,11 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_auto_selects_at_creation_and_fixed_settings_override(self):
         d = await self.create(
-            execution={"model": "fast", "reasoning_effort": "medium", "reason": "short work"}
+            execution={"model": "brief", "reasoning_effort": "medium", "reason": "short work"}
         )
-        self.assertEqual(d["spec"]["execution"]["model"], "fast")
+        self.assertEqual(d["spec"]["execution"]["model"], "brief")
         self.plugin.settings.execution = {"model": "fixed", "reasoning_effort": "high"}
-        d = await self.create(execution={"model": "fast", "reasoning_effort": "low"})
+        d = await self.create(execution={"model": "brief", "reasoning_effort": "low"})
         self.assertEqual(d["spec"]["execution"]["model"], "fixed")
         self.assertEqual(d["spec"]["execution"]["reasoning_effort"], "high")
         self.assertEqual(d["spec"]["execution"]["kind"], "agent")
@@ -1526,7 +1556,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Pause"):
             await repair()
         self.plugin.repo.update_run(run["id"], "paused", turn_active=False)
-        for collection in (self.plugin.launching, self.plugin.upgrading, self.plugin.falling_back):
+        for collection in (self.plugin.launching, self.plugin.upgrading):
             collection.add(run["id"])
             with self.assertRaisesRegex(ValueError, "Pause"):
                 await repair()

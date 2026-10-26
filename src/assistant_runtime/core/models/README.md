@@ -4,7 +4,7 @@ Models owns immutable account/provider/model configuration, bounded no-tool infe
 
 ## Configuration
 
-`main_model` and `main_reasoning_effort` select a registered alias and supported effort. Task profiles reference the same aliases. `model_api.memory` explicitly selects a structured-output model for upstream Mem0; an empty binding leaves extraction unavailable rather than launching another agent. Local embeddings, source validation, corrections and memory history keep their existing owners.
+`main_model` and `main_reasoning_effort` select a registered alias and supported effort. Task recommendations reference the same aliases. `model_api.memory` explicitly selects a structured-output model for upstream Mem0; an empty binding leaves extraction unavailable rather than launching another agent. Local embeddings, source validation, corrections and memory history keep their existing owners.
 
 Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets: `openai`, `claude`, `gemini`, `deepseek`. OpenCode Go presets: `opencode_go_responses`, `opencode_go_chat`, `opencode_go_anthropic`, `opencode_go_gemini`, using `OPENCODE_API_KEY`. Custom endpoints declare `protocol`, HTTPS `base_url` and `key_env`; supported protocols are `openai_responses`, `openai_chat`, `anthropic`, `gemini`. Presets cannot silently override their fixed endpoint. A local `enabled` switch does not change the supplier's data policy.
 
@@ -33,7 +33,7 @@ Defaults: 4 workers, 16 queued calls, 600-second total deadline, 24,000 text cha
 
 ## Native accounts and subscriptions
 
-`model_api.accounts.NAME` declares a native Pi `provider` and an explicit `auth="oauth"` or `auth="api_key"`. An API-key account can reference `key_env`; otherwise operator login saves the key privately. OAuth always uses provider login and refresh, never a pasted password/token or a global Codex auth file. A provider table with `account="NAME"` selects this route instead of an endpoint preset. Model aliases, task profiles, ordered fallback and Jev selection remain the same registry and policies.
+`model_api.accounts.NAME` declares a native Pi `provider` and an explicit `auth="oauth"` or `auth="api_key"`. An API-key account can reference `key_env`; otherwise operator login saves the key privately. OAuth always uses provider login and refresh, never a pasted password/token or a global Codex auth file. A provider table with `account="NAME"` selects this route instead of an endpoint preset. Model aliases and task recommendations use the same registry; optional Jev review respects explicit user choices.
 
 ```toml
 [model_api.accounts.chatgpt]
@@ -79,13 +79,17 @@ No new provider is enabled or selected automatically. Register an alias with cap
 
 ## AI usage admission
 
-All framework AI-service calls pass the independent [ai_usage plugin](../ai_usage/README.md). It owns counting, budgets, statistics and durable reservations. Pi retains only authenticated transport adaptation. Models retains inference idempotency and business results, linked to usage receipts. `[model_api.execution_limits]` is removed; use `[ai_usage]` in its own configuration fragment. Defaults: 100 requests per work, detail warning at 50; no other consumption hard limit by default. Missing token telemetry is recorded as unknown and does not alone invalidate a completed result. Retry, fallback, compaction and descendant calls share the host-owned work allowance across restart.
+All framework AI-service calls pass the independent [ai_usage plugin](../ai_usage/README.md). It owns counting, budgets, statistics and durable reservations. Pi retains only authenticated transport adaptation. Models retains inference idempotency and business results, linked to usage receipts. `[model_api.execution_limits]` is removed; use `[ai_usage]` in its own configuration fragment. The request allowance and warning fraction use the ai_usage configuration; no additional model-specific request cap is introduced. Missing token telemetry is recorded as unknown and does not alone invalidate a completed result. Compaction and descendant calls share the host-owned work allowance across restart.
 
-## Fallback and model changes
+## Failure and explicit model changes
 
-Auxiliary entry `fallbacks` expands only the primary's ordered list, once per candidate. A backup must honor explicit effort/image/schema requirements; incompatible candidates are skipped with an error receipt, never downgraded silently. Cancellation, unknown transport outcomes and lost streams do not retry another supplier.
+A request invokes only its selected model. Provider rejection is a failure; unknown
+transport outcomes remain unknown. Neither tasks nor auxiliary inference automatically
+switch models or replay calls. Removed `fallbacks` configuration is rejected.
 
-Task fallback is separately configured under `tasks.model_policy.fallbacks`. It requires a structured first-turn rejection and authoritative evidence that no tool/assistant activity occurred. Complex-task upgrades require a checkpoint with no active/unknown operations; old context is archived and the new model receives confirmed progress, not supplier-private reasoning state. User-explicit model choices remain protected from Jev advice.
+Task model changes require an explicit recommendation, a clean checkpoint and verified
+idle operations. The old context is archived; the new context receives confirmed progress,
+not provider-private reasoning. User-explicit choices stay protected from optional Jev advice.
 
 ## Operator connection checks and model directories
 
@@ -140,7 +144,7 @@ with `model_api.timeout_seconds` and `model_api.compaction_timeout_seconds` (1..
 These are total deadlines, including streaming output; one task may contain many calls.
 The models capability owns its configured inference deadline plus 30 seconds for settlement;
 public plugin callers inherit it unless they explicitly supply a shorter deadline. Auxiliary
-inference includes admission and configured fallback attempts in its total budget.
+inference includes admission and its single selected-model request in the total budget.
 The Pi outer provider envelope use the larger configured deadline plus 60 seconds;
 local CLI/MCP transports allow further return margin. They do not extend the inner deadline.
 Jev advisory fallback and device cancellation retain independent short deadlines.
@@ -153,6 +157,18 @@ unknown results are not replayed. Configuration updates prepare a replacement ad
 `capabilities.py` resolves one immutable snapshot for UI, CLI and runtime. Only exact official endpoint/provider/model identities auto-match the packaged models.dev catalog. A custom endpoint may explicitly select a public `provider/model` reference; this remains advertised metadata, not route acceptance. Pi native model descriptions are read without opening a credential store or making a network request. Custom API connections use the declared protocol and explicit capability fields; account catalog metadata is not guessed for an unrelated endpoint. A reasoning boolean never generates effort levels. Unknown capability fields remain absent in metadata; explicit unsupported inputs remain rejected.
 
 Snapshots include a non-secret connection/model binding, source and revision. Saving a stale binding fails with a repair instruction. Refresh is an operator draft operation, not a startup network request. Explicit adoption or refill copies known facts into ordinary settings, replacing their old values; absent facts leave settings unchanged. Model `output_limit` bounds output budgets and remains directly editable; snapshots supply defaults only for omitted settings. Existing native `output_limit="model"` semantics and durable usage admission are unchanged. `auto` is distinct from `none`: the API adapter omits automatic control before dispatch, and native Pi receives no explicit reasoning override. Normalized Pi engine `off` is translated back to the host's `auto` selection at the owned transport boundary.
+
+Anthropic connections import explicitly advertised effort levels through the same
+configuration fields, including OpenCode and custom endpoints. The Pi adapter reuses
+its pinned catalog's adaptive-thinking declaration for exact upstream model IDs;
+it never replaces the configured endpoint, key or enabled levels. Adaptive models
+send `thinking.type="adaptive"` and `output_config.effort`; legacy models use Pi's
+token-budget mapping. Unknown IDs retain Pi's budget-based behavior rather than
+guessing adaptive support from a name. `auto` omits thinking controls, while an
+enabled `none` explicitly disables thinking. Thinking and answer tokens share the
+configured output ceiling; insufficient legacy thinking room fails before dispatch.
+Structured output retains its format alongside effort. Catalog adoption is not
+supplier acceptance: third-party support still requires separate route verification.
 
 The MIT-licensed models.dev snapshot and license ship in the wheel. Maintainers explicitly run `python scripts/update_model_catalog.py` (or `--source <downloaded-json>`) and review the resulting metadata diff before release. Source hash and retrieval time are recorded; no runtime download or extra service is introduced. See https://github.com/anomalyco/models.dev for the source schema. Synthetic transport tests prove protocol behavior, not supplier capability acceptance.
 

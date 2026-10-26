@@ -38,7 +38,13 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
 
     async def open_runtime(self):
         self.store = Store(self.root / "state.sqlite")
-        self.config = Config(root=self.root, workspace=str(self.root), plugins=["tasks", "events"])
+        self.config = Config(
+            main_model="test-model",
+            main_reasoning_effort="low",
+            root=self.root,
+            workspace=str(self.root),
+            plugins=["tasks", "events"],
+        )
         self.executor = SimpleNamespace(
             select=AsyncMock(side_effect=lambda model, effort: {"model": model, "reasoning_effort": effort}),
             launch=AsyncMock(),

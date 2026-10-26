@@ -22,7 +22,6 @@ def repair_resources(plugin, args):
         or run["data"].get("turn_active")
         or run["id"] in plugin.launching
         or run["id"] in plugin.upgrading
-        or run["id"] in plugin.falling_back
         or pending_upgrade(run)
     ):
         raise ValueError("Pause the execution and confirm it stopped before correcting resources")

@@ -176,13 +176,9 @@ function renderModelEditor(field) {
   const advanced = node("details", undefined, "advanced-fields model-budget");
   advanced.append(
     node("summary", "高级设置"),
-    node("p", "运行预算与回退策略，与模型规格分开设置。", "hint"),
+    node("p", "运行预算，与模型规格分开设置。", "hint"),
   );
-  for (const name of [
-    "max_output_tokens",
-    "execution_max_output_tokens",
-    "fallbacks",
-  ])
+  for (const name of ["max_output_tokens", "execution_max_output_tokens"])
     advanced.append(input(name));
   root.replaceChildren(basic, summary, thinking, advanced);
   // Generic controls commit and rebuild on input, before a later change event.

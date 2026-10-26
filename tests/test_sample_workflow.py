@@ -84,14 +84,6 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
                     model_api=configuration(gateway.base_url),
                     main_model="model-a",
                     main_reasoning_effort="low",
-                    tasks={
-                        "model_policy": {
-                            "profiles": {
-                                p: {"model": "model-a", "reasoning_effort": "low"}
-                                for p in ("fast", "balanced", "deep", "ultra")
-                            }
-                        }
-                    },
                 )
                 (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
                 host = AssistantService(config)

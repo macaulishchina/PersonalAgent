@@ -22,15 +22,21 @@ from assistant_runtime.plugins.decisions.tools import create_server
 def model_state(objective):
     return {
         "objective": objective,
+        "assessment": {},
+        "prior_execution": None,
         "options": {
-            f"{profile}_{effort}": {"profile": profile, "model": model, "reasoning_effort": effort}
-            for profile, model in (
-                ("fast", "gpt-6-luna"),
-                ("balanced", "gpt-6.1-sol"),
-                ("deep", "gpt-6.1-sol"),
-                ("ultra", "gpt-6-astra"),
+            f"{ident}_{effort}": {
+                "recommendation": ident,
+                "model": model,
+                "reasoning_effort": effort,
+                "name": title,
+                "reason": reason,
+                "description": description,
+            }
+            for ident, model, effort, title, reason, description in (
+                ("routine", "gpt-6-luna", "low", "流程核验", "快速执行明确流程", "目标、接口及验收均已明确"),
+                ("diagnosis", "gpt-6.1-sol", "high", "疑难诊断", "深入对比因果假设", "证据冲突、根因未知时"),
             )
-            for effort in ("low", "medium", "high")
         },
     }
 
@@ -86,16 +92,16 @@ CASES = [
         "irrelevant",
     ),
     (
-        "model_fast",
-        "model_profile",
+        "model_routine",
+        "model_review",
         model_state("只读查询已知设备当前温度，已有工具和字段，读回结果即可验收。"),
-        "fast_low",
+        "routine_low",
     ),
     (
-        "model_deep",
-        "model_profile",
+        "model_diagnosis",
+        "model_review",
         model_state("诊断分布式系统的罕见数据损坏，证据互相冲突，无现成流程；需排除多种因果假设并验证根因。"),
-        "deep_high",
+        "diagnosis_high",
     ),
 ]
 

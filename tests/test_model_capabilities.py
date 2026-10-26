@@ -119,7 +119,7 @@ class CapabilityTest(unittest.TestCase):
         self.assertNotIn("reasoning_efforts", catalog["models"]["any-lab/toggle-only"])
         with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=catalog):
             provider = self.spec()["providers"]["p"]
-            for protocol in ("openai_chat", "openai_responses"):
+            for protocol in ("openai_chat", "openai_responses", "anthropic"):
                 metadata = profile({**provider, "protocol": protocol}, "private-alias", reference="any-lab/m")
                 self.assertEqual(metadata["reasoning_efforts"], ["low", "high", "max"])
                 for effort in metadata["reasoning_efforts"]:
@@ -133,10 +133,6 @@ class CapabilityTest(unittest.TestCase):
                 )["reasoning_efforts"],
                 ["high"],
             )
-            self.assertNotIn(
-                "reasoning_efforts",
-                profile({**provider, "protocol": "anthropic"}, "m", reference="any-lab/m"),
-            )
 
     def test_unknown_is_automatic_not_none_or_false_claims(self):
         cfg = ModelSettings.parse(self.spec())
@@ -144,6 +140,34 @@ class CapabilityTest(unittest.TestCase):
         self.assertEqual(reasoning_effort(entry), "auto")
         self.assertEqual(entry["reasoning_efforts"], [])
         self.assertNotIn("images", entry["capabilities"])
+
+    def test_anthropic_reference_fills_declared_efforts_and_preserves_auto(self):
+        declared = ["low", "medium", "high", "xhigh", "max"]
+        catalog = {
+            "revision": "fixture",
+            "models": {
+                "anthropic/example": {"reasoning": True, "reasoning_efforts": declared},
+                "anthropic/budget-only": {"reasoning": True},
+            },
+        }
+        with patch("assistant_runtime.core.models.capabilities.public_catalog", return_value=catalog):
+            raw = self.spec()
+            raw["providers"]["p"]["protocol"] = "anthropic"
+            provider = raw["providers"]["p"]
+            preview = search_references("example")["candidates"][0]["capabilities"]
+            snapshot = profile(provider, "private-alias", reference="anthropic/example")
+            self.assertEqual(snapshot["reasoning_efforts"], preview["reasoning_efforts"])
+            raw["entries"]["m"]["capabilities"] = snapshot
+            entry = ModelSettings.parse(raw).entry("m")
+            self.assertEqual(entry["reasoning_efforts"], declared)
+            self.assertEqual(reasoning_effort(entry), "auto")
+            for effort in declared:
+                self.assertEqual(reasoning_effort(entry, effort), effort)
+            self.assertNotIn(
+                "reasoning_efforts", profile(provider, "private-alias", reference="anthropic/budget-only")
+            )
+            raw["entries"]["m"]["reasoning_efforts"] = ["low"]
+            self.assertEqual(ModelSettings.parse(raw).entry("m")["reasoning_efforts"], ["low"])
 
     def test_gemini_reference_fills_declared_levels_into_normal_settings(self):
         catalog = {

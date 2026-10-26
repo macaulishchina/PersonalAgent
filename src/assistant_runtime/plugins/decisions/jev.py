@@ -12,7 +12,6 @@ import time
 import aiohttp
 from dotenv import dotenv_values
 from .errors import DecisionError
-from .questions import execution_questions
 
 
 def credential(root):
@@ -224,9 +223,7 @@ class JevProvider:
             }
 
     async def evaluate(self, job):
-        questions = (
-            execution_questions(job) if job["kind"] == "model_profile" else {"decision": job["question"]}
-        )
+        questions = {"decision": job["question"]}
         try:
             body = await self._request(
                 "POST",
@@ -245,24 +242,4 @@ class JevProvider:
             payload = json.loads(body)
         except (ValueError, UnicodeError):
             raise DecisionError("invalid_response") from None
-        if job["kind"] != "model_profile":
-            return answer(payload, job["question"]["criteria"], self.settings.model)
-        fields = {}
-        for native, field in (("profile", "profile"), ("effort", "reasoning_effort")):
-            try:
-                item = payload["answers"][native]
-            except (KeyError, TypeError):
-                raise DecisionError("invalid_response") from None
-            fields[field] = answer(
-                {**payload, "answers": {"decision": item}}, questions[native]["criteria"], self.settings.model
-            )
-        choice = fields["profile"]["choice"] + "_" + fields["reasoning_effort"]["choice"]
-        usage = fields["profile"]["usage"]
-        for field in fields.values():
-            field.pop("usage")
-        return {
-            "model": fields["profile"]["model"],
-            "choice": choice if choice in job["input"]["options"] else "uncertain",
-            "fields": fields,
-            "usage": usage,
-        }
+        return answer(payload, job["question"]["criteria"], self.settings.model)

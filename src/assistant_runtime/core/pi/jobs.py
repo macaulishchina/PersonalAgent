@@ -138,7 +138,7 @@ class PiJobs:
             await self.client.request("session.close", {"session_id": existing})
         result = await self.client.request(
             "session.resume" if existing else "session.create",
-            {**params, **({"session_id": existing} if existing else {"allow_model_fallback": False})},
+            {**params, **({"session_id": existing} if existing else {})},
             timeout=60,
         )
         for field, expected in (
@@ -154,10 +154,6 @@ class PiJobs:
         self.handles[run["id"]] = {
             "execution_session_id": thread,
             "attachments": run["data"].get("attachments", []),
-            "fresh_execution": not existing
-            and not run["data"].get("continuation")
-            and not spec.get("long_term"),
-            "activity": False,
             **({"mcp_revision": mcp_revision} if integration_adapter else {}),
         }
         if (
@@ -230,7 +226,6 @@ class PiJobs:
                 self.questions.pop(ident, None)
                 self.notify(ident, "running", questions=[])
         if "id" in event:
-            self.handles.setdefault(ident, {})["activity"] = True
             if method == "input.requested":
                 self.questions[ident] = event
                 self.notify(
@@ -255,13 +250,6 @@ class PiJobs:
                 )
             return True
         trace = tool_trace(method, p)
-        item = p.get("item", {})
-        if (
-            method in {"activity.started", "activity.completed"}
-            and item.get("type") not in {"reasoning", "input"}
-            and (item.get("type") != "message" or item.get("text"))
-        ):
-            self.handles.setdefault(ident, {})["activity"] = True
         if trace:
             self.notify(ident, None, tool_trace=trace)
         if method == "activity.completed":
@@ -326,48 +314,6 @@ class PiJobs:
         elif method == "error":
             self.notify(ident, None, error=str(p.get("error", "Provider error"))[:500])
         return True
-
-    async def fallback_ready(self, run):
-        """Only a first rejected turn with authoritative empty action history may restart."""
-        handle = self.handles.get(run["id"], {})
-        if not handle.get("fresh_execution") or handle.get("activity") or run["data"].get("goal"):
-            raise RuntimeError("Execution has activity or prior context; automatic fallback blocked")
-        thread = run["data"].get("execution_session_id")
-        if not thread or handle.get("execution_session_id") != thread:
-            raise RuntimeError("Cannot verify fallback thread")
-        summary = (await self.client.request("session.read", {"session_id": thread, "include_runs": True}))[
-            "session"
-        ]
-        turns = summary.get("runs")
-        if (
-            summary.get("status", {}).get("type") not in {"idle", "notLoaded", "systemError"}
-            or not isinstance(turns, list)
-            or len(turns) != 1
-        ):
-            raise RuntimeError("Fallback requires a single confirmed idle rejected turn")
-        turn = turns[0]
-        if (
-            turn.get("id") != run["data"].get("turn_id")
-            or turn.get("status") != "failed"
-            or not model_failure(turn.get("error"))["fallback_allowed"]
-        ):
-            raise RuntimeError("Provider did not confirm an eligible model failure")
-        items = turn.get("items")
-        if (
-            turn.get("itemsView") != "full"
-            or not isinstance(items, list)
-            or any(item.get("type") not in {"reasoning", "input"} for item in items)
-        ):
-            raise RuntimeError("Provider history contains work or is incomplete")
-        terminals = await self.client.request("operations.list", {"session_id": thread})
-        if terminals.get("data") or terminals.get("next_cursor"):
-            raise RuntimeError("Background operations prevent automatic fallback")
-
-    async def detach(self, run):
-        """Old provider events cannot mutate the replacement execution."""
-        self.threads.pop(run["data"].get("execution_session_id"), None)
-        self.handles.pop(run["id"], None)
-        self.questions.pop(run["id"], None)
 
     async def reject_continuation(self, ident, turn):
         async with self.locks.setdefault(ident, asyncio.Lock()):

@@ -42,14 +42,8 @@ def check(config, *, native=True):
         from assistant_runtime.core.tasks.selection import ModelPolicy
 
         selection = ModelPolicy.parse(policy.model_policy)
-        for row in selection.profiles.values():
-            entry = settings.entry(row["model"])
-            reasoning_effort(entry, row["reasoning_effort"])
-        for candidates in selection.fallbacks.values():
-            for row in candidates:
-                entry = settings.entry(row["model"])
-                reasoning_effort(entry, row["reasoning_effort"])
-        return {"profiles": list(selection.profiles), "concurrency": policy.concurrency}
+        policy.validate_bindings(settings.entries)
+        return {"recommendations": list(selection.recommendations), "concurrency": policy.concurrency}
 
     def memory():
         if config.memory_enabled:
@@ -109,7 +103,7 @@ def check(config, *, native=True):
         return "1.4.0"
 
     record("execution_binding", execution)
-    record("task_profiles", tasks)
+    record("task_recommendations", tasks)
     record("memory_binding", memory)
     record("usage_policy", lambda: {"max_requests": UsageSettings.parse(config.ai_usage).max_requests})
     record("assistant_skills", lambda: [p.name for p in assistant_skill_paths(config)])

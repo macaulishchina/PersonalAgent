@@ -1,36 +1,26 @@
-# 后台任务并发、模型四档、升级规则、工作文件和通知。
-
+# 后台任务：未指定模型/深度时跟随主对话；推荐项可为空。
 [tasks]
-max_goal_rounds = 8 # 同一长期目标单轮任务内有限续跑，不重置调用预算
+max_goal_rounds = 8
 timezone = "Asia/Shanghai"
 concurrency = 4
 misfire_seconds = 300
 
 [tasks.execution]
-model = "auto"
-reasoning_effort = "auto"
+model = "auto" # 跟随主对话模型；显式配置会约束所有任务
+reasoning_effort = "auto" # 沿用主对话具体深度；主对话也是 auto 时由发起模型选择
 
 [tasks.model_policy]
-review_mode = "active"
-default_profile = "fast"
-max_upgrades = 1
+review_mode = "shadow" # off/shadow/active；decisions 为可选插件
+max_upgrades = 1 # 有检查点的显式交接；失败不换模型
 
-[tasks.model_policy.profiles.fast]
-model = "go-gpt"
-reasoning_effort = "low"
-[tasks.model_policy.profiles.balanced]
-model = "go-gpt"
-reasoning_effort = "medium"
-[tasks.model_policy.profiles.deep]
-model = "go-gpt"
-reasoning_effort = "high"
-[tasks.model_policy.profiles.ultra]
-model = "go-gpt"
-reasoning_effort = "max"
-[tasks.model_policy.fallbacks]
-go-gpt = [{model="go-claude", reasoning_effort="medium"}, {model="deepseek-assist", reasoning_effort="high"}]
-go-claude = [{model="go-gpt", reasoning_effort="medium"}, {model="deepseek-assist", reasoning_effort="high"}]
-deepseek-assist = [{model="go-gpt", reasoning_effort="medium"}, {model="go-claude", reasoning_effort="medium"}]
+[tasks.model_policy.recommendations]
+# 自定义 ID 不代表档位顺序。模型必须先登记在 model_api.entries。
+# [tasks.model_policy.recommendations.diagnosis]
+# name = "复杂诊断"
+# model = "your-model-alias"
+# reasoning_effort = "high"
+# reason = "适合多假设分析和冲突证据推理"
+# description = "根因未明、需要比较多个解释并逐项验证时使用"
 
 [work_files]
 retention_days = 7

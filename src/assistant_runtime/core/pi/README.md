@@ -14,7 +14,7 @@ personal-assistant presentation and instructions remain owned by `core/speech`.
 
 Execution is full-permission; no OS sandbox is claimed. MCP tool policy remains enforced. Voice remains an unavailable placeholder owned by `core/speech/disabled.py`, pending independent acceptance. Pi owns no voice object and has no device-plugin dependency. Interactive MCP OAuth is not implemented; no login URL is fabricated.
 
-Install the pinned runtime with `python -m assistant_runtime.app.cli install-pi` using the application's Python environment. No destination is required: Pi lives in the user's data directory, and a successful installation records its absolute Pi and Node paths. The default `pi_binary="pi"` uses that record without adding Pi to PATH; a destination argument selects and records a custom location, while an explicit `pi_binary` path overrides the record. The wheel includes `extension.ts`. Configure `main_model`, `main_reasoning_effort`, `model_api` and task profiles. Secrets remain in private storage. Derived execution folders are mode 0700 and metadata/config files mode 0600.
+Install the pinned runtime with `python -m assistant_runtime.app.cli install-pi` using the application's Python environment. No destination is required: Pi lives in the user's data directory, and a successful installation records its absolute Pi and Node paths. The default `pi_binary="pi"` uses that record without adding Pi to PATH; a destination argument selects and records a custom location, while an explicit `pi_binary` path overrides the record. The wheel includes `extension.ts`. Configure `main_model`, `main_reasoning_effort`, `model_api` and optional task recommendations. Secrets remain in private storage. Derived execution folders are mode 0700 and metadata/config files mode 0600.
 
 New state never imports Codex context. The current plugin consolidation preserves existing Pi data; do not reset it at cutover. New Pi sessions survive clean restart; unconfirmed execution never automatically replays. Each session is closed through plugin ownership.
 
@@ -30,7 +30,7 @@ the Windows default; explicit Bash requires a native Bash installation. The
 Linux tool implementation is unchanged. The platform helper is packaged with the
 application, so both source and installed-package acceptance must cover it.
 
-`transport.py` authenticates Pi traffic and forwards normalized streaming events through the shared provider adapter. Before dispatch it obtains a durable permit from the shared [ai_usage plugin](../ai_usage/README.md); that plugin owns all counters, policies, storage and statistics. Native compaction passes through the same gate and counts only when a request is actually sent. Missing token telemetry is distinct from a lost execution result. Task continuation/fallback/upgrade/restart preserve work identity. Pi automatic retries and paid cache warming remain disabled.
+`transport.py` authenticates Pi traffic and forwards normalized streaming events through the shared provider adapter. Before dispatch it obtains a durable permit from the shared [ai_usage plugin](../ai_usage/README.md); that plugin owns all counters, policies, storage and statistics. Native compaction passes through the same gate and counts only when a request is actually sent. Missing token telemetry is distinct from a lost execution result. Task continuation, explicit handoff and restart preserve work identity. Pi automatic retries and paid cache warming remain disabled.
 
 
 Skill selection belongs to the composition root: enabled plugins contribute their
@@ -51,6 +51,16 @@ instructions. This controls automatic loading, not arbitrary filesystem permissi
 The execution extension registers native model aliases and forwards Pi-native normalized transcripts/events through the host's metered `/native` transport. It does not emulate Responses for another provider. Account/alias/effort/work identities are bound on the host; request parameters cannot choose an endpoint, account or key. Models auxiliary/memory inference uses the same provider library with no tool declarations and rejects tool output. Provider SDK errors are sanitized before leaving the helper. No request is automatically retried; an unfinished stream remains unknown, while an authoritative HTTP rejection is recorded separately. Credential and process failures do not restart or replay an agent turn.
 
 Provider catalogs are bundled metadata, not account entitlements. Actual images, structured output and tools still need per-route acceptance. ChatGPT's official OAuth route does not accept a request output cap, so `output_limit="model"` is mandatory; the host reserves the catalog maximum. Other provider request caps are checked against the actual constructed payload before send; unsupported encodings fail instead of losing a limit. Run the model-account tests with the models group; they use real Pi/SDK subprocesses and a localhost endpoint, never paid services.
+
+Custom Anthropic connections reuse only the exact model's pinned
+`forceAdaptiveThinking` declaration; configured credentials, endpoint, enabled
+levels and conversation policy stay independent. Pi encodes adaptive effort or
+legacy token budgets for both execution and auxiliary inference. Legacy thinking
+fits inside the configured total output ceiling, and insufficient room fails
+before HTTP. Explicit `none` uses the adapter's disabled-thinking input; `auto`
+removes control fields without choosing a depth. Structured formats and effort
+coexist in `output_config`. Real-SDK local tests cover both thinking modes and
+all imported Haiku efforts; they do not certify a third-party endpoint.
 
 Foreground conversation startup is separate from transport startup (`foreground=False`
 for standalone execution composition). This uses the same client, event dispatcher and

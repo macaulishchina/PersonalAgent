@@ -35,18 +35,138 @@
       },
       "execution": {
         "type": "object",
-        "title": "默认执行选型",
+        "title": "默认模型与思考深度",
         "default": {
           "model": "auto",
           "reasoning_effort": "auto"
         },
-        "additionalProperties": {}
+        "additionalProperties": false,
+        "description": "可以全部留为跟随主对话。显式设置会约束所有后台任务。",
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "默认任务模型",
+            "default": "auto",
+            "description": "auto 跟随主对话模型；也可固定一个已登记模型。",
+            "x-reference": "model_api.entries"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "title": "思考深度",
+            "default": "auto",
+            "description": "任务中的自动由发起模型选择具体深度；主对话有具体深度时可沿用。",
+            "enum": [
+              "auto",
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          }
+        }
       },
       "model_policy": {
         "type": "object",
-        "title": "模型选择与回退",
-        "default": {},
-        "additionalProperties": {}
+        "title": "模型推荐与决策",
+        "default": {
+          "max_upgrades": 1,
+          "review_mode": "shadow",
+          "recommendations": {}
+        },
+        "additionalProperties": false,
+        "properties": {
+          "recommendations": {
+            "type": "object",
+            "title": "模型推荐项",
+            "default": {},
+            "maxProperties": 32,
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "model",
+                "reason",
+                "description"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "title": "推荐名称",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "model": {
+                  "type": "string",
+                  "title": "推荐模型",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "x-reference": "model_api.entries"
+                },
+                "reasoning_effort": {
+                  "type": "string",
+                  "title": "思考深度",
+                  "default": "auto",
+                  "description": "任务中的自动由发起模型选择具体深度；主对话有具体深度时可沿用。",
+                  "enum": [
+                    "auto",
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    "ultra"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "title": "推荐理由",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "description": {
+                  "type": "string",
+                  "title": "适用场景",
+                  "minLength": 1,
+                  "maxLength": 800
+                }
+              }
+            }
+          },
+          "review_mode": {
+            "type": "string",
+            "title": "可选决策辅助",
+            "description": "需要启用 decisions 插件。关闭或不可用时，保留主模型的选择；观察只记录，不调整。",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "default": "shadow",
+            "x-labels": {
+              "off": "关闭",
+              "shadow": "只观察，不调整",
+              "active": "参与决策"
+            }
+          },
+          "max_upgrades": {
+            "type": "integer",
+            "title": "每次执行允许的模型交接次数",
+            "description": "仅允许有证据和安全检查点的显式交接；失败不会触发换模型。",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 3
+          }
+        }
       }
     }
   },

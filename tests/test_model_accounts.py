@@ -439,7 +439,7 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ModelCallError) as caught:
             await complete(self.accounts, self.payload(), "synthetic")
         self.assertEqual(str(caught.exception), "model_http_402")
-        self.assertTrue(caught.exception.fallback_allowed)
+        self.assertEqual(caught.exception.code, "model_http_402")
         self.assertNotIn("private", str(caught.exception))
         self.assertEqual(len(self.gateway.requests), 1)
 

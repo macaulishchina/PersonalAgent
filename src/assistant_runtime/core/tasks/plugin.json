@@ -16,7 +16,8 @@
   },
   "optional": {
     "conversation": "core",
-    "devices": "core"
+    "devices": "core",
+    "decisions": ">=1.0.0,<2.0.0"
   },
   "critical": false
 }

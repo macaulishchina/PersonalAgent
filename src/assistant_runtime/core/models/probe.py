@@ -64,7 +64,6 @@ class ModelProbes:
             provider["enabled"] = True
             if provider.get("account"):
                 provider.pop("protocol", None)  # The parser normalizes native bindings itself.
-            entry["fallbacks"] = []
             settings = ModelSettings.parse(
                 {
                     "enabled": True,

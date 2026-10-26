@@ -68,6 +68,10 @@ def validate_candidate(entry_name, contents, *, root, management=None, entry_dir
         from assistant_runtime.core.models.settings import ModelSettings, reasoning_effort
 
         models = ModelSettings.parse(config.model_api) if "models" in config.enabled_plugins else None
+        if models:
+            from assistant_runtime.core.tasks.settings import TaskSettings
+
+            TaskSettings.parse(config.tasks).validate_bindings(models.entries)
         if models and models.enabled:
             if config.main_model != "unconfigured":
                 if config.main_model not in models.entries:

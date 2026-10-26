@@ -91,16 +91,11 @@ class ModelReview:
                 },
             )
             return
-        config = p.host.config.decisions
         reason = (
             "disabled"
             if p.model_policy.review_mode == "off"
             else "decision_support_unavailable"
-            if not (
-                config.get("enabled", True)
-                and config.get("external_data_consent", False)
-                and config.get("mode", "active") == "active"
-            )
+            if "decisions" not in p.host.runtime.plugins
             else "instance_fixed"
             if all(v != "auto" for v in p.settings.execution.values())
             else "queue_full"
@@ -143,14 +138,15 @@ class ModelReview:
         spec = run["data"]["spec"]
         execution = spec["execution"]
         catalog = await p.executor.models()
-        options = p.model_policy.options(catalog, {}, p.settings.execution)
-        # Explicit custom models remain candidates even when not assigned to a tier.
+        options = p.model_policy.options(catalog, {}, p.settings.execution, p.model_defaults())
+        # Explicit custom models remain candidates even when not recommended.
         if not any(o["model"] == execution["model"] for o in options.values()):
             options.update(
                 p.model_policy.options(
                     catalog,
                     {"model": execution["model"], "reason": "review candidate"},
                     p.settings.execution,
+                    p.model_defaults(),
                 )
             )
         state = {

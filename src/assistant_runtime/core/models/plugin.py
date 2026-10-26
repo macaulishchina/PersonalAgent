@@ -324,88 +324,44 @@ class ModelsPlugin:
                         session_id = hashlib.sha256(
                             (str(self.host.config.root) + ":" + str(session)).encode()
                         ).hexdigest()
-                        candidates = [a["model"], *m.get("fallbacks", [])]
-                        for index, candidate in enumerate(candidates):
-                            try:
-                                selected = self.settings.entry(candidate)
-                                effort = reasoning_effort(selected, a.get("reasoning_effort"))
-                                if (a.get("images") and not selected.get("images")) or (
-                                    a.get("schema") is not None and not selected.get("structured")
-                                ):
-                                    raise ValueError("Fallback lacks required capability")
-                            except ValueError:
-                                attempts.append(
-                                    {
-                                        "model": candidate,
-                                        "state": "skipped",
-                                        "error": "incompatible_configuration",
-                                    }
-                                )
-                                log.warning(
-                                    "Model candidate skipped request=%s model=%s reason=incompatible_configuration",
-                                    ident,
-                                    candidate,
-                                )
-                                continue
-                            if await self.caller(request.caller_run) != caller:
-                                raise ValueError("Model caller execution version changed")
-                            attempted = {"model": candidate, "reasoning_effort": effort, "state": "submitted"}
-                            attempts.append(attempted)
-                            with self.db:
-                                self.db.execute(
-                                    "UPDATE model_calls SET result=? WHERE id=?",
-                                    (
-                                        json.dumps(
-                                            {"state": "submitted", "request_id": ident, "attempts": attempts}
-                                        ),
-                                        key,
+                        effort = reasoning_effort(m, a.get("reasoning_effort"))
+                        attempted = {"model": a["model"], "reasoning_effort": effort, "state": "submitted"}
+                        attempts.append(attempted)
+                        with self.db:
+                            self.db.execute(
+                                "UPDATE model_calls SET result=? WHERE id=?",
+                                (
+                                    json.dumps(
+                                        {"state": "submitted", "request_id": ident, "attempts": attempts}
                                     ),
-                                )
-                            try:
-                                from assistant_runtime.api.ai_usage import metered
+                                    key,
+                                ),
+                            )
+                        from assistant_runtime.api.ai_usage import metered
 
-                                scope = await self.host.ai_usage.scope(request.caller_run)
-                                selected_payload = {
-                                    **payload,
-                                    "model": candidate,
-                                    "reasoning": {"effort": effort},
-                                    "max_output_tokens": selected.get(
-                                        "max_output_tokens", self.settings.max_output_tokens
-                                    ),
-                                }
-                                result = await metered(
-                                    self.host.ai_usage.service,
-                                    scope,
-                                    "memory" if scope.work_id.startswith("memory:") else "inference",
-                                    selected["provider"],
-                                    selected["model"],
-                                    lambda: self.client.complete(selected_payload, session_id=session_id),
-                                    bounds={
-                                        "input_tokens": selected.get("context_window", 128000),
-                                        "output_tokens": await self.client.output_bound(selected_payload)
-                                        if hasattr(self.client, "output_bound")
-                                        else selected_payload["max_output_tokens"],
-                                    },
-                                    body=selected_payload,
-                                )
-                                attempted["state"] = "completed"
-                                result.update(
-                                    selected_model=candidate, reasoning_effort=effort, attempts=attempts
-                                )
-                                break
-                            except ModelCallError as exc:
-                                attempted.update(state="failed", error=exc.code)
-                                log.error(
-                                    "Model call failed request=%s model=%s error=%s fallback=%s",
-                                    ident,
-                                    candidate,
-                                    exc.code,
-                                    exc.fallback_allowed and index + 1 < len(candidates),
-                                )
-                                if not exc.fallback_allowed or index + 1 == len(candidates):
-                                    raise
-                        else:
-                            raise ModelCallError("no_compatible_fallback")
+                        scope = await self.host.ai_usage.scope(request.caller_run)
+                        payload["reasoning"] = {"effort": effort}
+                        try:
+                            result = await metered(
+                                self.host.ai_usage.service,
+                                scope,
+                                "memory" if scope.work_id.startswith("memory:") else "inference",
+                                m["provider"],
+                                m["model"],
+                                lambda: self.client.complete(payload, session_id=session_id),
+                                bounds={
+                                    "input_tokens": m.get("context_window", 128000),
+                                    "output_tokens": await self.client.output_bound(payload)
+                                    if hasattr(self.client, "output_bound")
+                                    else payload["max_output_tokens"],
+                                },
+                                body=payload,
+                            )
+                        except ModelCallError as exc:
+                            attempted.update(state="failed", error=exc.code)
+                            raise
+                        attempted["state"] = "completed"
+                        result.update(selected_model=a["model"], reasoning_effort=effort, attempts=attempts)
                         if a.get("schema") is not None:
                             from jsonschema import Draft202012Validator
 

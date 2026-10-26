@@ -16,177 +16,78 @@ task JSON/SSE or notification prose. Prose saying "sent" is not delivery evidenc
 Recorded task replies can restore missing conversation attachments from their
 existing registered references without rerunning tasks or capturing another image.
 
-## Configuration
+## 模型配置与推荐
+
+后台任务不要求单独配置模型。省略 `tasks.execution` 或保持两个字段为 `auto`，
+使用配置中的 `main_model` 与 `main_reasoning_effort`，而非某个父任务偶然使用的模型。
+创建时将具体选型与来源保存到任务及执行快照；修改推荐或主对话不会改写已保存任务。
+显式 `tasks.execution` 是所有任务的固定约束。记忆仍使用独立的 `model_api.memory`。
 
 ```toml
 [tasks]
-timezone = "Asia/Shanghai"
-concurrency = 2
-misfire_seconds = 300
-[tasks.execution]
-model = "auto"
-reasoning_effort = "auto"
+concurrency = 4
 
 [tasks.model_policy]
-default_profile = "fast"
+review_mode = "shadow" # off / shadow / active；decisions 可不启用
 max_upgrades = 1
-[tasks.model_policy.profiles.fast]
-model = "go-gpt"
-reasoning_effort = "low"
-[tasks.model_policy.profiles.balanced]
-model = "go-gpt"
-reasoning_effort = "low"
-[tasks.model_policy.profiles.deep]
-model = "go-gpt"
-reasoning_effort = "medium"
-[tasks.model_policy.profiles.ultra]
-model = "go-gpt"
-reasoning_effort = "max"
 
-[work_files]
-retention_days = 7
-# root = "/absolute/private/instance/work"
+# 可完全不添加推荐；ID 稳定，名称、模型与场景由实例维护，没有内置顺序。
+[tasks.model_policy.recommendations.diagnosis]
+name = "复杂诊断"
+model = "registered-model-alias"
+reasoning_effort = "high"
+reason = "适合多假设分析和冲突证据推理"
+description = "根因未明、需要比较多个解释并验证时使用"
 ```
 
-`auto` is an application policy, never sent as a model name to Pi. The initiating
-model reads `list_task_models` for current models, supported efforts, profile availability
-and shared guidance. Choose the lightest suitable profile using uncertainty, existing
-procedures and acceptance checks; step count or wall time alone does not imply difficult
-reasoning. Profile selects the execution model tier; reasoning effort can be chosen
-independently from that model's current account-supported efforts. Assistants may specify
-either or both with an evidence-based reason, e.g. `execution={"profile":"deep",
-"reasoning_effort":"high","reason":"conflicting evidence needs difficult reasoning"}`.
-Low suits familiar steps; medium suits exploration; high and above need reasoning
-difficulty rather than a long task. Higher efforts remain a deliberate, sparing choice.
+配置界面：**任务与通知 → 安排任务**，可管理默认选型及推荐项。
+模型库同时显示主对话标签、引用该模型的推荐名称；悬停可查看推荐理由、场景和深度。
+模型引用、重名、深度支持情况在保存前校验；移除仍被推荐引用的模型需要先调整推荐。
 
-Optional `decisions` support makes at most one joint `model_profile` query for missing
-profile/effort fields. The HTTP request batches two small native Choice questions,
-one for the tier and one for effort, instead of asking the provider to discriminate
-the Cartesian product. Confidence is checked independently for each unresolved field;
-an uncertain field falls back to its configured default while a trusted field can be
-adopted. The resulting combination must pass the same supported-option and executor
-checks; incompatible partial answers revert to the original policy. Its bounded `options` come from configured profiles and the current
-account catalog, with fixed instance values and explicit agent fields already applied.
-Only unresolved fields may change. Identical concrete model/effort aliases are collapsed
-to avoid splitting probabilities; matching configured defaults name the canonical tier.
-One supported combination needs no semantic query. With both fields determined, Jev is
-bypassed. Disabled/unconsented/shadow/unavailable/uncertain/timeout advice uses original
-profile defaults and preserves explicit fields; unsupported explicit choices still fail.
-No extra inference service or provider replacement is introduced. A model_catalog failure
-does not hide a subsequent executor validation error. Creating a task does not alter a
-running task's model or effort; active changes retain the controlled handoff mechanism.
-`ultra` is above `deep`, reserved for exceptionally complex reasoning or original
-scientific research with concrete justification that `deep` is insufficient. Use it
-sparingly; routine literature search, summaries, task length and a research-related
-title do not justify it. The default remains `fast`; all four model/effort mappings
-can be overridden in instance configuration. `ultra` is a task profile name, separate
-from any provider reasoning-effort value with the same name.
-Use `execution={"profile":"fast","reason":"known steps; read back the resulting state"}`.
-Concrete model/effort choices remain supported with a nonempty reason (max 400 chars).
-Missing/auto values use the configured profile, never the foreground or parent model.
-Fixed instance settings override requests. The resolved model/effort is stored with the definition and each run.
-Unsupported models/efforts fail explicitly. Repeated executions reuse saved choices while settings remain auto; fixed instance settings are applied again before every execution and saved in its run snapshot.
-Foreground uses `main_model`; Mem0 requires explicit `model_api.memory`. Task profiles change neither binding.
+`list_task_models` 返回主对话默认、固定约束、已登记模型及其原生深度、推荐项和统一指导。
+调用者可传 `execution={recommendation:"diagnosis", reasoning_effort:"high", reason:"..."}`，
+或直接选择 `execution.model`。推荐项的深度可覆盖；显式模型与推荐不一致会报错，
+不静默忽略其中一项。显式选择需说明理由。主模型根据实际目标、已有流程与验收要求决策，
+步骤多和耗时长不等于推理困难。没有推荐也可使用已登记的模型。
 
-Profiles are instance-owned opaque model IDs; partial overrides merge into the four
-defaults above. Unavailable choices fail unless an explicitly configured fallback applies at the safe first-turn boundary below; there is no implicit replacement.
-Pi owns catalog caching (five-minute TTL), concrete model validation and provider RPC.
-Existing saved concrete selections are not silently changed by a new default policy.
-Unrelated definition edits preserve selection provenance. Selection metadata supplied
-by clients is discarded/recomputed; the host records version, profile, origin of each
-field (`agent`, `profile_default`, `instance_fixed`, `jev`, `catalog_only_option`), reason
-and resolved values. Joint advice also retains the original explicit fields and the
-validated recommended combination. A different supported effort does not erase a known
-profile's identity or silently label it a custom model.
+### auto 的职责
 
-Runs retain the most recent 16 `model_selections` segments with monotonic segment numbers.
-Provider-confirmed model/effort are recorded separately when available, never inferred
-from tool latency. `get_task_execution_trace` returns these receipts and bounded upgrade
-history alongside tool metadata. Total execution time is not claimed as model reasoning
-time: queueing, tools, user waits and other orchestration also contribute.
+- 主对话 `auto`：不指定供应商思考强度，由供应商决定。
+- 任务省略深度：沿用主对话的具体深度；推荐有具体深度时优先使用推荐。
+- 任务有效深度仍为 `auto` 且模型支持调整：发起模型必须在工具调用中给出受支持的具体值。
+  缺少时返回可选值，尚未创建或执行任务；框架不臆造跨供应商档位。
+- 模型不提供可调深度：使用 `auto`，不会虚构 `none/low` 参数。
 
-## Explicit failure fallback
+### 可选 decisions
 
-Configure an ordered list per concrete primary model, separately from complexity
-upgrades and from no-tool inference fallback lists:
+Jev 的传输、授权、阈值和判断日志全部属于 `decisions` 插件。任务仅调用公共决策契约；
+不读取或复制其配置。未安装、停用、未授权、超时或无可信建议时保留原有有效选型。
+`off` 不调用；`shadow` 在初始派发后异步观察；`active` 创建/明确更改选型时只做一次有界复核。
+候选来自主对话、推荐及显式选择，按账号支持的原生深度过滤；不内置模型强弱顺序。
+`model_source/effort_source="assistant"` 表示可调整的助手推荐；`"user"` 只用于用户明确选择。
+用户、固定配置及未标记的显式字段保持保护；偏好文字不产生硬约束。
 
-```toml
-[tasks.model_policy.fallbacks]
-go-gpt = [{ model = "deepseek-assist", reasoning_effort = "none" }]
-# Example with verified API entries:
-go-claude = [
-  { model = "go-gpt", reasoning_effort = "none" },
-  { model = "go-gpt", reasoning_effort = "medium" },
-]
-```
+### 失败与显式模型交接
 
-The primary is tried first, then at most three listed backups once each. The
-original list remains fixed: no recursive backup expansion. Each backup has an
-explicit model and effort validated by the executor. Same upstream model through
-a different provider must have a distinct API entry alias. Existing saved task
-choices remain primary; the instance mapping also applies to those choices.
+模型错误直接失败，结果未知则记录未知；不自动换模型或重做操作。
+辅助推理同样只调用指定模型一次。调用 ID、共享额度、取消和迟到结果保护继续有效。
+旧 `profiles/default_profile/fallbacks` 配置已删除，保存/启动会拒绝这些字段。
+升级现有实例时明确移除这些字段，按用途创建推荐；历史结果和操作证据无需重写。
 
-Only a structured provider rejection on a fresh first execution is eligible.
-The Pi adapter must read back one failed turn, complete items, no tool/assistant
-activity, no active terminals and no Goal. Then tasks records a new model selection,
-revokes the old binding and starts a fresh thread for the same run and grants.
-Already-executed work, resumed turns, long-term Goals, user cancellation, policy
-errors, stream loss and unknown outcomes are not automatically replayed. Existing
-safe-checkpoint upgrades remain separate. Fallback can change model quality; it
-is availability policy, not a promise of equivalent reasoning strength.
+`request_task_model_upgrade` 继续保留安全交接能力，目标改为推荐 ID，不再按四档排名。
+必须给出真实推理困难、证据、检查点与唯一 UUID；`reasoning_effort` 可选择具体原生值。
+仅作用于当前运行，受 `max_upgrades` 限制。网络错误、欠费和未知操作不能触发交接。
+同模型交接须提高具体深度；不同模型是否更合适由调用者根据推荐描述判断。
 
-`get_task_execution_trace` exposes `model_fallback` with ordered errors, selected
-model and phase. Logs record failure and switch without credentials. Exhaustion
-fails the run. Restart during a pending handoff becomes unknown and requires
-reconciliation rather than another dispatch. Late old-thread results cannot replace
-the new run. Primary failure alone is never evidence that no operation happened.
-
-## Controlled model upgrades
-
-Pi agent completion ends one execution turn. An explicitly authorized `long_term=true` goal can queue another turn under the same run, grants and execution budget. Tasks owns this continuation; it is bounded by `tasks.max_goal_rounds` (default 8, configurable 1..64). Incomplete goals at that boundary wait for user action and never report completion. Blocked/paused goals and user clarification also wait. Ordinary periodic work finishes one check/batch; the scheduler owns the next trigger. A model cannot turn a periodic plan into a long-lived loop by reporting a goal.
-
-AI-service consumption belongs to [ai_usage](../ai_usage/README.md): 100 requests per work by default, including descendant tasks, fallback, auxiliary judgments and paid search. Tasks owns immutable work association, plan pause/recovery and result-delivery rights. A budget denial stops new AI requests; it does not replay tools or overturn verified actions. Details expose `ai_usage` and its known/unknown telemetry. A triggered plan stays paused until explicit recovery. Native retries and paid cache warming remain disabled.
-
-`request_task_model_upgrade` / CLI `tasks upgrade_model` applies to an active non-Goal
-Pi execution. It changes only that run, not future recurring runs or the definition.
-Background callers can target only their own run. Fixed model/effort settings prohibit
-automatic upgrades. `max_upgrades` defaults to one, permits 0..3; accepted requests consume
-the budget even if a handoff is subsequently blocked. Custom choices outside the configured
-profiles and native long-term Goals require explicit task management instead. Goal's
-autonomous continuation lifecycle is not silently interrupted or raced by a model handoff.
-The Pi adapter also rejects a configured higher profile that would reduce or retain
-the reasoning effort of the same model.
-The order is `fast → balanced → deep → ultra`; the default one-upgrade budget remains
-unchanged, and a justified request may move directly to a higher profile. `ultra`
-uses the same reason/evidence/checkpoint and authorization checks as other upgrades.
-
-Request a higher profile with a stable UUID, concrete `reason` and `evidence`, and a cause
-of `reasoning_limit`, `conflicting_evidence` or `unfamiliar_workflow`. Offline devices,
-timeouts, missing capabilities and uncertain actions are not upgrade causes. Checkpoint:
-
+检查点格式：
 ```json
-{"completed":["Verified completed work and stable operation IDs"],
- "next_step":"Verify current state, then perform only the remaining action",
+{"completed":["verified results and operation IDs"],"next_step":"remaining work",
  "active_operations":[],"uncertain_operations":[]}
 ```
 
-Reconcile uncertain actions and wait for active external operations before requesting;
-never put passwords/tokens in the checkpoint. The agent finishes its current turn after
-the request. Request acceptance is not an immediate model switch or task completion.
-The host persists `requested → ready → dispatching → applied` receipts, waits for a clean
-completed turn, verifies an idle independent provider thread, its matching latest completed
-turn and no live background terminals, then archives the old context and starts a fresh execution context from
-the verified checkpoint, retaining the same task run and budget. The run retains workspace/resources, completion round and operation IDs;
-no new task definition, foreground turn, speech or intermediate completion notice is created.
-Old completion events cannot end the new segment.
-
-User cancellation/pause wins before dispatch. Failed/interrupted turns and failed preflight
-block handoff; no terminal is killed merely to make a model switch possible. A lost dispatch
-acknowledgment or restart during unconfirmed dispatch becomes `unknown`, never automatically
-replayed. A durable `ready` checkpoint can re-enter read-only preflight after restart; if
-proof is unavailable it pauses for explicit reconciliation. The framework verifies provider
-lifecycle, while external side-effect certainty still requires honest operation receipts
-and checkpoint evidence. A stronger model must not repeat an acknowledged device action.
+宿主等待确认完成的执行边界、无活动/未知操作及无后台终端，再归档旧上下文并创建新上下文；
+不复制供应商私有推理。用户取消优先；交接确认丢失或重启中断记录未知，不重放。
+长期 Goal 不允许自动模型交接；其继续执行仍由任务已有轮次与共享用量保护管理。
 
 ## Task definitions and runs
 
@@ -341,7 +242,7 @@ rejects symlink traversal and does not scan user projects, secrets or model dire
 
 Run `python scripts/check.py` for scheduling, idempotency, cancellation, event freshness,
 model choice, concurrent resources, recovery, file boundaries and the existing suites.
-`--group tasks --group execution` includes profile defaults, no parent inheritance, fixed
+`--group tasks --group execution` includes main-conversation defaults, custom recommendations, fixed
 overrides/provenance, UUID idempotency, upgrade boundaries, live terminals, cancellation,
 lost acknowledgments, restart recovery and late prior-turn events. Provider fixtures do
 not establish real API model-switch success; perform explicit scratch-only live
@@ -601,53 +502,9 @@ known final episode range, requested storage level and absence of unresolved ope
 no search hits is not completion evidence. Unknown totals require continued tracking or
 user clarification. Tests live in `test_task_self_schedule`.
 
-## Evidence-based model review and active selection
+## Execution assessment and evidence
 
-`tasks.model_policy.review_mode` supports `off`, `shadow` (default) and `active`.
-Off/shadow keep existing missing-field selection behavior; shadow additionally observes
-initial dispatch asynchronously. Active uses one bounded pre-execution decision on task
-creation or explicit execution edits, replacing missing-field support rather than making
-two selection calls. It never reselects running work or changes saved recurring plans
-merely because the service restarts. Unrelated edits preserve execution verbatim.
-
-```toml
-[tasks.model_policy]
-review_mode = "active"
-
-[decisions.thresholds]
-model_review = 0.2
-```
-
-The candidate probability must meet this configurable threshold (0..1; default 0.90).
-It is not a measured execution-success probability. Other decision thresholds retain
-their existing minimum 0.5. The decisions global enabled/consent/mode switches still
-apply. `active_timeout_seconds` (default 3 seconds) also bounds catalog/review/adoption
-work after validating the original selection. Failure, timeout, missing support or an
-invalid recommendation keeps that valid original selection/default without a second
-Jev query, model retry or tool replay.
-
-Explicit recommendations should include `execution.model_source="assistant"` for a
-model/profile and `execution.effort_source="assistant"` for an explicit effort. Use
-`"user"` only for fields explicitly chosen by the user. User/fixed fields are filtered
-out of Jev's change space. Unlabelled explicit fields are conservatively protected,
-including older plans. A user-chosen model does not lock an unspecified effort.
-At the shared selection boundary, redundant `assistant` source labels on missing/auto
-values are removed without changing the caller's input. `user` labels still require
-a concrete model/profile or effort; defaults are not explicit user choices. Invalid
-source values are rejected. Free-form `assessment.user_preference` only informs Jev;
-it never adds selection locks, even when nonempty. Encode actual user choices in the
-corresponding structured fields and sources, not solely in preference prose.
-Declarations only restrict this choice; they are not verified user authorization and
-cannot grant tools, resources or rights. User constraints persist through execution
-updates unless the caller supplies an explicit user-directed replacement. No semantic
-verification of the caller's attribution is claimed.
-
-Active receipts record original/selected pairs, field origins, protected values,
-threshold, decision receipt, adoption and whether the pair actually changed. Dispatch
-copies this receipt into `run.data.model_review`, without an additional shadow call.
-Existing fallback chains and checkpoint-based upgrades remain separate owners.
-
-Agents should supply the following optional, bounded `execution.assessment`:
+Optional `execution.assessment` supplies bounded task facts for review:
 
 ```json
 {
@@ -674,7 +531,7 @@ Supplying fake `source` or `user_verified` fields inside assessment is rejected.
 The independent `model_review` question sees task facts and full legal model/effort
 pairs, but not the baseline recommendation/reason as separate advice. It does not
 create a universal scale between different providers' native efforts. Candidates come
-from configured tiers plus the explicitly selected custom model, filtered by the live
+from named recommendations, main defaults and the explicitly selected model, filtered by the live
 catalog and instance constraints. The task prompt may itself contain preferences, so
 this is not a claim of a statistically blinded experiment.
 
@@ -693,7 +550,7 @@ adoption state (`applied=false` in shadow). Original facts live in `spec.executi
 `spec.execution.selection.prior_execution`. Compare these alongside model-selection
 segments, tool trace, duration and verified task outcomes. Disagreement is not evidence
 that Jev was correct; provider-reported completion is not a quality label. Active correction is explicitly opt-in; deployment of a low threshold is not evidence
-of improved accuracy. Existing evidence/checkpoint-based upgrades remain unchanged.
+of improved accuracy. Explicit handoffs retain their evidence and checkpoint checks.
 
 
 Decision adoption now records its own observation after model policy validation.
@@ -723,5 +580,5 @@ A headless task installation can add `tasks` and `notifications` to slim and con
 or audio object is required. Install the tasks extra explicitly for APScheduler.
 Task plans own scheduling, goals, upgrades and feedback; each attempt references the
 public execution receipt through `data.execution_id`, also exposed as `execution` by get.
-Continuation, fallback and upgrades create new attempt receipts while retaining the same
+Continuation and explicit handoffs create new attempt receipts while retaining the same
 work allowance and existing verified operation checkpoints.

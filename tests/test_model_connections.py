@@ -55,7 +55,7 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                 "providers": {
                     "p": {
                         "protocol": protocol,
-                        "base_url": self.url,
+                        "base_url": self.url.removesuffix("/v1") if protocol == "anthropic" else self.url,
                         "key_env": "TEST_KEY",
                         "enabled": True,
                         **provider_options,
@@ -67,6 +67,7 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                         "model": model,
                         "images": True,
                         "structured": True,
+                        "context_window": 100000,
                         "reasoning_efforts": efforts
                         if efforts is not None
                         else ["none", "low", "high", "max"],
@@ -212,6 +213,80 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(RuntimeError):
                     await client.complete(self.payload("max"), session_id="one")
                 self.assertEqual(len(self.requests), count)
+
+    async def test_anthropic_adaptive_efforts_reach_wire_without_replacing_route(self):
+        levels = ["none", "low", "medium", "high", "xhigh", "max"]
+        for model in ("claude-haiku-5-5", "claude-opus-4-6"):
+            with self.subTest(model=model):
+                client = await self.client("anthropic", model=model, efforts=levels)
+                for effort in ["auto", *levels]:
+                    payload = self.payload(effort)
+                    payload["max_output_tokens"] = 4096
+                    await client.complete(payload, session_id="one")
+                    path, headers, wire = self.requests[-1]
+                    self.assertEqual(path, "/v1/messages")
+                    self.assertEqual(headers["x-api-key"], "private-synthetic-key")
+                    self.assertEqual(wire["model"], model)
+                    self.assertEqual(wire["max_tokens"], 4096)
+                    if effort == "auto":
+                        self.assertNotIn("thinking", wire)
+                        self.assertNotIn("effort", wire.get("output_config", {}))
+                    elif effort == "none":
+                        self.assertEqual(wire["thinking"], {"type": "disabled"})
+                        self.assertNotIn("effort", wire.get("output_config", {}))
+                    else:
+                        self.assertEqual(wire["thinking"]["type"], "adaptive")
+                        self.assertNotIn("budget_tokens", wire["thinking"])
+                        self.assertEqual(wire["output_config"]["effort"], effort)
+                before = len(self.requests)
+                with self.assertRaises(RuntimeError):
+                    await client.complete(self.payload("minimal"), session_id="one")
+                self.assertEqual(len(self.requests), before)
+        self.assertEqual(len(self.requests), 14)
+
+    async def test_anthropic_none_only_still_explicitly_disables_thinking(self):
+        for model in ("claude-haiku-5-5", "claude-sonnet-4-5"):
+            client = await self.client("anthropic", model=model, efforts=["none"])
+            await client.complete(self.payload("none"), session_id="one")
+            self.assertEqual(self.requests[-1][2]["thinking"], {"type": "disabled"})
+            await client.complete(self.payload("auto"), session_id="one")
+            self.assertNotIn("thinking", self.requests[-1][2])
+        self.assertEqual(len(self.requests), 4)
+
+    async def test_anthropic_budget_thinking_preserves_shared_output_ceiling(self):
+        client = await self.client(
+            "anthropic", model="claude-sonnet-4-5", efforts=["none", "low", "medium", "high"]
+        )
+        for effort, budget in (("low", 2048), ("medium", 8192), ("high", 16384)):
+            payload = self.payload(effort)
+            payload["max_output_tokens"] = 32768
+            await client.complete(payload, session_id="one")
+            wire = self.requests[-1][2]
+            self.assertEqual(wire["thinking"]["type"], "enabled")
+            self.assertEqual(wire["thinking"]["budget_tokens"], budget)
+            self.assertEqual(wire["max_tokens"], 32768)
+            self.assertNotIn("effort", wire.get("output_config", {}))
+        # Pi must reduce thinking inside a smaller shared ceiling, not grow it.
+        payload["max_output_tokens"] = 4096
+        await client.complete(payload, session_id="one")
+        wire = self.requests[-1][2]
+        self.assertLessEqual(wire["thinking"]["budget_tokens"], 4096 - 1024)
+        self.assertEqual(wire["max_tokens"], 4096)
+        # Too little room for legacy thinking must fail before HTTP dispatch.
+        payload["max_output_tokens"] = 128
+        with self.assertRaises(RuntimeError):
+            await client.complete(payload, session_id="one")
+        self.assertEqual(len(self.requests), 4)
+
+    async def test_anthropic_effort_and_structured_format_are_both_preserved(self):
+        client = await self.client("anthropic", model="claude-haiku-5-5", efforts=["high"])
+        payload = self.payload("high")
+        payload["text"] = {"format": {"schema": {"type": "object"}}}
+        await client.complete(payload, session_id="one")
+        wire = self.requests[-1][2]
+        self.assertEqual(wire["output_config"]["effort"], "high")
+        self.assertEqual(wire["output_config"]["format"]["schema"], {"type": "object"})
+        self.assertEqual(len(self.requests), 1)
 
     async def test_structured_output_preserves_schema_all_protocols(self):
         schema = {

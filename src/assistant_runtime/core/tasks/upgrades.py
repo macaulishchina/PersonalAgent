@@ -5,8 +5,6 @@ import json
 import time
 import uuid
 
-from assistant_runtime.core.tasks.selection import PROFILES
-
 
 def pending(run):
     history = run["data"].get("model_upgrades", [])
@@ -24,8 +22,21 @@ class ModelUpgrades:
         self.plugin, self.repo = plugin, plugin.repo
 
     async def request(self, args, caller):
-        if set(args) != {"run_id", "request_id", "profile", "cause", "reason", "evidence", "checkpoint"}:
-            raise ValueError("Upgrade requires run_id, UUID, profile, cause, reason, evidence and checkpoint")
+        if set(args) - {
+            "run_id",
+            "request_id",
+            "recommendation",
+            "cause",
+            "reason",
+            "evidence",
+            "checkpoint",
+            "reasoning_effort",
+        } or {"run_id", "request_id", "recommendation", "cause", "reason", "evidence", "checkpoint"} - set(
+            args
+        ):
+            raise ValueError(
+                "Upgrade requires run_id, UUID, recommendation, cause, reason, evidence and checkpoint"
+            )
         try:
             if str(uuid.UUID(args["request_id"])) != args["request_id"]:
                 raise ValueError()
@@ -43,8 +54,13 @@ class ModelUpgrades:
         self.validate(run, args)
         selected = await self.plugin.model_policy.resolve(
             self.plugin.executor,
-            {"profile": args["profile"], "reason": args["reason"]},
+            {
+                "recommendation": args["recommendation"],
+                "reason": args["reason"],
+                **({"reasoning_effort": args["reasoning_effort"]} if "reasoning_effort" in args else {}),
+            },
             self.plugin.settings.execution,
+            self.plugin.model_defaults(),
         )
         # The model lookup yielded; cancellation/termination must win the race.
         current = self.repo.run(run["id"])
@@ -78,21 +94,14 @@ class ModelUpgrades:
         if any(v != "auto" for v in self.plugin.settings.execution.values()):
             raise ValueError("Instance-fixed task model settings prohibit automatic upgrades")
         current = run["data"]["spec"]["execution"]
-        profile = current.get("profile")
-        if profile not in PROFILES:
-            profile = next(
-                (p for p in PROFILES if all(current.get(k) == v for k, v in policy.profiles[p].items())), None
-            )
+        target = policy.recommendations.get(args["recommendation"])
+        if not target:
+            raise ValueError("Handoff requires a configured recommendation")
         if (
-            args["profile"] not in PROFILES
-            or profile not in PROFILES
-            or PROFILES.index(args["profile"]) <= PROFILES.index(profile)
+            target["model"] == current["model"]
+            and args.get("reasoning_effort", target["reasoning_effort"]) == current["reasoning_effort"]
         ):
-            raise ValueError(
-                "Upgrade must move to a higher configured profile; custom selections cannot auto-upgrade"
-            )
-        if policy.profiles[args["profile"]] == {k: current[k] for k in ("model", "reasoning_effort")}:
-            raise ValueError("Upgrade must change model or reasoning effort")
+            raise ValueError("Handoff must change model or reasoning effort")
         if args["cause"] not in ("reasoning_limit", "conflicting_evidence", "unfamiliar_workflow"):
             raise ValueError(
                 "Offline devices, timeouts, missing tools and uncertain actions are not upgrade causes"

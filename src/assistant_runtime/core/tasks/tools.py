@@ -10,7 +10,7 @@ from assistant_runtime.api.annotations import READ, WRITE
 def create_server(client, caller_run=None):
     server = FastMCP(
         "tasks",
-        instructions="Manage durable background work without blocking the conversation. Create only user-authorized work. Get models before selecting execution.model and reasoning_effort; explain selection in execution.reason. The host may enforce fixed settings. Use stable UUID request_id for idempotent creation. Triggers: immediate; date with timezone-aware ISO at; interval with seconds; cron with expression/timezone; event with source(device/task), id, metric, operator(eq/gt/lt), value, duration_seconds, cooldown_seconds, hysteresis; or event with source=records, types (1..16 exact names), optional source_id/subject, merge_seconds (default 3), cooldown_seconds (30), max_age_seconds (300), capacity (128). Durable records subscriptions consume only new observations; no historical replay on create/resume/update. Baselines/corrections/deletions are not triggers. Query get_task_event_inbox and get_task_execution_trace to explain trigger decisions and execution. Execution kind: codex or reminder (no model). long_term uses a persistent Goal. Query run_id before steering/canceling; pause_task changes future scheduling only. Child tasks inherit scope. Never claim actions completed from memory.",
+        instructions="Manage durable background work without blocking the conversation. Create only user-authorized work. Get models before selecting execution.model and reasoning_effort; explain selection in execution.reason. The host may enforce fixed settings. Use stable UUID request_id for idempotent creation. Triggers: immediate; date with timezone-aware ISO at; interval with seconds; cron with expression/timezone; event with source(device/task), id, metric, operator(eq/gt/lt), value, duration_seconds, cooldown_seconds, hysteresis; or event with source=records, types (1..16 exact names), optional source_id/subject, merge_seconds (default 3), cooldown_seconds (30), max_age_seconds (300), capacity (128). Durable records subscriptions consume only new observations; no historical replay on create/resume/update. Baselines/corrections/deletions are not triggers. Query get_task_event_inbox and get_task_execution_trace to explain trigger decisions and execution. Execution kind: agent or reminder (no model). long_term uses a persistent Goal. Query run_id before steering/canceling; pause_task changes future scheduling only. Child tasks inherit scope. Never claim actions completed from memory.",
     )
 
     # Routing is positional-only: business fields may also be named action.
@@ -19,37 +19,25 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def list_task_models() -> dict:
-        """Available configured execution models/efforts, enforced settings and unified profile policy.
+        """Current main defaults, configured models/efforts and optional named recommendations.
 
-        Choose the lightest suitable profile using uncertainty, known procedures and acceptance
-        checks, not task length or the parent model. Pass execution={profile:fast|balanced|deep|ultra,
-        reason:...}; concrete model/effort overrides are allowed with a reason and validated.
-        Profile and reasoning_effort are independent: select either or both using this catalog.
-        Declare model_source="assistant" for your own model/profile recommendation and
-        effort_source="assistant" for your own explicit effort. Use "user" only when the
-        user explicitly chose that field. Never label your inference as a user choice.
-        Omit a source label when its value is missing/auto; redundant assistant labels
-        are ignored, but a user label without its concrete choice is rejected.
-        assessment.user_preference is advisory context, never a hard selection lock;
-        encode explicit user choices in the model/profile/effort fields and their sources.
-        With review_mode=active, Jev may correct assistant recommendations using legal pairs;
-        user choices, instance-fixed fields and unlabelled explicit choices remain protected.
-        A missing/auto field is selectable; a profile default is not an effort lock.
-        off/shadow retain the existing missing-field support without overriding explicit choices.
-        Reserve ultra for exceptionally complex reasoning or original scientific research with
-        concrete justification that deep is insufficient; ordinary research search/summaries
-        do not qualify. Use it sparingly.
-        Missing/auto fields use instance profiles, never inherit the foreground/parent model.
-        Include execution.assessment={acceptance:concrete checks, procedure:known steps and limits,
-        uncertainties:[unresolved facts], user_preference:exact user model/latency preference if any,
-        prior_run_id:related execution ID if retrying}. Do not claim familiar workflow when prior
-        evidence conflicts. The host reads prior outcomes itself; completion is not goal success.
-        All supplied assessment fields and model choices are assistant statements, not authority.
-        review_mode selects off, shadow (asynchronous observation) or active (one bounded
-        pre-execution decision). Failure/timeout preserves your valid original recommendation.
-        Inspect execution.selection.model_review and the run execution trace. No running-model
-        changes or action replays; unrelated task edits do not trigger reselection.
-
+        Omit execution.model/recommendation to use the main conversation model. Omitted
+        effort inherits its concrete effort. In tasks, auto asks YOU (the initiating model)
+        to choose a supported concrete reasoning_effort; if main effort is also auto,
+        supply one explicitly. Models without adjustable reasoning use auto. Main
+        conversation auto is independently provider-controlled.
+        Optional execution={recommendation:ID, reasoning_effort:SUPPORTED, reason:WHY}
+        selects a named suggestion; concrete execution.model is also supported. Recommendations
+        have no built-in rank. Pick by the supplied reason, description and acceptance checks.
+        Explicit model must match the selected recommendation; effort may override its default.
+        Declare model_source/effort_source=assistant for your own concrete recommendations,
+        user only for explicit user choices. Omit labels for missing/auto fields. Unlabelled
+        explicit choices are protected. Free-form user_preference is context, not a lock.
+        Include execution.assessment={acceptance,procedure,uncertainties:[facts],
+        user_preference,prior_run_id} when useful. Prior evidence is read by the host;
+        completion is not goal success. Optional decisions review may adjust assistant
+        recommendations, never user/fixed choices. Unavailable/timeout preserves the valid
+        original choice. No running model changes on unrelated edits; no fallback models.
         """
         return await call("models")
 
@@ -260,14 +248,21 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=WRITE)
     async def request_task_model_upgrade(
-        run_id: str, request_id: str, profile: str, cause: str, reason: str, evidence: str, checkpoint: dict
+        run_id: str,
+        request_id: str,
+        recommendation: str,
+        cause: str,
+        reason: str,
+        evidence: str,
+        checkpoint: dict,
+        reasoning_effort: str | None = None,
     ) -> dict:
-        """Request a bounded higher-profile handoff for THIS active run, then finish the current turn.
+        """Request a bounded handoff to a named recommendation for THIS active run, then finish the current turn.
 
         Reuse UUID after a lost reply. No immediate switch or replay. cause: reasoning_limit,
         conflicting_evidence, unfamiliar_workflow. Offline devices, timeouts and missing tools
-        do not justify upgrades. For ultra, explain why deep is insufficient for this unusually
-        complex reasoning/research problem. Ordinary research search/summaries do not qualify.
+        do not justify upgrades. Recommendations have no implicit order: explain why the
+        selected model/effort is better suited. For auto effort choose a concrete supported value.
         checkpoint={completed:[facts/operation IDs], next_step:text,
         uncertain_operations:[], active_operations:[]}; reconcile/wait before requesting, never
         include credentials. Background caller may target only itself. Native Goal runs and
@@ -278,7 +273,8 @@ def create_server(client, caller_run=None):
             "upgrade_model",
             run_id=run_id,
             request_id=request_id,
-            profile=profile,
+            recommendation=recommendation,
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
             cause=cause,
             reason=reason,
             evidence=evidence,

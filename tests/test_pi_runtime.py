@@ -150,12 +150,12 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                         await process.wait()
                     await gateway.aclose()
 
-    async def test_real_task_fallback_preserves_shared_budget_and_executes_once(self):
+    async def test_real_task_rejection_preserves_budget_and_does_not_try_another_model(self):
         from assistant_runtime.api.contracts import TaskRequest
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            target = root / "fallback.txt"
+            target = root / "rejected.txt"
 
             def script(step, body):
                 if body["model"] == "model-a":
@@ -169,8 +169,6 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
             cfg = Config(
                 root=root,
                 workspace=folder,
-                main_model="model-b",
-                main_reasoning_effort="low",
                 plugins=[
                     "ai_usage",
                     "workfiles",
@@ -186,15 +184,9 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 ],
                 memory_enabled=False,
                 model_api=configuration(gateway.base_url),
-                tasks={
-                    "model_policy": {
-                        "profiles": {
-                            name: {"model": "model-a", "reasoning_effort": "low"}
-                            for name in ("fast", "balanced", "deep", "ultra")
-                        },
-                        "fallbacks": {"model-a": [{"model": "model-b", "reasoning_effort": "low"}]},
-                    }
-                },
+                main_model="model-a",
+                main_reasoning_effort="low",
+                tasks={"model_policy": {"review_mode": "off"}},
             )
             host = AssistantService(cfg)
             serving = asyncio.create_task(host.run())
@@ -206,7 +198,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                         {
                             "request_id": str(uuid.uuid4()),
                             "spec": {
-                                "title": "Synthetic fallback",
+                                "title": "Synthetic model rejection",
                                 "prompt": "write and verify " + str(target),
                                 "notify_completion": False,
                             },
@@ -221,14 +213,14 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                             break
                         await asyncio.sleep(0.05)
                 run = runs[0]
-                self.assertEqual(run["state"], "completed", run)
-                self.assertEqual(target.read_text(), "once")
-                self.assertEqual([r["model"] for r in gateway.requests], ["model-a", "model-b", "model-b"])
-                self.assertEqual(run["data"]["ai_usage"]["requests"], 3)
+                self.assertEqual(run["state"], "failed", run)
+                self.assertFalse(target.exists())
+                self.assertEqual([r["model"] for r in gateway.requests], ["model-a"])
+                self.assertEqual(run["data"]["ai_usage"]["requests"], 1)
                 calls = await host.ai_usage.service.call(
                     "query", {"work_id": run["data"]["ai_usage"]["work_id"]}
                 )
-                self.assertEqual([r["http_status"] for r in reversed(calls["items"])], [402, 200, 200])
+                self.assertEqual([r["http_status"] for r in reversed(calls["items"])], [402])
 
             finally:
                 host.stop_event.set()
@@ -298,20 +290,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 model_api=configuration(gateway.base_url),
                 main_model="model-a",
                 main_reasoning_effort="low",
-                tasks={
-                    "concurrency": 4,
-                    "model_policy": {
-                        "profiles": {
-                            name: {"model": "model-b", "reasoning_effort": effort}
-                            for name, effort in (
-                                ("fast", "low"),
-                                ("balanced", "medium"),
-                                ("deep", "high"),
-                                ("ultra", "max"),
-                            )
-                        }
-                    },
-                },
+                tasks={"concurrency": 4},
                 notifications={"channels": ["chat"], "voice_enabled": False},
             )
             host = AssistantService(cfg)

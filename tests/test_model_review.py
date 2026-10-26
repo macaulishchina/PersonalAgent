@@ -55,7 +55,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
     async def test_blind_full_pair_review_disagrees_without_changing_execution(self):
         run = await self.staged(
             execution={
-                "profile": "fast",
+                "recommendation": "brief",
                 "reason": "agent believes easy",
                 "assessment": {
                     "acceptance": "Verify identity and destination",
@@ -64,7 +64,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         original = copy.deepcopy(run["data"]["spec"]["execution"])
-        self.host.config.decisions.update(enabled=True, external_data_consent=True, mode="active")
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         review = self.plugin.model_review
         review.enqueue(run)
         self.assertEqual(review.queue.get_nowait(), run["id"])
@@ -72,12 +72,12 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
         async def judgment(runtime, request):
             self.assertEqual(request.kind, "model_review")
             self.assertNotIn("agent believes easy", str(request.state))
-            self.assertIn("deep_medium", request.state["options"])
+            self.assertIn("investigate_medium", request.state["options"])
             prepared = prepare(
                 DecisionSample(request.kind, request.reference, request.state), "tasks", "jev-1.13.0"
             )
-            self.assertIn("deep_medium", prepared["choices"])
-            return {"status": "ok", "choice": "deep_medium", "receipt_id": "receipt"}
+            self.assertIn("investigate_medium", prepared["choices"])
+            return {"status": "ok", "choice": "investigate_medium", "receipt_id": "receipt"}
 
         with patch("assistant_runtime.core.tasks.model_review.decide", side_effect=judgment):
             await review.evaluate(run["id"])
@@ -92,7 +92,13 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
         self.executor.launch.assert_not_awaited()
 
     async def test_native_efforts_and_fixed_constraints_filter_review_candidates(self):
-        self.plugin.model_policy.profiles["balanced"] = {"model": "deepseek", "reasoning_effort": "high"}
+        self.plugin.model_policy.recommendations["explore"] = {
+            "name": "native",
+            "model": "deepseek",
+            "reasoning_effort": "high",
+            "reason": "Native reasoning",
+            "description": "Use verified provider efforts",
+        }
         self.executor.models.return_value.append(
             {
                 "model": "deepseek",
@@ -102,7 +108,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         run = await self.staged()
-        self.host.config.decisions.update(enabled=True, external_data_consent=True)
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         self.plugin.settings.execution = {"model": "deepseek", "reasoning_effort": "auto"}
         review = self.plugin.model_review
         review.enqueue(run)
@@ -125,7 +131,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
         review.enqueue(run)
         self.assertEqual(self.plugin.repo.run(run["id"])["data"]["model_review"]["state"], "skipped")
         self.assertTrue(review.queue.empty())
-        self.host.config.decisions.update(enabled=True, external_data_consent=True)
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         run = await self.staged()
         for i in range(16):
             review.queue.put_nowait(str(i))
@@ -143,7 +149,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
             ModelPolicy.parse({"review_mode": "invalid"})
 
     async def test_slow_review_does_not_block_launch_and_failure_is_isolated(self):
-        self.host.config.decisions.update(enabled=True, external_data_consent=True)
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         gate = asyncio.Event()
 
         async def blocked(*args):
@@ -162,7 +168,7 @@ class ReviewTest(unittest.IsolatedAsyncioTestCase):
     async def test_identical_facts_reuse_reference_and_invalid_pair_cannot_be_applied(self):
         first = await self.staged()
         second = await self.staged()
-        self.host.config.decisions.update(enabled=True, external_data_consent=True)
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         review = self.plugin.model_review
         references = []
 

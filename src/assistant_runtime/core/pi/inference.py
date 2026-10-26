@@ -62,10 +62,7 @@ async def complete(accounts, payload, session_id):
             elif kind == "error":
                 status = event.get("http_status", status)
                 if status and status != 200:
-                    raise ModelCallError(
-                        "model_http_" + str(status),
-                        fallback_allowed=status in {401, 402, 403, 404, 408, 429, 500, 502, 503, 504},
-                    )
+                    raise ModelCallError("model_http_" + str(status))
                 raise RuntimeError("Native model outcome unknown or authentication unavailable")
             elif kind == "done":
                 message = event["message"]

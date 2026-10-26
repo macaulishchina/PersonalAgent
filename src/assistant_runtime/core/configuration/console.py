@@ -114,6 +114,7 @@ class Console:
                 web.get("/console.js", self.javascript),
                 web.get("/workspace.js", self.workspace_javascript),
                 web.get("/model-editor.js", self.model_javascript),
+                web.get("/task-models.js", self.task_models_javascript),
                 web.get("/connections.js", self.connections_javascript),
                 web.get("/console.css", self.styles),
                 web.post("/api/login", self.login),
@@ -187,6 +188,9 @@ class Console:
 
     async def model_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "model-editor.js")
+
+    async def task_models_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "task-models.js")
 
     async def workspace_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "workspace.js")

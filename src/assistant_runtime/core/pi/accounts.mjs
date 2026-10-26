@@ -93,13 +93,22 @@ async function initConnection(args) {
     credentials: { read: async () => ({ type: "api_key", key: args.key }) },
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
+  // Reuse only Pi's wire-mode declaration for this exact model. Provider auth,
+  // endpoints, capabilities and managed conversation policies stay route-owned.
+  const anthropicModels =
+    spec.protocol === "anthropic"
+      ? providers.find((p) => p.id === "anthropic")?.getModels() || []
+      : [];
   const models = Object.entries(spec.entries).map(([alias, entry]) => ({
     id: alias,
     name: entry.model,
     api,
     provider: spec.provider,
     baseUrl: spec.base_url,
-    reasoning: entry.reasoning_efforts.some((level) => level !== "none"),
+    reasoning:
+      entry.reasoning_efforts.some((level) => level !== "none") ||
+      (spec.protocol === "anthropic" &&
+        entry.reasoning_efforts.includes("none")),
     thinkingLevelMap: Object.fromEntries(
       ["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(
         (level) => [
@@ -108,6 +117,10 @@ async function initConnection(args) {
         ],
       ),
     ),
+    ...(anthropicModels.find((m) => m.id === entry.model)?.compat
+      ?.forceAdaptiveThinking === true
+      ? { compat: { forceAdaptiveThinking: true } }
+      : {}),
     input: entry.images ? ["text", "image"] : ["text"],
     contextWindow: entry.context_window || 32768,
     maxTokens: entry.output_limit || 131072,
@@ -179,7 +192,16 @@ async function run(id, args, signal) {
   const started = performance.now();
   const timings = {};
   const elapsed = () => Math.round(performance.now() - started);
-  const { model, effort } = modelFor(args);
+  const { model: selectedModel, effort } = modelFor(args);
+  // Pi's legacy Anthropic adapter adds thinking tokens to maxTokens. Constrain
+  // its shared ceiling first so it fits the budget instead of enlarging our cap.
+  const model =
+    spec.protocol === "anthropic" && spec.entries
+      ? {
+          ...selectedModel,
+          maxTokens: Math.min(selectedModel.maxTokens, args.max_tokens),
+        }
+      : selectedModel;
   const context = structuredClone(args.context);
   // Restore native model identity only for this alias's history; Pi owns cross-provider conversion.
   for (const message of context.messages) {
@@ -198,7 +220,12 @@ async function run(id, args, signal) {
     timeoutMs: args.timeout_ms,
     transport: "sse",
     maxTokens: args.max_tokens,
-    reasoning: effort,
+    // Anthropic's simple adapter uses absent reasoning for disabled thinking;
+    // passing the literal "off" is truthy and would enable adaptive thinking.
+    reasoning:
+      model.api === "anthropic-messages" && effort === "off"
+        ? undefined
+        : effort,
     // Reuse already processed input through Pi's normal provider cache/session
     // affinity. This does not enable cache warming or automatic model requests.
     cacheRetention: "short",
@@ -260,6 +287,13 @@ async function run(id, args, signal) {
             responseJsonSchema: args.schema,
           };
       }
+      if (
+        model.api === "anthropic-messages" &&
+        payload.thinking?.type === "enabled" &&
+        (payload.thinking.budget_tokens < 1024 ||
+          payload.thinking.budget_tokens >= payload.max_tokens)
+      )
+        throw new Error("anthropic_thinking_budget_insufficient");
       if (spec.output_limit !== "model") {
         const cap =
           payload.max_output_tokens ??

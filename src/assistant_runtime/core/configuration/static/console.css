@@ -1909,7 +1909,7 @@ dialog.wide-dialog {
   .entity-card {
     display: grid;
     grid-template-columns:
-      minmax(130px, 0.8fr) minmax(160px, 1.15fr) minmax(170px, 1fr)
+      minmax(190px, 1.35fr) minmax(130px, 0.9fr) minmax(130px, 0.75fr)
       auto;
     gap: 20px;
     align-items: center;
@@ -2374,4 +2374,70 @@ dialog.wide-dialog {
   padding: 12px;
   background: var(--bg, #f5f7f3);
   border-radius: 6px;
+}
+
+.task-model-policy {
+  padding: 24px;
+  border-top: 1px solid var(--line);
+}
+.task-model-defaults > .inline-note {
+  margin: 16px 24px;
+}
+.recommendation-toolbar,
+.recommendation-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.recommendation-toolbar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.recommendation-toolbar h3,
+.recommendation-heading h4 {
+  margin: 0;
+}
+.recommendation-heading {
+  flex-wrap: wrap;
+}
+.recommendation-list {
+  margin: 20px 0;
+}
+.recommendation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.recommendation-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.recommendation-copy p {
+  margin: 8px 0 0;
+}
+.recommendation-badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.entity-name-and-usage {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.entity-name-and-usage h3 {
+  flex: 0 1 auto;
+  margin: 0;
+}
+.entity-heading .entity-avatar {
+  flex-shrink: 0;
+}
+.entity-grid[data-kind="entries"] .entity-heading {
+  flex-wrap: nowrap;
 }

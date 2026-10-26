@@ -5,12 +5,11 @@ from typing import Any
 
 
 class ModelCallError(RuntimeError):
-    """Sanitized adapter failure; only explicit rejection permits automatic fallback."""
+    """Sanitized adapter failure. Model calls are never automatically replayed."""
 
-    def __init__(self, code: str, *, fallback_allowed: bool = False):
+    def __init__(self, code: str):
         super().__init__(code)
         self.code = code
-        self.fallback_allowed = fallback_allowed
 
 
 @dataclass(frozen=True)

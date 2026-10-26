@@ -21,16 +21,27 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = task_fixtures.TasksTest.asyncTearDown
     create = task_fixtures.TasksTest.create
 
-    def test_api_no_reasoning_model_remains_an_automatic_selection_candidate(self):
-        policy = ModelPolicy.parse({"profiles": {"fast": {"model": "api-model", "reasoning_effort": "none"}}})
-        candidates = policy.options(
-            [{"model": "api-model", "supported_reasoning_efforts": [{"reasoning_effort": "none"}]}],
-            {},
-            {"model": "auto", "reasoning_effort": "auto"},
-        )
-        self.assertEqual(
-            candidates, {"fast_none": {"profile": "fast", "model": "api-model", "reasoning_effort": "none"}}
-        )
+    async def test_defaults_need_no_recommendations_and_follow_main_configuration(self):
+        self.plugin.model_policy = ModelPolicy.parse({})
+        self.config.main_model = "gpt-6.1-sol"
+        self.config.main_reasoning_effort = "medium"
+        result = (await self.create())["spec"]["execution"]
+        self.assertEqual((result["model"], result["reasoning_effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertNotIn("recommendation", result)
+        self.assertEqual(set(result["selection"]["sources"].values()), {"main_conversation"})
+
+    async def test_auto_effort_requires_caller_choice_when_main_is_auto(self):
+        self.config.main_reasoning_effort = "auto"
+        with self.assertRaisesRegex(ValueError, "initiating model"):
+            await self.create()
+        result = await self.create(execution={"reasoning_effort": "medium", "reason": "Compare evidence"})
+        self.assertEqual(result["spec"]["execution"]["reasoning_effort"], "medium")
+        self.executor.models.return_value = [
+            {"model": "plain", "supported_reasoning_efforts": [{"reasoning_effort": "auto"}]}
+        ]
+        self.config.main_model = "plain"
+        result = await self.create()
+        self.assertEqual(result["spec"]["execution"]["reasoning_effort"], "auto")
 
     async def make_running(self, **spec):
         definition = await self.create(auto_archive=False, **spec)
@@ -47,7 +58,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         return {
             "run_id": run["id"],
             "request_id": str(uuid.uuid4()),
-            "profile": "balanced",
+            "recommendation": "explore",
             "cause": "unfamiliar_workflow",
             "reason": "界面与已有流程不一致，需要探索并读回验收",
             "evidence": "已核实页面结构与已保存流程不同，尚未执行下一步写操作",
@@ -65,13 +76,13 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
             TaskRequest("upgrade_model", self.arguments(run, **changes), run["id"])
         )
 
-    async def test_auto_and_children_do_not_inherit_high_configuration(self):
+    async def test_children_use_main_defaults_not_incidental_parent_model(self):
         self.host.backend.resolved_reasoning_effort = "high"
         d = await self.create()
         self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
         self.assertEqual(d["spec"]["execution"]["reasoning_effort"], "low")
         parent = await self.make_running(
-            execution={"profile": "deep", "reason": "复杂诊断，需要验证冲突证据"}
+            execution={"recommendation": "investigate", "reason": "复杂诊断，需要验证冲突证据"}
         )
         child = await self.plugin.request(
             TaskRequest(
@@ -80,12 +91,13 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
                 parent["id"],
             )
         )
-        self.assertEqual(child["spec"]["execution"]["profile"], "fast")
+        self.assertEqual(child["spec"]["execution"]["model"], "gpt-6-luna")
+        self.assertNotIn("recommendation", child["spec"]["execution"])
         self.assertEqual(child["spec"]["depth"], 1)
 
     async def test_agent_reason_and_unrelated_update_preserve_real_provenance(self):
         with self.assertRaisesRegex(ValueError, "execution.reason"):
-            await self.create(execution={"profile": "balanced"})
+            await self.create(execution={"recommendation": "explore"})
         d = await self.create()
         receipt = d["spec"]["execution"]["selection"]
         updated = await self.plugin.request(
@@ -110,7 +122,7 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_catalog_exposes_policy_and_selection_records_fixed_overrides(self):
         models = await self.plugin.request(TaskRequest("models", {}))
-        self.assertEqual(models["model_policy"]["default_profile"], "fast")
+        self.assertEqual(models["model_policy"]["defaults"]["model"], "gpt-6-luna")
         self.plugin.settings.execution = {"model": "fixed", "reasoning_effort": "high"}
         run = await self.make_running()
         receipt = run["data"]["model_selections"][0]
@@ -119,49 +131,18 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         trace = await self.plugin.request(TaskRequest("trace", {"run_id": run["id"]}))
         self.assertEqual(trace["model_selections"], run["data"]["model_selections"])
 
-    async def test_ultra_requires_reason_and_uses_instance_mapping_without_becoming_default(self):
+    async def test_custom_recommendation_has_no_rank_and_cannot_conflict_with_model(self):
         with self.assertRaisesRegex(ValueError, "execution.reason"):
-            await self.create(execution={"profile": "ultra"})
-        self.plugin.model_policy = ModelPolicy.parse(
-            {"profiles": {"ultra": {"model": "research-model", "reasoning_effort": "xhigh"}}}
-        )
+            await self.create(execution={"recommendation": "research"})
         definition = await self.create(
-            execution={
-                "profile": "ultra",
-                "reason": "原创跨领域证明，需同时验证多层相互依赖的假设，deep 不足",
-            }
+            execution={"recommendation": "research", "reason": "Compare multiple hypotheses"}
         )
-        execution = definition["spec"]["execution"]
-        self.assertEqual((execution["model"], execution["reasoning_effort"]), ("research-model", "xhigh"))
-        self.assertEqual(execution["selection"]["profile"], "ultra")
-        self.assertEqual((await self.create())["spec"]["execution"]["profile"], "fast")
-        self.assertEqual(self.plugin.model_policy.max_upgrades, 1)
-
-        self.executor.select.side_effect = ValueError("Configured research model unavailable")
-        with self.assertRaisesRegex(ValueError, "unavailable"):
-            await self.create(execution={"profile": "ultra", "reason": "已有具体研究推理需求"})
-
-    async def test_deep_to_ultra_handoff_preserves_definition_and_cannot_downgrade(self):
-        run = await self.make_running(execution={"profile": "deep", "reason": "需要诊断相互冲突的证据"})
-        await self.upgrade(
-            run,
-            profile="ultra",
-            cause="reasoning_limit",
-            reason="已验证该问题需要原创多层证明，deep 的方法不足",
-            evidence="现有方法不能同时满足两个已验证约束，需要重新构造并验证理论模型",
-        )
-        self.plugin.provider_update(run["id"], "completed", turn_active=False)
-        await self.plugin.upgrades.apply(run["id"])
-        dispatched = self.executor.launch.await_args.args[0]
-        selected = dispatched["data"]["spec"]["execution"]
-        self.assertEqual((selected["profile"], selected["reasoning_effort"]), ("ultra", "high"))
-        self.assertEqual(dispatched["id"], run["id"])
-        self.assertEqual(dispatched["data"]["execution_session_id"], "provider-thread")
-        definition = self.plugin.repo.definition(run["task_id"])
-        self.assertEqual(definition["spec"]["execution"]["profile"], "deep")
-        highest = await self.make_running(execution={"profile": "ultra", "reason": "复杂原创科研证明"})
-        with self.assertRaisesRegex(ValueError, "higher"):
-            await self.upgrade(highest, profile="deep")
+        self.assertEqual(definition["spec"]["execution"]["model"], "gpt-6-astra")
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            await self.create(
+                execution={"recommendation": "research", "model": "gpt-6-luna", "reason": "Invalid pair"}
+            )
+        self.assertNotIn("recommendation", (await self.create())["spec"]["execution"])
 
     async def test_request_is_idempotent_and_waits_for_clean_boundary(self):
         run = await self.make_running()
@@ -182,13 +163,13 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         dispatched = self.executor.launch.await_args.args[0]
         self.assertEqual(dispatched["data"]["execution_session_id"], "provider-thread")
         self.assertIn("stable-id", dispatched["data"]["continuation"])
-        self.assertEqual(dispatched["data"]["spec"]["execution"]["profile"], "balanced")
+        self.assertEqual(dispatched["data"]["spec"]["execution"]["recommendation"], "explore")
         self.assertEqual(dispatched["task_id"], run["task_id"])
         self.assertEqual(self.plugin.repo.run(run["id"])["data"]["model_selections"][-1]["segment"], 2)
         self.plugin.provider_update(run["id"], "running", turn_id="new-turn", turn_active=True)
         self.assertEqual(self.plugin.repo.run(run["id"])["data"]["model_upgrades"][-1]["phase"], "applied")
         with self.assertRaisesRegex(ValueError, "limit"):
-            await self.upgrade(self.plugin.repo.run(run["id"]), profile="deep")
+            await self.upgrade(self.plugin.repo.run(run["id"]), recommendation="investigate")
 
     async def test_scope_unsafe_checkpoints_external_failures_and_goal_are_rejected(self):
         run = await self.make_running()
@@ -201,8 +182,8 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
                 await self.plugin.request(TaskRequest("upgrade_model", args, run["id"]))
         with self.assertRaisesRegex(ValueError, "not upgrade causes"):
             await self.upgrade(run, cause="network_timeout")
-        with self.assertRaisesRegex(ValueError, "higher"):
-            await self.upgrade(run, profile="fast")
+        with self.assertRaisesRegex(ValueError, "configured recommendation"):
+            await self.upgrade(run, recommendation="missing")
         goal = await self.make_running(long_term=True)
         with self.assertRaisesRegex(ValueError, "Goal"):
             await self.upgrade(goal)
@@ -380,18 +361,34 @@ class ProviderHandoffTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PolicySettingsTest(unittest.TestCase):
-    def test_profile_settings_are_strict_and_instance_overrides_are_partial(self):
-        p = ModelPolicy.parse({"profiles": {"fast": {"model": "custom-fast"}}})
-        self.assertEqual(p.profiles["fast"], {"model": "custom-fast", "reasoning_effort": "low"})
-        self.assertEqual(p.profiles["ultra"], {"model": "go-gpt", "reasoning_effort": "max"})
-        configured = ModelPolicy.parse({"profiles": {"ultra": {"reasoning_effort": "xhigh"}}})
-        self.assertEqual(configured.profiles["ultra"]["reasoning_effort"], "xhigh")
-        self.assertEqual(configured.profiles["deep"]["reasoning_effort"], "high")
+    def test_empty_defaults_and_invalid_recommendations(self):
+        self.assertEqual(ModelPolicy.parse({}).recommendations, {})
         for data in (
             {"max_upgrades": True},
             {"max_upgrades": 4},
-            {"profiles": {"unexpected": {}}},
-            {"profiles": {"fast": {"model": "auto"}}},
+            {"profiles": {}},
+            {"fallbacks": {}},
+            {"recommendations": {"invalid id": {}}},
+            {"recommendations": {"valid": {"name": "missing model"}}},
         ):
-            with self.assertRaises(ValueError):
+            with self.subTest(data=data), self.assertRaises(ValueError):
                 ModelPolicy.parse(data)
+
+    def test_duplicate_names_and_binding_efforts_are_validated(self):
+        from assistant_runtime.core.tasks.settings import TaskSettings
+
+        row = {
+            "name": "诊断",
+            "model": "one",
+            "reason": "证据对比",
+            "description": "根因未明时",
+            "reasoning_effort": "high",
+        }
+        with self.assertRaisesRegex(ValueError, "unique"):
+            ModelPolicy.parse({"recommendations": {"one": row, "two": row}})
+        settings = TaskSettings.parse({"model_policy": {"recommendations": {"diagnosis": row}}})
+        with self.assertRaisesRegex(ValueError, "已有的模型"):
+            settings.validate_bindings({})
+        with self.assertRaisesRegex(ValueError, "思考深度"):
+            settings.validate_bindings({"one": {"reasoning_efforts": ["low"]}})
+        settings.validate_bindings({"one": {"reasoning_efforts": ["low", "high"]}})

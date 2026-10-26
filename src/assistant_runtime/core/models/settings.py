@@ -259,7 +259,6 @@ class ModelSettings:
                     "execution_max_output_tokens",
                     "context_window",
                     "output_limit",
-                    "fallbacks",
                     "capabilities",
                 },
             )
@@ -310,16 +309,6 @@ class ModelSettings:
                 raise ValueError("Invalid execution output token budget")
             m["max_output_tokens"] = output_bound(m, limit)
             m["execution_max_output_tokens"] = output_bound(m, execution_limit)
-        for ident, entry in obj.entries.items():
-            fallback = entry.get("fallbacks", [])
-            if (
-                not isinstance(fallback, list)
-                or len(fallback) > 3
-                or any(not isinstance(m, str) or m not in obj.entries for m in fallback)
-                or len(set(fallback)) != len(fallback)
-                or ident in fallback
-            ):
-                raise ValueError("Invalid ordered model fallbacks")
         if obj.memory and (obj.memory not in obj.entries or not obj.entries[obj.memory].get("structured")):
             raise ValueError("Memory requires a configured structured-output model")
         if obj.memory and not obj.enabled:
@@ -349,7 +338,6 @@ class ModelSettings:
                 "available": self.enabled and self.providers[m["provider"]].get("enabled", False),
                 "images": m.get("images", False),
                 "structured": m.get("structured", False),
-                "fallbacks": m.get("fallbacks", []),
                 "default_reasoning_effort": reasoning_effort(m),
                 "supported_reasoning_efforts": [
                     {"reasoning_effort": e} for e in ["auto", *m["reasoning_efforts"]]

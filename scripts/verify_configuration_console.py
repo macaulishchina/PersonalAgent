@@ -778,9 +778,6 @@ default_reasoning_effort = "none"
                 await efforts.locator("input[value=none]").check()
                 await efforts.locator("input[value=high]").uncheck()
                 await primary.get_by_text("高级设置", exact=True).click()
-                fallback = primary.locator(selector(["model_api", "entries", "primary", "fallbacks"]))
-                await fallback.get_by_role("button", name="添加一项", exact=True).click()
-                await fallback.get_by_label("有序回退模型 · 第 1 项", exact=True).select_option("fast")
                 await primary.get_by_text("高级设置", exact=True).click()
                 await primary.evaluate("dialog => dialog.scrollTop = 0")
                 await capture(page, "configuration-desktop-models.png")
@@ -829,7 +826,7 @@ default_reasoning_effort = "none"
                 assert dotenv_values(root / ".env")[native_reference] == "synthetic-native-key"
                 assert "discarded-secret" not in (root / ".env").read_text()
                 assert saved["entries"]["primary"]["provider"] == "LeiHuo-OpenAI"
-                assert saved["entries"]["primary"]["fallbacks"] == ["fast"]
+                assert "fallbacks" not in saved["entries"]["primary"]
                 assert saved["entries"]["primary"]["reasoning_efforts"] == ["none", "medium"]
                 # Explicit leave actions retain drafts on failure and save before navigation.
                 await page.get_by_label("主对话模型", exact=True).select_option("primary")
@@ -968,7 +965,7 @@ default_reasoning_effort = "none"
                         "save_without_restart": "passed",
                         "model_alias_editing": "passed",
                         "new_provider_references": "passed",
-                        "ordered_fallbacks_and_effort_checkboxes": "passed",
+                        "native_effort_checkboxes": "passed",
                         "automatic_model_capabilities": "passed",
                         "confirmed_restart": "passed",
                         "entry_removal": "passed",

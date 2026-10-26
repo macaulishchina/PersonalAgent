@@ -1,141 +1,105 @@
-"""Instance-owned model policy. No inference, provider RPC or task-text classifier."""
+"""Task-owned recommendations and deterministic selection; no provider inference."""
 
 from dataclasses import dataclass, field
+import re
 import time
 
-PROFILES = ("fast", "balanced", "deep", "ultra")
+from assistant_runtime.api.configuration import configuration_default
+
 GUIDANCE = (
-    "Choose the lightest profile that can meet the task's acceptance checks. "
-    "fast: clear objective, familiar steps and easy verification; "
-    "balanced: unfamiliar interfaces or coordination across tools; "
-    "deep: conflicting evidence, unexplained failures or complex diagnosis. "
-    "ultra: use sparingly for exceptionally complex reasoning or original scientific research, "
-    "only when there is concrete justification that deep is insufficient. "
-    "Routine literature search, summaries and a research-related title do not justify ultra. "
-    "Profile selects the execution model tier; reasoning_effort can be chosen independently "
-    "from that model's supported efforts. Low suits known steps; medium suits exploration; "
-    "high or above needs difficult reasoning, not a long task. Prefer the lightest adequate effort. "
-    "Task length and number of steps do not by themselves require deeper reasoning. "
-    "Explain uncertainty, available procedure and verification in execution.reason. "
-    "Declare model_source/effort_source as assistant for your recommendations, user only for explicit user choices. "
-    "Source labels require corresponding choices; redundant assistant labels on missing/auto fields are ignored. "
-    "Free-form user_preference is context, not a model/effort lock; encode explicit user choices in those fields. "
-    "Active Jev correction may change assistant recommendations; user/fixed/unlabelled explicit fields stay protected. "
-    "Never inherit the parent/main model merely because it created the task. "
-    "Network errors, offline devices, missing tools and uncertain side effects need reconciliation, not a stronger model."
+    "Omit execution.model to use the configured main conversation model. "
+    "Omitted effort inherits the main conversation's concrete effort. "
+    "For a task, auto means the initiating model must choose a supported concrete effort; "
+    "if both task and main effort are auto, supply reasoning_effort explicitly. "
+    "Models without configurable reasoning use auto. Main conversation auto remains provider-controlled. "
+    "Recommendations are optional named suggestions, not ordered tiers or fallback models. "
+    "Choose using their reason/description and the task's acceptance checks; task length alone is not difficulty. "
+    "Explain explicit choices in execution.reason. Declare model_source/effort_source as assistant for "
+    "your recommendations, user only for explicit user choices. Missing source labels never imply user intent. "
+    "Optional decision review may adjust assistant recommendations, never user or instance-fixed choices. "
+    "Provider errors fail the execution; no automatic alternative model or operation replay."
 )
 
 
 @dataclass
 class ModelPolicy:
-    default_profile: str = "fast"
-    max_upgrades: int = 1
-    review_mode: str = "shadow"
-    fallbacks: dict = field(default_factory=dict)
-    profiles: dict = field(
-        default_factory=lambda: {
-            "fast": {"model": "go-gpt", "reasoning_effort": "low"},
-            "balanced": {"model": "go-gpt", "reasoning_effort": "medium"},
-            "deep": {"model": "go-gpt", "reasoning_effort": "high"},
-            "ultra": {"model": "go-gpt", "reasoning_effort": "max"},
-        }
+    max_upgrades: int = field(
+        default_factory=lambda: configuration_default(__file__, "model_policy")["max_upgrades"]
     )
+    review_mode: str = field(
+        default_factory=lambda: configuration_default(__file__, "model_policy")["review_mode"]
+    )
+    recommendations: dict = field(default_factory=dict)
 
     @classmethod
     def parse(cls, data):
-        if not isinstance(data, dict) or set(data) - {
-            "default_profile",
-            "max_upgrades",
-            "profiles",
-            "fallbacks",
-            "review_mode",
-        }:
-            raise ValueError("Unknown task model policy settings")
-        result = cls()
-        result.review_mode = data.get("review_mode", "shadow")
-        if not isinstance(result.review_mode, str) or result.review_mode not in {"off", "shadow", "active"}:
+        if not isinstance(data, dict) or set(data) - {"max_upgrades", "review_mode", "recommendations"}:
+            raise ValueError("Unknown task model policy settings; use named recommendations")
+        result = cls(**data)
+        if result.review_mode not in ("off", "shadow", "active"):
             raise ValueError("Model review supports off, shadow or active")
-        result.default_profile = data.get("default_profile", result.default_profile)
-        result.max_upgrades = data.get("max_upgrades", result.max_upgrades)
-        result.fallbacks = data.get("fallbacks", {})
-        if not isinstance(result.fallbacks, dict) or len(result.fallbacks) > 64:
-            raise ValueError("Invalid task fallback configuration")
-        for model, candidates in result.fallbacks.items():
-            if (
-                not isinstance(model, str)
-                or not 1 <= len(model) <= 160
-                or not isinstance(candidates, list)
-                or not 1 <= len(candidates) <= 3
-            ):
-                raise ValueError("Task fallback chains require 1..3 concrete candidates")
-            seen = {model}
-            for candidate in candidates:
-                if (
-                    not isinstance(candidate, dict)
-                    or set(candidate) != {"model", "reasoning_effort"}
-                    or any(
-                        not isinstance(v, str) or not 1 <= len(v) <= 160 or v == "auto"
-                        for v in candidate.values()
-                    )
-                ):
-                    raise ValueError("Task fallback requires concrete model and reasoning effort")
-                if candidate["model"] in seen:
-                    raise ValueError("Task fallback candidates cannot repeat")
-                seen.add(candidate["model"])
-        if (
-            result.default_profile not in PROFILES
-            or type(result.max_upgrades) is not int
-            or not 0 <= result.max_upgrades <= 3
-        ):
-            raise ValueError("Invalid task model profile/upgrade limit")
-        profiles = data.get("profiles", {})
-        if not isinstance(profiles, dict) or set(profiles) - set(PROFILES):
-            raise ValueError("Unknown task model profile")
-        for name, values in profiles.items():
-            if not isinstance(values, dict) or set(values) - {"model", "reasoning_effort"}:
-                raise ValueError("Invalid task model profile fields")
-            result.profiles[name].update(values)
-        for values in result.profiles.values():
-            if any(
-                not isinstance(v, str) or not 1 <= len(v.strip()) <= 160 or v == "auto"
-                for v in values.values()
-            ):
-                raise ValueError("Task profiles require concrete model and reasoning effort")
+        if type(result.max_upgrades) is not int or not 0 <= result.max_upgrades <= 3:
+            raise ValueError("Task model handoff limit must be 0..3")
+        if not isinstance(result.recommendations, dict) or len(result.recommendations) > 32:
+            raise ValueError("Task recommendations must be a named object with at most 32 items")
+        clean, names = {}, set()
+        for ident, row in result.recommendations.items():
+            if not isinstance(ident, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", ident):
+                raise ValueError("Recommendation ID must be a stable lowercase identifier")
+            if not isinstance(row, dict) or set(row) - {
+                "name",
+                "model",
+                "reasoning_effort",
+                "reason",
+                "description",
+            }:
+                raise ValueError("Unknown task recommendation fields")
+            for key, limit in (("name", 80), ("model", 160), ("reason", 400), ("description", 800)):
+                if not isinstance(row.get(key), str) or not 1 <= len(row[key].strip()) <= limit:
+                    raise ValueError("Recommendation requires bounded nonempty " + key)
+            effort = row.get("reasoning_effort", "auto")
+            if not isinstance(effort, str) or not 1 <= len(effort.strip()) <= 160 or row["model"] == "auto":
+                raise ValueError("Recommendation requires a concrete model and valid effort")
+            if row["name"].strip() in names:
+                raise ValueError("Recommendation names must be unique")
+            names.add(row["name"].strip())
+            clean[ident] = {**row, "name": row["name"].strip(), "reasoning_effort": effort}
+        result.recommendations = clean
         return result
 
-    def describe(self, models):
+    def describe(self, models, main, fixed):
         catalog = {m["model"]: m for m in models}
         return {
-            "version": 1,
-            "default_profile": self.default_profile,
+            "version": 2,
+            "defaults": {
+                k: fixed[k] if fixed[k] != "auto" else main[k] for k in ("model", "reasoning_effort")
+            },
             "max_upgrades": self.max_upgrades,
             "review_mode": self.review_mode,
-            "fallbacks": self.fallbacks,
             "guidance": GUIDANCE,
-            "profiles": {
-                name: {
-                    **values,
-                    "available": values["model"] in catalog
-                    and values["reasoning_effort"]
-                    in [
-                        e["reasoning_effort"]
-                        for e in catalog[values["model"]].get("supported_reasoning_efforts", [])
-                    ],
+            "recommendations": {
+                ident: {
+                    **row,
+                    "available": row["model"] in catalog
+                    and catalog[row["model"]].get("available", True)
+                    and (
+                        row["reasoning_effort"] == "auto"
+                        or row["reasoning_effort"] in supported(catalog[row["model"]])
+                    ),
                 }
-                for name, values in self.profiles.items()
+                for ident, row in self.recommendations.items()
             },
         }
 
     @staticmethod
     def normalize(requested):
-        """Drop empty recommendation provenance; never guess an explicit user choice."""
         requested = dict(requested)
-        for choice_field, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
+        for choice, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
             value = requested.get(source)
             if value is not None and value not in ("assistant", "user"):
                 raise ValueError("Invalid " + source)
-            explicit = requested.get(choice_field) not in (None, "auto") or (
-                choice_field == "model" and requested.get("profile") not in (None, "auto")
+            explicit = requested.get(choice) not in (None, "auto") or (
+                choice == "model" and bool(requested.get("recommendation"))
             )
             if value == "user" and not explicit:
                 raise ValueError(source + " requires an explicit choice")
@@ -145,108 +109,133 @@ class ModelPolicy:
 
     def validate(self, requested, fixed):
         requested = self.normalize(requested)
-        profile = requested.get("profile")
-        if profile in (None, "auto"):
-            profile = self.default_profile
-        if profile not in PROFILES:
-            raise ValueError("Unknown task execution profile")
+        ident = requested.get("recommendation")
+        if ident is not None and (not isinstance(ident, str) or ident not in self.recommendations):
+            raise ValueError("Unknown task recommendation")
+        if ident and requested.get("model") not in (None, "auto", self.recommendations[ident]["model"]):
+            raise ValueError("Explicit model conflicts with recommendation")
         reason = requested.get("reason")
-        explicit = any(
-            requested.get(k) not in (None, "auto") for k in ("model", "reasoning_effort", "profile")
-        )
         if reason is not None and (not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 400):
             raise ValueError("Task model reason must be 1..400 characters")
-        if explicit and not reason and all(v == "auto" for v in fixed.values()):
+        if (
+            any(
+                requested.get(k) not in (None, "auto")
+                for k in ("model", "reasoning_effort", "recommendation")
+            )
+            and not reason
+            and all(v == "auto" for v in fixed.values())
+        ):
             raise ValueError("Explain task uncertainty and verification in execution.reason")
         for key in ("model", "reasoning_effort"):
             value = requested.get(key)
-            if value not in (None, "auto") and (
-                not isinstance(value, str) or not 1 <= len(value.strip()) <= 160
-            ):
+            if value is not None and (not isinstance(value, str) or not 1 <= len(value.strip()) <= 160):
                 raise ValueError("Invalid task " + key)
-        return profile
+        return ident
 
-    def options(self, models, requested, fixed):
-        """Only configured tiers/account-supported efforts, preserving explicit fields."""
+    def options(self, models, requested, fixed, main):
+        """Bounded, concrete candidates from declared recommendations and the baseline."""
         self.validate(requested, fixed)
-        catalog = {alias: row for row in models for alias in (row.get("id"), row["model"]) if alias}
+        catalog = {m["model"]: m for m in models}
         model = fixed["model"] if fixed["model"] != "auto" else requested.get("model")
         effort = (
             fixed["reasoning_effort"]
             if fixed["reasoning_effort"] != "auto"
             else requested.get("reasoning_effort")
         )
-        profile = requested.get("profile")
-        profiles = [profile] if profile not in (None, "auto") else list(PROFILES)
-        if model not in (None, "auto") and profile in (None, "auto"):
-            profiles = [p for p in PROFILES if self.profiles[p]["model"] == model] or ["custom"]
-        result = {}
-        for tier in profiles:
-            selected_model = model if model not in (None, "auto") else self.profiles[tier]["model"]
-            supported = catalog.get(selected_model, {}).get("supported_reasoning_efforts", [])
-            for item in supported:
-                value = item["reasoning_effort"]
-                if value not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
-                    continue
+        rec = requested.get("recommendation")
+        if rec:
+            model = model if model not in (None, "auto") else self.recommendations[rec]["model"]
+        rows = [
+            (
+                None,
+                {
+                    "name": "主对话默认",
+                    "model": main["model"],
+                    "reason": "沿用主对话配置",
+                    "description": "未指定任务模型时使用",
+                },
+            ),
+            *self.recommendations.items(),
+        ]
+        if model not in (None, "auto") and model not in [r["model"] for _, r in rows]:
+            rows.append(
+                (
+                    None,
+                    {
+                        "name": "显式模型",
+                        "model": model,
+                        "reason": "调用者明确选择",
+                        "description": "保留当前选择",
+                    },
+                )
+            )
+        result, seen = {}, {}
+        for ident, row in rows:
+            if model not in (None, "auto", row["model"]):
+                continue
+            entry = catalog.get(row["model"])
+            if not entry:
+                continue
+            efforts = [e for e in supported(entry) if e != "auto"] or ["auto"]
+            for value in efforts:
                 if effort not in (None, "auto", value):
                     continue
-                result[tier + "_" + value] = {
-                    "profile": tier,
-                    "model": selected_model,
+                pair = (row["model"], value)
+                score = 3 if ident and row.get("reasoning_effort") == value else 1 if ident else 0
+                if pair in seen and seen[pair][1] >= score:
+                    continue
+                if pair in seen:
+                    result.pop(seen[pair][0])
+                option_id = (ident or ("main" if row["model"] == main["model"] else "selected")) + "_" + value
+                seen[pair] = (option_id, score)
+                result[option_id] = {
+                    "recommendation": ident,
+                    "model": row["model"],
                     "reasoning_effort": value,
+                    "name": row["name"],
+                    "reason": row["reason"],
+                    "description": row["description"],
                 }
-        # Identical model/effort aliases would split judgment probability. Prefer
-        # the tier whose configured default matches, then the higher tier name.
-        unique = {}
-        for ident, option in result.items():
-            tier, effort = option["profile"], option["reasoning_effort"]
-            identity = (catalog[option["model"]]["model"], effort)
-            score = (
-                self.profiles.get(tier, {}).get("reasoning_effort") == effort,
-                PROFILES.index(tier) if tier in PROFILES else -1,
-            )
-            if identity not in unique or score > unique[identity][0]:
-                unique[identity] = (score, ident, option)
-        return {ident: option for _, ident, option in unique.values()}
+        return result
 
-    async def resolve(self, executor, requested, fixed):
+    async def resolve(self, executor, requested, fixed, main):
         requested = self.normalize(requested)
-        profile = self.validate(requested, fixed)
-        reason = requested.get("reason")
-        reason = reason or (
-            "使用实例固定配置"
-            if any(v != "auto" for v in fixed.values())
-            else f"任务未明确选型，采用实例默认 {self.default_profile} 策略；不继承发起会话配置"
-        )
+        ident = self.validate(requested, fixed)
+        row = self.recommendations.get(ident, {})
         choices, sources = {}, {}
         for key in ("model", "reasoning_effort"):
             if fixed[key] != "auto":
                 choices[key], sources[key] = fixed[key], "instance_fixed"
             elif requested.get(key) not in (None, "auto"):
                 choices[key], sources[key] = requested[key], "agent"
+            elif row.get(key) not in (None, "auto"):
+                choices[key], sources[key] = row[key], "recommendation"
             else:
-                choices[key], sources[key] = self.profiles[profile][key], "profile_default"
-            if not isinstance(choices[key], str):
-                raise ValueError("Invalid task model selection")
+                choices[key], sources[key] = main[key], "main_conversation"
+        if choices["model"] in (None, "auto", "unconfigured", ""):
+            raise ValueError(
+                "Task model is not configured; configure the main model or choose execution.model"
+            )
+        if choices["reasoning_effort"] == "auto":
+            models = await executor.models()
+            entry = next((m for m in models if choices["model"] in (m.get("id"), m["model"])), {})
+            levels = [e for e in supported(entry) if e != "auto"]
+            if levels:
+                raise ValueError(
+                    "Task auto effort requires the initiating model to choose execution.reasoning_effort from: "
+                    + ", ".join(levels)
+                )
+            sources["reasoning_effort"] = "model_without_reasoning"
         resolved = await executor.select(choices["model"], choices["reasoning_effort"])
-        matched = [p for p in PROFILES if self.profiles[p] == resolved]
-        model_matched = [
-            p for p in PROFILES if self.profiles[p]["model"] in (choices["model"], resolved["model"])
-        ]
-        actual = (
-            profile
-            if self.profiles[profile]["model"] in (choices["model"], resolved["model"])
-            else matched[0]
-            if matched
-            else model_matched[-1]
-            if model_matched
-            else "custom"
+        reason = requested.get("reason") or (
+            "使用实例固定配置" if any(v != "auto" for v in fixed.values()) else "沿用主对话模型与思考深度"
         )
+        actual = ident if row.get("model") == resolved["model"] else None
         selection = {
-            "version": 1,
+            "version": 2,
             "at": time.time(),
-            "profile": actual,
-            "requested_profile": profile,
+            "recommendation": actual,
+            "requested_recommendation": ident,
             "sources": sources,
             "reason": reason,
             "resolved": resolved,
@@ -254,8 +243,12 @@ class ModelPolicy:
         return {
             "kind": "agent",
             **resolved,
-            "profile": actual,
+            **({"recommendation": actual} if actual else {}),
             "reason": reason,
             "selection": selection,
             **{k: requested[k] for k in ("model_source", "effort_source") if k in requested},
         }
+
+
+def supported(model):
+    return [e["reasoning_effort"] for e in model.get("supported_reasoning_efforts", [])]

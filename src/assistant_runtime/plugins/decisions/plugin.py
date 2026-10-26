@@ -295,27 +295,6 @@ class DecisionsPlugin:
         answer = row["answer"]
         choice = answer["choice"]
         threshold = (policy or self.settings.policy(row["kind"]))["threshold"]
-        if row["kind"] == "model_profile":
-            fields = {
-                key: value["choice"]
-                if value["choice"] != "uncertain" and value["probabilities"][value["choice"]] >= threshold
-                else None
-                for key, value in answer["fields"].items()
-            }
-            if not any(fields.values()):
-                return fallback("low_confidence", row["id"])
-            return {
-                "status": "ok",
-                "choice": choice,
-                "field_choices": fields,
-                "field_probabilities": {
-                    key: value["probabilities"] for key, value in answer["fields"].items()
-                },
-                "receipt_id": row["id"],
-                "model": answer["model"],
-                "probability_threshold": threshold,
-                "confidence_scope": "per_field",
-            }
         if choice == "uncertain" or answer["probabilities"].get(choice, 0) < threshold:
             return fallback("low_confidence", row["id"])
         return {
@@ -503,7 +482,6 @@ class DecisionsPlugin:
                 source = {
                     "voice_intent": "assistant",
                     "event_relevance": "tasks",
-                    "model_profile": "tasks",
                     "model_review": "tasks",
                 }.get(request.kind, "mcp:background" if request.caller_run else "mcp:foreground")
                 reference = (request.caller_run + ":" if request.caller_run else "") + request.reference

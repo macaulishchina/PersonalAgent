@@ -69,7 +69,6 @@ class TaskTrace:
             "truncated": bool(truncated),
             "outcome_scope": "provider_reported",
             "model_selections": run["data"].get("model_selections", []),
-            "model_fallback": run["data"].get("model_fallback"),
             "ai_usage": run["data"].get("ai_usage"),
             "goal_rounds": run["data"].get("goal_rounds", 0),
             "resource_repairs": run["data"].get("resource_repairs", []),

@@ -294,15 +294,6 @@
               "title": "执行输出上限",
               "x-advanced": true
             },
-            "fallbacks": {
-              "type": "array",
-              "title": "有序回退模型",
-              "items": {
-                "type": "string",
-                "x-reference": "model_api.entries"
-              },
-              "x-advanced": true
-            },
             "capabilities": {
               "type": "object",
               "title": "模型资料来源",

@@ -17,6 +17,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
     create = fixtures.TasksTest.create
 
     def enable(self):
+        self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         self.plugin.model_policy.review_mode = "active"
         self.host.config.decisions.update(
             enabled=True,
@@ -28,7 +29,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
 
     def recommendation(self, **changes):
         return {
-            "profile": "fast",
+            "recommendation": "brief",
             "reasoning_effort": "low",
             "reason": "Known workflow",
             "model_source": "assistant",
@@ -36,12 +37,13 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             **changes,
         }
 
-    def result(self, choice="deep_medium", probability=0.24):
+    def result(self, choice="investigate_medium", probability=0.24):
         return {
             "status": "ok",
             "choice": choice,
             "probabilities": {choice: probability},
             "receipt_id": "test",
+            "probability_threshold": 0.2,
         }
 
     async def test_assistant_choice_can_change_and_receipt_is_not_a_second_review(self):
@@ -68,7 +70,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
 
         async def judge(runtime, request):
             self.assertEqual({o["model"] for o in request.state["options"].values()}, {"gpt-6-luna"})
-            return self.result("fast_medium", 0.28)
+            return self.result("brief_medium", 0.28)
 
         with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge):
             d = await self.create(
@@ -163,8 +165,11 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((e["model"], e["reasoning_effort"]), ("gpt-6-luna", "low"))
                     self.assertNotIn("model_source", e)
                     self.assertNotIn("effort_source", e)
-                    judge.assert_awaited_once()
-        self.host.config.decisions["enabled"] = False
+                    if mode == "active":
+                        judge.assert_awaited_once()
+                    else:
+                        judge.assert_not_awaited()
+        self.runtime.plugins.pop("decisions")
         with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             d = await self.create(execution={"model_source": "assistant", "effort_source": "assistant"})
             self.assertNotIn("effort_source", d["spec"]["execution"])
@@ -185,7 +190,11 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
             # Even an explicit profile only chooses a model tier, not an effort.
             with self.assertRaisesRegex(ValueError, "effort_source"):
                 await self.create(
-                    execution={"profile": "fast", "reason": "User preference", "effort_source": "user"}
+                    execution={
+                        "recommendation": "brief",
+                        "reason": "User preference",
+                        "effort_source": "user",
+                    }
                 )
             judge.assert_not_called()
         self.assertEqual(self.store.db.execute("SELECT count(*) FROM job_definitions").fetchone()[0], 0)
@@ -201,16 +210,10 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                 d = await self.create(execution=self.recommendation())
                 self.assertEqual(d["spec"]["execution"]["model"], "gpt-6-luna")
                 judge.assert_awaited_once()
-        self.host.config.decisions["active_timeout_seconds"] = 0.01
-
-        async def slow(*args):
-            await asyncio.sleep(1)
-            return self.result()
-
-        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=slow):
+        with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=TimeoutError):
             d = await self.create(execution=self.recommendation(reasoning_effort="auto"))
         self.assertEqual(d["spec"]["execution"]["selection"]["model_review"]["decision"]["reason"], "timeout")
-        self.host.config.decisions["enabled"] = False
+        self.runtime.plugins.pop("decisions")
         with patch("assistant_runtime.core.tasks.model_advice.decide") as judge:
             d = await self.create(execution=self.recommendation())
             judge.assert_not_called()
@@ -254,12 +257,18 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                     {
                         "task_id": d["id"],
                         "revision": updated["revision"],
-                        "changes": {"execution": {"profile": "deep", "reason": "New recommendation"}},
+                        "changes": {
+                            "execution": {
+                                "recommendation": "investigate",
+                                "model_source": "user",
+                                "reason": "User selected a new recommendation",
+                            }
+                        },
                     },
                 )
             )
             judge.assert_not_called()
-        self.assertEqual(updated["spec"]["execution"]["model"], "gpt-6-luna")
+        self.assertEqual(updated["spec"]["execution"]["model"], "gpt-6.1-sol")
         self.assertEqual(updated["spec"]["execution"]["model_source"], "user")
 
     def test_global_threshold_and_explicit_override_use_candidate_probability(self):
@@ -280,9 +289,9 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                 "kind": "model_review",
                 "id": "receipt",
                 "answer": {
-                    "choice": "deep_medium",
+                    "choice": "investigate_medium",
                     "model": "jev-1.13.0",
-                    "probabilities": {"deep_medium": 0.24},
+                    "probabilities": {"investigate_medium": 0.24},
                     "confidence": 0.19,
                 },
             }
@@ -306,7 +315,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
                 {"none", "low", "high", "max"},
             )
             self.assertEqual({o["model"] for o in request.state["options"].values()}, {"deepseek"})
-            return self.result("custom_high", 0.3)
+            return self.result("selected_high", 0.3)
 
         with patch("assistant_runtime.core.tasks.model_advice.decide", side_effect=judge):
             d = await self.create(

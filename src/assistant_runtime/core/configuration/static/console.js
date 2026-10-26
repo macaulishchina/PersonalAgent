@@ -431,6 +431,7 @@ function seedValue(rule) {
   );
 }
 function optionLabel(rule, value, path) {
+  if (rule["x-labels"]?.[value]) return rule["x-labels"][value];
   if (!path.at(-1)?.includes("reasoning")) return String(value);
   const labels = {
     auto: "自动 · 遵循模型默认策略",

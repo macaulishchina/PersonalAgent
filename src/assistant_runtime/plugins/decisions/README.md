@@ -24,8 +24,7 @@ same provider pool and receipt model. Kernel contracts remain standard-library o
   `get_voice_decision`/`confirm_voice_decision` dispatch to the voice owner, not this
   plugin. Background identities cannot confirm foreground voice changes.
 
-Trusted scenes live in `questions.py`: voice intent, event relevance, unresolved
-model profile, joint model review, and generic selection. Adding a scene requires
+Trusted scenes live in `questions.py`: voice intent, event relevance, joint model review, and generic selection. Adding a scene requires
 versioned question/state validation, bounded owner summary, meaningful fallback,
 owner adoption handling and tests. User text/options are data, never instructions.
 A missing/disabled plugin uses the original path; cancellation propagates, rather
@@ -70,9 +69,8 @@ Default modes: voice/selection parallel, task-model/event direct. Global shadow
 forces all scenes to observation-only. Policies are hashed, with effective values
 recorded per invocation. The threshold uses the selected candidate probability,
 not provider `confidence` and not an empirically calibrated accuracy guarantee.
-`uncertain` always falls back. Model-profile's legacy two-question result still
-requires each adopted field to meet its own threshold; joint model review selects
-one legal pair. User choices and fixed settings remain task-owned protections.
+`uncertain` always preserves the original selection. Model review chooses one legal
+model/effort pair using task-owned recommendation descriptions; it has no fixed tiers. User choices and fixed settings remain task-owned protections.
 
 `TYPESAFE_API_KEY` belongs in the private root `.env` or environment. Explicit
 instance consent covers curated text/context only; credentials and raw audio/video

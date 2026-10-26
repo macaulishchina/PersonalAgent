@@ -21,9 +21,14 @@ class ReleasePreflightTest(unittest.TestCase):
             plugins=["ai_usage", "models", "pi", "tasks", "memory"],
             tasks={
                 "model_policy": {
-                    "profiles": {
-                        name: {"model": "model-a", "reasoning_effort": "low"}
-                        for name in ("fast", "balanced", "deep", "ultra")
+                    "recommendations": {
+                        "diagnose": {
+                            "name": "诊断",
+                            "model": "model-a",
+                            "reasoning_effort": "low",
+                            "reason": "已验证接口",
+                            "description": "标准核验流程",
+                        }
                     }
                 }
             },
@@ -44,11 +49,11 @@ class ReleasePreflightTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             config = self.config(Path(folder))
             config.main_reasoning_effort = "ultra"
-            config.tasks["model_policy"]["profiles"]["deep"]["model"] = "missing"
+            config.tasks["model_policy"]["recommendations"]["diagnose"]["model"] = "missing"
             with patch("scripts.check_pi_release.credential", side_effect=ValueError("SECRET")):
                 result = check(config, native=False)
             failures = {r["check"] for r in result["checks"] if r["state"] == "failed"}
-            self.assertEqual(failures, {"execution_binding", "task_profiles", "credential_references"})
+            self.assertEqual(failures, {"execution_binding", "task_recommendations", "credential_references"})
             self.assertNotIn("SECRET", str(result))
 
     def test_missing_memory_binding_or_usage_plugin_blocks_readiness(self):

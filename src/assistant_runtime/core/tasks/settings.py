@@ -1,4 +1,4 @@
-"""Strict instance settings, independent from foreground and memory models."""
+"""Task configuration; main-conversation defaults are resolved by the task owner."""
 
 from assistant_runtime.api.configuration import configuration_default
 
@@ -35,3 +35,27 @@ class TaskSettings:
             raise ValueError("Task execution settings must be nonempty strings")
         ModelPolicy.parse(result.model_policy)
         return result
+
+    def validate_bindings(self, entries):
+        """Shared static check for saved defaults/recommendations, including dormant ones."""
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        rows = [
+            ("execution", self.execution),
+            *[
+                ("model_policy.recommendations." + ident, row)
+                for ident, row in ModelPolicy.parse(self.model_policy).recommendations.items()
+            ],
+        ]
+        for path, row in rows:
+            model = row.get("model", "auto")
+            if model == "auto":
+                continue
+            prefix = ["tasks", *path.split(".")]
+            if model not in entries:
+                raise ConfigurationError([*prefix, "model"], "reference", "请选择模型库中已有的模型")
+            effort = row.get("reasoning_effort", "auto")
+            if effort != "auto" and effort not in entries[model]["reasoning_efforts"]:
+                raise ConfigurationError(
+                    [*prefix, "reasoning_effort"], "unsupported", "此模型不支持所选思考深度"
+                )

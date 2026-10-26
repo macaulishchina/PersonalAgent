@@ -144,7 +144,7 @@ def profile(provider, model, *, account=None, native=None, remote=None, referenc
         ]
         if not values["reasoning_efforts"]:
             values.pop("reasoning_efforts")
-    elif provider.get("protocol") not in {"pi", "openai_responses", "openai_chat"}:
+    elif provider.get("protocol") not in {"pi", "openai_responses", "openai_chat", "anthropic"}:
         values.pop("reasoning_efforts", None)
     return {
         "binding": binding(provider, model, account),
