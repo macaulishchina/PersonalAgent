@@ -353,6 +353,7 @@ class Ledger:
                 cost_cny=cost,
                 total_tokens=inp + out if inp is not None and out is not None else None,
                 cached_input_tokens=usage.get("cached_input_tokens"),
+                cache_write_input_tokens=usage.get("cache_write_input_tokens"),
                 reasoning_tokens=usage.get("reasoning_tokens"),
                 cost_kind="estimated" if cost is not None else "unknown",
             )

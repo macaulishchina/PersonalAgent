@@ -225,3 +225,29 @@ The host supplies an opaque marker for explicit supplements/answers; matching ad
 checks the active run, native role and answer tool-call ID. A successful steer RPC only means
 accepted. Consumed receipts include the durable usage call ID and prove input inclusion,
 not provider processing or task success. The adapter never resends an uncertain public input.
+
+
+## Stable independent-execution prefixes (0.4.1)
+
+Public `ExecutionRequest.submit` needs no new fields. Each execution still owns a distinct
+Pi session, real cwd, budget identity and scratch/artifact directories. The adapter describes
+that cwd as `.` and deliverables as `../artifacts` in model-visible system sections, while
+keeping the actual cwd for tools and persisted metadata. Caller text and attachments remain
+data in their original order; PA does not join histories or introduce cross-session cache keys.
+Other conversation, task and controlled-context prompt policies remain unchanged.
+
+An explicit public-execution whitelist containing 1..min(4, max_loaded_tools) MCP tools
+uses Pi's native direct-server readiness before the first request. Only permitted identities
+are candidates. Their combined JSON declarations must fit 16 KiB; missing/hidden tools or
+larger declarations keep discovery behavior. Larger and implicit inventories stay deferred.
+Preloading declares tools; it never invokes them or grants approvals. `tools.updated` reports
+schema size and sanitized discovery logs report `preloaded` / `preload_deferred`; declaration order
+is stable. Tool removal and authorization always take priority over prefix reuse.
+
+Cache counts come from Pi's provider usage. The pinned SDK normalizes missing cache counts
+to zero, so PA conservatively reports zero/absent cache-read and cache-write counts as null
+(unknown), and preserves positive reported counts. It cannot distinguish an explicit zero
+from SDK default zero without provider-level evidence. Total input/output accounting stays
+unchanged; cache counts are subsets, never added again to already normalized totals.
+Cache warming and automatic paid retries stay disabled. Stable requests improve eligibility,
+but do not guarantee cache hits, routing, retention, or a lower bill.

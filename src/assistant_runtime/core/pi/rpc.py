@@ -129,6 +129,7 @@ class PiSessionWorker:
             env["ASSISTANT_RUNTIME_PYTHON"] = sys.executable
         env["ASSISTANT_TOOL_RESULT_MAX_CHARS"] = str(self.parent.settings.tool_result_max_chars)
         env["ASSISTANT_MAX_LOADED_TOOLS"] = str(self.parent.settings.max_loaded_tools)
+        env["ASSISTANT_STABLE_EXECUTION_PROMPT"] = "1" if self.meta.get("stable_execution_prompt") else "0"
         env["ASSISTANT_PI_DISCOVERY"] = "1" if self.meta.get("mcp_enabled", True) else "0"
         env["ASSISTANT_PI_MODELS"] = str(agent_dir / "models.json")
         env["ASSISTANT_PI_POLICY"] = json.dumps(self.meta.get("policy") or {}, ensure_ascii=False)
@@ -496,14 +497,14 @@ class PiSessionWorker:
                     "input_tokens": int(usage.get("input", 0))
                     + int(usage.get("cacheRead", 0))
                     + int(usage.get("cacheWrite", 0)),
-                    "cached_input_tokens": int(usage.get("cacheRead", 0)),
-                    "cache_write_input_tokens": int(usage.get("cacheWrite", 0)),
+                    "cached_input_tokens": int(usage["cacheRead"]) if usage.get("cacheRead") else None,
+                    "cache_write_input_tokens": int(usage["cacheWrite"]) if usage.get("cacheWrite") else None,
                     "output_tokens": int(usage.get("output", 0)),
                     "total_tokens": int(usage.get("totalTokens", 0)),
                 }
                 total = self.meta.setdefault("usage", {k: 0 for k in mapped_usage})
                 for key, value in mapped_usage.items():
-                    total[key] += value
+                    total[key] = total[key] + value if total[key] is not None and value is not None else None
                 await self.parent.events.put(
                     {
                         "kind": "usage.updated",
@@ -842,6 +843,7 @@ class PiClient:
                 "budget_scope": p.get("budget_id"),
                 "shell_env": cfg.get("shell_environment_policy.set", {}),
                 "allowed_tools": scope["allowed_tools"],
+                "stable_execution_prompt": bool(p.get("_stable_execution_prompt")),
                 "controlled_context": cfg.get("controlled_context"),
                 "control_token": cfg.get("control_token", ""),
                 "skill_paths": scope["skill_paths"],
@@ -913,7 +915,15 @@ class PiClient:
                 spec["args"] = [*args, "--execution-session", meta["id"]]
         write_pi_models(folder, self.settings, session_id=meta["id"], transport_url=self.transport.url)
         for name, data in (
-            ("mcp.json", to_pi_mcp_json(meta["mcp_servers"])),
+            (
+                "mcp.json",
+                to_pi_mcp_json(
+                    meta["mcp_servers"],
+                    preload=meta.get("stable_execution_prompt", False),
+                    allowed=meta.get("allowed_tools"),
+                    limit=self.settings.max_loaded_tools,
+                ),
+            ),
             (
                 "settings.json",
                 {

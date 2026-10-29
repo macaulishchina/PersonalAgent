@@ -52,8 +52,10 @@ def server_config(
     return result
 
 
-def to_pi_mcp_json(mcp_servers):
+def to_pi_mcp_json(mcp_servers, *, preload=False, allowed=None, limit=12):
     """Translate internal mcp_servers dict to Pi's mcp.json schema."""
+    selected = [name for name in (allowed or []) if name.startswith("mcp__")]
+    eager = preload and 0 < len(selected) <= min(4, limit)
     servers = {}
     for name, spec in (mcp_servers or {}).items():
         if not isinstance(spec, dict):
@@ -108,6 +110,11 @@ def to_pi_mcp_json(mcp_servers):
             }
         for t in disabled_tools:
             tool_exposure[t] = "hidden"
+        if eager:
+            # Pi waits for these servers before its first request. Hidden tools stay hidden.
+            for tool, exposure in list(tool_exposure.items()):
+                if exposure == "deferred" and f"mcp__{name}__{tool}" in selected:
+                    tool_exposure[tool] = "direct"
         if tool_exposure:
             entry["toolExposure"] = tool_exposure
         servers[name] = entry

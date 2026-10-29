@@ -330,8 +330,10 @@ class ExecutionService:
                         "model": row["data"]["model"],
                         "cwd": str(area / "scratch"),
                         "budget_id": ident,
+                        "_stable_execution_prompt": True,
                         "instructions": INSTRUCTIONS
-                        + f"Temporary files belong in {area / 'scratch'}; deliverables belong in {area / 'artifacts'}.",
+                        + "The working directory (.) is this execution's scratch area; "
+                        "deliverables belong in ../artifacts. Resolve relative paths against this directory.",
                         "config": {
                             "model_reasoning_effort": row["data"]["effort"],
                             "mcp_servers": row["data"]["servers"],

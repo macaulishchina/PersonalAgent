@@ -58,6 +58,7 @@ export default function (pi: any) {
     policy.allowed_tools ?? undefined,
     discoveryEnabled,
     Number(process.env.ASSISTANT_MAX_LOADED_TOOLS || 12),
+    process.env.ASSISTANT_STABLE_EXECUTION_PROMPT === "1",
   );
   const resultLimit = Number(
     process.env.ASSISTANT_TOOL_RESULT_MAX_CHARS || 6000,

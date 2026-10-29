@@ -62,13 +62,14 @@ export function registerDiscovery(
   allowed: string[] | undefined,
   enabled: boolean,
   limit: number,
+  stableExecution = false,
 ) {
   const searchable = () =>
     pi
       .getAllTools()
       .filter(
         (tool: any) =>
-          ["deferred", "codemode"].includes(tool.exposure) &&
+          ["deferred", "codemode", ...(stableExecution ? ["direct"] : [])].includes(tool.exposure) &&
           (!Array.isArray(allowed) || allowed.includes(tool.name)),
       );
   const native = nativeSearch({ ...pi, getAllTools: searchable });
@@ -149,6 +150,8 @@ export function registerDiscovery(
       };
     },
   });
+  const explicit = (allowed || []).filter((name) => name.startsWith("mcp__"));
+  let prepare = false;
   let tick = 0;
   const used = new Map<string, number>();
   const base = () =>
@@ -157,6 +160,7 @@ export function registerDiscovery(
     );
   const reset = () => {
     used.clear();
+    prepare = stableExecution && enabled && explicit.length > 0 && explicit.length <= Math.min(4, limit);
     tick = 0;
     pi.setActiveTools([...base(), ...(enabled ? ["tool_search"] : [])]);
   };
@@ -239,6 +243,20 @@ export function registerDiscovery(
   // Runs after the preceding tool batch settles, before the next model call.
   // Never deactivate tools while parallel business operations are in flight.
   pi.on("context_with_system", async (event: any, ctx: any) => {
+    if (prepare) {
+      prepare = false;
+      const candidates = searchable().filter((tool: any) => explicit.includes(tool.name))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+      const chars = Buffer.byteLength(JSON.stringify(candidates.map((tool: any) => ({
+        name: tool.name, description: tool.description, parameters: tool.parameters,
+      }))));
+      const ready = candidates.length === explicit.length && chars <= 16384;
+      pi.setActiveTools([
+        ...pi.getActiveTools().filter((name: string) => !name.startsWith("mcp__")),
+        ...(ready ? candidates.map((tool: any) => tool.name) : []),
+      ]);
+      report(ctx, ready ? "preloaded" : "preload_deferred", ready ? explicit : []);
+    }
     const active: string[] = pi.getActiveTools();
     const loaded = active.filter((name) => name.startsWith("mcp__"));
     const ranked = [...loaded].sort(
@@ -254,7 +272,8 @@ export function registerDiscovery(
     const selected: string[] = pi.getActiveTools();
     const definitions = pi
       .getAllTools()
-      .filter((tool: any) => selected.includes(tool.name));
+      .filter((tool: any) => selected.includes(tool.name))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
     ctx.ui.notify(
       "__assistant_tools__:" +
         JSON.stringify({
@@ -281,6 +300,10 @@ export function registerDiscovery(
     const messages = event.messages.map((message: any) => {
       if (message.role !== "system") return message;
       const { toolsAdded, toolsRemoved, ...rest } = message;
+      // A relative cwd is accurate for this scratch-bound execution. Real tool cwd
+      // and persisted session metadata remain untouched; no identity is reused.
+      if (stableExecution && rest.sections?.cwd)
+        rest.sections = { ...rest.sections, cwd: "<cwd>\n.\n</cwd>" };
       if (declared) return rest;
       declared = true;
       return {

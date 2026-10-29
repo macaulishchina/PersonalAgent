@@ -50,6 +50,7 @@ GROUPS = {
         "pi_runtime",
         "execution_reset",
         "execution_service",
+        "execution_cache",
         "execution_receipts",
         "execution_authority",
         "execution_contexts",

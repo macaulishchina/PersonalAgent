@@ -15,7 +15,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
     session = fixture.PiSkeletonTest.session
     completed = fixture.PiSkeletonTest.completed
 
-    async def configured(self, *, tools=None, limit=2, second=False):
+    async def configured(self, *, tools=None, limit=2, second=False, stable=False):
         self.client.settings = replace(self.settings, max_loaded_tools=limit)
         script = self.root / "catalog.py"
         script.write_text(
@@ -45,7 +45,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
             config["allowed_tools"] = tools
         if second:
             config["mcp_servers"]["alternate-catalog"] = dict(config["mcp_servers"]["catalog"])
-        return await self.session(config=config)
+        return await self.session(config=config, _stable_execution_prompt=stable)
 
     async def run_prompt(self, ident):
         await self.client.request(
@@ -266,6 +266,60 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_small_explicit_execution_loads_before_first_model_request(self):
+        ident = await self.configured(tools=["mcp__catalog__action_3"], stable=True)
+
+        def script(step, body):
+            names = [t["name"] for t in body.get("tools", [])]
+            self.assertIn("mcp__catalog__action_3", names)
+            self.assertNotIn("mcp__catalog__action_4", names)
+            if step == 1:
+                return sse_tool_call("business", "mcp__catalog__action_3", {})
+            return sse_text_reply("done", "verified")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual(len(self.gateway.requests), 2)
+        self.assertEqual(self.gateway.requests[0]["tools"], self.gateway.requests[1]["tools"])
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["3"])
+        await self.client.close()
+        await self.client.start()
+        await self.client.request("session.resume", {"session_id": ident})
+        self.gateway.script_fn = lambda step, body: sse_text_reply("resume", "done")
+        await self.run_prompt(ident)
+        self.assertIn("mcp__catalog__action_3", [t["name"] for t in self.gateway.requests[-1]["tools"]])
+
+    async def test_preload_over_count_or_schema_bound_stays_deferred(self):
+        for huge in (False, True):
+            with self.subTest(huge=huge):
+                tools = ["mcp__catalog__action_" + str(i) for i in range(1 if huge else 5)]
+                ident = await self.configured(tools=tools, limit=8, stable=True)
+                if huge:
+                    path = self.root / "catalog.py"
+                    path.write_text(path.read_text().replace("*80", "*2000"))
+                self.gateway.script_fn = lambda step, body: sse_text_reply("done", "done")
+                await self.run_prompt(ident)
+                self.assertNotIn("SCHEMA_SENTINEL", str(self.gateway.requests[-1]))
+                self.assertFalse(
+                    any(t["name"].startswith("mcp__") for t in self.gateway.requests[-1]["tools"])
+                )
+                await self.client.request("session.close", {"session_id": ident})
+
+    async def test_preload_keeps_hidden_tools_and_other_scope_unavailable(self):
+        ident = await self.configured(tools=["mcp__catalog__action_3"], stable=True)
+
+        def script(step, body):
+            names = [t["name"] for t in body.get("tools", [])]
+            self.assertNotIn("mcp__catalog__action_4", names)
+            if step == 1:
+                return sse_tool_call("forged", "mcp__catalog__action_4", {})
+            self.assertIn("not found", str(body))
+            return sse_text_reply("done", "done")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertFalse((self.root / "calls.txt").exists())
+
 
 class MappingTest(unittest.TestCase):
     def test_allow_deny_and_approval_are_applied_before_discovery(self):
@@ -293,3 +347,22 @@ class MappingTest(unittest.TestCase):
             {"read": "deferred", "confirm": "deferred", "remove": "hidden", "write": "hidden"},
         )
         self.assertEqual(config["args"], ["server.py"])
+
+    def test_eager_mapping_never_promotes_a_denied_or_unselected_tool(self):
+        from assistant_runtime.core.pi.mcp import to_pi_mcp_json
+
+        result = to_pi_mcp_json(
+            {
+                "sample": {
+                    "command": "python",
+                    "enabled_tools": ["read", "remove"],
+                    "disabled_tools": ["remove"],
+                }
+            },
+            preload=True,
+            allowed=["mcp__sample__read", "mcp__sample__remove"],
+            limit=3,
+        )
+        self.assertEqual(
+            result["mcpServers"]["sample"]["toolExposure"], {"read": "direct", "remove": "hidden"}
+        )
