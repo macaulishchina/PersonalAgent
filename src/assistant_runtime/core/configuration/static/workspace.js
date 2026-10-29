@@ -75,6 +75,41 @@ function valueAt(path, fallback) {
   const field = fieldAt(path);
   return field ? (currentValue(field) ?? fallback) : fallback;
 }
+function renderChatShortcut() {
+  const entry = $("chat-open");
+  if (!entry) return;
+  entry.hidden = selected !== "plugin:web";
+  entry.onclick = null;
+  if (entry.hidden) return;
+  const plugins = fieldAt(["plugins"])?.loaded_value,
+    enabled = fieldAt(["web", "enable"])?.loaded_value,
+    host = fieldAt(["web", "host"])?.loaded_value,
+    port = fieldAt(["web", "port"])?.loaded_value;
+  let address;
+  if (
+    plugins?.includes("web") && enabled && typeof host === "string" &&
+    Number.isInteger(port) && port > 0 && port <= 65535 &&
+    ["running", "degraded"].includes($("health").dataset.state)
+  ) {
+    const loopback = host === "::1" || /^127\./.test(host),
+      local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+    if (!loopback || local) {
+      const target = new URL(location.href),
+        destination = ["0.0.0.0", "::"].includes(host) ? location.hostname : host;
+      // Chat's direct listener is HTTP; never carry console queries or credentials.
+      target.protocol = "http:";
+      target.hostname = destination.includes(":") && !destination.startsWith("[")
+        ? `[${destination}]` : destination;
+      target.port = String(port);
+      target.pathname = "/";
+      target.search = target.hash = target.username = target.password = "";
+      address = target.href;
+    }
+  }
+  entry.disabled = !address;
+  entry.title = address || "聊天网页尚未生效或当前地址不可访问";
+  if (address) entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
+}
 function moveTo(page, tab) {
   if (page !== selected && (dirty() || invalid.size)) {
     pendingNavigation = { page, tab };
@@ -209,6 +244,7 @@ function workspaceRender() {
   $("page-title").textContent = copy[0];
   $("page-description").textContent = copy[1];
   $("breadcrumb-current").textContent = copy[0];
+  renderChatShortcut();
   if (selected === "overview") renderOverview();
   else if (selected === "models") renderModels();
   else if (selected === "plugins") renderPlugins();

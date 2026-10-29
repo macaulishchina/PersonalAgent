@@ -1233,6 +1233,7 @@ async function applicationStatus() {
     }[status.state] || status.state;
   $("health").dataset.state = status.state;
   renderPluginHealth(status);
+  renderChatShortcut();
   const workLabels = {
     queued: "等待执行",
     dispatching: "正在启动",

@@ -74,6 +74,26 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)
 
+    async def test_machine_hostname_keeps_origin_and_auth_guards(self):
+        hostname = socket.gethostname().lower()
+        port = self.base.rsplit(":", 1)[1]
+        for name in (hostname, hostname.upper()):
+            authority = f"{name}:{port}"
+            headers = {"Host": authority, "Origin": f"http://{authority}"}
+            response = await self.client.get(self.base + "/", headers=headers)
+            self.assertEqual(response.status, 200)
+            response = await self.client.get(self.base + "/api/messages", headers=headers)
+            self.assertEqual(response.status, 401)
+            response = await self.client.post(
+                self.base + "/api/login", json={"token": self.token},
+                headers={**headers, "Origin": "http://evil.test"},
+            )
+            self.assertEqual(response.status, 403)
+        response = await self.client.get(
+            self.base + "/", headers={"Host": hostname + ".evil.test"},
+        )
+        self.assertEqual(response.status, 400)
+
     async def test_explicit_input_is_bound_to_web_and_cannot_switch_session(self):
         from unittest.mock import AsyncMock
 

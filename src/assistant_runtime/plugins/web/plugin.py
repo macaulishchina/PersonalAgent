@@ -5,6 +5,7 @@ from .declaration import DECLARATION
 import asyncio
 import ipaddress
 import json
+import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -129,9 +130,10 @@ class WebPlugin:
         if not self.settings.enable:
             raise web.HTTPServiceUnavailable(text="网页入口已关闭")
         try:
-            # Numeric hosts prevent arbitrary domain DNS-rebinding. localhost is for tunnels.
+            # Trust numeric addresses, localhost and the OS-owned machine name;
+            # arbitrary domain names still cannot use DNS rebinding to enter.
             hostname = urlsplit("//" + request.host).hostname
-            if hostname != "localhost":
+            if hostname not in {"localhost", socket.gethostname().lower()}:
                 ipaddress.ip_address(hostname or "")
             origin = request.headers.get("Origin")
             expected = f"{request.scheme}://{request.host}"

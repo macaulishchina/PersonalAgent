@@ -461,10 +461,18 @@ nav svg {
   font-size: 14px;
   margin-top: 9px;
 }
-.page-heading > button {
-  font-size: 13px;
-  background: transparent;
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+.page-actions > button {
+  font-size: 13px;
+}
+.page-actions > .secondary {
+  background: transparent;
 }
 .configuration-state {
   display: flex;
@@ -1566,7 +1574,7 @@ dialog.wide-dialog {
   .page-heading h1 {
     font-size: 24px;
   }
-  .page-heading > button {
+  .page-actions > button {
     padding: 6px 8px;
     font-size: 12px;
   }
@@ -1656,7 +1664,7 @@ dialog.wide-dialog {
   .page-heading {
     display: block;
   }
-  .page-heading > button {
+  .page-actions {
     margin-top: 12px;
   }
   .header-actions {
