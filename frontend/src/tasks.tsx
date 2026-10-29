@@ -1,3 +1,4 @@
+import { chatPath } from "./http";
 import { useEffect, useState, useRef } from "react";
 import { Search, ListTodo, ArrowLeft, ChevronRight } from "lucide-react";
 import { RUN_LABELS, planLabel, runSummary } from "./task-presentation";
@@ -239,7 +240,7 @@ export function TaskPanel({
           {r.data.artifacts.map((f: any) => (
             <p key={f.name}>
               <a
-                href={`/api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`}
+                href={chatPath(`api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`)}
               >
                 {f.name}
               </a>{" "}

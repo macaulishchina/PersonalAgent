@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import json
 import socket
+import hmac
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,6 +27,7 @@ class WebPlugin:
         self.runner = None
         self.streams = set()
         self.upload_lock = asyncio.Lock()
+        self.frontend = api.resource("http_frontend")
 
     def maintenance_pending(self):
         # HTTP submits are admitted by conversation/tasks; retention is passive housekeeping.
@@ -70,7 +72,11 @@ class WebPlugin:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, self.settings.host, self.settings.port)
         await self.site.start()
+        self.publish()
         self.cleanup_task = context.spawn(self.cleanup_uploads(), "upload-retention")
+
+    def publish(self):
+        self.frontend.publish(self.settings.host, self.site._server.sockets[0].getsockname()[1])
 
     async def prepare_configuration(self, settings):
         from assistant_runtime.api.configuration import ConfigurationUpdate
@@ -101,12 +107,15 @@ class WebPlugin:
                     await new_site.start()
                     self.site = new_site
             elif not settings.enable and previous.enable:
+                self.frontend.withdraw()
                 await previous_site.stop()
             elif settings.enable and (settings.host, settings.port) != (previous.host, previous.port):
                 new_site = web.TCPSite(self.runner, settings.host, settings.port)
                 await new_site.start()
                 self.site = new_site
                 await previous_site.stop()
+            if settings.enable:
+                self.publish()
 
         async def rollback():
             self.settings, self.auth = previous, previous_auth
@@ -122,18 +131,30 @@ class WebPlugin:
                 self.site = previous_site
                 if previous_site not in self.runner.sites:
                     await previous_site.start()
+                self.publish()
+            elif not previous.enable:
+                self.frontend.withdraw()
 
         return ConfigurationUpdate(commit, rollback)
 
     @web.middleware
     async def guard(self, request, handler):
+        if not hmac.compare_digest(request.headers.get("X-PA-Frontend-Key", ""), self.frontend.key):
+            raise web.HTTPForbidden(text="请从实例管理端口的 /chat/ 访问聊天。")
+        request = request.clone(
+            scheme=request.headers.get("X-PA-Frontend-Scheme", "http"),
+            remote=request.headers.get("X-PA-Frontend-Peer", request.remote),
+        )
         if not self.settings.enable:
             raise web.HTTPServiceUnavailable(text="网页入口已关闭")
         try:
             # Trust numeric addresses, localhost and the OS-owned machine name;
             # arbitrary domain names still cannot use DNS rebinding to enter.
             hostname = urlsplit("//" + request.host).hostname
-            if hostname not in {"localhost", socket.gethostname().lower()}:
+            if request.headers.get("X-PA-Frontend-Trusted-Origin") != "1" and hostname not in {
+                "localhost",
+                socket.gethostname().lower(),
+            }:
                 ipaddress.ip_address(hostname or "")
             origin = request.headers.get("Origin")
             expected = f"{request.scheme}://{request.host}"
@@ -182,14 +203,14 @@ class WebPlugin:
             samesite="Strict",
             secure=request.secure,
             max_age=7 * 86400,
-            path="/",
+            path="/chat/",
         )
         return response
 
     async def logout(self, request):
         self.auth.logout(request.cookies.get(COOKIE, ""))
         response = web.json_response({"ok": True})
-        response.del_cookie(COOKIE, path="/")
+        response.del_cookie(COOKIE, path="/chat/")
         return response
 
     async def session(self, request):
@@ -367,7 +388,7 @@ class WebPlugin:
             media = await self.conversation.upload(data, field.filename)
             ident = media["id"]
             return web.json_response(
-                {"id": ident, "name": media["name"], "url": f"/api/uploads/{ident}"}, status=201
+                {"id": ident, "name": media["name"], "url": f"/chat/api/uploads/{ident}"}, status=201
             )
 
     async def attachment(self, request):
@@ -387,6 +408,7 @@ class WebPlugin:
             await asyncio.sleep(3600)
 
     async def close(self):
+        self.frontend.withdraw()
         for response in list(self.streams):
             response.force_close()
         if self.runner:

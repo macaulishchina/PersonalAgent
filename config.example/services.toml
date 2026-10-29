@@ -1,9 +1,10 @@
 # Web、Apple Home、事件服务及第三方 MCP 接入设置。
 # 在入口 plugins 中启用对应插件后再填写这些示例。
 [web]
+# Chat is served at the management origin's /chat/; this listener is local transport.
 enable = true
 host = "127.0.0.1"
-port = 8046
+port = 0
 # [events]
 # quota_bytes = 2147483648
 # queue_size = 128

@@ -82,36 +82,16 @@ function renderChatShortcut() {
   entry.onclick = null;
   if (entry.hidden) return;
   const plugins = fieldAt(["plugins"])?.loaded_value,
-    enabled = fieldAt(["web", "enable"])?.loaded_value,
-    host = fieldAt(["web", "host"])?.loaded_value,
-    port = fieldAt(["web", "port"])?.loaded_value;
-  let address;
-  if (
-    plugins?.includes("web") && enabled && typeof host === "string" &&
-    Number.isInteger(port) && port > 0 && port <= 65535 &&
+    enabled = fieldAt(["web", "enable"])?.loaded_value;
+  const address = plugins?.includes("web") && enabled &&
     ["running", "degraded"].includes($("health").dataset.state)
-  ) {
-    const loopback = host === "::1" || /^127\./.test(host),
-      local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-    if (!loopback || local) {
-      const target = new URL(location.href),
-        destination = ["0.0.0.0", "::"].includes(host) ? location.hostname : host;
-      // Chat's direct listener is HTTP; never carry console queries or credentials.
-      target.protocol = "http:";
-      target.hostname = destination.includes(":") && !destination.startsWith("[")
-        ? `[${destination}]` : destination;
-      target.port = String(port);
-      target.pathname = "/";
-      target.search = target.hash = target.username = target.password = "";
-      address = target.href;
-    }
-  }
+    ? new URL("/chat/", location.origin).href : null;
   entry.disabled = !address;
   entry.title = address || "聊天网页尚未生效或当前地址不可访问";
   if (address) entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
 }
 function moveTo(page, tab) {
-  if (page !== selected && (dirty() || invalid.size)) {
+  if (page !== selected && hasLocalChanges()) {
     pendingNavigation = { page, tab };
     $("leave-description").textContent = invalid.size
       ? "当前页面有格式错误。可以继续修正，或放弃修改后切换。"
@@ -138,7 +118,10 @@ async function leavePage(save) {
     .forEach((b) => (b.disabled = true));
   try {
     if (save) await saveChanges();
-    else for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
+    else {
+      for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
+      for (const patch of pendingRestart?.patches || []) edits.set(key(patch.path), patch);
+    }
     $("leave-dialog").close();
     pendingNavigation = null;
     navigateTo(target.page, target.tab);

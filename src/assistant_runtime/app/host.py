@@ -142,8 +142,12 @@ class AssistantService:
             if action == "configuration-update":
                 if d.get("execution_session"):
                     raise ValueError("Configuration control is operator-only")
-                result = await self.configuration.apply(
-                    d["entry"], d["version"], d.get("resources", []), preview=d.get("preview", False)
+                result = await self.configuration.submit(
+                    d["entry"],
+                    d["version"],
+                    d.get("resources", []),
+                    preview=d.get("preview", False),
+                    attempt_id=d.get("attempt_id"),
                 )
                 writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
                 await writer.drain()
@@ -163,6 +167,14 @@ class AssistantService:
                 writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
                 await writer.drain()
                 return
+            if action == "http-frontend":
+                if d.get("execution_session"):
+                    raise ValueError("HTTP routing is operator-only")
+                frontend = getattr(self, "http_frontends", {}).get(d.get("owner"))
+                result = frontend.endpoint if frontend else None
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
             if action == "management-status":
                 writer.write(
                     (
@@ -175,6 +187,7 @@ class AssistantService:
                                     "supervisor_pid": int(
                                         os.environ.get("PERSONAL_AGENT_SUPERVISOR_PID", os.getpid())
                                     ),
+                                    "configuration_update": self.configuration.status(),
                                     "configuration_version": os.environ.get(
                                         "PERSONAL_AGENT_CONFIGURATION_VERSION"
                                     ),
@@ -584,6 +597,7 @@ class AssistantService:
                 if self.assistant is not None:
                     await self.assistant.sleep()
             finally:
+                await self.configuration.close()
                 await self.runtime.close()
                 from assistant_runtime.platforms.ipc import cleanup
 

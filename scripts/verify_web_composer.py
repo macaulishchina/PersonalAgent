@@ -13,8 +13,8 @@ from playwright.async_api import async_playwright, expect
 async def main():
     static = Path(__file__).resolve().parents[1] / "src/assistant_runtime/plugins/web/static"
     app = web.Application()
-    app.router.add_get("/", lambda request: web.FileResponse(static / "index.html"))
-    app.router.add_static("/", static)
+    app.router.add_get("/chat/", lambda request: web.FileResponse(static / "index.html"))
+    app.router.add_static("/chat/", static)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -82,7 +82,7 @@ async def main():
                 await route.fulfill(json=data)
 
             await page.route("**/api/**", route_api)
-            await page.goto(origin)
+            await page.goto(origin + "/chat/")
             entry = page.get_by_role("textbox", name="消息", exact=True)
             await expect(page.get_by_role("button", name="加入队列", exact=True)).to_be_disabled()
             await entry.fill("请把这项要求也考虑进去")

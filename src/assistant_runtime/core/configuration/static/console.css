@@ -267,12 +267,7 @@ pre {
   background: var(--accent-soft);
   color: #386b4b;
 }
-.restart-badge {
-  color: #916c36;
-  background: #fbf3e1;
-  font-size: 12px;
-  margin-top: 5px;
-}
+
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -1334,20 +1329,9 @@ dialog.wide-dialog {
 .application-status[data-state="partially_applied"] {
   background: #fff5e5;
 }
-#blockers {
-  padding-left: 19px;
-  font-size: 13px;
-  color: #88764d;
-  line-height: 1.9;
-  margin: 16px 0;
-}
-#blockers:empty {
-  display: none;
-}
-#apply-update {
-  margin-top: 14px;
-  font-size: 13px;
-}
+
+
+
 .restart-option {
   display: flex;
   align-items: center;
@@ -1751,8 +1735,7 @@ dialog.wide-dialog {
   column-gap: 8px;
   align-items: baseline;
 }
-.field-copy > .hint,
-.field-copy > .restart-badge {
+.field-copy > .hint {
   grid-column: 1 / -1;
 }
 .field-source {

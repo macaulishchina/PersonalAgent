@@ -91,10 +91,14 @@ async def verify(config):
             from assistant_runtime.plugins.web.settings import WebSettings
 
             ws = WebSettings.parse(config.web)
-            base = f"http://127.0.0.1:{ws.port}"
+            from assistant_runtime.core.configuration.settings import ManagementSettings
+
+            management = ManagementSettings.load(config.root / "management.toml")
+            origin = f"http://127.0.0.1:{management.port}"
+            base = origin + "/chat"
             credential = ws.credential_path(config.state_dir).read_text().strip()
             async with aiohttp.ClientSession(
-                cookie_jar=aiohttp.CookieJar(unsafe=True), headers={"Origin": base}
+                cookie_jar=aiohttp.CookieJar(unsafe=True), headers={"Origin": origin}
             ) as session:
                 async with session.post(base + "/api/login", json={"token": credential}) as response:
                     assert response.status == 200

@@ -87,8 +87,10 @@ async def verify(preset, root, extensions=(), windows_device_fixtures=False):
         document["web"] = {"host": "127.0.0.1", "port": free_port()}
         system.atomic_write(entry, tomlkit.dumps(document).encode())
     if services.exists():
-        content = services.read_text(encoding="utf-8").replace("8046", str(free_port()))
-        system.atomic_write(services, content.encode())
+        content = tomlkit.parse(services.read_text(encoding="utf-8"))
+        if "web" in content:
+            content["web"].update(host="127.0.0.1", port=0)
+        system.atomic_write(services, tomlkit.dumps(content).encode())
     env = {key: value for key, value in os.environ.items() if not key.startswith("PERSONAL_AGENT_")}
     env["PYTHONUTF8"] = "1"
     logpath = root / "acceptance.log"

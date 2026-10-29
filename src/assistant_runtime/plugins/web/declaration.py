@@ -24,7 +24,7 @@ DECLARATION = PluginDefinition(
         TaskRequest,
         NotificationRequest,
     ),
-    resources=("conversation", "notifications_enabled", "tasks_enabled"),
+    resources=("conversation", "notifications_enabled", "tasks_enabled", "http_frontend"),
     config_key="web",
     validate=WebSettings.parse,
 )

@@ -15,12 +15,12 @@ pa configuration reset-token --management /absolute/instance/management.toml
 ```
 
 Open port **8047**, listening on `0.0.0.0` by default. The random administrator token is
-private at `state/configuration/admin-token`; it is separate from the chat login.
+private at `state/configuration/admin-token`; it is separate from the chat login. Optional chat shares this public origin at /chat/. The kernel listener survives absent/failed chat or business; implementation remains in the web extension. Private loopback endpoints are discovered only through operator IPC.
 `configuration serve --management ...` is the explicit management entry point. `run`
 resolves the same bootstrap before parsing business configuration, so damaged business
 TOML does not prevent the repair page from starting. Initialization does not start services.
 
-After login, **修改密码** sets a custom administrator password (7–256 characters,
+After login, **修改密码** sets a custom administrator password (6–256 characters,
 without leading/trailing whitespace, line breaks or NUL). Digits alone, letters alone,
 or a mixture are accepted, with no character-class requirement. It verifies the current password
 and repeated new input, shares the login rate limit, and atomically updates the private
@@ -97,8 +97,9 @@ IPC responses. Unrecoverable owners and their dependents refuse new requests. Ma
 listener failures remain separately pending and can be retried without restarting the worker.
 
 Plugin composition, process foundation, fixed main voice bindings and storage migration
-remain explicit restart/maintenance operations. A page is applied atomically: if its related
-changes require restart, the candidate waits as a whole. External integration steps stay pending
+remain explicit restart/maintenance operations. Hot changes apply first; restart edits remain
+in a private proposal until confirmed. Dependency-coupled changes stay together if their partial
+candidate cannot validate. External integration steps stay pending
 until the operator explicitly confirms them. Manual edits are detected but never auto-applied.
 
 ## Files and credentials
@@ -209,3 +210,9 @@ Historical results are preserved in the [module acceptance archive](../../../../
 Model editing uses `model-editor.js` over the same typed draft/transaction controls. `/api/model-capabilities` is authenticated, revision-checked metadata-only lookup, independent of credentials or inference. Model facts and acceptance are separate; the page edits one set of model parameters and thinking settings. Adopting or refilling metadata replaces known fields directly in the draft; absent facts preserve the corresponding settings. Provenance is informational, not a parallel override form. Model/connection changes discard stale page metadata and require re-identification; server validation rejects stale saved bindings. No provider credentials are sent to public catalogs.
 
 Public capability references use a searchable dropdown with all matching records across all packaged models.dev suppliers. Names are ranked by normalized exact match, substring and search terms; suggestions never change a route or grant capabilities. The operator previews a selected record and explicitly copies its known values into the normal configuration draft. Unknown models remain savable. The dropdown reuses the collection filter and model-list styling; filtering is local, selection explicit, and no pages are hidden. Searches are local, authenticated and revision checked, and require neither credentials nor inference calls.
+
+### Operator save workflow
+
+`save_flow.py` validates the complete candidate with `ConfigurationFiles` before any save. A preview against the running worker supplies the same application policies used during actual updates. Hot changes are saved/applied first; restart-only edits remain in an instance-private proposal (`restart-draft.json`), never startup input. Invalid dependency-coupled partial candidates remain together. Proposals use opaque IDs and configuration revisions for conflict checks; credential values are retained only in private storage, not returned to the browser. Discard removes the proposal; explicit restart confirmation commits its candidate through the normal file transaction and manager lifecycle. The console exposes one save action and one optional restart confirmation.
+
+Worker update intents are acknowledged promptly and polled by attempt ID. Reconnecting cannot enqueue duplicate transactions; an explicit retry creates a fresh attempt. Prepare/commit/restore/cleanup stages have bounded waits and private progress receipts. Failed recovery blocks affected owners instead of pretending that the old state was restored.

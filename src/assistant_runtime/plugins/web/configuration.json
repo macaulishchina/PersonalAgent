@@ -14,15 +14,19 @@
       },
       "host": {
         "type": "string",
-        "title": "监听地址",
-        "default": "127.0.0.1"
+        "title": "内部传输地址",
+        "default": "127.0.0.1",
+        "description": "仅用于管理服务与聊天插件之间的本机通信；对外访问地址在实例管理中设置。",
+        "x-advanced": true
       },
       "port": {
         "type": "integer",
-        "title": "监听端口",
-        "default": 8046,
-        "minimum": 1,
-        "maximum": 65535
+        "title": "内部传输端口",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 65535,
+        "description": "通常保持 0，由系统分配。聊天与配置统一通过实例管理端口访问。",
+        "x-advanced": true
       },
       "token_file": {
         "type": "string",

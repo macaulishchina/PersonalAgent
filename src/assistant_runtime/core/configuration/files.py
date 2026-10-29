@@ -52,6 +52,17 @@ class Snapshot:
     resources: dict[str, bytes | None] = field(default_factory=dict)
 
 
+def snapshot_version(contents, resources):
+    digest = hashlib.sha256()
+    for name, content in sorted(contents.items()):
+        digest.update(name.encode() + b"\0" + content + b"\0")
+    for ident, content in sorted(resources.items()):
+        digest.update(
+            ident.encode() + b"\0resource\0" + (content if content is not None else b"\0absent") + b"\0"
+        )
+    return digest.hexdigest()
+
+
 class ConfigurationFiles:
     def __init__(self, entry, state, validate, *, retain=20, resources=None):
         self.entry = Path(entry).expanduser().absolute()
@@ -140,7 +151,7 @@ class ConfigurationFiles:
                 self.snapshot(), self.entry.name, root=self.resources.root if self.resources else None
             )
 
-    def patch(self, version, patches, *, actor="administrator", resource_changes=None):
+    def patch(self, version, patches, *, actor="administrator", resource_changes=None, _preview=False):
         from .fields import patch_documents
 
         return self.save(
@@ -150,6 +161,7 @@ class ConfigurationFiles:
             else {n: tomllib.loads(raw.decode()) for n, raw in snapshot.contents.items()},
             actor=actor,
             resource_changes=resource_changes,
+            _preview=_preview,
         )
 
     def _candidate(self, snapshot, changes):
@@ -192,7 +204,7 @@ class ConfigurationFiles:
             contents[name] = content
         return contents, sorted(set(fields))
 
-    def save(self, version, changes, *, actor="local", resource_changes=None, _repair=False):
+    def save(self, version, changes, *, actor="local", resource_changes=None, _repair=False, _preview=False):
         with self.locked():
             snapshot = self._repair_snapshot() if _repair else self.snapshot()
             if version != snapshot.version:
@@ -244,6 +256,8 @@ class ConfigurationFiles:
             self.validate_all(contents, resource_values, touched)
             if (self._repair_snapshot() if _repair else self.snapshot()).version != version:
                 raise Conflict("Configuration changed during validation")
+            if _preview:
+                return Snapshot(snapshot_version(contents, resource_values), contents, resource_values)
             if contents == snapshot.contents and resource_values == snapshot.resources:
                 return {"version": version, "changed": False}
             ident = uuid.uuid4().hex

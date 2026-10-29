@@ -5,15 +5,26 @@ from assistant_runtime.api.configuration import ConfigurationUpdate
 
 
 class UpdateCoordinator:
-    def __init__(self):
+    def __init__(self, *, stage_timeout=45, on_stage=None):
         self.lock = asyncio.Lock()
+        self.stage_timeout, self.on_stage = stage_timeout, on_stage
+        self.stage = None
         self.failed_owners = set()
         self.cleanup_failures = set()
         self.failure = None
         self.authorized_tasks = set()
 
+    def progress(self, owner, stage):
+        self.stage = {"owner": owner, "stage": stage}
+        if self.on_stage:
+            self.on_stage(dict(self.stage))
+
+    async def bounded(self, operation):
+        async with asyncio.timeout(self.stage_timeout):
+            return await operation
+
     async def finish(self, operation):
-        task = asyncio.create_task(operation)
+        task = asyncio.create_task(self.bounded(operation))
         self.authorized_tasks.add(task)
         try:
             while True:
@@ -36,20 +47,23 @@ class UpdateCoordinator:
             try:
                 for owner, prepare in preparations:
                     self.failure = (owner, "prepare")
-                    change = await prepare()
+                    self.progress(owner, "prepare")
+                    change = await self.bounded(prepare())
                     if not isinstance(change, ConfigurationUpdate):
                         raise TypeError("Owner must return a prepared configuration update")
                     prepared.append((owner, change))
                 for owner, change in prepared:
                     self.failure = (owner, "commit")
                     attempted.append((owner, change))
-                    await change.commit()
+                    self.progress(owner, "commit")
+                    await self.bounded(change.commit())
                 committed = True
                 self.failure = None
                 self.failed_owners.difference_update(owner for owner, _ in prepared)
             except BaseException:
                 for owner, change in reversed(attempted):
                     try:
+                        self.progress(owner, "rollback")
                         await self.finish(change.rollback())
                     except BaseException:
                         self.failed_owners.add(owner)
@@ -58,6 +72,7 @@ class UpdateCoordinator:
                 for owner, change in reversed(prepared):
                     if change.release:
                         try:
+                            self.progress(owner, "cleanup")
                             await self.finish(change.release(committed))
                         except BaseException:
                             (self.cleanup_failures if committed else self.failed_owners).add(owner)

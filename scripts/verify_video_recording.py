@@ -25,7 +25,11 @@ async def verify(config, devices, duration):
         assert "video.record" in result["device"]["capabilities"]
     folder = config.state_dir / "acceptance/video-clips"
     folder.mkdir(parents=True, exist_ok=True)
-    base = f"http://127.0.0.1:{settings.port}"
+    from assistant_runtime.core.configuration.settings import ManagementSettings
+
+    management = ManagementSettings.load(config.root / "management.toml")
+    origin = f"http://127.0.0.1:{management.port}"
+    base = origin + "/chat"
     evidence = {"started_at": time.time(), "devices": devices, "duration_seconds": duration, "videos": []}
     try:
         async with async_playwright() as playwright:
@@ -39,7 +43,7 @@ async def verify(config, devices, duration):
                 response = await page.request.post(
                     base + "/api/login",
                     data={"token": settings.credential_path(config.state_dir).read_text().strip()},
-                    headers={"Origin": base},
+                    headers={"Origin": origin},
                 )
                 assert response.status == 200
                 await page.reload()
@@ -54,7 +58,7 @@ async def verify(config, devices, duration):
                         + "。每台只录一次，将视频作为聊天附件返回。不要截图、看图、移动镜头、修改音箱或音量，不要播音。视频不发送到外部服务。完成后简短告知。",
                         "attachments": [],
                     },
-                    headers={"Origin": base},
+                    headers={"Origin": origin},
                 )
                 assert receipt.status == 202
                 user = (await receipt.json())["message"]

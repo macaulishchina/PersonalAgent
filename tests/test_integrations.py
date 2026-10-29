@@ -218,6 +218,28 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
         await self.adapter.apply(force=True)
         self.assertEqual(self.client.request.await_count, 4)
 
+    async def test_owned_refresh_crosses_configuration_barrier_but_other_requests_stay_paused(self):
+        parent = asyncio.current_task()
+        ready = asyncio.Event()
+        self.client.configuration_tasks = {parent}
+
+        async def guarded(method, params, **kwargs):
+            if asyncio.current_task() not in self.client.configuration_tasks:
+                await ready.wait()
+            return await self.rpc(method, params, **kwargs)
+
+        self.client.request.side_effect = guarded
+        other = asyncio.create_task(self.client.request("session.read", {}))
+        try:
+            async with asyncio.timeout(1):
+                result = await self.adapter.apply(force=True, staged=True)
+            self.assertEqual(result["state"], "applied")
+            self.assertFalse(other.done())
+            self.assertEqual(self.client.configuration_tasks, {parent})
+        finally:
+            ready.set()
+            await other
+
     async def test_probe_is_real_provider_discovery_and_closes_only_its_thread(self):
         result = await self.adapter.verify("mobile", "background", True)
         self.assertEqual(result["state"], "verified")

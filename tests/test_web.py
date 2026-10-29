@@ -8,7 +8,7 @@ import socket
 import tempfile
 import unittest
 
-from aiohttp import ClientSession, CookieJar, FormData
+from aiohttp import ClientSession, CookieJar, FormData, web
 from PIL import Image
 from assistant_runtime.app.bundled import context_for
 from assistant_runtime.plugins.web.plugin import WebPlugin
@@ -40,12 +40,39 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         await self.host.conversation.start(self.context)
         self.plugin = WebPlugin(context_for(self.host, "web"))
         await self.plugin.start(self.context)
-        self.base = f"http://127.0.0.1:{port}"
-        self.client = ClientSession(cookie_jar=CookieJar(unsafe=True), headers={"Origin": self.base})
+        from types import SimpleNamespace
+        from assistant_runtime.core.configuration.chat_gateway import ChatGateway
+
+        async def endpoint(payload):
+            return self.host.http_frontends["web"].endpoint
+
+        self.gateway = ChatGateway(
+            SimpleNamespace(process=SimpleNamespace(returncode=None), request=endpoint)
+        )
+
+        @web.middleware
+        async def routing(request, handler):
+            request["gateway_scheme"] = "https" if getattr(self, "https_gateway", False) else "http"
+            if getattr(self, "https_gateway", False):
+                request["gateway_origin"] = "https://public.example"
+                request["gateway_trusted_origin"] = True
+            return await handler(request)
+
+        app = web.Application(middlewares=[routing])
+        app.router.add_route("*", "/chat/{path:.*}", self.gateway.forward)
+        self.gateway_runner = web.AppRunner(app, shutdown_timeout=1)
+        await self.gateway_runner.setup()
+        site = web.TCPSite(self.gateway_runner, "127.0.0.1", 0)
+        await site.start()
+        self.origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        self.base = self.origin + "/chat"
+        self.client = ClientSession(cookie_jar=CookieJar(unsafe=True), headers={"Origin": self.origin})
         self.token = (self.host.config.state_dir / "web-access-token").read_text().strip()
 
     async def asyncTearDown(self):
         await self.client.close()
+        await self.gateway.close()
+        await self.gateway_runner.cleanup()
         await self.context.close()
         self.host.store.db.close()
         self.temp.cleanup()
@@ -76,7 +103,7 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_machine_hostname_keeps_origin_and_auth_guards(self):
         hostname = socket.gethostname().lower()
-        port = self.base.rsplit(":", 1)[1]
+        port = self.origin.rsplit(":", 1)[1]
         for name in (hostname, hostname.upper()):
             authority = f"{name}:{port}"
             headers = {"Host": authority, "Origin": f"http://{authority}"}
@@ -85,12 +112,14 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(self.base + "/api/messages", headers=headers)
             self.assertEqual(response.status, 401)
             response = await self.client.post(
-                self.base + "/api/login", json={"token": self.token},
+                self.base + "/api/login",
+                json={"token": self.token},
                 headers={**headers, "Origin": "http://evil.test"},
             )
             self.assertEqual(response.status, 403)
         response = await self.client.get(
-            self.base + "/", headers={"Host": hostname + ".evil.test"},
+            self.base + "/",
+            headers={"Host": hostname + ".evil.test"},
         )
         self.assertEqual(response.status, 400)
 
@@ -375,12 +404,35 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         r = await self.client.post(self.base + "/api/uploads", data=form)
         self.assertEqual(r.status, 201)
         attachment = await r.json()
-        r = await self.client.get(self.base + attachment["url"])
+        r = await self.client.get(self.origin + attachment["url"])
         self.assertEqual(r.status, 200)
         self.assertEqual(r.content_type, "image/jpeg")
         async with ClientSession() as other:
-            r = await other.get(self.base + attachment["url"])
+            r = await other.get(self.origin + attachment["url"])
             self.assertEqual(r.status, 401)
+
+    async def test_large_upload_streams_past_the_management_json_body_limit(self):
+        import random
+
+        await self.login()
+        data = io.BytesIO()
+        Image.frombytes("RGB", (1024, 1024), random.Random(0).randbytes(1024 * 1024 * 3)).save(
+            data, format="PNG"
+        )
+        self.assertGreater(len(data.getvalue()), 2 * 1024 * 1024)
+        form = FormData()
+        form.add_field("image", data.getvalue(), filename="large.png", content_type="image/png")
+        response = await self.client.post(self.base + "/api/uploads", data=form)
+        self.assertEqual(response.status, 201, await response.text())
+
+    async def test_trusted_https_gateway_preserves_secure_chat_cookie(self):
+        self.https_gateway = True
+        response = await self.client.post(
+            self.base + "/api/login", json={"token": self.token}, headers={"Origin": "https://public.example"}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.cookies["personal_agent_session"]["secure"])
+        self.assertEqual(response.cookies["personal_agent_session"]["path"], "/chat/")
 
     async def test_report_group_projection_matches_history_and_sse(self):
         import json
@@ -498,7 +550,8 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
 class WebSettingsTest(unittest.TestCase):
     def test_invalid_listener_and_port_rejected(self):
         for value in (
-            {"port": 0},
+            {"port": -1},
+            {"host": "0.0.0.0", "enable": True},
             {"port": True},
             {"host": "external.example"},
             {"enable": "false"},

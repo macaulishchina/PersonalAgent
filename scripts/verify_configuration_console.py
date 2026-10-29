@@ -364,9 +364,7 @@ default_reasoning_effort = "none"
                     await page.get_by_role("button", name="保存并生效", exact=True).click()
                 saved_response = await save_response.value
                 assert saved_response.status == 200, await saved_response.json()
-                await expect(page.locator("#notice")).to_have_text(
-                    "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
-                )
+                await expect(page.locator("#notice")).to_have_text("保存成功，设置已生效。")
                 config = tomllib.loads(entry.read_text())
                 assert config["plugin_settings"]["sample"]["report"]["style"] == "detailed"
                 assert config["plugin_settings"]["sample"]["max_length"] == 1200
@@ -803,9 +801,7 @@ default_reasoning_effort = "none"
                     await page.get_by_role("button", name="保存并生效", exact=True).click()
                 saved_response = await save_response.value
                 assert saved_response.status == 200, await saved_response.json()
-                await expect(page.locator("#notice")).to_have_text(
-                    "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
-                )
+                await expect(page.locator("#notice")).to_have_text("保存成功，设置已生效。")
                 saved = tomllib.loads(models.read_text())["model_api"]
                 assert saved["providers"]["native_test"]["account"] == "native_test"
                 native_reference = saved["accounts"]["native_test"]["key_env"]
@@ -892,18 +888,27 @@ default_reasoning_effort = "none"
                     assert await page.locator("#entry-dialog").evaluate("d => d.scrollWidth <= d.clientWidth")
                     await page.get_by_role("button", name="取消编辑", exact=True).click()
                 await page.set_viewport_size({"width": 1440, "height": 1000})
-                await page.get_by_role("button", name="生效状态与维护", exact=True).click()
-                await expect(page.locator("#apply-dialog")).to_be_visible()
+
+                assert await page.locator("#apply-open, .restart-badge").count() == 0
+                await page.evaluate('() => changed(["unit_name"], "set", "pa-browser-acceptance.service")')
+                await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#restart-dialog")).to_be_visible()
                 await capture(page, "configuration-desktop-apply.png")
-                async with page.expect_response(lambda r: r.url.endswith("/api/apply") and r.status == 202):
-                    await page.get_by_role("button", name="等待完成后重启", exact=True).click()
+                await page.get_by_role("button", name="暂不重启", exact=True).click()
+                assert (await (await page.request.get(origin + "/api/status")).json())["pid"] == pid
+                await page.get_by_role("button", name="保存并生效", exact=True).click()
+                await expect(page.locator("#restart-dialog")).to_be_visible()
+                async with page.expect_response(
+                    lambda r: r.url.endswith("/api/configuration/restart") and r.status == 200
+                ):
+                    await page.get_by_role("button", name="重启并生效", exact=True).click()
                 async with asyncio.timeout(30):
                     while True:
                         applied = await (await page.request.get(origin + "/api/status")).json()
                         if applied["application"]["phase"] == "applied" and applied["pid"] != pid:
                             break
                         await asyncio.sleep(0.2)
-                await page.get_by_role("button", name="关闭应用配置").click()
+                await expect(page.locator("#count")).to_have_text("没有未保存的修改")
                 await page.get_by_role("button", name="变更记录", exact=True).click()
                 await expect(page.locator("#history-dialog")).to_be_visible()
                 assert await page.locator(".history-item").count() >= 1

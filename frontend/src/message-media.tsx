@@ -1,3 +1,4 @@
+import { chatPath } from "./http";
 import { useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 
@@ -62,7 +63,7 @@ export function MessageMedia({
         a.type === "video/mp4" ? (
           <figure className="message-video" key={a.id}>
             <video
-              src={"/api/uploads/" + a.id}
+              src={chatPath("api/uploads/" + a.id)}
               controls
               playsInline
               preload="metadata"
@@ -70,7 +71,7 @@ export function MessageMedia({
             />
             <figcaption>
               <span>{a.name}</span>
-              <a href={"/api/uploads/" + a.id} download={a.name}>
+              <a href={chatPath("api/uploads/" + a.id)} download={a.name}>
                 下载
               </a>
             </figcaption>
@@ -79,9 +80,9 @@ export function MessageMedia({
           <button
             key={a.id}
             aria-label={"查看图片 " + a.name}
-            onClick={() => onOpen("/api/uploads/" + a.id)}
+            onClick={() => onOpen(chatPath("api/uploads/" + a.id))}
           >
-            <img src={"/api/uploads/" + a.id} alt={a.name} loading="lazy" />
+            <img src={chatPath("api/uploads/" + a.id)} alt={a.name} loading="lazy" />
           </button>
         ),
       )}

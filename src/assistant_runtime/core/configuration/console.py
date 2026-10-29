@@ -17,6 +17,10 @@ COOKIE = "personal_agent_admin"
 log = logging.getLogger(__name__)
 
 
+class ConfigurationBusy(ValueError):
+    pass
+
+
 class Console:
     def __init__(self, business):
         self.business = business
@@ -27,6 +31,12 @@ class Console:
         self.site = None
         self.business.management_applied = self.reconfigure
         self.writes = asyncio.Lock()
+        from .save_flow import SaveFlow
+
+        self.save_flow = SaveFlow(business)
+        from .chat_gateway import ChatGateway
+
+        self.chat_gateway = ChatGateway(business)
         from .accounts import Accounts
 
         self.accounts = Accounts(business)
@@ -52,6 +62,16 @@ class Console:
                 pass
         expected = public_origin if trusted else request.scheme + "://" + request.host
         request["secure_context"] = expected.startswith("https://")
+        if request.path == "/chat" or request.path.startswith("/chat/"):
+            origin = request.headers.get("Origin")
+            if (origin and origin != expected) or (
+                request.method not in {"GET", "HEAD"} and origin != expected
+            ):
+                raise web.HTTPForbidden(text="跨站请求已拒绝")
+            request["gateway_scheme"] = urlsplit(expected).scheme
+            request["gateway_origin"] = expected
+            request["gateway_trusted_origin"] = bool(public_origin and trusted)
+            return await handler(request)
         if request.method not in {"GET", "HEAD"}:
             origin = urlsplit(request.headers.get("Origin", ""))
             if origin.scheme + "://" + origin.netloc != expected:
@@ -65,6 +85,8 @@ class Console:
             if request.method not in {"GET", "HEAD"} and not isinstance(await request.json(), dict):
                 raise ValueError("Expected a configuration operation object")
             response = await handler(request)
+        except ConfigurationBusy as exc:
+            response = web.json_response({"error": str(exc), "code": "configuration_busy"}, status=409)
         except Conflict:
             response = web.json_response({"error": "配置已被其他操作修改，请重新加载"}, status=409)
         except PermissionError:
@@ -111,6 +133,8 @@ class Console:
         app.add_routes(
             [
                 web.get("/", self.index),
+                web.route("*", "/chat", self.chat_gateway.forward),
+                web.route("*", "/chat/{path:.*}", self.chat_gateway.forward),
                 web.get("/console.js", self.javascript),
                 web.get("/workspace.js", self.workspace_javascript),
                 web.get("/model-editor.js", self.model_javascript),
@@ -124,6 +148,8 @@ class Console:
                 web.get("/api/status", self.status),
                 web.get("/api/configuration", self.read),
                 web.post("/api/configuration", self.save),
+                web.post("/api/configuration/discard", self.discard),
+                web.post("/api/configuration/restart", self.restart),
                 web.get("/api/catalog", self.describe),
                 web.get("/api/resources", self.resources),
                 web.get("/api/accounts", self.account_inventory),
@@ -163,16 +189,19 @@ class Console:
         return {"host": settings.host, "port": settings.port, "public_origin": settings.public_origin}
 
     def writable(self):
-        if self.business.application.get("phase") in {
+        task = getattr(self.business, "apply_task", None)
+        if (task is not None and not task.done()) or self.business.application.get("phase") in {
             "preparing",
             "applying",
             "waiting",
             "cancelling",
             "restarting",
+            "recovering",
         }:
-            raise ValueError("Configuration application is active")
+            raise ConfigurationBusy("上一轮设置仍在保存生效，请稍后再试；本页修改会保留。")
 
     async def close(self):
+        await self.chat_gateway.close()
         await self.provider_queries.close()
         await self.accounts.close()
         if self.runner:
@@ -268,6 +297,7 @@ class Console:
                     if self.files.resources
                     else []
                 )
+                result["pending_restart"] = self.save_flow.public()
                 return result
 
         result = await asyncio.to_thread(snapshot_view)
@@ -312,16 +342,29 @@ class Console:
         data = await request.json()
         async with self.writes:
             self.writable()
-            result = await asyncio.to_thread(
-                self.files.patch,
+            result = await self.save_flow.save(
                 data.get("version"),
                 data.get("patches"),
-                actor="administrator",
-                resource_changes=data.get("resources"),
+                data.get("resources"),
+                data.get("pending_id"),
             )
-            if result.get("changed"):
-                result["application"] = self.business.update(result["version"])
         return web.json_response(result)
+
+    async def discard(self, request):
+        data = await request.json()
+        async with self.writes:
+            await asyncio.to_thread(self.save_flow.discard, data.get("pending_id"))
+        return web.json_response({"discarded": True})
+
+    async def restart(self, request):
+        data = await request.json()
+        if data.get("confirmed") is not True:
+            raise ValueError("Explicit restart confirmation required")
+        async with self.writes:
+            self.writable()
+            return web.json_response(
+                await self.save_flow.restart(data.get("version"), data.get("pending_id"))
+            )
 
     async def history(self, request):
         return web.json_response({"versions": await asyncio.to_thread(self.files.history)})

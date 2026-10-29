@@ -1,5 +1,6 @@
 """Operator-only live configuration composition; module code owns each update."""
 
+import asyncio
 from dataclasses import fields
 from pathlib import Path
 import os
@@ -33,6 +34,84 @@ class ConfigurationRuntime:
         import asyncio
 
         self.operation = asyncio.Lock()
+        self.task = None
+        self.intent = None
+        self.receipt = {"phase": "idle"}
+        self.updates.on_stage = self._progress
+
+    def status(self):
+        return {**self.receipt, "busy": bool(self.task and not self.task.done())}
+
+    def _progress(self, stage):
+        import logging
+        import json
+        import time
+        from assistant_runtime.api.system import system
+
+        self.receipt.update(
+            stage,
+            phase="recovering" if stage["stage"] in {"rollback", "cleanup"} else "applying",
+            updated=time.time(),
+        )
+        logging.getLogger(__name__).info(
+            "configuration_update_stage version=%s owner=%s stage=%s",
+            self.receipt.get("version"),
+            stage["owner"],
+            stage["stage"],
+        )
+        try:
+            system.atomic_write(
+                self.host.config.state_dir / "configuration/hot-receipt.json",
+                json.dumps(self.receipt).encode(),
+            )
+        except OSError:
+            # Telemetry failure must never skip owned rollback/cleanup.
+            logging.getLogger(__name__).warning("configuration_stage_receipt_unavailable")
+
+    async def submit(self, entry, revision, resources=(), *, preview=False, attempt_id=None):
+        # IPC acknowledges the intent; reconnects query the same transaction rather
+        # than holding a socket open or queuing duplicate updates behind its lock.
+        if preview:
+            return await self.apply(entry, revision, resources, preview=True)
+        intent = (str(entry), revision, tuple(sorted(resources)), attempt_id)
+        if self.task and not self.task.done():
+            if intent != self.intent:
+                from assistant_runtime.api.configuration import ConfigurationError
+
+                raise ConfigurationError(
+                    ["configuration"], "application_busy", "上一轮配置仍在处理，请稍后再保存"
+                )
+            return self.status()
+        if intent == self.intent and self.receipt.get("phase") != "waiting":
+            return self.status()
+        self.intent = intent
+        self.receipt = {"version": revision, "phase": "preparing", "attempt_id": attempt_id}
+        self.task = asyncio.create_task(
+            self._run_update(entry, revision, resources), name="configuration-update-worker"
+        )
+        return self.status()
+
+    async def _run_update(self, entry, revision, resources):
+        import json
+        from assistant_runtime.api.configuration import ConfigurationError
+        from assistant_runtime.api.system import system
+
+        attempt_id = self.receipt.get("attempt_id")
+        try:
+            result = await self.apply(entry, revision, resources)
+        except (Exception, asyncio.CancelledError) as exc:
+            result = {"phase": "failed", "diagnostic": "configuration_update_failed"}
+            if isinstance(exc, ConfigurationError):
+                result["issues"] = [exc.public()]
+        self.receipt = {**result, "version": revision, "attempt_id": attempt_id}
+        system.atomic_write(
+            self.host.config.state_dir / "configuration/hot-receipt.json", json.dumps(self.receipt).encode()
+        )
+
+    async def close(self):
+        if self.task and not self.task.done():
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
 
     async def action(self, owner, action, arguments, confirmed=False):
         async with self.operation:
@@ -233,17 +312,34 @@ class ConfigurationRuntime:
 
             receipt = self.host.config.state_dir / "configuration/hot-receipt.json"
             if not preview:
-                system.atomic_write(receipt, json.dumps({"version": revision, "phase": "applying"}).encode())
+                self.receipt = {
+                    "version": revision,
+                    "phase": "preparing",
+                    "attempt_id": self.receipt.get("attempt_id"),
+                }
+                system.atomic_write(receipt, json.dumps(self.receipt).encode())
             try:
                 result = await self._apply(entry, revision, resources, preview=preview)
             except BaseException:
                 if not preview:
                     system.atomic_write(
-                        receipt, json.dumps({"version": revision, "phase": "failed"}).encode()
+                        receipt,
+                        json.dumps(
+                            {
+                                "version": revision,
+                                "phase": "failed",
+                                "attempt_id": self.receipt.get("attempt_id"),
+                            }
+                        ).encode(),
                     )
                 raise
             if not preview:
-                system.atomic_write(receipt, json.dumps({**result, "version": revision}).encode())
+                system.atomic_write(
+                    receipt,
+                    json.dumps(
+                        {**result, "version": revision, "attempt_id": self.receipt.get("attempt_id")}
+                    ).encode(),
+                )
             return result
 
     async def _apply(self, entry, revision, resources=(), *, preview=False):

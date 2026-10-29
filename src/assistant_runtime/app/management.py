@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 from assistant_runtime.core.configuration.files import Snapshot, atomic
 
@@ -55,7 +56,14 @@ class BusinessProcess:
         except (ValueError, OSError):
             self.application = {"phase": "failed", "diagnostic": "application_receipt_invalid"}
         self.reconcile_update()
-        if self.application.get("phase") in {"preparing", "applying", "waiting", "cancelling", "restarting"}:
+        if self.application.get("phase") in {
+            "preparing",
+            "applying",
+            "recovering",
+            "waiting",
+            "cancelling",
+            "restarting",
+        }:
             self.application.update(phase="failed", interrupted=True)
             self.persist_application()
 
@@ -69,9 +77,14 @@ class BusinessProcess:
             try:
                 worker = json.loads((self.state / "hot-receipt.json").read_text(encoding="utf-8"))
                 pending = json.loads((self.state / "pending-snapshot.json").read_text(encoding="utf-8"))
-                if worker.get("phase") == "applied" and worker.get("version") == pending[
-                    "version"
-                ] == self.application.get("version"):
+                if (
+                    worker.get("phase") == "applied"
+                    and (
+                        not self.application.get("attempt_id")
+                        or worker.get("attempt_id") == self.application["attempt_id"]
+                    )
+                    and worker.get("version") == pending["version"] == self.application.get("version")
+                ):
                     self.accept_snapshot(
                         Snapshot(
                             pending["version"],
@@ -397,6 +410,7 @@ class BusinessProcess:
             "phase": "preparing",
             "version": version,
             "hot": True,
+            "attempt_id": uuid.uuid4().hex,
             "management_pending": self.application.get("management_pending", False),
             "required_steps": self.application_steps(snapshot),
         }
@@ -441,6 +455,7 @@ class BusinessProcess:
                 "entry": str(entry),
                 "version": snapshot.version,
                 "resources": changed,
+                "attempt_id": self.application.get("attempt_id"),
             }
             while True:
                 try:
@@ -449,11 +464,25 @@ class BusinessProcess:
                     # A lost IPC response must not misreport a completed worker transaction.
                     receipt = self.state / "hot-receipt.json"
                     result = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
-                    if result.get("version") != snapshot.version or result.get("phase") != "applied":
+                    if (
+                        result.get("version") != snapshot.version
+                        or result.get("attempt_id") != request["attempt_id"]
+                        or result.get("phase")
+                        not in {
+                            "preparing",
+                            "applying",
+                            "recovering",
+                            "waiting",
+                            "applied",
+                            "failed",
+                            "pending_restart",
+                        }
+                        or self.process.returncode is not None
+                    ):
                         raise
                 self.application.update(result)
                 self.persist_application()
-                if result["phase"] != "waiting":
+                if result["phase"] not in {"waiting", "preparing", "applying", "recovering"}:
                     break
                 await asyncio.sleep(0.5)
             if result["phase"] == "applied":
@@ -606,8 +635,10 @@ class BusinessProcess:
             self.persist_application()
 
     async def abort_apply(self):
-        if self.application["phase"] not in {"preparing", "waiting"}:
-            raise ValueError("Restart has begun; waiting can no longer be withdrawn")
+        if (self.application.get("hot") and self.application["phase"] != "waiting") or self.application[
+            "phase"
+        ] not in {"preparing", "waiting"}:
+            raise ValueError("Only waiting for a safe configuration boundary can be withdrawn")
         self.apply_task.cancel()
         await asyncio.gather(self.apply_task, return_exceptions=True)
         if self.process and self.process.returncode is None:

@@ -20,10 +20,12 @@ class WebSettings:
         if (
             type(settings.enable) is not bool
             or type(settings.port) is not int
-            or not 1 <= settings.port <= 65535
+            or not 0 <= settings.port <= 65535
         ):
             raise ValueError("Invalid web enable or port")
-        ipaddress.ip_address(settings.host)
+        address = ipaddress.ip_address(settings.host)
+        if settings.enable and not address.is_loopback:
+            raise ValueError("聊天网页内部传输仅允许本机地址；对外地址和端口统一在实例管理中设置")
         if not isinstance(settings.token_file, str):
             raise ValueError("web.token_file must be a path")
         return settings

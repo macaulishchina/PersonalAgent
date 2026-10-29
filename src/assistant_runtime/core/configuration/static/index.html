@@ -64,7 +64,6 @@
             </div>
             <div class="page-actions">
               <button id="chat-open" class="primary" hidden>打开聊天界面</button>
-              <button id="apply-open" class="secondary">生效状态与维护</button>
             </div>
           </div>
           <div class="configuration-state">
@@ -201,49 +200,16 @@
       </form>
     </dialog>
 
-    <dialog id="apply-dialog">
+    <dialog id="restart-dialog">
       <div class="dialog-heading">
-        <div>
-          <h2>生效状态与维护</h2>
-          <p>查看保存结果；只有需要时才手动重启。</p>
-        </div>
-        <button
-          class="icon-button"
-          data-close="apply-dialog"
-          aria-label="关闭应用配置"
-        >
-          ×
-        </button>
+        <div><h2>重启以完成设置？</h2><p id="restart-summary"></p></div>
       </div>
       <div class="application">
-        <div class="application-status">
-          <span class="state-dot"></span
-          ><strong id="application-state" aria-live="polite"></strong>
-        </div>
-        <ul id="blockers"></ul>
-        <button id="apply-update" class="primary">
-          重试在线应用（不重启）
-        </button>
-        <section class="restart-option">
-          <div>
-            <h3>等待完成后重启</h3>
-            <p>
-              暂停接收新工作，等待已接受的工作完成。期间可以回答、取消工作或撤销等待。
-            </p>
-          </div>
-          <button id="apply-wait" class="primary">等待完成后重启</button>
-        </section>
-        <section class="restart-option">
-          <div>
-            <h3>终止并重启</h3>
-            <p>
-              取消当前工作后重启。无法确认的外部操作结果保留为未知，不会自动重做。
-            </p>
-          </div>
-          <button id="apply-force" class="danger">终止并重启</button>
-        </section>
+        <p>现在重启会中断正在进行的工作。未确认的结果不会自动重做。</p>
+        <p class="hint">选择暂不重启，剩余修改会保留；可以继续编辑或放弃，不会提前生效。</p>
         <div class="dialog-actions">
-          <button id="abort-apply" class="secondary">撤销等待</button>
+          <button id="restart-later" class="secondary">暂不重启</button>
+          <button id="restart-confirm" class="primary">重启并生效</button>
         </div>
       </div>
     </dialog>
@@ -251,7 +217,7 @@
       <div class="dialog-heading">
         <div>
           <h2>变更记录</h2>
-          <p>恢复配置不会回滚业务数据，仍需应用后生效。</p>
+          <p>查看当前修改及已保存的变更。恢复配置不会回滚业务数据。</p>
         </div>
         <button
           class="icon-button"

@@ -40,11 +40,17 @@ let snapshot,
   resourceInventory = [],
   selected = "overview",
   saving = false;
+let configurationBusy = false, needsRetry = false, pendingRestart = null;
 let showInactive = false;
 const openEntries = new Set();
 const resourceEdits = new Map();
-const dirty = () => edits.size + resourceEdits.size;
+const dirty = () => edits.size + resourceEdits.size + (pendingRestart?.opaque_count || 0);
 const edits = new Map();
+function hasLocalChanges() {
+  const retained = new Map((pendingRestart?.patches || []).map(p => [key(p.path), p]));
+  return invalid.size || resourceEdits.size || edits.size !== retained.size ||
+    [...edits].some(([id, patch]) => JSON.stringify(patch) !== JSON.stringify(retained.get(id)));
+}
 const invalid = new Map();
 const drafts = new Map();
 const hiddenValue = (value) =>
@@ -62,6 +68,8 @@ const node = (tag, text, cls) => {
 };
 function signedOut() {
   activeEditor = null;
+  pendingRestart = null;
+  needsRetry = false;
   for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
   $("login-screen").hidden = false;
   $("login").hidden = false;
@@ -291,10 +299,10 @@ function updateSaveBar() {
     : dirty()
       ? `${dirty()} 项未保存`
       : "没有未保存的修改";
-  $("save").disabled = saving || !dirty() || Boolean(invalid.size);
-  $("save").textContent = saving ? "保存中…" : "保存并生效";
+  $("save").disabled = saving || configurationBusy || (!dirty() && !needsRetry) || Boolean(invalid.size);
+  $("save").textContent = saving || configurationBusy ? "保存并生效中…" : "保存并生效";
   $("discard").disabled = saving || (!dirty() && !invalid.size);
-  for (const id of ["refresh", "history", "password-open", "apply-open"])
+  for (const id of ["refresh", "history", "password-open"])
     $(id).disabled = saving;
   for (const button of $("navigation").querySelectorAll("button"))
     button.disabled = saving;
@@ -473,8 +481,6 @@ function drawField(field) {
   label.htmlFor = id;
   label.id = id + "-label";
   copy.append(label);
-  if (field.application === "restart")
-    copy.append(node("span", "重启或维护后生效", "badge restart-badge"));
   if (rule.description) {
     const description = node("p", rule.description, "hint");
     description.id = id + "-description";
@@ -939,9 +945,9 @@ function render() {
   renderEntityEditor();
   updateSaveBar();
 }
-async function load() {
+async function load({ discardLocal = false } = {}) {
   if (
-    (dirty() || invalid.size) &&
+    !discardLocal && hasLocalChanges() &&
     !confirm("重新加载会放弃尚未保存的编辑，是否继续？")
   )
     return;
@@ -964,6 +970,8 @@ async function load() {
     descriptions[page.id] = page.description;
   }
   edits.clear();
+  pendingRestart = config.pending_restart;
+  for (const patch of pendingRestart?.patches || []) edits.set(key(patch.path), patch);
   invalid.clear();
   drafts.clear();
   $("diagnostics").replaceChildren(
@@ -1053,55 +1061,94 @@ $("password-change").addEventListener("submit", (e) => {
   });
 });
 $("refresh").addEventListener("click", () => action(load));
-$("discard").addEventListener("click", () => action(load));
-$("apply-open").addEventListener("click", () =>
-  action(async () => {
-    await applicationStatus();
-    showDialog("apply-dialog");
-  }),
-);
-$("apply-update").addEventListener("click", () =>
-  action(async () => {
-    if (dirty()) throw Error("请先保存或放弃编辑");
-    await api("/api/update", { version: snapshot.version });
-    await applicationStatus();
-  }),
-);
-async function saveChanges() {
-  if (invalid.size)
-    throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
-  if (!dirty()) {
-    $("notice").textContent = "没有未保存的修改。";
-    return;
+$("discard").addEventListener("click", () => action(async () => {
+  if (pendingRestart) await api("/api/configuration/discard", {pending_id: pendingRestart.id});
+  await load({discardLocal: true});
+  showNotice("已放弃修改。", 4000);
+}));
+function askRestart() {
+  if (!pendingRestart) return;
+  $("restart-summary").textContent = `还有 ${pendingRestart.count} 项修改需要重启；无需重启的设置已处理完成。`;
+  showDialog("restart-dialog");
+}
+async function waitForApplication() {
+  for (;;) {
+    const status = await api("/api/status"), application = status.application || {};
+    if (!["preparing", "waiting", "applying", "recovering", "cancelling", "restarting"].includes(application.phase)) {
+      if (application.phase === "failed") throw Object.assign(
+        Error((application.issues || []).map(i => i.message).join("；") || "设置未能生效，原运行配置已保留。请重试保存；如仍失败，请检查日志。"),
+        {issues: application.issues || []});
+      if (application.phase === "pending_restart") throw Error("这些修改需要一起重启才能应用，请重新保存后确认重启。");
+      return application;
+    }
+    await new Promise(resolve => setTimeout(resolve, 750));
   }
+}
+async function saveChanges() {
+  if (invalid.size) throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
+  if (!dirty() && !needsRetry) return;
   saving = true;
   $("notice").textContent = "";
   updateSaveBar();
   try {
     const saved = await api("/api/configuration", {
-      version: snapshot.version,
-      patches: [...edits.values()],
-      resources: [...resourceEdits.values()],
+      version: snapshot.version, patches: [...edits.values()],
+      resources: [...resourceEdits.values()], pending_id: pendingRestart?.id || null,
     });
-    edits.clear();
-    resourceEdits.clear();
-    await load();
-    showNotice(
-      saved.changed
-        ? "已保存，正在应用；需要等待或重启的项目会显示具体状态。"
-        : "没有配置变更。",
-      6000,
-    );
+    // The server has committed a new file revision even if a module cannot switch.
+    // Keep the editable candidate for an explicit retry; never resubmit an old revision.
+    snapshot.version = saved.version;
+    pendingRestart = saved.pending_restart;
+    const applied = saved.application ? await waitForApplication() : {};
+    await load({discardLocal: true});
+    if (pendingRestart) askRestart();
+    else showNotice(applied.phase === "pending_start" ? "保存成功，下次启动时生效。" :
+      applied.phase === "partially_applied" ? "保存成功；部分功能仍需处理，请查看实例日志。" : "保存成功，设置已生效。", 6000);
   } finally {
     saving = false;
+    await applicationStatus().catch(() => {});
     updateSaveBar();
   }
 }
+$("restart-later").addEventListener("click", () => {
+  $("restart-dialog").close();
+  showNotice("无需重启的修改已生效，其余修改保留在变更记录中。", 6000);
+});
+$("restart-confirm").addEventListener("click", () => action(async () => {
+  if (!pendingRestart) return;
+  saving = true;
+  $("restart-confirm").disabled = true;
+  updateSaveBar();
+  try {
+    const saved = await api("/api/configuration/restart", {version: snapshot.version,
+      pending_id: pendingRestart.id, confirmed: true});
+    snapshot.version = saved.version;
+    $("restart-dialog").close();
+    showNotice("正在重启并应用设置…");
+    await waitForApplication();
+    await load({discardLocal: true});
+    showNotice("保存成功，重启后设置已生效。", 6000);
+  } finally {
+    saving = false;
+    $("restart-confirm").disabled = false;
+    await applicationStatus().catch(() => {});
+    updateSaveBar();
+  }
+}));
 $("save").addEventListener("click", () => action(saveChanges));
 $("history").addEventListener("click", () =>
   action(async () => {
     const history = await api("/api/history");
     $("versions").replaceChildren();
+    if (dirty()) {
+      const current = node("article");
+      current.append(node("h3", "当前修改"), node("p", [
+        ...new Set([...edits.values()].map(p => p.path.join("."))),
+        ...new Set([...resourceEdits.values()].map(p => "resource:" + p.id)),
+        ...(pendingRestart?.labels || []),
+      ].filter((item,index,all) => all.indexOf(item) === index).join("、")));
+      $("versions").append(current);
+    }
     if (!history.versions.length)
       $("versions").append(node("p", "尚无配置变更记录", "empty-state"));
     for (const item of history.versions) {
@@ -1132,7 +1179,7 @@ $("history").addEventListener("click", () =>
   }),
 );
 window.addEventListener("beforeunload", (e) => {
-  if (dirty() || invalid.size) {
+  if (hasLocalChanges()) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -1193,36 +1240,13 @@ async function applicationStatus() {
   const status = await api("/api/status"),
     application = status.application || { phase: "idle" };
   if ($("editor").hidden) return;
-  const labels = {
-    idle: "尚未发起应用",
-    preparing: "校验配置中",
-    waiting: "正在等待工作结束",
-    applying: "正在更新设置",
-    pending_start: "已保存，下次启动生效",
-    pending_restart: "已保存，此次修改需要显式重启",
-    cancelling: "正在取消在途工作",
-    restarting: "正在重启业务服务",
-    applied: "已应用指定配置版本",
-    partially_applied: "已应用，但部分功能或外部部署步骤尚未就绪",
-    failed: "应用失败，尚未确认生效；请查看诊断后重试",
-    withdrawn: "已撤销等待，继续接收新工作",
-  };
-  $("application-state").textContent =
-    labels[application.phase] || application.phase;
-  const pending = snapshot && status.loaded_version !== snapshot.version,
-    partial = application.phase === "partially_applied";
-  if (pending && ["applied", "idle", "withdrawn"].includes(application.phase))
-    $("application-state").textContent = "待应用 · 新配置将在重启后加载";
-  $("application-state").parentElement.dataset.state = pending
-    ? "pending"
-    : application.phase;
-  $("state").textContent =
-    pending || partial
-      ? labels[application.phase] || "文件有修改，等待校验并应用"
-      : "已生效 · 文件快照一致";
-  document
-    .querySelector(".configuration-state")
-    .classList.toggle("pending", Boolean(pending || partial));
+  configurationBusy = ["preparing", "waiting", "applying", "recovering", "cancelling", "restarting"].includes(application.phase);
+  updateSaveBar();
+  needsRetry = Boolean(!configurationBusy && snapshot && status.loaded_version &&
+    status.loaded_version !== snapshot.version && application.phase !== "pending_start");
+  $("state").textContent = configurationBusy ? "正在保存并生效…" : needsRetry ? "有保存的修改尚未生效，请重试保存。" : "";
+  document.querySelector(".configuration-state").hidden = !configurationBusy && !needsRetry;
+  updateSaveBar();
   $("health").textContent =
     {
       running: "业务运行中",
@@ -1234,109 +1258,6 @@ async function applicationStatus() {
   $("health").dataset.state = status.state;
   renderPluginHealth(status);
   renderChatShortcut();
-  const workLabels = {
-    queued: "等待执行",
-    dispatching: "正在启动",
-    running: "执行中",
-    waiting_user: "等待你回答",
-    cancelling: "正在取消",
-    unknown: "结果待核实",
-    paused: "已暂停，需要处理",
-    scheduled_immediate: "等待派发",
-    finalizing: "正在保存结果",
-    model_review: "正在整理执行评估",
-    model_call: "模型请求尚未结束",
-    memory_capture: "正在处理记忆",
-    capability_call: "操作尚未结束",
-    drain_not_supported: "插件尚不支持等待检查；可撤销等待或选择终止并重启",
-  };
-  $("blockers").replaceChildren(
-    ...(application.fields || []).map((item) =>
-      node(
-        "li",
-        `${item.path.join(".")} · ${item.reason || { immediate: "即时更新", boundary: "安全边界更新", restart: "需要重启" }[item.mode]}`,
-      ),
-    ),
-    ...(application.issues || []).map((item) =>
-      node("li", `${item.path.join(".")}：${item.message}`),
-    ),
-    ...(application.blockers || []).map((item) => {
-      const owner =
-        inventory?.plugins.find((plugin) => plugin.id === item.owner)
-          ?.configuration?.title ||
-        item.owner ||
-        "";
-      const message =
-        item.owner === "admission"
-          ? "正在准备已接受的请求"
-          : workLabels[item.state] || "操作尚未结束";
-      const row = node(
-        "li",
-        `${owner} ${item.id ? item.id.slice(0, 12) : ""} · ${message}`,
-      );
-      if (item.id) row.title = item.id;
-      return row;
-    }),
-    ...(application.required_steps || []).map((item) =>
-      node("li", item.message),
-    ),
-  );
-  for (const step of application.required_steps || [])
-    if (application.phase === "partially_applied") {
-      const li = node("li"),
-        button = node("button", "确认已手动完成 " + step.component, "subtle");
-      button.addEventListener("click", () =>
-        action(async () => {
-          if (
-            !confirm(
-              "仅在已完成并验证此外部部署步骤后确认；此按钮不会执行部署。",
-            )
-          )
-            return;
-          await api("/api/complete-step", {
-            version: application.version,
-            component: step.component,
-            confirmed: true,
-          });
-          await applicationStatus();
-        }),
-      );
-      li.append(button);
-      $("blockers").append(li);
-    }
-  if (application.management_address) {
-    const address = application.management_address;
-    let host = ["0.0.0.0", "::"].includes(address.host)
-      ? location.hostname
-      : address.host;
-    if (host.includes(":") && !host.startsWith("[")) host = `[${host}]`;
-    const target =
-      address.public_origin || `${location.protocol}//${host}:${address.port}`;
-    if (target !== location.origin) {
-      const link = node("a", "打开新的配置地址");
-      link.href = target;
-      $("application-state").append(" · ", link);
-    }
-  }
-  if (application.resume_failed)
-    $("application-state").append(
-      "；恢复接收新工作失败，请检查插件或终止并重启。",
-    );
-  const active =
-    status.state === "starting" ||
-    ["preparing", "waiting", "cancelling", "restarting"].includes(
-      application.phase,
-    );
-  if (status.state === "starting") {
-    $("state").textContent = "正在启动 · 核对配置与业务状态";
-    $("application-state").textContent = "业务启动中，正在核对配置";
-  }
-  $("apply-wait").disabled = active;
-  $("apply-update").disabled = active;
-  $("apply-force").disabled = active;
-  $("abort-apply").disabled = !["preparing", "waiting"].includes(
-    application.phase,
-  );
   if (!applicationTimer)
     applicationTimer = setInterval(async () => {
       if (statusPolling || $("editor").hidden) return;
@@ -1361,36 +1282,6 @@ async function applicationStatus() {
       }
     }, 5000);
 }
-async function applyConfiguration(mode) {
-  if (dirty() || invalid.size) throw Error("请先保存或放弃尚未保存的编辑");
-  const preview = await api("/api/application-preview");
-  if (
-    !confirm(
-      `将应用版本 ${preview.version.slice(0, 12)}，并重启业务服务。\n变更字段：${preview.fields.join("、") || "无文件变化"}\n${(preview.required_steps || []).map((step) => step.message).join("\n")}\n${mode === "wait" ? "等待已接受的工作完成；等待期间可撤销。" : "当前工作将被终止，外部操作可能已经发生。"}`,
-    )
-  )
-    return;
-  if (
-    mode === "force" &&
-    !confirm("再次确认：取消在途工作并终止业务进程？未知结果不会自动重做。")
-  )
-    return;
-  await api("/api/apply", { version: preview.version, mode, confirmed: true });
-  await applicationStatus();
-}
-$("apply-wait").addEventListener("click", () =>
-  action(() => applyConfiguration("wait")),
-);
-$("apply-force").addEventListener("click", () =>
-  action(() => applyConfiguration("force")),
-);
-$("abort-apply").addEventListener("click", () =>
-  action(async () => {
-    await api("/api/abort-apply", {});
-    await applicationStatus();
-  }),
-);
-
 function matches(value, condition) {
   if (!condition) return true;
   if (condition.required?.some((name) => !Object.hasOwn(value || {}, name)))

@@ -1,3 +1,4 @@
+import { chatPath } from "./http";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -81,7 +82,7 @@ const initial: State = {
 };
 class LoginRequired extends Error {}
 async function api(path: string, options: RequestInit = {}) {
-  const r = await fetch("/api/" + path, {
+  const r = await fetch(chatPath("api/" + path), {
     ...options,
     credentials: "same-origin",
     headers:
@@ -645,7 +646,7 @@ function App() {
       setBefore(d.before);
       cursor.current = d.cursor;
       events.current?.close();
-      const stream = new EventSource("/api/events?after=" + cursor.current);
+      const stream = new EventSource(chatPath("api/events?after=" + cursor.current));
       events.current = stream;
       stream.onopen = () => {
         if (own === generation.current) {
@@ -1158,7 +1159,7 @@ function App() {
                 <div className="attachments">
                   {attachments.map((a) => (
                     <div key={a.id}>
-                      <img src={"/api/uploads/" + a.id} alt={a.name} />
+                      <img src={chatPath("api/uploads/" + a.id)} alt={a.name} />
                       <button
                         type="button"
                         aria-label={"移除 " + a.name}

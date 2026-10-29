@@ -71,6 +71,10 @@ def resources_for(host, name, keys):
             from assistant_runtime.api.system import system
 
             resources[key] = system
+        elif key == "http_frontend":
+            from .http_frontends import scoped
+
+            resources[key] = scoped(host, name)
         elif key == "execution_control":
             from assistant_runtime.api.control import ExecutionControl
 

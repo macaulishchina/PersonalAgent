@@ -248,11 +248,18 @@ class PiIntegrations:
                 return {"state": "applied", **self.status()}
 
             transaction = asyncio.create_task(refresh())
+            # This owned child completes the same configuration transaction. It
+            # must cross the caller's barrier; unrelated requests remain paused.
+            authorized = getattr(backend.client, "configuration_tasks", set())
+            if asyncio.current_task() in authorized:
+                authorized.add(transaction)
             try:
                 return await asyncio.shield(transaction)
             except asyncio.CancelledError:
                 await asyncio.shield(asyncio.gather(transaction, return_exceptions=True))
                 raise
+            finally:
+                authorized.discard(transaction)
 
     async def open_probe(self, ident, context):
         self.registry.work.mkdir(parents=True, exist_ok=True, mode=0o700)

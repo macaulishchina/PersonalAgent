@@ -108,6 +108,8 @@ def validate_ports(config, management=None):
                 continue
             listeners.append((plugin["id"], values[endpoint["host"]], values[endpoint["port"]]))
     for index, (owner, host, port) in enumerate(listeners):
+        if port == 0:
+            continue  # Automatic private ports cannot collide before binding.
         address = ipaddress.ip_address(host)
         for other, peer, number in listeners[:index]:
             previous = ipaddress.ip_address(peer)
