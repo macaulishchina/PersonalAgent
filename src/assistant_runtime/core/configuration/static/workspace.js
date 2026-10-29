@@ -1555,7 +1555,16 @@ function searchableSelect(label, filterLabel, identity, signal) {
     trigger.setAttribute("aria-expanded", String(open));
     if (focus) (open ? search : trigger)?.focus();
   }
-  Object.defineProperty(root, "value", { get: () => selected });
+  Object.defineProperty(root, "value", {
+    get: () => selected,
+    set: (value) => {
+      const row = [...list.children].find((item) => item.dataset.value === value);
+      selected = row ? value : "";
+      trigger.textContent = row?.textContent || "请选择参考模型…";
+      for (const item of list.children) item.setAttribute("aria-pressed", String(item === row));
+      root.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+  });
   Object.defineProperty(root, "disabled", {
     get: () => trigger.disabled,
     set: (value) => {

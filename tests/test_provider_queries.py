@@ -164,6 +164,8 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         (root / ".env").write_text("PA_TEST_DIRECTORY_KEY=private-test-key\n")
         business = BusinessProcess(ManagementSettings(root, entry))
         console = Console(business)
+        console.provider_queries.references.download = AsyncMock(side_effect=OSError("offline fixture"))
+        self.addAsyncCleanup(console.provider_queries.close)
         app = web.Application(middlewares=[console.guard])
         app.add_routes(
             [
@@ -180,6 +182,46 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(console.accounts.close)
         headers = {"Origin": str(client.make_url("/")).rstrip("/")}
         return root, business, console, client, headers
+
+    async def test_catalog_background_refresh_requires_auth_and_preserves_model_configuration(self):
+        from test_reference_catalog import compiled
+        import asyncio
+
+        root, business, console, client, headers = await self.management()
+        before = business.files.snapshot()
+        body = {"action": "search", "query": "new-model", "version": before.version}
+        response = await client.post("/api/model-capabilities", json=body, headers=headers)
+        self.assertEqual(response.status, 401)
+        console.provider_queries.references.download.assert_not_called()
+        await client.post(
+            "/api/login", json={"token": console.access.path.read_text().strip()}, headers=headers
+        )
+        ready = asyncio.Event()
+
+        async def download():
+            await ready.wait()
+            return compiled()
+
+        console.provider_queries.references.download = AsyncMock(side_effect=download)
+        response = await client.post("/api/model-capabilities", json=body, headers=headers)
+        first = await response.json()
+        self.assertEqual(first["total"], 0)
+        self.assertTrue(first["catalog"]["updating"])
+        await client.post("/api/model-capabilities", json=body, headers=headers)
+        console.provider_queries.references.download.assert_awaited_once()
+        ready.set()
+        await console.provider_queries.references.task
+        response = await client.post(
+            "/api/model-capabilities", json={**body, "update": False}, headers=headers
+        )
+        self.assertEqual((await response.json())["total"], 1)
+        response = await client.post(
+            "/api/model-capabilities", json={"action": "catalog", "version": before.version}, headers=headers
+        )
+        self.assertFalse((await response.json())["catalog"]["updating"])
+        self.assertEqual(business.files.snapshot().contents, before.contents)
+        self.assertEqual(business.files.snapshot().version, before.version)
+        console.provider_queries.references.download.assert_awaited_once()
 
     async def test_capabilities_need_auth_revision_but_not_credentials_or_inference(self):
         root, business, console, client, headers = await self.management()

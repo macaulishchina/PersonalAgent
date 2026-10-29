@@ -578,13 +578,13 @@ default_reasoning_effort = "none"
                 candidate = picker.get_by_role("button", name="匹配的参考模型", exact=True)
                 await expect(candidate).to_be_enabled()
                 await expect(candidate).to_have_attribute("aria-expanded", "false")
-                await expect(picker.get_by_role("button", name="采用并填充", exact=True)).to_be_disabled()
+                await expect(picker.get_by_role("button", name="填入参数", exact=True)).to_be_disabled()
                 original_connection = await reference_editor.get_by_label(
                     "使用连接", exact=True
                 ).input_value()
                 search_reference = picker.get_by_label("搜索模型或服务商", exact=True)
                 await search_reference.fill("no-such-reference-xyz")
-                await expect(picker).to_contain_text("没有匹配资料")
+                await expect(picker).to_contain_text("暂无匹配资料")
                 await expect(candidate).to_be_disabled()
                 await search_reference.fill("deepseek-v4.1-flash")
                 await expect(candidate).to_be_enabled()
@@ -655,7 +655,7 @@ default_reasoning_effort = "none"
                 original_choice = picker.locator(".searchable-select-option:visible").first
                 selected_reference = await original_choice.get_attribute("data-value")
                 await original_choice.click()
-                await picker.get_by_role("button", name="采用并填充", exact=True).click()
+                await picker.get_by_role("button", name="填入参数", exact=True).click()
                 await expect(reference_editor.locator(".capability-summary")).to_contain_text(
                     "最近采用：models.dev"
                 )
@@ -704,7 +704,7 @@ default_reasoning_effort = "none"
                 await picker.locator(
                     '.searchable-select-option[data-value="google/gemini-3.1-pro-preview"]'
                 ).click()
-                await picker.get_by_role("button", name="采用并填充", exact=True).click()
+                await picker.get_by_role("button", name="填入参数", exact=True).click()
                 await expect(reference_editor.locator(".capability-summary")).to_contain_text(
                     "最近采用：models.dev"
                 )

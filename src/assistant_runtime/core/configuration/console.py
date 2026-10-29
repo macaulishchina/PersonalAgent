@@ -173,6 +173,7 @@ class Console:
             raise ValueError("Configuration application is active")
 
     async def close(self):
+        await self.provider_queries.close()
         await self.accounts.close()
         if self.runner:
             await self.runner.cleanup()

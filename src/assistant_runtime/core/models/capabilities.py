@@ -34,9 +34,9 @@ def catalog_origin(provider, metadata):
     return ("original" if provider == owner else "other") if owner else "unknown"
 
 
-def search_references(query):
+def search_references(query, *, catalog=None):
     """Rank names across all suppliers; candidates never select or apply metadata."""
-    catalog = public_catalog()
+    catalog = catalog if catalog is not None else public_catalog()
     tokens = re.findall(r"[^\W_]+", query.casefold())
     compact = "".join(tokens)
     ranked = []
@@ -120,9 +120,9 @@ def supplier(provider, account=None):
     return ""
 
 
-def profile(provider, model, *, account=None, native=None, remote=None, reference=""):
+def profile(provider, model, *, account=None, native=None, remote=None, reference="", catalog=None):
     """Build a reviewable snapshot; public reasoning booleans never invent effort levels."""
-    catalog = public_catalog()
+    catalog = catalog if catalog is not None else public_catalog()
     owner = supplier(provider, account)
     lookup = reference or (owner + "/" + model if owner else "")
     values = deepcopy(catalog["models"].get(lookup, {}))

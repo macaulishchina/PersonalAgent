@@ -177,3 +177,19 @@ Public capability references use a searchable dropdown with all matching records
 Catalog origin comes exclusively from the upstream `canonical_model_id` lab/model attribution retained by the compiler. Matching provider/lab IDs identify the original catalog; different IDs mean other catalogs, not proof of unofficial service. Missing or malformed attribution stays unknown. Search includes canonical identities to find service aliases, and original catalog entries rank first. No vendor allowlists or name-prefix heuristics participate. See [upstream attribution](https://github.com/anomalyco/models.dev#api-reference).
 
 Model aliases accept letters, digits, dots, underscores and hyphens, beginning with a letter (64 characters maximum). The UI and owner schema share this rule; invalid names produce a name-specific error without echoing values. The catalog compiler retains explicit `reasoning_options` effort lists. Generic OpenAI routes import these lists. Gemini routes import explicitly declared none/minimal/low/medium/high controls; Pi owns their level or token-budget wire mapping. Unsupported levels are not copied or silently downgraded. Native Pi uses its adapter metadata first, and budget/toggle controls are not converted into guessed effort levels. Adopting metadata fills the normal effort settings and retains auto as the default unless the operator has selected a supported explicit level. Other protocol mappings remain explicit.
+
+
+## Public capability references
+
+The configuration console reads an instance-local models.dev snapshot immediately and
+starts a single background refresh on metadata searches or capability reads. Concurrent
+reads share that update; status polling does not start another download. The fixed public
+HTTPS endpoint receives no supplier credentials. Downloads have a 20-second deadline and
+16 MiB bound; only validated, complete metadata is atomically stored in
+`state/model-catalog/models.dev.json`. A failed download, invalid response or failed save
+keeps the previous snapshot. The packaged snapshot remains the offline fallback.
+
+The editor shows the snapshot retrieval time, update state and a manual check/retry action.
+Updated candidates are refreshed without applying them. Search, select a reference and use
+the single fill action to stage known facts into normal parameter fields. Metadata updates
+never save model configuration, replace an editing draft or change an active model route.

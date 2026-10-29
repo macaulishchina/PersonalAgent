@@ -2449,3 +2449,14 @@ dialog.wide-dialog {
 .entity-grid[data-kind="entries"] .entity-heading {
   flex-wrap: nowrap;
 }
+
+
+.capability-catalog-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 0 18px;
+}
+.capability-catalog-bar .hint { margin: 0; line-height: 1.5; }
+.capability-catalog-bar button { flex: 0 0 auto; padding: 8px 12px; }

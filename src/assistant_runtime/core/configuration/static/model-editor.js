@@ -102,7 +102,6 @@ function renderModelEditor(field) {
   ) {
     if (busy) return;
     busy = true;
-    load.disabled = true;
     status.textContent = "正在读取模型资料…";
     const identity = [current().provider, current().model];
     try {
@@ -140,16 +139,10 @@ function renderModelEditor(field) {
       }
     } finally {
       busy = false;
-      load.disabled = false;
     }
   }
-  const load = button(
-    cap.source && cap.source !== "unknown" ? "重新填充资料" : "识别并填充",
-    () => refresh(),
-    "secondary",
-  );
   const picker = renderCapabilityPicker(initial, refresh);
-  summary.append(source, load, picker, status);
+  summary.append(source, picker, status);
   const values = { ...modelCapabilityValues(cap), ...initial };
   function input(name) {
     return drawField({
@@ -242,14 +235,20 @@ function renderCapabilityPicker(initial, apply) {
   const root = node("details", undefined, "capability-picker");
   root.open =
     !initial.capabilities?.source || initial.capabilities.source === "unknown";
-  root.append(node("summary", "查找并选择能力参考"));
+  root.append(node("summary", "从模型资料填充"));
   root.append(
     node(
       "p",
-      "按模型名称搜索所有服务商。选择并核对规格后填充到下方参数。资料中已知的值会替换现值，未提供的保留；不会更换连接或模型 ID。",
+      "搜索并选择参考模型，再填入下方参数。只替换资料中已知的值，不更换连接或模型 ID。",
       "hint",
     ),
   );
+  const catalogBar = node("div", undefined, "capability-catalog-bar");
+  const catalogStatus = node("span", "正在读取资料库状态…", "hint");
+  catalogStatus.setAttribute("role", "status");
+  const check = button("检查更新", () => updateCatalog(), "secondary");
+  catalogBar.append(catalogStatus, check);
+  root.append(catalogBar);
   const fields = node("fieldset", undefined, "capability-picker-fields");
   const query = formInput(fields, "capability-search", "搜索模型或服务商", {
     type: "search",
@@ -270,7 +269,7 @@ function renderCapabilityPicker(initial, apply) {
   preview.hidden = true;
   const actions = node("div", undefined, "capability-actions");
   const adopt = button(
-    "采用并填充",
+    "填入参数",
     async () => {
       const candidate = candidates.find(
         (item) => item.reference === select.value,
@@ -278,7 +277,7 @@ function renderCapabilityPicker(initial, apply) {
       if (!candidate) return;
       fields.disabled = true;
       try {
-        await apply(candidate.reference);
+        await apply(candidate.applyReference ?? candidate.reference);
       } finally {
         fields.disabled = false;
       }
@@ -292,32 +291,83 @@ function renderCapabilityPicker(initial, apply) {
   let candidates = [],
     sequence = 0,
     timer,
-    started = false;
+    started = false,
+    pollTimer,
+    catalogRevision = "";
   function clear() {
     candidates = [];
     select.setOptions([]);
     adopt.disabled = true;
     preview.hidden = true;
   }
-  async function search() {
+  function showCatalog(value) {
+    if (!root.isConnected || !value) return;
+    const date = value.retrieved_at ? new Date(value.retrieved_at).toLocaleString("zh-CN", { hour12: false }) : "未知";
+    catalogStatus.textContent = `资料库更新于 ${date}` +
+      (value.updating ? " · 正在后台更新…" : value.error ? " · 更新未完成，继续使用已有资料" : "");
+    catalogStatus.dataset.state = value.error ? "error" : "";
+    check.disabled = value.updating;
+    clearTimeout(pollTimer);
+    if (value.updating) pollTimer = setTimeout(pollCatalog, 800);
+  }
+  async function pollCatalog() {
+    if (!root.isConnected) return;
+    try {
+      const result = await api("/api/model-capabilities", { action: "catalog", version: snapshot.version });
+      showCatalog(result.catalog);
+      if (!result.catalog.updating && result.catalog.revision !== catalogRevision)
+        await search(false, true);
+    } catch (error) {
+      if (root.isConnected) {
+        check.disabled = false;
+        catalogStatus.textContent = error.message;
+      }
+    }
+  }
+  async function updateCatalog() {
+    check.disabled = true;
+    try {
+      const result = await api("/api/model-capabilities", { action: "catalog", update: true, version: snapshot.version });
+      showCatalog(result.catalog);
+    } catch (error) {
+      if (root.isConnected) { check.disabled = false; catalogStatus.textContent = error.message; }
+    }
+  }
+  editorInputController.signal.addEventListener("abort", () => {
+    ++sequence;
+    clearTimeout(timer);
+    clearTimeout(pollTimer);
+  }, { once: true });
+  async function search(update = true, preserve = false) {
     clearTimeout(timer);
     const id = ++sequence;
     const text = query.value.trim();
+    const previous = preserve ? select.value : "";
     clear();
     if (!text) {
       status.textContent = "输入模型名，也可用服务商名称缩小范围。";
       return;
     }
-    status.textContent = "正在搜索本地能力目录…";
+    status.textContent = "正在查找模型资料…";
     try {
       const result = await api("/api/model-capabilities", {
         action: "search",
         query: text,
+        update,
         version: snapshot.version,
       });
       if (id !== sequence || !root.isConnected) return;
       candidates = result.candidates;
+      const provider = valueAt(["model_api", "providers"], {})[initial.provider];
+      if (provider?.account || provider?.protocol === "pi") candidates.unshift({
+        reference: "@connection", applyReference: "", provider: initial.provider,
+        model: initial.model, origin: "connection", match: "exact", canonical_model_id: "",
+        capabilities: initial.capabilities?.source === "Pi 1.4.0" ? initial.capabilities : {},
+      });
+      catalogRevision = result.revision;
+      showCatalog(result.catalog);
       const origins = {
+        connection: "当前连接的 Pi 资料",
         original: "原厂目录",
         other: "其他目录",
         unknown: "归属未标注",
@@ -336,9 +386,14 @@ function renderCapabilityPicker(initial, apply) {
           };
         }),
       );
-      status.textContent = result.total
-        ? `共 ${result.total} 项，全部可选。原厂目录优先；下拉中输入“原厂”可筛选。${candidates.some((item) => item.origin === "original") ? "" : " 当前匹配项没有已标注的原厂记录，可缩短模型名重新搜索。"}`
-        : "没有匹配资料。可缩短名称重新搜索，或直接手动填写；不影响保存模型。";
+      const selection = candidates.find((item) => item.reference === previous) ||
+        candidates.find((item) => item.reference === initial.capabilities?.reference) ||
+        (initial.capabilities?.source === "Pi 1.4.0" ? candidates.find((item) => item.origin === "connection") : null) ||
+        (candidates.length === 1 ? candidates[0] : null);
+      if (selection) { select.value = selection.reference; }
+      status.textContent = candidates.length
+        ? `共 ${candidates.length} 项，全部可选。原厂目录优先；下拉中输入“原厂”可筛选。${candidates.some((item) => item.origin === "original") ? "" : " 当前匹配项没有已标注的原厂记录，可缩短模型名重新搜索。"}`
+        : "暂无匹配资料。后台更新完成后会再次查找；也可缩短名称或手动填写，不影响保存。";
     } catch (error) {
       if (id === sequence && root.isConnected)
         status.textContent = error.message;
@@ -377,7 +432,9 @@ function renderCapabilityPicker(initial, apply) {
       node("strong", candidate.reference),
       node(
         "p",
-        candidate.origin === "original"
+        candidate.origin === "connection"
+          ? "点击填入时读取当前连接的 Pi 模型资料，不发起推理。"
+          : candidate.origin === "original"
           ? "资料来源：原厂目录"
           : candidate.origin === "other"
             ? "资料来源：其他目录（不代表非官方）"
@@ -394,7 +451,9 @@ function renderCapabilityPicker(initial, apply) {
       facts,
       node(
         "p",
-        "来源：models.dev 公开目录。仅借用能力规格，不代表当前连接已验收；思考档位仍按当前连接的适配能力确定。",
+        candidate.origin === "connection"
+          ? "来自当前连接的模型目录。没有提供的参数仍保留原值。"
+          : "来源：models.dev 公开目录。仅借用能力规格，不代表当前连接已验收；思考档位仍按当前连接的适配能力确定。",
         "hint",
       ),
     );
@@ -417,6 +476,11 @@ function renderCapabilityPicker(initial, apply) {
       started = true;
       search();
     }
+  });
+  queueMicrotask(() => {
+    if (!root.isConnected) return;
+    if (root.open && !started) { started = true; search(); }
+    else if (!root.open) updateCatalog();
   });
   return root;
 }

@@ -26,6 +26,7 @@ GROUPS = {
         "model_connections",
         "model_probes",
         "model_capabilities",
+        "reference_catalog",
         "provider_queries",
     },
     "speech": {"interaction"},

@@ -47,6 +47,9 @@ class ProviderQueries:
     def __init__(self, business, accounts):
         self.business, self.accounts = business, accounts
         self.slots = asyncio.Semaphore(2)
+        from assistant_runtime.core.models.reference_catalog import ReferenceCatalog
+
+        self.references = ReferenceCatalog(business.settings.root)
 
     def capture_model(self, data):
         import uuid
@@ -100,7 +103,6 @@ class ProviderQueries:
     async def describe(self, data):
         from assistant_runtime.core.models.capabilities import (
             profile,
-            public_catalog,
             search_references,
             supplier,
         )
@@ -111,11 +113,19 @@ class ProviderQueries:
             snapshot = self.business.files.snapshot()
             if snapshot.version != version:
                 raise Conflict()
+            if data.get("action") == "catalog":
+                if data.get("update") is True:
+                    self.references.read()
+                return {"catalog": self.references.status()}
+            catalog = self.references.read(update=data.get("update") is not False)
             if data.get("action") == "search":
                 query = data.get("query", "")
                 if not isinstance(query, str) or len(query) > 200 or any(ord(c) < 32 for c in query):
                     raise ProbeInput("query", "请输入 200 字符以内的模型名称或服务商。")
-                return search_references(query.strip())
+                return {
+                    **search_references(query.strip(), catalog=catalog),
+                    "catalog": self.references.status(),
+                }
             raw = {}
             for content in snapshot.contents.values():
                 merge(raw, tomllib.loads(content.decode()))
@@ -135,7 +145,7 @@ class ProviderQueries:
             model, reference = data.get("model"), data.get("reference", "")
             if not isinstance(model, str) or not 1 <= len(model) <= 200 or any(ord(c) < 32 for c in model):
                 raise ValueError("请填写有效的模型 ID")
-            if not isinstance(reference, str) or (reference and reference not in public_catalog()["models"]):
+            if not isinstance(reference, str) or (reference and reference not in catalog["models"]):
                 raise ProbeInput("reference", "该参考资料已不在目录中，请重新搜索并选择。")
             binary = raw.get("pi_binary", "pi")
         native = None
@@ -155,9 +165,14 @@ class ProviderQueries:
             native=native,
             remote=observed if isinstance(observed, dict) else None,
             reference=reference,
+            catalog=catalog,
         )
         await asyncio.to_thread(self.check_version, version)
-        return {"capabilities": snapshot, "native_available": native is not None}
+        return {
+            "capabilities": snapshot,
+            "native_available": native is not None,
+            "catalog": self.references.status(),
+        }
 
     def capture(self, name, version, draft=None):
         with self.business.files.locked():
@@ -272,3 +287,6 @@ class ProviderQueries:
             raise
         except (ValueError, RuntimeError, OSError, KeyError, TypeError):
             return result(False, "account", "账号检查未完成，请检查 Pi 安装、账号配置及授权状态。")
+
+    async def close(self):
+        await self.references.close()
