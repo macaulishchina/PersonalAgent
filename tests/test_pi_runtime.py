@@ -32,9 +32,6 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            with socket.socket() as sock:
-                sock.bind(("127.0.0.1", 0))
-                port = sock.getsockname()[1]
             gateway = FakeResponsesGateway(lambda step, body: sse_text_reply("cli", "CLI_OK"))
             path = root / "config.toml"
             path.write_text(
@@ -42,7 +39,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 'profile="headless"\nbackend="pi"\nmain_model="model-a"\n'
                 'main_reasoning_effort="low"\nmemory_enabled=false\n'
                 'plugins=["ai_usage", "workfiles", "devices", "assistant", "conversation", "execution", "models","pi","voice_disabled","web"]\n'
-                f'[web]\nenable=true\nhost="127.0.0.1"\nport={port}\n'
+                '[web]\nenable=true\nhost="127.0.0.1"\nport=0\n'
                 "[model_api]\nenabled=true\n"
                 '[model_api.providers.local]\nprotocol="openai_responses"\n'
                 f'base_url="{gateway.base_url}"\nkey_env="TEST_KEY"\nenabled=true\n'
@@ -82,12 +79,13 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                             await asyncio.sleep(0.05)
                     self.assertEqual(status["plugins"]["pi"]["state"], "ready")
                     self.assertEqual(status["plugins"]["ai_usage"]["state"], "ready")
-                    origin = f"http://127.0.0.1:{port}"
+                    origin = f"http://127.0.0.1:{admin_port}"
+                    chat = origin + "/chat"
                     async with ClientSession(cookie_jar=CookieJar(unsafe=True)) as web:
-                        async with web.get(origin + "/api/session") as reply:
+                        async with web.get(chat + "/api/session") as reply:
                             self.assertEqual(reply.status, 401)
                         async with web.post(
-                            origin + "/api/login",
+                            chat + "/api/login",
                             json={"token": (root / "state/web-access-token").read_text().strip()},
                             headers={"Origin": origin},
                         ) as reply:
@@ -104,12 +102,12 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                             content_type="image/png",
                         )
                         async with web.post(
-                            origin + "/api/uploads", data=image, headers={"Origin": origin}
+                            chat + "/api/uploads", data=image, headers={"Origin": origin}
                         ) as reply:
                             self.assertEqual(reply.status, 201)
                             uploaded = await reply.json()
                         async with web.post(
-                            origin + "/api/messages",
+                            chat + "/api/messages",
                             json={
                                 "request_id": str(uuid.uuid4()),
                                 "text": "Reply CLI_OK",
@@ -120,7 +118,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(reply.status, 202)
                         async with asyncio.timeout(20):
                             while True:
-                                async with web.get(origin + "/api/messages") as reply:
+                                async with web.get(chat + "/api/messages") as reply:
                                     body = await reply.json()
                                 self.assertFalse(
                                     [

@@ -5,7 +5,6 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
-import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -215,7 +214,9 @@ class ConversationMemoryTest(unittest.IsolatedAsyncioTestCase):
 
 class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
     async def test_http_web_cli_real_pi_mem0_restart_without_duplicate_extraction(self):
-        from aiohttp import ClientSession, CookieJar
+        from aiohttp import ClientSession, CookieJar, web as http_web
+        from aiohttp.test_utils import TestServer
+        from assistant_runtime.core.configuration.chat_gateway import ChatGateway
         from assistant_runtime.app.initialize import initialize
         from assistant_runtime.app.host import AssistantService
         from assistant_runtime.app.cli import request
@@ -229,9 +230,6 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             gateway = FakeResponsesGateway(lambda step, body: sse_text_reply(f"reply{step}", "OK"))
-            with socket.socket() as sock:
-                sock.bind(("127.0.0.1", 0))
-                port = sock.getsockname()[1]
             base = Config.load(initialize(root / "instance", preset="slim"))
             config = replace(
                 base,
@@ -241,7 +239,7 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
                 main_model="model-a",
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
-                web={"enable": True, "host": "127.0.0.1", "port": port},
+                web={"enable": True, "host": "127.0.0.1", "port": 0},
             )
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             extractions = []
@@ -298,7 +296,24 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
                 )
 
             host, running = await boot(True)
+
+            async def endpoint(payload):
+                return host.http_frontends["web"].endpoint
+
+            chat_gateway = ChatGateway(
+                SimpleNamespace(process=SimpleNamespace(returncode=None), request=endpoint)
+            )
+
+            @http_web.middleware
+            async def routing(request, handler):
+                request["gateway_scheme"] = "http"
+                return await handler(request)
+
+            public = http_web.Application(middlewares=[routing])
+            public.router.add_route("*", "/chat/{path:.*}", chat_gateway.forward)
+            frontend = TestServer(public, shutdown_timeout=1)
             try:
+                await frontend.start_server()
                 terminal = Chat(invoke, output=lambda *args: None)
                 await terminal.select()
                 first = terminal.session
@@ -307,16 +322,16 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
                 second = terminal.session
                 await terminal.command("I prefer concise written answers.")
                 await terminal.command("/exit")
-                url = f"http://127.0.0.1:{port}"
+                url = str(frontend.make_url("/")).rstrip("/")
                 async with ClientSession(
                     cookie_jar=CookieJar(unsafe=True), headers={"Origin": url}
                 ) as client:
                     token = (config.state_dir / "web-access-token").read_text().strip()
-                    response = await client.post(url + "/api/login", json={"token": token})
+                    response = await client.post(url + "/chat/api/login", json={"token": token})
                     self.assertEqual(response.status, 200)
                     payload = {"request_id": str(uuid.uuid4()), "text": "I prefer a quiet office."}
                     for _ in range(2):
-                        response = await client.post(url + "/api/messages", json=payload)
+                        response = await client.post(url + "/chat/api/messages", json=payload)
                         self.assertEqual(response.status, 202, await response.text())
                 await wait(lambda: not host.conversations.maintenance_pending())
                 self.assertEqual(len(gateway.requests), 3)
@@ -361,6 +376,8 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(gateway.requests), 3)
                 self.assertFalse(host.memory.context.error)
             finally:
+                await chat_gateway.close()
+                await frontend.close()
                 host.stop_event.set()
                 await asyncio.wait_for(running, 25)
                 await gateway.aclose()

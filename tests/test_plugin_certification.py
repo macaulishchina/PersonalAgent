@@ -2,7 +2,6 @@
 
 from release_fixture import release_data
 
-import asyncio
 import json
 from pathlib import Path
 import tempfile
@@ -161,15 +160,7 @@ class CertificationTest(unittest.TestCase):
             config = Config.load(initialize(self.root / "windows"))
             self.assertNotIn("web", config.plugins)
             self.assertEqual(config.plugins, Config(root=self.root).plugins)
-            if "windows" not in platforms("voice_disabled"):
-                for _ in range(2):
-                    with self.assertRaisesRegex(ValueError, "voice_disabled.*slim"):
-                        initialize(self.root / "rejected", preset="standard")
-                    self.assertFalse((self.root / "rejected").exists())
-            else:
-                self.assertIn(
-                    "web", Config.load(initialize(self.root / "standard", preset="standard")).plugins
-                )
+            self.assertIn("web", Config.load(initialize(self.root / "standard", preset="standard")).plugins)
         with patch.object(system, "name", "linux"):
             config = Config.load(initialize(self.root / "linux"))
             self.assertIn("web", config.plugins)
@@ -224,7 +215,6 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
     async def test_incompatible_existing_config_can_be_read_and_repaired_but_not_enabled(self):
         from aiohttp.test_utils import TestClient, TestServer
         from assistant_runtime.core.configuration.console import Console, web
-        from assistant_runtime.core.configuration.auth import AdminAccess
         from assistant_runtime.core.configuration.files import ConfigurationFiles
         from assistant_runtime.core.configuration.validation import validate_candidate
 
@@ -240,16 +230,18 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
             files = ConfigurationFiles(
                 entry, root / "private", lambda contents: validate_candidate(entry.name, contents, root=root)
             )
-            console = object.__new__(Console)
-            console.settings = SimpleNamespace(root=root)
-            console.files = files
-            console.business = SimpleNamespace(
+            business = SimpleNamespace(
+                settings=SimpleNamespace(root=root),
+                state=root / "private",
+                files=files,
                 application={},
                 loaded_snapshot=None,
+                loaded=None,
+                process=None,
                 update=lambda version: {"phase": "pending_start", "version": version},
             )
-            console.access = AdminAccess(root / "admin")
-            console.writes = asyncio.Lock()
+            console = Console(business)
+            self.addAsyncCleanup(console.close)
             app = web.Application(middlewares=[console.guard])
             app.add_routes(
                 [
@@ -262,7 +254,7 @@ class ConsoleCertificationTest(unittest.IsolatedAsyncioTestCase):
             async with TestClient(TestServer(app)) as client:
                 origin = {"Origin": str(client.make_url("/")).rstrip("/")}
                 response = await client.post(
-                    "/api/login", json={"token": (root / "admin").read_text().strip()}, headers=origin
+                    "/api/login", json={"token": console.access.path.read_text().strip()}, headers=origin
                 )
                 self.assertEqual(response.status, 200)
                 response = await client.get("/api/catalog")

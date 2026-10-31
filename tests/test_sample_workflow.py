@@ -154,7 +154,12 @@ class InstalledWorkflowTest(unittest.IsolatedAsyncioTestCase):
                 def discover(step, body):
                     index = step - start
                     if index == 1:
-                        self.assertEqual([t["name"] for t in body["tools"]], ["tool_search"])
+                        # Discovering a preloaded tool must not execute it.
+                        self.assertCountEqual(
+                            [t["name"] for t in body["tools"]],
+                            ["mcp__extensions__sample_read", "tool_search"],
+                        )
+                        self.assertNotIn("HEADLESS_NOTE", json.dumps(body))
                         return sse_tool_call("discover", "tool_search", {"query": "sample_read", "limit": 1})
                     if index == 2:
                         self.assertIn("mcp__extensions__sample_read", str(body["tools"]))
