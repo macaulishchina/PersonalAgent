@@ -324,7 +324,7 @@ async function run(id, args, signal) {
     },
   };
   const stream = runtime.streamSimple(model, context, options);
-  let emitted = 0;
+  let emitted = 0, largestPartial = 0;
   for await (const event of stream) {
     if (event.type.endsWith("_delta") && event.delta?.length) {
       timings.first_content_ms ??= elapsed();
@@ -352,8 +352,17 @@ async function run(id, args, signal) {
       args.inference && event.type === "text_delta"
         ? { type: "text_delta" }
         : event;
-    emitted += Buffer.byteLength(JSON.stringify(forwarded));
-    if (emitted > 64 * 1024 * 1024)
+    // Pi events repeat the whole growing assistant message as `partial`.
+    // Bound each IPC frame and unique response data, not the quadratic sum
+    // of identical prefixes (fine-grained providers can emit one char/event).
+    const { partial, ...incremental } = forwarded;
+    const partialBytes = partial ? Buffer.byteLength(JSON.stringify(partial)) : 0;
+    const incrementalBytes = Buffer.byteLength(JSON.stringify(incremental));
+    if (partialBytes + incrementalBytes > 8 * 1024 * 1024)
+      throw new Error("native_response_exceeds_bound");
+    largestPartial = Math.max(largestPartial, partialBytes);
+    emitted += incrementalBytes;
+    if (emitted + largestPartial > 64 * 1024 * 1024)
       throw new Error("native_response_exceeds_bound");
     await emit({ id, event: forwarded });
   }

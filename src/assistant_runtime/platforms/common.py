@@ -74,10 +74,18 @@ class Platform:
                 import pywintypes
                 from .windows import file_error
 
-                try:
-                    win32file.MoveFileEx(name, str(path), 0x1 | 0x8)  # REPLACE_EXISTING | WRITE_THROUGH
-                except pywintypes.error as exc:
-                    raise file_error(exc, path) from exc
+                import time
+
+                # Readers/scanners can briefly omit FILE_SHARE_DELETE. Retry only
+                # the atomic replacement, never the work that produced the data.
+                for attempt in range(6):
+                    try:
+                        win32file.MoveFileEx(name, str(path), 0x1 | 0x8)  # REPLACE_EXISTING | WRITE_THROUGH
+                        break
+                    except pywintypes.error as exc:
+                        if exc.winerror not in {5, 32, 33} or attempt == 5:
+                            raise file_error(exc, path) from exc
+                        time.sleep(0.01 * (2 ** attempt))
             else:
                 os.replace(name, path)
                 self.sync_directory(path.parent)

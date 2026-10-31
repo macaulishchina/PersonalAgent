@@ -227,7 +227,7 @@ class PiSessionWorker:
                 msg = json.loads(line)
                 await self._handle_message(msg)
         except Exception as exc:
-            log.warning("Pi event stream failed (%s): %s", self.execution_session_id, type(exc).__name__)
+            log.warning("Pi event stream failed (%s): %s", self.execution_session_id, type(exc).__name__, exc_info=True)
         finally:
             for fut in list(self.pending.values()):
                 if not fut.done():
@@ -717,13 +717,7 @@ class PiClient:
         if meta is None:
             meta = self.workers[ident].meta
         path = self._meta_path(ident)
-        temp = path.with_suffix(".tmp")
-        fd = os.open(temp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(meta, stream, ensure_ascii=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temp.replace(path)
+        system.atomic_write(path, json.dumps(meta, ensure_ascii=False).encode("utf-8"))
 
     def register_ui_request(self, worker, ui_id, method):
         self.counter += 1

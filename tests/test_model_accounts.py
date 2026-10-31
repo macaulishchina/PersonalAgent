@@ -121,6 +121,40 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
             "max_output_tokens": 512,
         }
 
+    async def test_character_stream_does_not_charge_repeated_partial_prefixes(self):
+        text = "长报告" * 4000
+
+        def reply(step, body):
+            events = sse_text_reply("long-stream", text)
+            original = events[3]
+            events[3:4] = [{**original, "delta": char} for char in text]
+            return events
+
+        self.gateway.script_fn = reply
+        worker, args, _ = await self.accounts.route("subscription", "medium")
+        args.update(context={"messages": [{"role": "user", "content": "Synthetic stream only", "timestamp": 0}]},
+                    max_tokens=16384, timeout_ms=60000)
+        final = None
+        async with asyncio.timeout(60):
+            async for item in worker.events("stream", args):
+                event = item.get("event", {})
+                if event.get("type") == "done":
+                    final = event["message"]
+        self.assertIsNotNone(final)
+        self.assertEqual(final["content"][0]["text"], text)
+        self.assertEqual(len(self.gateway.requests), 1)
+
+    async def test_oversized_native_frame_is_still_rejected_without_replay(self):
+        self.gateway.script_fn = lambda step, body: sse_text_reply("oversized", "x" * (8 * 1024 * 1024))
+        worker, args, _ = await self.accounts.route("subscription", "medium")
+        args.update(context={"messages": [{"role": "user", "content": "Synthetic frame only", "timestamp": 0}]},
+                    max_tokens=16384, timeout_ms=30000)
+        with self.assertRaisesRegex(RuntimeError, "native_stream_failed"):
+            async with asyncio.timeout(30):
+                async for _ in worker.events("stream", args):
+                    pass
+        self.assertEqual(len(self.gateway.requests), 1)
+
     async def test_auto_uses_native_defaults_without_forcing_an_effort(self):
         payload = self.payload()
         payload["reasoning"] = {"effort": "auto"}
