@@ -6,6 +6,7 @@ import asyncio
 from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 from dataclasses import asdict
 import json
+from assistant_runtime.api.tool_calls import ToolFailure, ToolOutcome
 from pathlib import Path
 from typing import Protocol
 
@@ -148,6 +149,10 @@ class LocalRuntimeClient:
                 if not isinstance(reply, dict) or type(reply.get("ok")) is not bool:
                     raise ValueError("Invalid capability response")
                 if not reply["ok"]:
+                    if isinstance(reply.get("tool_outcome"), dict):
+                        raise ToolFailure(
+                            ToolOutcome(**reply["tool_outcome"]), result=reply.get("tool_result")
+                        )
                     raise RuntimeError(reply.get("error", "Capability failed"))
                 return reply["result"]
         finally:

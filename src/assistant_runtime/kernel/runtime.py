@@ -304,7 +304,8 @@ class Runtime:
                     continue
                 try:
                     await self.plugins[name].start(context)
-                    context.state = "ready"
+                    if context.state == "starting":
+                        context.state = "ready"
                 except Exception as exc:
                     context.error = f"{type(exc).__name__}: {exc}"[:240]
                     await context.close()

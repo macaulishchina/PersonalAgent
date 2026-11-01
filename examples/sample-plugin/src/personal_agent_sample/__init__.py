@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import uuid
 from assistant_runtime.api import (
     ConfigurationSpec,
     plugin_manifest,
@@ -13,6 +14,7 @@ from assistant_runtime.api import (
     ExecutionRequest,
     FileRequest,
 )
+from assistant_runtime.api.tool_calls import invalid_arguments
 
 
 class Notes:
@@ -34,7 +36,9 @@ class Notes:
 
     async def write(self, arguments):
         if len(arguments["text"]) > self.context.config["max_length"]:
-            raise ValueError("Note exceeds the configured limit")
+            raise invalid_arguments("Note exceeds the configured max_length; shorten text", "text")
+        if self.context.get("text", "") == arguments["text"]:
+            return await self.read({})
         self.context.set("text", arguments["text"])
         self.context.publish("sample.updated", length=len(arguments["text"]))
         return await self.read({})
@@ -56,12 +60,20 @@ class Notes:
 
     async def report(self, arguments):
         """Submit, never synchronously wait for a nested agent to finish."""
+        try:
+            if str(uuid.UUID(arguments["request_id"])) != arguments["request_id"]:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise invalid_arguments("Use a canonical UUID request_id", "request_id") from None
         digest = hashlib.sha256(arguments["text"].encode()).hexdigest()
         key = "report:" + arguments["request_id"]
         async with self.submissions:
             saved = self.context.get(key)
             if saved and saved["digest"] != digest:
-                raise ValueError("request_id reused with different report input")
+                raise invalid_arguments(
+                    "request_id already identifies different report input; inspect that execution",
+                    "request_id",
+                )
             if not saved:
                 resource = await self.context.invoke(
                     FileRequest(
@@ -106,12 +118,11 @@ class Notes:
             ),
             Tool(
                 "sample_write",
-                "Replace the sample note",
+                "Replace the sample note; text must also fit the configured max_length",
                 {
                     **value,
-                    "properties": {
-                        "text": {"type": "string", "maxLength": 2000}
-                    },
+                    "properties": {"text": {"type": "string", "maxLength": 2000}},
+                    "examples": [{"text": "A short note"}, {"text": ""}],
                 },
                 value,
                 self.write,
@@ -129,6 +140,9 @@ class Notes:
                     },
                     "required": ["request_id", "text"],
                     "additionalProperties": False,
+                    "examples": [
+                        {"request_id": "b1d5a4fb-77ed-4b29-8b45-7571d98bb912", "text": "Summarize this input"}
+                    ],
                 },
                 {"type": "object"},
                 self.report,

@@ -8,7 +8,8 @@ PAGES = (
     ("execution", "对话与执行", "设置对话行为、执行并发和用量保护。"),
     ("tasks", "任务与通知", "管理后台任务及结果通知。"),
     ("resources", "文件与记忆", "管理工作区、文件与记忆。"),
-    ("connections", "连接与设备", "连接 MCP、外部服务及设备。"),
+    ("connections", "连接与设备", "管理设备及连接。"),
+    ("permissions", "权限管理", "管理第三方 MCP 的连接和长期授权。"),
     ("plugins", "插件", "管理功能、依赖和平台认证，打开插件的独立设置。"),
     ("access", "实例管理", "管理访问入口、运行状态及维护设置。"),
 )
@@ -26,7 +27,7 @@ OWNER_PAGES = {
     "events": "tasks",
     "workfiles": "resources",
     "memory": "resources",
-    "integrations": "connections",
+    "integrations": "permissions",
     "devices": "connections",
 }
 

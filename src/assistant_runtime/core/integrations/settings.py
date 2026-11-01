@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit
 
 CONTEXTS = {"foreground", "background"}
-APPROVALS = {"prompt", "approve", "reject"}
+APPROVALS = {"approve", "reject"}
 NAME = re.compile(r"[a-z][a-z0-9_]{0,47}")
 ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -91,7 +91,7 @@ def definition(value):
         "contexts": ["foreground", "background"],
         "allow_tools": None,
         "deny_tools": [],
-        "approval": "prompt",
+        "approval": "approve",
         "tool_approvals": {},
         "startup_timeout_seconds": 60,
         "tool_timeout_seconds": 600,

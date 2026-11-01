@@ -8,6 +8,7 @@ const groups = {
   notifications: "通知与事件",
   resources: "记忆与文件",
   connections: "外部连接",
+  permissions: "权限管理",
   plugins: "插件管理",
   extensions: "扩展插件",
 };
@@ -18,7 +19,8 @@ const descriptions = {
   conversation: "管理对话体验与后台任务策略。",
   notifications: "设置结果通知与事件处理。",
   resources: "管理记忆、工作文件与设备资源。",
-  connections: "管理外部服务与 MCP 连接。",
+  connections: "管理设备及其连接。",
+  permissions: "管理第三方 MCP 连接与工具授权。",
   plugins: "选择当前实例启用的插件，保存后重启生效。",
   extensions: "按插件管理配置，字段与默认值由插件声明。",
 };
@@ -32,6 +34,7 @@ const navPaths = {
   resources: "M3 6h7l2 2h9v12H3V6",
   connections:
     "M9 15l6-6 M7 17l-2 2a4 4 0 0 1-5-5l5-5 M17 7l2-2a4 4 0 0 1 5 5l-5 5",
+  permissions: "M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3 M8 12l3 3 5-6",
   plugins: "M4 4h6v6H4V4 M14 4h6v6h-6V4 M4 14h6v6H4v-6 M14 14h6v6h-6v-6",
   extensions: "M8 3h8v5h5v8h-5v5H8v-5H3V8h5V3",
 };
@@ -67,6 +70,7 @@ const node = (tag, text, cls) => {
   return e;
 };
 function signedOut() {
+  activeEditor?.dispose?.();
   activeEditor = null;
   pendingRestart = null;
   needsRetry = false;
@@ -659,6 +663,20 @@ function drawField(field) {
     }
     input.value = String(value ?? "");
     read = () => input.value;
+    if (rule["x-reference"] === "model_api.entries") {
+      if (rule.enum) {
+        input.replaceChildren();
+        for (const v of new Set([...rule.enum, ...(value ? [value] : [])])) {
+          const option = node("option", optionLabel(rule, v, path));
+          option.value = String(v);
+          input.append(option);
+        }
+        input.value = String(value ?? rule.enum[0] ?? "");
+      }
+      element = modelReferencePicker(input, {
+        auto: Boolean(rule.enum?.includes("auto") && rule["x-labels"]?.auto),
+      });
+    }
   } else if (rule.enum) {
     input = node("select");
     if (value === undefined) {
@@ -800,7 +818,11 @@ function drawField(field) {
           changed(path, "set", [...current]);
           draw();
         });
-        line.append(item, remove);
+        const itemControl =
+          rule.items?.["x-reference"] === "model_api.entries"
+            ? modelReferencePicker(item)
+            : item;
+        line.append(itemControl, remove);
         input.append(line);
       });
       const add = node("button", "添加一项", "secondary");
@@ -843,6 +865,14 @@ function drawField(field) {
   if (drafts.has(id) && input.tagName !== "DIV" && input.type !== "checkbox")
     input.value = drafts.get(id);
   input.id = id;
+  if (element?.classList.contains("model-reference")) {
+    element
+      .querySelector("[role=searchbox]")
+      .setAttribute(
+        "aria-label",
+        (rule.title || path.at(-1)) + " · 搜索模型或 Provider",
+      );
+  }
   if (input.tagName === "DIV") {
     input.setAttribute("role", "group");
     input.setAttribute("aria-labelledby", label.id);
@@ -903,7 +933,14 @@ function drawField(field) {
       ? "小于 " + displayValue(rule, rule.exclusiveMaximum)
       : null,
   ].filter(Boolean);
-  input.title = limits.join(" · ");
+  input.title = [
+    ...(rule["x-reference"] === "model_api.entries"
+      ? [input.selectedOptions?.[0]?.label]
+      : []),
+    ...limits,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const information = fieldSource(field);
   if (limits.length) information.append(node("p", limits.join(" · "), "hint"));
   if (
@@ -1325,7 +1362,7 @@ function resourceGroup(resource) {
   return (
     {
       credentials: "models",
-      mcp: "connections",
+      mcp: "permissions",
       management: "access",
       web_access: "plugin:web",
     }[resource.id] ||
@@ -1339,7 +1376,7 @@ function resourceGroup(resource) {
 function drawResources(target = $("documents"), filter) {
   const resources = resourceInventory.filter(
     (r) =>
-      r.kind !== "asset" &&
+      r.kind !== "asset" && r.id !== "mcp" &&
       (filter ? filter(r) : resourceGroup(r) === selected),
   );
   if (!resources.length) return;
@@ -1484,14 +1521,6 @@ function drawResources(target = $("documents"), filter) {
           node(
             "p",
             "管理地址变更可能中断当前连接；应用前请记录新地址。绑定失败会保留旧入口。",
-            "hint",
-          ),
-        );
-      if (resource.id === "mcp")
-        content.append(
-          node(
-            "p",
-            "提交完整 MCP 定义 JSON；已有内容不回显，版本由所属模块递增。凭据请使用环境变量引用。",
             "hint",
           ),
         );

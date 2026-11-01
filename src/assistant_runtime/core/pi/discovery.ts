@@ -1,5 +1,6 @@
-/** Exact identity lookup around Pi's native metadata search and bounded loadout. */
+/** Pi owns execution and ranking; presentation never grants or revokes authority. */
 import { createToolSearchExtension } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 function nativeSearch(pi: any) {
   let definition: any;
@@ -11,50 +12,46 @@ function nativeSearch(pi: any) {
   });
   return definition;
 }
+const shortName = (tool: any) =>
+  tool.originalName || tool.name.slice(5).split("__").slice(1).join("__");
+const namespaces = (tool: any) => [
+  tool.originalServer,
+  tool.name.slice(5).split("__")[0],
+  tool.namespace?.name,
+  ...(tool.namespace?.aliases || []),
+];
+const declaration = (tool: any) => ({
+  name: tool.name,
+  description: tool.description,
+  parameters: tool.parameters,
+});
 
 function exactMatches(query: string, tools: any[]) {
-  const shortName = (tool: any) =>
-    tool.name.startsWith("mcp__")
-      ? tool.name.slice(5).split("__").slice(1).join("__")
-      : tool.name;
-  const namespaces = (tool: any) => [
-    tool.name.startsWith("mcp__")
-      ? tool.name.slice(5).split("__")[0]
-      : undefined,
-    tool.namespace?.name,
-    ...(tool.namespace?.aliases || []),
-  ];
-  const qualifiedName = query
-    .trim()
-    .match(/^([A-Za-z][A-Za-z0-9_-]*)[.:/]([A-Za-z][A-Za-z0-9_-]+)$/);
-  if (qualifiedName)
-    return {
-      explicit: true,
-      tools: tools.filter(
-        (tool) =>
-          shortName(tool) === qualifiedName[2] &&
-          namespaces(tool).includes(qualifiedName[1]),
-      ),
-    };
-  const words = new Set(query.match(/[A-Za-z0-9_-]+/g) || []);
-  const full = [...words].filter((word) => word.startsWith("mcp__"));
-  if (full.length)
-    return {
-      explicit: true,
-      tools: tools.filter((tool) => words.has(tool.name)),
-    };
-  const matches = tools.filter((tool) => {
-    const short = shortName(tool);
-    return words.has(short) && (short.includes("_") || query.trim() === short);
-  });
-  // A namespace qualifies a short name when multiple servers export it.
-  const qualified = matches.filter((tool) =>
-    namespaces(tool).some((name) => words.has(name)),
-  );
-  return {
-    explicit: matches.length > 0,
-    tools: qualified.length ? qualified : matches,
-  };
+  const tokens = query.match(/[A-Za-z0-9_-]+(?:[.:/][A-Za-z0-9_-]+)?/g) || [];
+  const found = new Map<string, any>();
+  const ambiguous = new Set<string>();
+  let explicit = false;
+  for (const token of tokens) {
+    const qualified = token.match(/^([^.:/]+)[.:/]([^.:/]+)$/);
+    const matches = tools.filter((tool) =>
+      qualified
+        ? shortName(tool) === qualified[2] &&
+          namespaces(tool).includes(qualified[1])
+        : token.startsWith("mcp__")
+          ? tool.name === token
+          : shortName(tool) === token,
+    );
+    if (qualified || token.startsWith("mcp__") || matches.length)
+      explicit = true;
+    const scoped = matches.filter((tool) =>
+      namespaces(tool).some((name) => tokens.includes(name)),
+    );
+    const selected = scoped.length ? scoped : matches;
+    if (selected.length > 1)
+      selected.forEach((tool) => ambiguous.add(tool.name));
+    else selected.forEach((tool) => found.set(tool.name, tool));
+  }
+  return { explicit, tools: [...found.values()], ambiguous: [...ambiguous] };
 }
 
 export function registerDiscovery(
@@ -63,26 +60,90 @@ export function registerDiscovery(
   enabled: boolean,
   limit: number,
   stableExecution = false,
+  byteLimit = 65536,
+  origin: (name: string) => { server: string; tool: string } | undefined = () =>
+    undefined,
 ) {
-  const searchable = () =>
+  const catalog = () =>
     pi
       .getAllTools()
       .filter(
         (tool: any) =>
-          ["deferred", "codemode", ...(stableExecution ? ["direct"] : [])].includes(tool.exposure) &&
+          tool.name.startsWith("mcp__") &&
+          tool.exposure !== "hidden" &&
           (!Array.isArray(allowed) || allowed.includes(tool.name)),
-      );
-  const native = nativeSearch({ ...pi, getAllTools: searchable });
-  const report = (ctx: any, mode: string, names: string[]) =>
-    ctx.ui.notify(
-      "__assistant_discovery__:" + JSON.stringify({ mode, tools: names }),
-      "info",
+      )
+      .map((tool: any) => ({
+        ...tool,
+        originalName: origin(tool.name)?.tool,
+        originalServer: origin(tool.name)?.server,
+      }));
+  const visible = new Set<string>();
+  const used = new Map<string, number>();
+  let tick = 0;
+  let prepare = false;
+  const base = () =>
+    (Array.isArray(allowed) ? allowed : pi.getActiveTools()).filter(
+      (name: string) => !name.startsWith("mcp__") && name !== "tool_search",
     );
+  const sync = () =>
+    pi.setActiveTools([
+      ...base(),
+      ...(enabled ? ["tool_search", ...catalog().map((t: any) => t.name)] : []),
+    ]);
+  const select = (names: string[]) => {
+    for (const name of names) {
+      visible.add(name);
+      used.set(name, ++tick);
+    }
+    sync();
+  };
+  // Search deals with model-visible definitions, not Pi's callable set.
+  const native = nativeSearch({
+    ...pi,
+    getAllTools: () =>
+      catalog().map((t: any) => ({ ...t, exposure: "deferred" })),
+    getActiveTools: () => [],
+    setActiveTools: select,
+  });
   pi.registerTool({
     ...native,
+    parameters: Type.Object({
+      query: Type.String({
+        description:
+          "Exact names, qualified names or metadata keywords. Empty with namespace lists that source.",
+      }),
+      namespace: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: limit })),
+    }),
     description:
-      native.description +
-      "\nWhen a tool name is known, query its exact full name (mcp__server__tool) or qualified name (server.tool_name). Exact names take priority, including already loaded tools. A short name shared by multiple servers requires qualification. Loading never executes an operation.",
+      "Search tool metadata and select current definitions. Known registered and authorized exact tool names can be called directly. Search to learn parameters; multiple distinct names are supported. Qualify shared short names. Use namespace to browse a source. Discovery never executes business actions.",
+    reachesTools: (input: any) => {
+      if (input.namespace)
+        return [
+          "mcp__" +
+            input.namespace
+              .replace(/^mcp__/, "")
+              .replace(/[^A-Za-z0-9_]/g, "_"),
+        ];
+      const words =
+        input.query.match(/[A-Za-z0-9_-]+(?:[.:/][A-Za-z0-9_-]+)?/g) || [];
+      const scoped = words.filter(
+        (word: string) => word.startsWith("mcp__") || /[.:/]/.test(word),
+      );
+      return scoped.length
+        ? scoped.map((word: string) =>
+            word.startsWith("mcp__")
+              ? word
+              : "mcp__" + word.split(/[.:/]/)[0].replace(/[^A-Za-z0-9_]/g, "_"),
+          )
+        : "all";
+    },
+    prepareLoadout: () => ({
+      hiddenDeclarations: catalog()
+        .filter((t: any) => !visible.has(t.name))
+        .map((t: any) => t.name),
+    }),
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -94,244 +155,183 @@ export function registerDiscovery(
         throw new Error(
           "Tool discovery is unavailable in this execution scope",
         );
-      const count = input.limit ?? 8;
+      const count = input.limit ?? Math.min(8, limit);
       if (!Number.isInteger(count) || count < 1 || count > limit)
         throw new Error(`Search limit must be between 1 and ${limit}`);
       if (signal?.aborted) throw new Error("Tool discovery cancelled");
-      const exact = exactMatches(input.query, searchable());
-      if (!exact.explicit) {
-        const result = await native.execute(id, input, signal, update, ctx);
-        report(ctx, "metadata", result.details?.loaded || []);
-        return result;
-      }
-      const names = exact.tools.map((tool: any) => tool.name);
-      const full = input.query.trim().startsWith("mcp__");
-      if (names.length > 1 && !full) {
-        report(ctx, "ambiguous", names.slice(0, count));
+      const candidates = catalog().filter(
+        (t: any) => !input.namespace || namespaces(t).includes(input.namespace),
+      );
+      const exact = exactMatches(input.query, candidates);
+      let selected = exact.tools;
+      let mode = "exact";
+      if (exact.ambiguous.length && !selected.length)
         return {
           content: [
             {
               type: "text",
               text:
-                "Tool name is ambiguous. Search an exact full name:\n" +
-                names.slice(0, count).join("\n"),
+                "Tool name is ambiguous; qualify the source: " +
+                exact.ambiguous.slice(0, count).join(", "),
             },
           ],
           details: {
             loaded: [],
             discovery: "ambiguous",
-            candidates: names.slice(0, count),
+            candidates: exact.ambiguous.slice(0, count),
           },
         };
+      if (!exact.explicit) {
+        if (input.namespace && !input.query.trim()) {
+          selected = candidates.slice(0, count);
+          mode = "namespace";
+        } else {
+          const scoped = nativeSearch({
+            ...pi,
+            getAllTools: () =>
+              candidates.map((t: any) => ({ ...t, exposure: "deferred" })),
+            getActiveTools: () => [],
+            setActiveTools: select,
+          });
+          const result = await scoped.execute(
+            id,
+            { query: input.query, limit: count },
+            signal,
+            update,
+            ctx,
+          );
+          selected = candidates.filter((t: any) =>
+            result.details?.loaded?.includes(t.name),
+          );
+          mode = "metadata";
+        }
       }
-      if (names.length > count)
+      if (selected.length > count)
         throw new Error("Too many exact tools; use a focused query");
-      pi.setActiveTools([...pi.getActiveTools(), ...names]);
-      report(ctx, names.length ? "exact" : "unavailable", names);
+      const names = selected.map((t: any) => t.name);
+      select(names);
+      if (!names.length) mode = "unavailable";
+      const sources = [
+        ...new Set(
+          catalog().map(
+            (t: any) => t.originalServer || t.name.slice(5).split("__")[0],
+          ),
+        ),
+      ]
+        .sort()
+        .slice(0, count);
+      const text = names.length
+        ? "Definitions selected for your next model request:\n" +
+          selected
+            .map(
+              (t: any) =>
+                `- ${t.name}: ${t.description.trim().split(/\r?\n/)[0]}`,
+            )
+            .join("\n") +
+          (exact.ambiguous.length
+            ? "\nOther requested names are ambiguous; qualify the source: " +
+              exact.ambiguous.slice(0, count).join(", ")
+            : "")
+        : "No match in the current ready, authorized catalog. This is not proof that a connecting service has no tools. Use an exact name or browse a namespace: " +
+          sources.join(", ");
+      ctx.ui.notify(
+        "__assistant_discovery__:" + JSON.stringify({ mode, tools: names }),
+        "info",
+      );
       return {
-        content: [
-          {
-            type: "text",
-            text: names.length
-              ? "Tools are loaded and available from your next call:\n" +
-                exact.tools
-                  .map(
-                    (tool: any) =>
-                      `- ${tool.name}: ${tool.description.trim().split(/\r?\n/)[0]}`,
-                  )
-                  .join("\n")
-              : "No available tool matches this exact name in the current execution scope. Nothing was executed.",
-          },
-        ],
+        content: [{ type: "text", text }],
         details: {
           loaded: names,
-          discovery: names.length ? "exact" : "unavailable",
+          discovery: mode,
+          namespaces: sources,
+          ambiguous: exact.ambiguous.slice(0, count),
         },
       };
     },
   });
-  const explicit = (allowed || []).filter((name) => name.startsWith("mcp__"));
-  let prepare = false;
-  let tick = 0;
-  const used = new Map<string, number>();
-  const base = () =>
-    (Array.isArray(allowed) ? allowed : pi.getActiveTools()).filter(
-      (name: string) => !name.startsWith("mcp__") && name !== "tool_search",
-    );
-  const reset = () => {
+  pi.on("session_start", () => {
+    visible.clear();
     used.clear();
-    prepare = stableExecution && enabled && explicit.length > 0 && explicit.length <= Math.min(4, limit);
     tick = 0;
-    pi.setActiveTools([...base(), ...(enabled ? ["tool_search"] : [])]);
-  };
-  pi.on("session_start", reset);
-  pi.on("before_agent_start", () => {
-    // Reuse a bounded warm loadout in this live session, but drop removed or
-    // newly hidden identities before the model sees them. Resume starts cold.
-    const available = new Set(searchable().map((tool: any) => tool.name));
-    const warm = enabled
-      ? pi
-          .getActiveTools()
-          .filter(
-            (name: string) => name.startsWith("mcp__") && available.has(name),
-          )
-      : [];
-    pi.setActiveTools([
-      ...base(),
-      ...(enabled ? ["tool_search"] : []),
-      ...warm,
-    ]);
+    prepare = stableExecution;
+    sync();
   });
-  pi.on("tool_result", async (event: any) => {
-    if (event.toolName === "tool_search") {
-      for (const name of event.details?.loaded || []) used.set(name, ++tick);
-    } else if (event.toolName.startsWith("mcp__"))
-      used.set(event.toolName, ++tick);
+  pi.on("before_agent_start", sync);
+  pi.on("tool_result", (event: any) => {
+    if (event.toolName.startsWith("mcp__")) select([event.toolName]);
   });
-  pi.on("message_end", async (event: any, ctx: any) => {
-    // A deferred direct call was rejected before execution. Load only that known,
-    // permitted identity; never execute/replay the business operation here.
-    const message = event.message;
-    if (
-      !enabled ||
-      message.role !== "toolResult" ||
-      !message.isError ||
-      message.durationMs !== undefined ||
-      !message.toolName?.startsWith("mcp__") ||
-      pi.getActiveTools().includes(message.toolName) ||
-      message.content?.length !== 1 ||
-      message.content[0]?.type !== "text" ||
-      message.content[0].text !== `Tool ${message.toolName} not found`
-    )
-      return;
-    const loaded = searchable().some(
-      (tool: any) => tool.name === message.toolName,
-    );
-    if (loaded) {
-      pi.setActiveTools([...pi.getActiveTools(), message.toolName]);
-      used.set(message.toolName, ++tick);
-    }
-    report(
-      ctx,
-      loaded ? "load_after_not_found" : "unavailable",
-      loaded ? [message.toolName] : [],
-    );
-    return {
-      message: {
-        ...message,
-        content: [
-          {
-            type: "text",
-            text:
-              `Tool ${message.toolName} was not found in the active loadout, so this call did not execute. ` +
-              (loaded
-                ? "It is now loaded for your next call. "
-                : `Use tool_search with query="${message.toolName}" to wait for discovery and check availability in this scope. `) +
-              "Submit the intended call once after loading, preserving its request ID if present; do not repeat any other completed or unknown operation.",
-          },
-        ],
-        details: {
-          ...message.details,
-          discovery: loaded
-            ? "loaded_not_executed"
-            : "unavailable_not_executed",
-          loaded: loaded ? [message.toolName] : [],
-        },
-      },
-    };
+  pi.on("tool_execution_end", (event: any) => {
+    if (event.isError && catalog().some((t: any) => t.name === event.toolName))
+      select([event.toolName]);
   });
-  // Runs after the preceding tool batch settles, before the next model call.
-  // Never deactivate tools while parallel business operations are in flight.
-  pi.on("context_with_system", async (event: any, ctx: any) => {
+  pi.on("context_with_system", (event: any, ctx: any) => {
+    const available = catalog();
+    const byName = new Map<string, any>(available.map((t: any) => [t.name, t]));
     if (prepare) {
       prepare = false;
-      const candidates = searchable().filter((tool: any) => explicit.includes(tool.name))
-        .sort((a: any, b: any) => a.name.localeCompare(b.name));
-      const chars = Buffer.byteLength(JSON.stringify(candidates.map((tool: any) => ({
-        name: tool.name, description: tool.description, parameters: tool.parameters,
-      }))));
-      const ready = candidates.length === explicit.length && chars <= 16384;
-      pi.setActiveTools([
-        ...pi.getActiveTools().filter((name: string) => !name.startsWith("mcp__")),
-        ...(ready ? candidates.map((tool: any) => tool.name) : []),
-      ]);
-      report(ctx, ready ? "preloaded" : "preload_deferred", ready ? explicit : []);
+      const explicit = (allowed || []).filter((n) => n.startsWith("mcp__"));
+      if (
+        explicit.length > 0 &&
+        explicit.length <= Math.min(4, limit) &&
+        explicit.every((n) => byName.has(n)) &&
+        Buffer.byteLength(
+          JSON.stringify(explicit.map((n) => declaration(byName.get(n)))),
+        ) <= 16384
+      )
+        select(explicit);
     }
-    const active: string[] = pi.getActiveTools();
-    const loaded = active.filter((name) => name.startsWith("mcp__"));
-    const ranked = [...loaded].sort(
-      (a, b) => (used.get(b) || 0) - (used.get(a) || 0),
-    );
-    const keep = new Set(ranked.slice(0, limit));
-    const evicted = loaded.filter((name) => !keep.has(name));
-    if (evicted.length)
-      pi.setActiveTools(
-        active.filter((name) => !name.startsWith("mcp__") || keep.has(name)),
-      );
-    for (const name of used.keys()) if (!keep.has(name)) used.delete(name);
-    const selected: string[] = pi.getActiveTools();
+    const ranked = [...visible]
+      .filter((n) => byName.has(n))
+      .sort((a, b) => (used.get(b) || 0) - (used.get(a) || 0));
+    const keep: string[] = [];
+    let bytes = 2;
+    for (const name of ranked) {
+      const size =
+        Buffer.byteLength(JSON.stringify(declaration(byName.get(name)))) + 1;
+      if (keep.length >= limit || (keep.length > 0 && bytes + size > byteLimit))
+        continue;
+      keep.push(name);
+      bytes += size;
+      if (bytes > byteLimit) break; // One oversized schema is shown intact, alone.
+    }
+    const evicted = [...visible].filter((n) => !keep.includes(n));
+    visible.clear();
+    keep.forEach((n) => visible.add(n));
+    for (const name of used.keys()) if (!visible.has(name)) used.delete(name);
+    sync();
     const definitions = pi
       .getAllTools()
-      .filter((tool: any) => selected.includes(tool.name))
-      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+      .filter(
+        (t: any) =>
+          pi.getActiveTools().includes(t.name) &&
+          (!t.name.startsWith("mcp__") || visible.has(t.name)),
+      )
+      .sort((a: any, b: any) => a.name.localeCompare(b.name))
+      .map(declaration);
     ctx.ui.notify(
       "__assistant_tools__:" +
         JSON.stringify({
-          active: selected,
+          active: definitions.map((t: any) => t.name),
+          callable: available.length,
           evicted,
           catalog: pi.getAllTools().length,
-          schema_chars: JSON.stringify(
-            definitions.map((tool: any) => ({
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            })),
-          ).length,
+          schema_chars: JSON.stringify(definitions).length,
+          schema_bytes: bytes,
+          oversized: bytes > byteLimit,
         }),
       "info",
     );
-    // Pi records schema changes in its durable transcript. Project only the current
-    // loadout into requests, or evicted definitions would still occupy history.
-    // Keep every user/tool message and system section; only declarations change.
-    const schema = new Map<string, any>();
-    for (const message of event.messages)
-      for (const tool of message.toolsAdded || []) schema.set(tool.name, tool);
+    // Replace historical declarations with the current registry version; retain all business evidence.
     let declared = false;
     const messages = event.messages.map((message: any) => {
       if (message.role !== "system") return message;
       const { toolsAdded, toolsRemoved, ...rest } = message;
-      // A relative cwd is accurate for this scratch-bound execution. Real tool cwd
-      // and persisted session metadata remain untouched; no identity is reused.
       if (stableExecution && rest.sections?.cwd)
         rest.sections = { ...rest.sections, cwd: "<cwd>\n.\n</cwd>" };
       if (declared) return rest;
       declared = true;
-      return {
-        ...rest,
-        toolsAdded: definitions.map(
-          (tool: any) =>
-            schema.get(tool.name) || {
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            },
-        ),
-      };
+      return { ...rest, toolsAdded: definitions };
     });
     return { messages };
-  });
-  pi.on("tool_call", async (event: any) => {
-    if (event.toolName !== "tool_search") return;
-    if (!enabled)
-      return {
-        block: true,
-        reason: "Tool discovery is unavailable in this execution scope",
-      };
-    const count = event.input.limit ?? 8;
-    if (!Number.isInteger(count) || count < 1 || count > limit)
-      return {
-        block: true,
-        reason: `Search limit must be between 1 and ${limit}; use a focused query with an explicit limit`,
-      };
   });
 }

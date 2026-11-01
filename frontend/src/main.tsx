@@ -1,4 +1,5 @@
 import { chatPath } from "./http";
+import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -237,7 +238,7 @@ function ToolActivity({
   label: string;
 }) {
   const busy = message.status === "streaming";
-  const failed = message.status === "failed";
+  const failed = message.status === "failed" && message.tool_summary?.dispatch !== "not_dispatched" && message.tool_summary?.result_state !== "unknown";
   const labels: Record<string, string> = {
     streaming: "进行中",
     complete: "完成",
@@ -559,20 +560,13 @@ function App() {
     [draft, setDraft] = useState(
       () => sessionStorage.getItem("pa-draft") || "",
     );
-  const [replyTarget, setReplyTarget] = useState<{
-    requestId: string;
-    questionId?: string | number;
-  } | null>(null);
-  const replying =
-    !!state.active_request_id &&
-    replyTarget?.requestId === state.active_request_id &&
-    replyTarget?.questionId === state.question_id &&
-    !notificationContext;
+  const [deliveryMode, setDeliveryMode] = useDeliveryMode();
+  const replying = !!state.active_request_id && deliveryMode === "steer";
   const queued = state.queue?.filter((r) => r.state === "queued") || [];
   const sendLabel = replying
     ? state.question_id != null
       ? "发送回答"
-      : "发送补充"
+      : "直接引导"
     : state.active_request_id
       ? "加入队列"
       : "发送";
@@ -646,7 +640,9 @@ function App() {
       setBefore(d.before);
       cursor.current = d.cursor;
       events.current?.close();
-      const stream = new EventSource(chatPath("api/events?after=" + cursor.current));
+      const stream = new EventSource(
+        chatPath("api/events?after=" + cursor.current),
+      );
       events.current = stream;
       stream.onopen = () => {
         if (own === generation.current) {
@@ -753,7 +749,7 @@ function App() {
   }
   async function upload(files: FileList | File[] | null) {
     if (replying) {
-      setError("补充和回答仅支持文字，请切换为新消息后添加图片。");
+      setError("当前执行的直接引导仅支持文字；请切换为排队后添加图片。");
       return;
     }
     if (!files || uploading) return;
@@ -788,7 +784,10 @@ function App() {
     )
       return;
     if (replying) {
-      if (attachments.length) return;
+      if (attachments.length || notificationContext) {
+        setError("图片和通知引用需要排队发送，请切换发送方式。");
+        return;
+      }
       await conversationAction(
         state.question_id != null ? "answer" : "supplement",
       );
@@ -885,7 +884,6 @@ function App() {
       });
       if (action !== "cancel") {
         setDraft((current) => (current.trim() === text ? "" : current));
-        setReplyTarget(null);
         input.current?.focus();
       }
       setState(await api("session"));
@@ -1083,53 +1081,13 @@ function App() {
                 void upload(e.dataTransfer.files);
               }}
             >
-              {(state.active_request_id ||
-                state.task_running ||
-                state.speaking ||
-                !online) && (
-                <div className="composer-context">
-                  <div className="composer-status" role="status">
-                    {!online ? (
-                      <WifiOff size={14} />
-                    ) : (
-                      <span className="execution-dot" />
-                    )}
-                    <span>
-                      {!online
-                        ? "连接已断开"
-                        : state.question_id != null
-                          ? "等待你的回答"
-                          : "正在执行"}
-                    </span>
-                  </div>
-                  <div className="composer-context-actions">
-                    {!online && (
-                      <button type="button" onClick={() => connect()}>
-                        重新连接
-                      </button>
-                    )}
-                    {state.speaking && (
-                      <button
-                        type="button"
-                        disabled={!online || sending}
-                        onClick={() => control("stop")}
-                      >
-                        <Square size={12} />
-                        停止播报
-                      </button>
-                    )}
-                    {state.active_request_id && (
-                      <button
-                        type="button"
-                        className="cancel-execution"
-                        disabled={sending || !online || uploading}
-                        onClick={() => conversationAction("cancel")}
-                      >
-                        <Square size={12} />
-                        取消当前执行
-                      </button>
-                    )}
-                  </div>
+              {!online && (
+                <div className="composer-connection" role="status">
+                  <WifiOff size={13} aria-hidden="true" />
+                  <span>连接已断开</span>
+                  <button type="button" onClick={() => connect()}>
+                    重新连接
+                  </button>
                 </div>
               )}
               {!!state.questions?.length && (
@@ -1193,10 +1151,10 @@ function App() {
                     replying
                       ? state.question_id != null
                         ? "写下你的回答…"
-                        : "补充要求，继续当前执行…"
+                        : "补充要求或调整方向…"
                       : state.active_request_id
-                        ? "写下一条消息，完成当前执行后发送…"
-                        : "发消息，或继续刚才的话题…"
+                        ? "写下一条消息…"
+                        : "发消息…"
                   }
                   aria-label="消息"
                   maxLength={32000}
@@ -1229,7 +1187,7 @@ function App() {
                     aria-label="添加图片"
                     title={
                       replying
-                        ? "补充和回答仅支持文字"
+                        ? "直接引导仅支持文字；切换排队可添加图片"
                         : "添加图片 · 支持粘贴或拖入"
                     }
                     disabled={uploading || replying}
@@ -1238,72 +1196,67 @@ function App() {
                     {uploading ? (
                       <LoaderCircle size={20} className="spin" />
                     ) : (
-                      <Plus size={22} />
+                      <Plus size={20} strokeWidth={1.6} />
                     )}
                   </button>
-                  {state.active_request_id && (
-                    <div
-                      className="delivery-modes"
-                      role="group"
-                      aria-label="消息发送方式"
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={!replying}
-                        disabled={sending}
-                        onClick={() => {
-                          setReplyTarget(null);
-                          input.current?.focus();
-                        }}
-                      >
-                        新消息
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={replying}
-                        disabled={
-                          sending ||
-                          uploading ||
-                          attachments.length > 0 ||
-                          !!notificationContext
-                        }
-                        title={
-                          attachments.length || notificationContext
-                            ? "图片和通知引用请作为新消息发送"
-                            : undefined
-                        }
-                        onClick={() => {
-                          setReplyTarget({
-                            requestId: state.active_request_id!,
-                            questionId: state.question_id,
-                          });
-                          input.current?.focus();
-                        }}
-                      >
-                        {state.question_id != null ? "回答问题" : "补充执行"}
-                      </button>
-                    </div>
-                  )}
+                  <DeliveryModeSelector
+                    mode={deliveryMode}
+                    onChange={setDeliveryMode}
+                    disabled={sending}
+                  />
                 </div>
-                <button
-                  className="send"
-                  type="submit"
-                  aria-label={sendLabel}
-                  disabled={
-                    sending ||
-                    uploading ||
-                    !online ||
-                    (!draft.trim() && !attachments.length)
-                  }
-                >
-                  {sending ? (
-                    <LoaderCircle size={18} className="spin" />
-                  ) : (
-                    <ArrowUp size={20} />
+                <div className="composer-actions">
+                  {state.speaking && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="停止播报"
+                      title="停止播报"
+                      disabled={!online || sending}
+                      onClick={() => control("stop")}
+                    >
+                      <AudioLines size={18} />
+                    </button>
                   )}
-                  <span>{sendLabel}</span>
-                </button>
+                  {state.active_request_id && (
+                    <button
+                      type="button"
+                      className="icon-button cancel-execution"
+                      aria-label="停止当前执行"
+                      title="停止当前执行"
+                      disabled={sending || !online || uploading}
+                      onClick={() => conversationAction("cancel")}
+                    >
+                      <Square size={12} fill="currentColor" strokeWidth={0} />
+                    </button>
+                  )}
+                  <button
+                    className="send"
+                    type="submit"
+                    aria-label={sendLabel}
+                    title={sendLabel}
+                    disabled={
+                      sending ||
+                      uploading ||
+                      !online ||
+                      (replying &&
+                        (!!attachments.length || !!notificationContext)) ||
+                      (!draft.trim() && !attachments.length)
+                    }
+                  >
+                    {sending ? (
+                      <LoaderCircle size={18} className="spin" />
+                    ) : (
+                      <ArrowUp size={18} strokeWidth={1.8} />
+                    )}
+                  </button>
+                </div>
               </div>
+              {replying && (!!attachments.length || !!notificationContext) && (
+                <p className="composer-delivery-note" role="status">
+                  图片和通知引用需要切换为排队发送。
+                </p>
+              )}
             </form>
             {queued.length > 0 && (
               <details className="composer-queue">
@@ -1375,13 +1328,6 @@ function App() {
                 </button>
               </div>
               <div className="composer-caption-info">
-                {state.active_request_id
-                  ? replying
-                    ? "发送至当前执行，不另起一轮"
-                    : "新消息将在当前执行结束后发送"
-                  : state.voice === "disabled"
-                    ? "支持文字、图片和任务委派"
-                    : "与语音入口实时同步"}
                 <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
             </div>

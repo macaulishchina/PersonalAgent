@@ -43,6 +43,9 @@ class Console:
         from .provider_queries import ProviderQueries
 
         self.provider_queries = ProviderQueries(business, self.accounts)
+        from .permissions import Permissions
+
+        self.permissions = Permissions(business)
 
     @web.middleware
     async def guard(self, request, handler):
@@ -140,6 +143,10 @@ class Console:
                 web.get("/model-editor.js", self.model_javascript),
                 web.get("/task-models.js", self.task_models_javascript),
                 web.get("/connections.js", self.connections_javascript),
+                web.get("/permissions.js", self.permissions_javascript),
+                web.get("/api/permissions/mcp", self.permissions_inventory),
+                web.post("/api/permissions/mcp", self.permissions_preview),
+                web.post("/api/permissions/mcp/verify", self.permissions_verify),
                 web.get("/console.css", self.styles),
                 web.post("/api/login", self.login),
                 web.post("/api/logout", self.logout),
@@ -202,6 +209,7 @@ class Console:
 
     async def close(self):
         await self.chat_gateway.close()
+        await self.permissions.close()
         await self.provider_queries.close()
         await self.accounts.close()
         if self.runner:
@@ -212,6 +220,28 @@ class Console:
 
     async def javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.js")
+
+    async def permissions_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "permissions.js")
+
+    async def permissions_inventory(self, request):
+        return web.json_response(
+            await asyncio.to_thread(self.permissions.inventory, request.query.get("version"))
+        )
+
+    async def permissions_preview(self, request):
+        data = await request.json()
+        if not isinstance(data.get("version"), str):
+            raise ValueError("Configuration version required")
+        return web.json_response(
+            await asyncio.to_thread(self.permissions.inventory, data["version"], data.get("patch"))
+        )
+
+    async def permissions_verify(self, request):
+        data = await request.json()
+        if not isinstance(data.get("version"), str):
+            raise ValueError("Configuration version required")
+        return web.json_response(await self.permissions.verify(data))
 
     async def connections_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "connections.js")

@@ -124,9 +124,9 @@ class PluginFrameworkTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(mcp_result.data, {"value": 9, "request": "mcp-r"})
             self.assertEqual(store.get("plugin.sample.value"), 9)
             self.assertEqual((await adapter.instance.queue.get()).kind, "sample.changed")
-            from jsonschema import ValidationError
+            from assistant_runtime.api.tool_calls import ToolFailure
 
-            with self.assertRaises(ValidationError):
+            with self.assertRaises(ToolFailure):
                 await tools.invoke("sample_write", {"value": "wrong"}, identity=CallIdentity("r", "w"))
             await runtime.close()
             self.assertFalse(tools.tools)
@@ -256,15 +256,27 @@ asyncio.run(main())
                         pass
 
                     runtime.add(SimpleNamespace(manifest=Manifest(dependency), start=start))
-                runtime.add(InstalledPlugin(declaration, {}, root, lambda k: None, (), tools))
+                runtime.add(InstalledPlugin(declaration, {"max_length": 20}, root, lambda k: None, (), tools))
                 try:
                     await runtime.start()
                     identity = CallIdentity("package", "work")
+                    events = runtime.subscribe("contract-test")
                     await tools.invoke("sample_write", {"text": "persisted"}, identity=identity)
+                    self.assertEqual(events.get_nowait().kind, "sample.updated")
+                    await tools.invoke("sample_write", {"text": "persisted"}, identity=identity)
+                    self.assertTrue(events.empty())
+                    from assistant_runtime.api import ToolFailure
+
+                    with self.assertRaises(ToolFailure) as caught:
+                        await tools.invoke("sample_write", {"text": "x" * 21}, identity=identity)
+                    self.assertEqual(caught.exception.outcome.field, "text")
+                    self.assertEqual(caught.exception.outcome.dispatch, "not_dispatched")
+                    self.assertTrue(events.empty())
                     self.assertEqual(
                         await tools.invoke("sample_read", {}, identity=identity), {"text": "persisted"}
                     )
                 finally:
+                    runtime.unsubscribe("contract-test")
                     await runtime.close()
                     store.db.close()
             finally:

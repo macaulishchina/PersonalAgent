@@ -113,6 +113,12 @@ class ModelSettings:
     tool_result_max_chars: int = field(
         default_factory=lambda: configuration_default(__file__, "tool_result_max_chars")
     )
+    tool_schema_max_bytes: int = field(
+        default_factory=lambda: configuration_default(__file__, "tool_schema_max_bytes")
+    )
+    invalid_tool_call_limit: int = field(
+        default_factory=lambda: configuration_default(__file__, "invalid_tool_call_limit")
+    )
     max_loaded_tools: int = field(default_factory=lambda: configuration_default(__file__, "max_loaded_tools"))
     max_output_tokens: int = field(
         default_factory=lambda: configuration_default(__file__, "max_output_tokens")
@@ -161,11 +167,18 @@ class ModelSettings:
             ("compaction_timeout_seconds", MAX_OPERATION_SECONDS),
             ("tool_result_max_chars", 50000),
             ("max_loaded_tools", 64),
+            ("tool_schema_max_bytes", 1048576),
+            ("invalid_tool_call_limit", 32),
             ("max_output_tokens", 16384),
             ("execution_max_output_tokens", 131072),
         ):
             n = getattr(obj, key)
-            minimum = 0 if key in {"max_output_tokens", "execution_max_output_tokens"} else 1
+            minimum = {
+                "max_output_tokens": 0,
+                "execution_max_output_tokens": 0,
+                "tool_schema_max_bytes": 1024,
+                "invalid_tool_call_limit": 2,
+            }.get(key, 1)
             if type(n) is not int or not minimum <= n <= maximum:
                 raise ValueError("Invalid models." + key)
         if not isinstance(obj.providers, dict) or not isinstance(obj.entries, dict):

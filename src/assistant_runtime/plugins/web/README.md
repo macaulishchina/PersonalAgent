@@ -9,3 +9,23 @@ Admin and chat logins remain separate. Chat cookies have Path=/chat/; administra
 The extension owns all chat routes/authentication and UI assets. The app supplies an owner-scoped http_frontend resource (key, publish(loopback_host, port), withdraw()). It exposes the current endpoint only through operator IPC, never runtime health or model tools. Disable/close withdraws the endpoint; re-enable or hot listener replacement publishes the new one.
 
 Frontend production assets are built with base=/chat/. All API, SSE and attachment URLs use the same prefix. The gateway does not retry submissions or buffer SSE. Provider execution/usage/request deduplication remain owned by existing conversation/execution services.
+
+## Composer delivery
+
+The same compact composer is used before and during execution. While an execution is
+active, messages default to direct steering (`supplement`, or `answer` for a pending
+question). An inline switch toggles between steering and queued new messages with one click or tap;
+no popup is opened. The label shows the selected behavior, and keyboard Space/Enter also toggles it.
+The choice is stored in this browser's local storage, survives reload and execution
+changes, and syncs across tabs. An idle conversation always starts a normal new turn.
+Stopping execution is a separate action and never clears the draft or preference.
+
+Direct steering currently accepts text only. Images and notification references require
+an explicit switch to queued delivery; neither unsupported input nor a failed steering
+request is silently resubmitted as a new message. Existing server-side execution identity,
+queue, cancellation and request-deduplication semantics are unchanged.
+
+After `npm --prefix frontend run build`, run `python scripts/verify_web_composer.py`
+(with optional `--browser /absolute/chromium`) for isolated routing, persistence,
+keyboard, attachment and light/dark desktop/mobile layout acceptance. This check uses
+synthetic local responses and does not contact model providers or production services.

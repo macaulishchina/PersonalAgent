@@ -7,6 +7,7 @@ from .runs import ExecutionRequest
 from .conversation import ConversationRequest
 from .backends import BackendSpec, PlatformInfo
 from .plugins import CallIdentity, PluginContext, PluginDefinition, Tool
+from .tool_calls import ToolOutcome, ToolFailure
 from .releases import plugin_manifest
 from assistant_runtime.kernel.runtime import Manifest
 from assistant_runtime.kernel.event_reporting import identifier
@@ -19,6 +20,8 @@ __all__ = [
     "PluginContext",
     "PluginDefinition",
     "Tool",
+    "ToolOutcome",
+    "ToolFailure",
     "Manifest",
     "plugin_manifest",
     "identifier",

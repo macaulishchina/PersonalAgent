@@ -299,6 +299,13 @@ class Resources:
                 path.write_bytes(raw)
                 validate_ports(config, ManagementSettings.load(path))
 
+    def audit_fields(self, resource, operation):
+        if resource.kind == "mcp":
+            from assistant_runtime.core.integrations.configuration import audit_fields
+
+            return audit_fields(operation)
+        return []
+
     def prepare(self, resource, previous, operation):
         if resource.read_only or resource.kind == "asset":
             raise ValueError("Resource is read-only")
@@ -328,6 +335,17 @@ class Resources:
                         raise ValueError("Invalid credential value")
                     set_key(path, key, value, quote_mode="always")
                 return path.read_bytes()
+        if resource.kind == "mcp" and op == "patch":
+            from assistant_runtime.core.integrations.configuration import patch_registry
+
+            return json.dumps(
+                patch_registry(
+                    json.loads((previous or b'{"revision":0,"servers":{},"removed":[]}').decode()),
+                    operation.get("value"),
+                ),
+                ensure_ascii=False,
+                indent=2,
+            ).encode()
         if resource.sensitive:
             if op == "clear_secret":
                 return None

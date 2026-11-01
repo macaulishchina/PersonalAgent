@@ -445,14 +445,17 @@ p {
   z-index: 4;
 }
 .composer {
-  border: 1px solid var(--line);
-  border-radius: 22px;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, var(--surface));
+  border-radius: 18px;
   background: var(--surface);
-  padding: 14px 16px 12px;
-  box-shadow: var(--shadow);
+  padding: 10px 12px 9px;
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--ink) 4%, transparent);
+  transition: border-color 160ms, box-shadow 160ms;
 }
 .composer:focus-within {
-  border-color: #a9b6a7;
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--surface));
+  box-shadow: 0 2px 16px color-mix(in srgb, var(--ink) 5%, transparent);
 }
 .composer textarea {
   flex: 1;
@@ -460,13 +463,13 @@ p {
   border: 0;
   outline: 0;
   resize: none;
-  min-height: 58px;
+  min-height: 44px;
   max-height: 168px;
-  padding: 12px 2px;
+  padding: 8px 4px;
   background: transparent;
   color: var(--ink);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.55;
 }
 .composer textarea::placeholder {
   color: var(--muted);
@@ -485,12 +488,11 @@ p {
   flex: none;
   background: var(--accent);
   color: var(--bg);
-  border-radius: 12px;
-  height: 38px;
-  padding: 0 14px;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
 }
 .send:disabled {
   opacity: 1;
@@ -707,9 +709,6 @@ p {
   .primary {
     color: #19241c;
   }
-  .composer:focus-within {
-    border-color: #637863;
-  }
   .error {
     color: #d39379;
   }
@@ -747,7 +746,7 @@ p {
     justify-content: center;
   }
   .composer {
-    border-radius: 24px;
+    border-radius: 18px;
     padding: 7px 8px;
   }
   .composer textarea {
@@ -1814,78 +1813,106 @@ p {
   margin-top: 8px;
 }
 
-/* One composer, with explicit delivery mode and a single submit action. */
-.composer-context,
+/* The composer keeps the same shape before and during execution. */
 .composer-toolbar,
 .composer-tools,
-.composer-context-actions,
-.composer-status,
-.delivery-modes {
+.composer-actions,
+.composer-connection {
   display: flex;
   align-items: center;
 }
-.composer-context {
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 0 11px;
-  border-bottom: 1px solid var(--line);
-}
-.composer-status {
-  gap: 8px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 500;
-}
-.execution-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-.composer-context-actions {
-  gap: 12px;
-}
-.composer-context-actions button {
-  gap: 5px;
-  font-size: 12px;
-  color: var(--muted);
-  padding: 4px 0;
-}
-.composer-context-actions .cancel-execution:hover {
-  color: #bd725a;
-}
 .composer-toolbar {
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   padding-top: 4px;
 }
-.composer-tools {
-  gap: 10px;
+.composer-tools,
+.composer-actions {
+  gap: 6px;
   min-width: 0;
 }
-.composer-tools .attach {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+.composer-tools .attach,
+.composer-actions .icon-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
 }
-.delivery-modes {
-  padding: 3px;
+.cancel-execution:hover {
   background: var(--bubble);
-  border-radius: 10px;
-  gap: 2px;
+  color: var(--ink);
 }
-.delivery-modes button {
-  padding: 5px 10px;
-  min-height: 29px;
+.composer-connection {
+  gap: 7px;
+  padding: 2px 3px 4px;
   color: var(--muted);
-  border-radius: 7px;
   font-size: 12px;
-  white-space: nowrap;
 }
-.delivery-modes button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+.composer-connection button {
+  margin-left: auto;
   color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.composer-delivery-note {
+  margin: 8px 4px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.delivery-switch {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  flex: none;
+  width: 112px;
+  height: 30px;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--ink) 5%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  font-size: 11px;
+  line-height: 20px;
+  letter-spacing: 0.03em;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.delivery-switch-thumb {
+  position: absolute;
+  inset: 3px auto 3px 3px;
+  width: calc(50% - 4px);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px #0000000c, 0 0 0 1px color-mix(in srgb, var(--ink) 4%, transparent);
+  transition: transform 180ms cubic-bezier(0.2, 0.75, 0.25, 1), box-shadow 160ms;
+}
+.delivery-switch[aria-checked="false"] .delivery-switch-thumb {
+  transform: translateX(calc(100% + 2px));
+}
+.delivery-switch-option {
+  position: relative;
+  text-align: center;
+  color: color-mix(in srgb, var(--ink) 50%, var(--surface));
+  transition: color 160ms;
+}
+.delivery-switch-option[data-selected="true"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+@media (hover: hover) {
+  .delivery-switch:hover .delivery-switch-option {
+    color: color-mix(in srgb, var(--ink) 70%, var(--surface));
+  }
+  .delivery-switch:hover .delivery-switch-option[data-selected="true"] {
+    color: var(--accent);
+  }
+}
+.delivery-switch:active:not(:disabled) .delivery-switch-thumb {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .delivery-switch-thumb,
+  .delivery-switch-option {
+    transition: none;
+  }
 }
 .composer button:disabled {
   cursor: not-allowed;

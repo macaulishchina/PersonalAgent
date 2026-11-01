@@ -375,6 +375,22 @@
         "title": "记忆整理模型",
         "default": "",
         "x-reference": "model_api.entries"
+      },
+      "tool_schema_max_bytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 1048576,
+        "default": 65536,
+        "title": "可见工具定义字节预算",
+        "description": "完整定义按需展示；单个超大定义独立展示，不截断。"
+      },
+      "invalid_tool_call_limit": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 32,
+        "default": 3,
+        "title": "重复无效调用上限",
+        "description": "同一轮中相同参数、定义及权限下，确定未执行的重复错误达到此次数后停止。"
       }
     }
   },

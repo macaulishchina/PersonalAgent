@@ -112,28 +112,10 @@ class ModelUpgrades:
             ):
                 raise ValueError("Upgrade requires bounded nonempty reason and evidence")
         checkpoint = args["checkpoint"]
-        if not isinstance(checkpoint, dict) or set(checkpoint) != {
-            "completed",
-            "next_step",
-            "uncertain_operations",
-            "active_operations",
-        }:
-            raise ValueError(
-                "Checkpoint must describe completed work, next step and active/uncertain operations"
-            )
-        if (
-            not isinstance(checkpoint["completed"], list)
-            or len(checkpoint["completed"]) > 16
-            or any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in checkpoint["completed"])
-        ):
-            raise ValueError("Invalid completed-work checkpoint")
-        if (
-            not isinstance(checkpoint["next_step"], str)
-            or not 1 <= len(checkpoint["next_step"].strip()) <= 2000
-        ):
-            raise ValueError("Checkpoint requires a bounded next step")
-        if checkpoint["uncertain_operations"] != [] or checkpoint["active_operations"] != []:
-            raise ValueError("Reconcile uncertain operations and wait for active operations before upgrading")
+        from .tool_contracts import CHECKPOINT
+        from assistant_runtime.mcp.contracts import validate
+
+        validate(checkpoint, CHECKPOINT, "checkpoint")
 
     def boundary(self, run, state, data):
         upgrade = pending(run)

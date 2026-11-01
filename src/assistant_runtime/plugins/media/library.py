@@ -157,6 +157,10 @@ class Library:
         ).fetchone()
 
     async def preview(self, args, owner):
+        from .tool_contracts import CHANGES
+        from assistant_runtime.mcp.contracts import validate
+
+        validate(args.get("changes"), CHANGES, "changes")
         if args.get("location", "cloud") == "local":
             from .local_library import LocalLibrary
 
@@ -462,6 +466,10 @@ class Library:
             raise ValueError("Collection identity required")
         row = self.db.execute("SELECT revision,data FROM media_collections WHERE id=?", (name,)).fetchone()
         if "definition" in args:
+            from .tool_contracts import COLLECTION
+            from assistant_runtime.mcp.contracts import validate
+
+            validate(args["definition"], COLLECTION, "definition")
             if row and json.loads(row[1]).get("target") != args.get("target"):
                 raise ValueError("Collection belongs to another target")
             value = args["definition"]

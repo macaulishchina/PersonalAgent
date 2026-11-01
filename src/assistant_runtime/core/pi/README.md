@@ -120,63 +120,61 @@ The web projection also suppresses empty assistant reply records from existing
 history without deleting evidence, media, tool activity or the turn's failure notice.
 The response indicator continues to follow execution state while no text is available.
 
-## Native tool discovery and bounded declarations
+## 统一工具调用边界
 
-All entrances (foreground, background jobs, public execution/slim) use this adapter's
-MCP mapping: allowed tools have native Pi `deferred` exposure, disabled/disallowed tools
-remain `hidden`. The adapter composes Pi's public `createToolSearchExtension` factory
-as the single `tool_search` registration. Pi still owns metadata ranking, MCP readiness
-and tool activation; there is no separate discovery service, model router or agent loop.
-Known full names (`mcp__server__tool`) and qualified names (`server.tool_name`) resolve
-exactly, including tools already loaded. A unique short name such as `capture_image`
-takes priority over metadata ranking; names shared by multiple servers require
-qualification rather than silently selecting one. Unknown qualified names do not
-fall through to a different server. Natural-language queries retain Pi's native
-English metadata search. Neither path executes a business operation.
-The native compact server directory is bounded by Pi and does not include full schemas.
+主对话、后台任务和 slim 复用相同 Pi 扩展与调用管线。登记目录、可调用集合和
+模型可见定义分别维护：授权且已就绪的工具保持 active，`prepareLoadout.hiddenDeclarations`
+隐藏暂不需要的声明。已知准确名称的工具无需先搜索、失败再重发。隐藏声明不撤销权限；
+隐藏权限仍通过 MCP exposure、执行白名单和调用钩子共同约束。
 
-`model_api.max_loaded_tools=12` (1..64) bounds discovered MCP definitions per model
-request, separately from the small native execution/clarification tools. Search batches
-cannot exceed this limit. Newly loaded and recently used tools take priority; eviction
-occurs at the next model boundary, after the preceding parallel tool batch settles.
-Evicted tools remain registered and searchable. A new engine session starts fresh;
-resume does not eagerly restore every previously used MCP definition. A missing match
-or disconnected server is an explicit tool result, never an excuse to expose all tools.
+`tool_search` 复用 Pi 元数据排序。准确名称逐个解析，支持完整名称、来源限定名称和
+唯一短名；多个不同工具不是歧义，真正同名才返回来源候选。已显示定义仍能查询。
+Pi 注册时提供的原始来源和工具名保留为身份映射；权限与原始定义使用该映射，
+不从下划线化或带碰撞后缀的规范名反推原名。
+带 namespace 或明确来源的查询只等待对应原生 MCP 连接；通用搜索可等待所有相关源。
+原生分词不擅长中文，因此无匹配时提供有界来源目录，使用 namespace 浏览，不臆造工具。
+尚未登记的工具不能依据历史定义执行；目录无匹配不证明连接成功或服务没有工具，
+连接诊断仍以 Pi 原生 MCP 状态和日志为准，不从工具错误文字猜测连接状态。
 
-Pi's public `context_with_system` hook projects only current tool declarations into
-requests, because durable historical schema patches would otherwise keep evicted
-schemas in context. User messages, tool calls/results and system sections are retained;
-the original transcript remains intact. Existing schema metadata is preserved. Native
-accounts and Responses routes receive the same provider-neutral projection. Tool search
-itself uses ordinary function calling; it requires no vendor-specific tool-search API.
+配置归 `model_api`：
 
-Explicit execution `tools` remains the authorization ceiling. Discovery is a host-added
-infrastructure tool only when that scope contains MCP capabilities. It cannot search
-hidden tools or activate another server outside the captured scope. Denied tools are
-hidden before discovery, and every actual call retains existing caller identity, task
-scope, approvals and policy validation. Pure native-file execution/empty tool selections
-do not gain MCP access. Tool searches do not execute business operations, automatically
-retry tools, or grant approvals. Model turns still consume the same shared AI allowance.
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `max_loaded_tools` | 12 | 当前可见 MCP 定义数量，范围 1..64 |
+| `tool_schema_max_bytes` | 65536 | 当前 MCP 声明 JSON UTF-8 字节预算，范围 1024..1048576 |
+| `invalid_tool_call_limit` | 3 | 同轮同一无效调用的最大次数，范围 2..32 |
 
-`tools.updated` events and sanitized logs record the active tool names, catalog size,
-evicted names and declared schema character count (not estimated tokens). No tool
-arguments, results or credentials enter those logs. This bounds tool-definition growth;
-ordinary task data still needs pagination, file references and native compaction.
+定义按最近选择/使用维护，在工具批次完成后的模型边界淘汰。单个超预算定义完整独占，
+记录 oversized；不截断 Schema。淘汰不影响可调用性。历史 schema patch 在模型投影中
+替换为当前登记定义，保留调用结果和原始会话证据；重启从冷目录恢复，不恢复全部旧定义。
+基础文件和澄清工具不计入 MCP 定义预算；普通业务数据仍需分页、结果文件和 Pi 压缩。
 
-The live session keeps its bounded warm loadout across user turns. Before a new turn,
-removed/hidden/out-of-scope identities are excluded; process restart and session resume
-start cold. This avoids searching again for recently used tools without accumulating
-their schemas. The same behavior applies to conversations, background jobs and slim.
+`tool_lifecycle.ts` 只观察和约束 Pi 原生管线，不执行第二套循环。开始事件不代表业务
+已经发出。原生参数校验/授权拒绝为 not_dispatched；进入工具处理后没有充分证据的
+异常为 unknown。内部插件可通过公共 `ToolFailure/ToolOutcome` 提供明确阶段、字段、
+恢复条件和回执。IPC 与 MCP 保留这些信息；第三方自报元数据不冒充内部证据。
+成功返回工具结果也不代表异步业务完成，仍以业务操作回执为准。
 
-A direct call to an undeclared tool can be rejected by Pi before any execution. Only
-Pi's exact missing-tool result with no execution duration is eligible for recovery.
-If that exact identity is registered and permitted, the adapter loads it and preserves
-the error while explaining that no operation ran; otherwise it requests exact discovery
-through `tool_search`, which owns MCP readiness. It never invokes or retries the operation.
-Real tool failures, unknown outcomes and denied tools are not relabeled as loading errors.
-Discovery logs record session, lookup mode and permitted tool names, without raw queries,
-arguments, schemas or credentials. These distinguish exact/metadata/ambiguous/unavailable
-lookup and loading after a missing-tool error.
+相同名称、参数指纹、定义和权限版本的确定未执行错误在同一用户轮中缓存，再次出现
+不访问后端，默认累计 3 次终止该轮。修改参数或定义后可重新校验。查询成功、普通轮询
+不计数。已经返回 unknown 的相同调用在本轮不重复派发，要求查询回执或交给用户处理。
+新用户轮重置局部重复检测；跨轮/重启仍由原有执行记录和业务回执判断是否可继续，
+不把新轮当成外部写操作的自动重放许可。不提供自动模型回退或付费重试。
+
+可信内置只读工具可使用 Pi 并行批次；写操作及第三方工具使用顺序执行。权限、
+幂等性和跨任务资源锁仍归各自所有者；第三方 readOnlyHint 不授予并行/重试权限。
+扩展成功加载后必须通过 RPC 命令注册确认；初始化失败不能降级到未受约束的 Pi。
+
+执行记录保存定义/权限版本、调用 ID、阶段、派发证据、重复次数和耗时。validation_ms
+是调用开始到本地校验/授权钩子的时间，waiting_ms 是后续原生准备钩子的等待时间，
+duration_ms 是 Pi 报告的处理器耗时（包含适配/传输），result_processing_ms 是余下结果处理。
+它们不假装能拆解第三方服务内部耗时。默认日志不新增原始参数、正文、图片或密钥。
+主对话和后台过程分别显示未执行、被禁止、调用失败和结果待确认；错误详情默认折叠。
+
+验收使用真实锁定 Pi＋本地合成服务：直接隐藏调用一次、来源/多名称/中文目录、
+有界定义及淘汰、参数纠正、IPC/MCP 结构化错误、未知操作不重发、无效循环收敛及
+权限加载失败，以及慢服务隔离、带连字符的工具身份和原生读并行/写顺序批次。
+它们不代表真实供应商或设备验收；部署单独安排。
 
 ## Native prompt-cache reuse and timings
 
@@ -241,7 +239,7 @@ uses Pi's native direct-server readiness before the first request. Only permitte
 are candidates. Their combined JSON declarations must fit 16 KiB; missing/hidden tools or
 larger declarations keep discovery behavior. Larger and implicit inventories stay deferred.
 Preloading declares tools; it never invokes them or grants approvals. `tools.updated` reports
-schema size and sanitized discovery logs report `preloaded` / `preload_deferred`; declaration order
+schema size and the current visible/callable counts; declaration order
 is stable. Tool removal and authorization always take priority over prefix reuse.
 
 Cache counts come from Pi's provider usage. The pinned SDK normalizes missing cache counts

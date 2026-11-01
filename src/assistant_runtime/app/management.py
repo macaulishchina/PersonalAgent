@@ -190,6 +190,8 @@ class BusinessProcess:
         async with asyncio.timeout(
             max(120, self.settings.startup_seconds)
             if payload.get("command") == "configuration-update"
+            else 3690
+            if payload.get("command") == "mcp" and payload.get("action") == "verify_draft"
             else 10
         ):
             reader, writer = await connect(self.settings.root / "state/control.sock")

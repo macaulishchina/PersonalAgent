@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from assistant_runtime.core.integrations.settings import IntegrationSettings, definition, name
+from assistant_runtime.core.integrations.settings import IntegrationSettings, name
 
 
 class McpRegistry:
@@ -85,12 +85,18 @@ class McpRegistry:
             self.data = data
 
     def configure(self, ident, changes, revision):
+        from .tool_contracts import CHANGES
+        from assistant_runtime.mcp.contracts import validate
+
+        validate(changes, CHANGES, "changes")
         name(ident)
         if not isinstance(changes, dict):
             raise ValueError("MCP changes must be an object")
         data = self.snapshot()
         previous = data["servers"].get(ident)
-        spec = definition({**(previous["definition"] if previous else {}), **changes})
+        from .configuration import updated_definition
+
+        spec = updated_definition(previous["definition"] if previous else None, changes)
         if previous and previous["definition"] == spec:
             return self.get(ident)
         if type(revision) is not int or revision != self.revision:
@@ -116,32 +122,11 @@ class McpRegistry:
         self.save(data)
 
     def public(self, ident):
-        row = self.get(ident)
-        spec = row["definition"]
-        t = spec["transport"]
-        if t["type"] == "stdio":
-            transport = {
-                "type": "stdio",
-                "command": t["command"],
-                "argument_count": len(t["args"]),
-                "cwd": t.get("cwd") or str(self.work / ident),
-                "env_names": sorted(t["env"]),
-                "env_vars": t["env_vars"],
-            }
-        else:
-            from urllib.parse import urlsplit
+        from .configuration import public_entry
 
-            parsed = urlsplit(t["url"])
-            transport = {
-                "type": "http",
-                "origin": parsed.scheme + "://" + parsed.netloc,
-                "header_names": sorted(t["headers"]),
-                "env_headers": t["env_headers"],
-                "bearer_token_env": t.get("bearer_token_env"),
-            }
-        return {
-            "name": ident,
-            "runtime_name": "external_" + ident,
-            **row,
-            "definition": {**spec, "transport": transport},
-        }
+        item = public_entry(ident, self.get(ident))
+        if item["definition"]["transport"]["type"] == "stdio":
+            item["definition"]["transport"]["cwd"] = item["definition"]["transport"].get("cwd") or str(
+                self.work / ident
+            )
+        return item

@@ -1,4 +1,5 @@
 import { registerControlled } from "./controlled_tools.ts";
+import { registerToolLifecycle } from "./tool_lifecycle.ts";
 import { registerDiscovery } from "./discovery.ts";
 import { Type } from "typebox";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -7,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
+  createMcpExtension,
   createPowerShellToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { windowsShellOperations } from "../../platforms/windows_shell.mjs";
@@ -31,9 +33,36 @@ function loadPolicy(): PolicySpec {
   const raw = process.env.ASSISTANT_PI_POLICY;
   if (!raw) return {};
   try {
-    return JSON.parse(raw) as PolicySpec;
+    const value = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error("Invalid policy");
+    if (
+      value.allowed_tools != null &&
+      (!Array.isArray(value.allowed_tools) ||
+        value.allowed_tools.some((n: any) => typeof n !== "string"))
+    )
+      throw new Error("Invalid allowed tools");
+    const record = (v: any) => v && typeof v === "object" && !Array.isArray(v);
+    const names = (v: any) =>
+      Array.isArray(v) && v.every((n: any) => typeof n === "string");
+    if (value.mcp_policies != null && !record(value.mcp_policies))
+      throw new Error("Invalid MCP policies");
+    for (const rule of Object.values(value.mcp_policies || {}) as any[]) {
+      if (
+        !record(rule) ||
+        ![undefined, "approve", "reject"].includes(rule.approval) ||
+        (rule.allow_tools != null && !names(rule.allow_tools)) ||
+        (rule.deny_tools != null && !names(rule.deny_tools)) ||
+        (rule.tool_approvals != null && !record(rule.tool_approvals)) ||
+        Object.values(rule.tool_approvals || {}).some(
+          (v) => !["approve", "reject"].includes(v as string),
+        )
+      )
+        throw new Error("Invalid MCP policy");
+    }
+    return value as PolicySpec;
   } catch {
-    return {};
+    throw new Error("Invalid execution tool policy; refusing to start");
   }
 }
 
@@ -52,6 +81,41 @@ export default function (pi: any) {
     );
   }
   const policy = loadPolicy();
+  const internal = JSON.parse(
+    process.env.ASSISTANT_INTERNAL_MCP_SERVERS || "[]",
+  );
+  // Pi assigns canonical names (including collision suffixes). Keep its original
+  // registration identity; never reverse-guess it from the sanitized name.
+  const origins = new Map<string, { server: string; tool: string }>();
+  const origin = (name: string) => origins.get(name);
+  const lifecycle = registerToolLifecycle(
+    pi,
+    policy,
+    Number(process.env.ASSISTANT_INVALID_TOOL_CALL_LIMIT || 3),
+    internal,
+    origin,
+  );
+  if (!process.env.ASSISTANT_CONTROL_TOKEN) {
+    createMcpExtension()({
+      ...pi,
+      registerTool: (tool: any) => {
+        const slash = tool.label?.indexOf("/") ?? -1;
+        const server =
+          tool.name.startsWith("mcp__") && slash > 0
+            ? tool.label.slice(0, slash)
+            : undefined;
+        if (server)
+          origins.set(tool.name, { server, tool: tool.label.slice(slash + 1) });
+        pi.registerTool({
+          ...tool,
+          executionMode:
+            internal.includes(server) && tool.annotations?.readOnlyHint === true
+              ? "parallel"
+              : "sequential",
+        });
+      },
+    });
+  }
   const discoveryEnabled = process.env.ASSISTANT_PI_DISCOVERY === "1";
   registerDiscovery(
     pi,
@@ -59,6 +123,8 @@ export default function (pi: any) {
     discoveryEnabled,
     Number(process.env.ASSISTANT_MAX_LOADED_TOOLS || 12),
     process.env.ASSISTANT_STABLE_EXECUTION_PROMPT === "1",
+    Number(process.env.ASSISTANT_TOOL_SCHEMA_BYTES || 65536),
+    origin,
   );
   const resultLimit = Number(
     process.env.ASSISTANT_TOOL_RESULT_MAX_CHARS || 6000,
@@ -110,6 +176,16 @@ export default function (pi: any) {
           ...event.content.filter((block: any) => block.type !== "text"),
         ],
         isError: event.isError,
+        // Only owner metadata survives the preview; full structured output is in the file.
+        details: event.details,
+        structuredContent: event.structuredContent?.tool_outcome
+          ? { tool_outcome: event.structuredContent.tool_outcome }
+          : event.structuredContent?.structuredContent?.tool_outcome
+            ? {
+                tool_outcome:
+                  event.structuredContent.structuredContent.tool_outcome,
+              }
+            : undefined,
       };
     } catch {
       // Storage failure must not hide evidence or misreport a tool's business outcome.
@@ -144,10 +220,10 @@ export default function (pi: any) {
                 signal: options.signal,
                 headers: {
                   "Content-Type": "application/json",
-                  Authorization:
-                    "Bearer " + process.env.PA_EXECUTION_TOKEN,
+                  Authorization: "Bearer " + process.env.PA_EXECUTION_TOKEN,
                   ...provider.headers,
-                  "x-assistant-control": process.env.ASSISTANT_CONTROL_TOKEN || "",
+                  "x-assistant-control":
+                    process.env.ASSISTANT_CONTROL_TOKEN || "",
                 },
                 body: JSON.stringify(payload),
               });
@@ -363,58 +439,10 @@ export default function (pi: any) {
     },
   });
 
-  pi.on("tool_call", async (event: any, ctx: any) => {
-    const name: string = event.toolName || "";
-    if (
-      Array.isArray(policy.allowed_tools) &&
-      !policy.allowed_tools.includes(name) &&
-      !(name === "tool_search" && discoveryEnabled)
-    ) {
-      return {
-        block: true,
-        reason: `Tool ${name} is outside this execution scope`,
-      };
-    }
-    if (name.startsWith("mcp__")) {
-      const rest = name.slice(5);
-      const sep = rest.indexOf("__");
-      if (sep > 0) {
-        const server = rest.slice(0, sep);
-        const tool = rest.slice(sep + 2);
-        const serverPolicy = policy.mcp_policies?.[server];
-        if (serverPolicy) {
-          const denied = new Set(serverPolicy.deny_tools || []);
-          const allowed = serverPolicy.allow_tools;
-          const toolApproval =
-            serverPolicy.tool_approvals?.[tool] ||
-            serverPolicy.approval ||
-            "approve";
-          if (
-            denied.has(tool) ||
-            (Array.isArray(allowed) && !allowed.includes(tool)) ||
-            toolApproval === "reject"
-          ) {
-            return {
-              block: true,
-              reason: `Tool ${tool} is disabled by policy`,
-            };
-          }
-          if (toolApproval === "prompt") {
-            const reply = await ctx.ui.input(
-              "__assistant_rpc__",
-              JSON.stringify({
-                kind: "approval.requested",
-                data: { server, tool, arguments: event.input },
-              }),
-            );
-            const parsed = reply ? JSON.parse(reply) : {};
-            if (parsed?.decision !== "approve") {
-              return { block: true, reason: `Tool ${tool} was not approved` };
-            }
-          }
-        }
-      }
-    }
-    return undefined;
+  pi.registerCommand("assistant_tool_contract_v1", {
+    description: "Internal tool contract readiness marker",
+    handler: async () => {},
   });
+
+  pi.on("tool_call", lifecycle.ready);
 }

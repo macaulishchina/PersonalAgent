@@ -13,6 +13,10 @@ Include `hid-buttons.toml` from the configuration entry and enable `hid_buttons`
 `plugins`. See `config.example/hid-buttons.toml`. Each mapping requires vendor ID,
 product ID, serial, exact report bytes (including report ID) and `action="wake"`.
 At most eight devices, one mapping per identity; debounce defaults to 500 ms.
+The plugin owns `configuration.json`: the management page renders named mappings,
+hexadecimal identities, the exact report and debounce from that schema. Initialization
+and runtime share its defaults; existing `hid_buttons` TOML fields remain unchanged.
+This is an explicit hardware-specific mapping, never a default for other USB devices.
 The plugin resolves sysfs identity on each connection, never a fixed hidraw number.
 Zero or multiple matches fail closed. It opens only read-only, nonblocking descriptors;
 no feature/output reports, audio changes or grabs. Volume and mute reports are ignored.

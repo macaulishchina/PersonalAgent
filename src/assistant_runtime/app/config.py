@@ -1,6 +1,7 @@
 """Instance configuration. Hardware identities never belong in code defaults."""
 
 from assistant_runtime.api.configuration import configuration_default
+from assistant_runtime.core.plugin_catalog import metadata
 from .presets import default_plugins
 from .configuration_fields import ModuleSettings
 
@@ -110,7 +111,7 @@ class Config(ModuleSettings):
     model_api: dict = field(default_factory=dict)
     media: dict = field(default_factory=dict)
     search: dict = field(default_factory=dict)
-    hid_buttons: dict = field(default_factory=lambda: configuration_default(__file__, "hid_buttons"))
+    hid_buttons: dict = field(default_factory=lambda: configuration_default(metadata("hid_buttons")))
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     execution: dict = field(default_factory=dict)

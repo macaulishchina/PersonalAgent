@@ -277,8 +277,7 @@ class MemoryPlugin:
                     await self.provider.start()
                     await self.refresh()
                     self.ready = True
-                    self.context.error = None
-                    self.context.state = "ready"
+                    self.context.set_health("ready")
                 # Retry failed physical deletes; tombstones already exclude recall.
                 for (ident,) in self.store.db.execute(
                     "SELECT id FROM memory_items WHERE deleted=1"
@@ -301,8 +300,7 @@ class MemoryPlugin:
                         self.current = asyncio.create_task(self.process_job(row))
                         try:
                             await self.current
-                            self.context.error = None
-                            self.context.state = "ready"
+                            self.context.set_health("ready")
                         except asyncio.CancelledError:
                             if asyncio.current_task().cancelling():
                                 raise
@@ -317,8 +315,9 @@ class MemoryPlugin:
                                 (str(exc)[:200], row[0]),
                             )
                             self.store.db.commit()
-                            self.context.error = str(exc)[:200]
-                            self.context.state = "degraded"
+                            self.context.set_health(
+                                "degraded", "memory_processing_failed: " + type(exc).__name__
+                            )
                             attempts = self.store.db.execute(
                                 "SELECT attempts FROM memory_jobs WHERE id=?", (row[0],)
                             ).fetchone()[0]
@@ -329,8 +328,7 @@ class MemoryPlugin:
                 raise
             except Exception as exc:
                 self.ready = False
-                self.context.state = "degraded"
-                self.context.error = str(exc)[:200]
+                self.context.set_health("degraded", "memory_unavailable: " + type(exc).__name__)
             finally:
                 self.maintenance_busy = False
             await asyncio.sleep(5)

@@ -1,6 +1,8 @@
 """Durable task management. Scheduling callbacks never execute model work inline."""
 
+from assistant_runtime.mcp.contracts import validate as validate_tool
 from assistant_runtime.api.lifecycle import admits_work
+from assistant_runtime.api.tool_calls import ToolFailure, ToolOutcome, invalid_arguments
 
 from .declaration import DECLARATION
 
@@ -23,6 +25,7 @@ from assistant_runtime.core.tasks.event_inbox import EventInbox, subscription, v
 from assistant_runtime.core.tasks.trace import TaskTrace
 from assistant_runtime.core.tasks.selection import ModelPolicy
 from assistant_runtime.core.tasks.model_advice import select_execution
+from .tool_contracts import EXECUTION, TRIGGER, CHANGES, merge_patch
 from assistant_runtime.core.tasks.model_review import ModelReview, assessment, evidence
 from assistant_runtime.core.tasks.upgrades import (
     ModelUpgrades,
@@ -377,6 +380,15 @@ class TasksPlugin:
         return True
 
     async def validate_spec(self, value, caller=None, *, preserved_execution=None):
+        try:
+            return await self._validate_spec(value, caller, preserved_execution=preserved_execution)
+        except ToolFailure:
+            raise
+        except (ValueError, KeyError) as exc:
+            # Validation completes before any definition/run is created or changed.
+            raise invalid_arguments(str(exc), "spec") from None
+
+    async def _validate_spec(self, value, caller=None, *, preserved_execution=None):
         allowed = {
             "title",
             "prompt",
@@ -428,8 +440,7 @@ class TasksPlugin:
         s["workspace"] = str(workspace)
         tr = dict(s["trigger"]) if isinstance(s["trigger"], dict) else s["trigger"]
         s["trigger"] = tr
-        if not isinstance(tr, dict) or set(tr) - {"kind", "at", "seconds", "expression", "timezone", "event"}:
-            raise ValueError("Invalid task trigger")
+        validate_tool(tr, TRIGGER, "trigger")
         tr.setdefault("kind", "immediate")
         trigger(tr, self.settings.timezone, time.time())
         if tr["kind"] == "event":
@@ -472,19 +483,9 @@ class TasksPlugin:
         if preserved_execution is not None:
             s["execution"] = json.loads(json.dumps(preserved_execution))
             return s
-        if not isinstance(requested, dict) or set(requested) - {
-            "model",
-            "reasoning_effort",
-            "reason",
-            "kind",
-            "device_id",
-            "recommendation",
-            "selection",
-            "assessment",
-            "model_source",
-            "effort_source",
-        }:
-            raise ValueError("Invalid task execution")
+        if not isinstance(requested, dict):
+            validate_tool(requested, EXECUTION, "execution")
+        validate_tool({k: v for k, v in requested.items() if k != "selection"}, EXECUTION, "execution")
         if requested.get("kind", "agent") not in {"agent", "reminder", "device_query"}:
             raise ValueError("Unknown execution kind")
         if requested.get("kind") == "device_query":
@@ -815,22 +816,60 @@ class TasksPlugin:
             raise ValueError("Archived/terminated tasks cannot be reactivated; create an explicit new task")
         if a == "update":
             if args.get("revision") != d["revision"]:
-                raise ValueError("Task changed; read latest revision")
+                raise ToolFailure(
+                    ToolOutcome(
+                        "revision_conflict",
+                        "validation",
+                        "not_dispatched",
+                        "failed",
+                        "Task changed; read latest revision",
+                        field="revision",
+                        next_action="refresh_state",
+                    )
+                )
+            validate_tool(args["changes"], CHANGES, "changes")
+            original_changes = args["changes"]
             if "execution" in args["changes"]:
                 replacement = args["changes"]["execution"]
                 if not isinstance(replacement, dict):
                     raise ValueError("Invalid task execution")
-                replacement = dict(replacement)
                 old_execution = d["spec"]["execution"]
+                replacement = merge_patch(old_execution, replacement)
+                replacement.pop("selection", None)
+                # A recommendation is a model selector. The persisted concrete model
+                # is its resolved value, not a second explicit choice in this patch.
+                patch = original_changes["execution"]
+                if patch.get("recommendation") and patch["recommendation"] != old_execution.get(
+                    "recommendation"
+                ):
+                    if old_execution.get("model_source") == "user" and patch.get("model_source") != "user":
+                        raise invalid_arguments(
+                            "Changing a user choice requires explicit user-directed replacement",
+                            "changes.execution.model_source",
+                        )
+                    if "model" not in patch:
+                        replacement.pop("model", None)
+                elif (
+                    "model" in patch
+                    and "recommendation" not in patch
+                    and patch["model"] != old_execution.get("model")
+                ):
+                    replacement.pop("recommendation", None)
                 for key, source in (("model", "model_source"), ("reasoning_effort", "effort_source")):
-                    if old_execution.get(source) == "user" and replacement.get(source) != "user":
-                        if replacement.get(key) not in (None, "auto", old_execution[key]):
-                            raise ValueError(
-                                "Changing a user choice requires explicit user-directed replacement"
+                    if (
+                        old_execution.get(source) == "user"
+                        and original_changes["execution"].get(source) != "user"
+                    ):
+                        if original_changes["execution"].get(key) not in (None, "auto", old_execution[key]):
+                            raise invalid_arguments(
+                                "Changing a user choice requires explicit user-directed replacement",
+                                "changes.execution." + source,
                             )
                         replacement.update({key: old_execution[key], source: "user"})
                 args = {**args, "changes": {**args["changes"], "execution": replacement}}
-            combined = {**d["spec"], **args["changes"]}
+            combined = merge_patch(d["spec"], original_changes)
+            if "execution" in args["changes"]:
+                combined["execution"] = replacement
             combined.pop("depth", None)
             if {"trigger", "long_term"}.intersection(args["changes"]) and "auto_archive" not in args[
                 "changes"
@@ -847,7 +886,17 @@ class TasksPlugin:
                 spec["execution"] = d["spec"]["execution"]
             event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
             if self.repo.definition(d["id"])["revision"] != d["revision"]:
-                raise ValueError("Task changed; read latest revision")
+                raise ToolFailure(
+                    ToolOutcome(
+                        "revision_conflict",
+                        "validation",
+                        "not_dispatched",
+                        "failed",
+                        "Task changed; read latest revision",
+                        field="revision",
+                        next_action="refresh_state",
+                    )
+                )
             # Editing a child must preserve its lineage for recursive termination.
             for key in ("parent_id", "depth"):
                 if key in d["spec"]:

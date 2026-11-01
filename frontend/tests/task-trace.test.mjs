@@ -59,13 +59,41 @@ test("out of order arrival keeps completed phase and avoids negative duration", 
 test("labels preserve unknown tools and bounded data", () => {
   assert.equal(stepTitle(traceSteps([event(1, "a", "started")])[0]), "lookup");
   assert.equal(
-    stepTitle(
-      traceSteps([event(1, "a", "started", { kind: "command" })])[0],
-    ),
+    stepTitle(traceSteps([event(1, "a", "started", { kind: "command" })])[0]),
     "执行命令",
   );
   const items = Array.from({ length: 510 }, (_, i) =>
     event(i + 1, String(i), "started"),
   );
   assert.equal(mergeTrace([], items).length, 500);
+});
+
+test("dispatch evidence distinguishes invalid, denied and uncertain operations", () => {
+  const cases = [
+    [
+      {
+        status: "failed",
+        dispatch: "not_dispatched",
+        error_code: "invalid_arguments",
+      },
+      "未执行",
+    ],
+    [
+      {
+        status: "failed",
+        dispatch: "not_dispatched",
+        error_code: "tool_permission_denied",
+      },
+      "被禁止",
+    ],
+    [
+      { status: "failed", dispatch: "dispatched", result_state: "unknown" },
+      "结果待确认",
+    ],
+  ];
+  for (const [metadata, label] of cases) {
+    const [step] = traceSteps([event(1, "call", "completed", metadata)]);
+    assert.equal(stepState(step, "completed").label, label);
+    assert.notEqual(stepState(step, "completed").tone, "error");
+  }
 });

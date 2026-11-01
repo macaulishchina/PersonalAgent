@@ -31,7 +31,7 @@ function renderTaskDefaults(field) {
     "auto",
     ...Object.keys(valueAt(["model_api", "entries"], {})),
   ];
-  delete copy.schema.properties.model["x-reference"];
+  copy.schema.properties.model["x-reference"] = "model_api.entries";
   copy.schema.properties.model["x-labels"] = { auto: "跟随主对话模型" };
   copy.schema.properties.reasoning_effort = taskEffortSchema(
     copy.schema.properties.reasoning_effort,
@@ -43,7 +43,7 @@ function renderTaskDefaults(field) {
   root.append(
     node(
       "p",
-      `主对话：${main} · ${valueAt(["main_reasoning_effort"], "auto")}。未配置任务模型时使用这一绑定；已保存任务的具体选型保持不变。`,
+      `主对话：${modelDisplayName(main)} · ${valueAt(["main_reasoning_effort"], "auto")}。未配置任务模型时使用这一绑定；已保存任务的具体选型保持不变。`,
       "inline-note",
     ),
     drawField(copy),
@@ -79,7 +79,7 @@ function renderTaskPolicy(field) {
       node("h4", item.name || "未命名推荐"),
       node(
         "span",
-        `${item.model || "未选择模型"} · ${item.reasoning_effort || "auto"}`,
+        `${item.model ? modelDisplayName(item.model) : "未选择模型"} · ${item.reasoning_effort || "auto"}`,
         "badge",
       ),
     );
@@ -169,6 +169,7 @@ function renderTaskRecommendation(field) {
   root.addEventListener(
     "input",
     (event) => {
+      if (event.target.tagName !== "SELECT") return;
       const row = event.target.closest("[data-field-path]");
       if (row?.dataset.fieldPath !== key([...field.path, "model"])) return;
       const supported =

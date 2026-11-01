@@ -101,13 +101,7 @@ def to_pi_mcp_json(mcp_servers, *, preload=False, allowed=None, limit=12):
                         tool_exposure[t] = "deferred"
         if spec.get("default_tools_approval_mode") == "reject":
             entry["exposure"] = "hidden"
-            tool_exposure = {
-                t: "deferred"
-                for t, rule in rules.items()
-                if rule.get("approval_mode") in {"approve", "prompt"}
-                and t not in disabled_tools
-                and (enabled_tools is None or t in enabled_tools)
-            }
+            tool_exposure = {}
         for t in disabled_tools:
             tool_exposure[t] = "hidden"
         if eager:

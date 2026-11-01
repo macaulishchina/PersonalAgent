@@ -452,8 +452,6 @@ class ExecutionService:
             self.records.update(
                 ident, "waiting_user", questions=data.get("questions", []), question_id=event["id"]
             )
-        elif kind == "approval.requested" and not external:
-            await self.client.respond(event["id"], {"decision": "decline"})
         elif "id" in event and not external:
             await self.client.send(
                 {"id": event["id"], "error": {"code": -32601, "message": "Unsupported execution request"}}

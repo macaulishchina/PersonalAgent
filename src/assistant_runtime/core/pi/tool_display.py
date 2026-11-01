@@ -42,6 +42,21 @@ def tool_display(item):
     server, tool = item.get("server"), item.get("tool")
     if not isinstance(server, str) or not isinstance(tool, str):
         return None
+    outcome = (
+        item.get("tool_outcome")
+        or mapping(mapping(item.get("result")).get("details")).get("tool_outcome")
+        or {}
+    )
+    if outcome.get("outcome") in {"failed", "unknown", "cancelled"}:
+        return {
+            "kind": "tool",
+            "outcome": "failed",
+            "error_code": short(outcome.get("code")),
+            "dispatch": short(outcome.get("dispatch")),
+            "result_state": short(outcome.get("outcome")),
+            "stage": short(outcome.get("stage")),
+            "field": short(outcome.get("field")),
+        }
     if (server, tool) not in {("tasks", "create_task"), ("tasks", "get_task"), ("search", "fetch_webpage")}:
         return None
     result = mapping(item.get("result"))

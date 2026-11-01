@@ -100,9 +100,10 @@ class ConfigurationSpec:
     requires: tuple[str, ...] = ()
 
 
-def configuration_default(owner_file, key):
+def configuration_default(owner_file, key=None):
     """A declared default is shared by native settings and the operator interface."""
-    return deepcopy(_description(owner_file)["schema"]["properties"][key]["default"])
+    schema = _description(owner_file)["schema"]
+    return deepcopy(schema["default"] if key is None else schema["properties"][key]["default"])
 
 
 @lru_cache(maxsize=64)

@@ -31,7 +31,7 @@ class Admission:
         operations = self.service.records.operations
         if state is None:
             return operations.begin(ident, kind, native_id, **details)
-        operations.settle(ident, kind, native_id, state)
+        operations.settle(ident, kind, native_id, state, **details)
 
     def inputs_consumed(self, session, turn, model_request, identities):
         ident = self.service.sessions.get(session)

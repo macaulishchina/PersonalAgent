@@ -11,7 +11,7 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    plugin_manifest(__file__),
+    manifest=plugin_manifest(__file__),
     internal_factory=build,
     provides=(FileRequest,),
     configuration=configuration_spec(__file__),

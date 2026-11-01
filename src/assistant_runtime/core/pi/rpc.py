@@ -129,6 +129,15 @@ class PiSessionWorker:
             env["ASSISTANT_RUNTIME_PYTHON"] = sys.executable
         env["ASSISTANT_TOOL_RESULT_MAX_CHARS"] = str(self.parent.settings.tool_result_max_chars)
         env["ASSISTANT_MAX_LOADED_TOOLS"] = str(self.parent.settings.max_loaded_tools)
+        env["ASSISTANT_TOOL_SCHEMA_BYTES"] = str(self.parent.settings.tool_schema_max_bytes)
+        env["ASSISTANT_INVALID_TOOL_CALL_LIMIT"] = str(self.parent.settings.invalid_tool_call_limit)
+        env["ASSISTANT_INTERNAL_MCP_SERVERS"] = json.dumps(
+            [
+                name
+                for name, spec in self.meta.get("mcp_servers", {}).items()
+                if spec.get("args", [])[:2] == ["-m", "assistant_runtime.mcp"]
+            ]
+        )
         env["ASSISTANT_STABLE_EXECUTION_PROMPT"] = "1" if self.meta.get("stable_execution_prompt") else "0"
         env["ASSISTANT_PI_DISCOVERY"] = "1" if self.meta.get("mcp_enabled", True) else "0"
         env["ASSISTANT_PI_MODELS"] = str(agent_dir / "models.json")
@@ -167,7 +176,7 @@ class PiSessionWorker:
         # -ne disables built-ins too. Retain the pinned engine's capabilities
         # explicitly without discovering project or user-installed extensions.
         # Discovery composes Pi's public tool-search factory in our extension.
-        for extension in () if self.meta.get("controlled_context") else ("mcp", "codemode", "llama.cpp"):
+        for extension in () if self.meta.get("controlled_context") else ("codemode", "llama.cpp"):
             args.extend(["-e", "builtin:" + extension])
         for selected_path in self.meta.get("skill_paths", self.parent.skill_paths):
             path = Path(selected_path)
@@ -192,6 +201,18 @@ class PiSessionWorker:
             asyncio.create_task(self._read_stdout()),
             asyncio.create_task(self._read_stderr()),
         ]
+        # Pi can continue after an extension load error. Never let that degrade
+        # policy enforcement into an unrestricted default loop.
+        try:
+            readiness = await self.command({"type": "get_commands"})
+            ready = any(
+                row.get("name") == "assistant_tool_contract_v1" for row in readiness.get("commands", [])
+            )
+        except (RpcError, TimeoutError):
+            ready = False
+        if not ready:
+            await self.close()
+            raise RpcError("Tool contract extension failed to initialize; execution refused")
         if self.meta.get("injected_items"):
             encoded = base64.b64encode(
                 json.dumps(self.meta["injected_items"], ensure_ascii=False).encode("utf-8")
@@ -258,6 +279,21 @@ class PiSessionWorker:
             method = msg.get("method")
             if method == "notify":
                 text = str(msg.get("message", ""))
+                if text.startswith("__assistant_tool_stop__:"):
+                    self.turn_error = text.split(":", 1)[1]
+                    self.tool_stop = True
+                if text.startswith("__assistant_tool_outcome__:"):
+                    outcome = json.loads(text.split(":", 1)[1])
+                    log.info(
+                        "Pi tool outcome session=%s call=%s code=%s dispatch=%s preparation_ms=%s execution_ms=%s repeats=%s",
+                        self.execution_session_id,
+                        outcome.get("call_id"),
+                        outcome.get("code"),
+                        outcome.get("dispatch"),
+                        outcome.get("preparation_ms"),
+                        outcome.get("duration_ms"),
+                        outcome.get("repeats", 0),
+                    )
                 if text.startswith("__assistant_discovery__:"):
                     discovery = json.loads(text.split(":", 1)[1])
                     log.info(
@@ -419,12 +455,39 @@ class PiSessionWorker:
                     }
                 )
         elif mtype == "tool_execution_end":
+            outcome = ((msg.get("result") or {}).get("details") or {}).get("tool_outcome") or {}
             if self.parent.admission and msg.get("toolCallId"):
                 self.parent.admission.operation(
                     self.execution_session_id,
                     "tool",
                     msg["toolCallId"],
-                    "failed" if msg.get("isError") else "completed",
+                    "not_sent"
+                    if outcome.get("dispatch") == "not_dispatched"
+                    else "unknown"
+                    if outcome.get("outcome") == "unknown"
+                    else "failed"
+                    if msg.get("isError")
+                    else "completed",
+                    tool_outcome={
+                        k: outcome[k]
+                        for k in (
+                            "code",
+                            "stage",
+                            "dispatch",
+                            "outcome",
+                            "call_id",
+                            "parent_call_id",
+                            "definition_version",
+                            "permission_version",
+                            "duration_ms",
+                            "preparation_ms",
+                            "validation_ms",
+                            "waiting_ms",
+                            "result_processing_ms",
+                            "repeats",
+                        )
+                        if k in outcome
+                    },
                 )
             call_id = msg.get("toolCallId") or ""
             tool_name = msg.get("toolName") or ""
@@ -436,6 +499,8 @@ class PiSessionWorker:
             item = self.pending_tools.pop(call_id, None) or self._to_tool_item(call_id, tool_name, args)
             if item:
                 item["status"] = "failed" if is_error else "completed"
+                if outcome:
+                    item["tool_outcome"] = outcome
                 if item["type"] == "mcp":
                     item["result"] = result
                 elif item["type"] == "command":
@@ -522,6 +587,8 @@ class PiSessionWorker:
         elif mtype == "agent_settled":
             aborted = bool(msg.get("aborted")) or self.turn_aborted
             status = "interrupted" if aborted else ("failed" if self.turn_error else "completed")
+            if getattr(self, "tool_stop", False):
+                status = "failed"
             self.active_turn = None
             await self._finalize_turn(turn_id, status, self.turn_error)
 
@@ -573,6 +640,12 @@ class PiSessionWorker:
                 "code": "generation_failed",
                 **({"status": int(match[1])} if match else {}),
             }
+        if getattr(self, "tool_stop", False):
+            turn_record["error"] = {
+                "code": "repeated_invalid_call",
+                "message": "Repeated unchanged invalid tool calls; no retry was dispatched.",
+            }
+            self.tool_stop = False
         if self.compaction_error and status in {"completed", "failed"}:
             turn_record["status"] = "failed"
             turn_record["error"] = {

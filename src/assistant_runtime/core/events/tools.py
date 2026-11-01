@@ -1,6 +1,10 @@
 """Event MCP contracts. Returned observations are data, never instructions."""
 
 from fastmcp import FastMCP
+from typing import Annotated, Literal
+from pydantic import WithJsonSchema, Field
+from assistant_runtime.mcp.contracts import checked
+from .tool_contracts import RECORD, SOURCE
 from assistant_runtime.api.contracts import EventRequest
 from assistant_runtime.api.annotations import READ, WRITE
 
@@ -39,7 +43,12 @@ def create_server(client, caller_run=None):
         entrance: str | None = None,
         since: float | None = None,
         until: float | None = None,
-        before: list | None = None,
+        before: Annotated[
+            list | None,
+            Field(
+                description="Opaque keyset cursor returned by query_events. Pass it through unchanged; do not construct or reinterpret its elements."
+            ),
+        ] = None,
         limit: int = 50,
     ) -> dict:
         """Keyset history pages (maximum 100). Inspect gaps and coverage before interpreting absence."""
@@ -75,7 +84,7 @@ def create_server(client, caller_run=None):
         entrance: str | None = None,
         since: float | None = None,
         until: float | None = None,
-        group_by: str = "type",
+        group_by: Literal["source", "type", "subject"] = "type",
         limit: int = 50,
     ) -> dict:
         """Bounded group counts; timeout is an error, never a partial exact count."""
@@ -93,12 +102,16 @@ def create_server(client, caller_run=None):
         )
 
     @server.tool(annotations=WRITE)
-    async def record_event(record: dict) -> dict:
+    async def record_event(
+        record: Annotated[dict, WithJsonSchema(RECORD), checked(RECORD, "record")],
+    ) -> dict:
         """Append authorized statement/summary: key,type,version,subject,evidence,data and occurred_at OR observed_start/end. Source is server-derived."""
         return await call("record", record=record)
 
     @server.tool(annotations=WRITE)
-    async def correct_event(id: str, revision: int, record: dict) -> dict:
+    async def correct_event(
+        id: str, revision: int, record: Annotated[dict, WithJsonSchema(RECORD), checked(RECORD, "record")]
+    ) -> dict:
         """Correct with current revision, preserving original and stable key."""
         return await call("correct", id=id, revision=revision, record=record)
 
@@ -108,7 +121,11 @@ def create_server(client, caller_run=None):
         return await call("delete", id=id, revision=revision)
 
     @server.tool(annotations=WRITE)
-    async def configure_event_source(id: str, revision: int, definition: dict) -> dict:
+    async def configure_event_source(
+        id: str,
+        revision: int,
+        definition: Annotated[dict, WithJsonSchema(SOURCE), checked(SOURCE, "definition")],
+    ) -> dict:
         """Create/replace trusted adapter instance {adapter,config,enabled}; registry revision CAS."""
         return await call("configure", id=id, revision=revision, definition=definition)
 

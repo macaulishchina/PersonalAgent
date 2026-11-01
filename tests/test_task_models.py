@@ -30,6 +30,33 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("recommendation", result)
         self.assertEqual(set(result["selection"]["sources"].values()), {"main_conversation"})
 
+    async def test_nested_execution_patch_preserves_reason_and_running_snapshot(self):
+        run = await self.make_running(
+            execution={
+                "model": "gpt-6-luna",
+                "model_source": "assistant",
+                "reason": "stable reason",
+                "assessment": {"acceptance": "verify", "uncertainties": ["old"]},
+            }
+        )
+        before = copy.deepcopy(run["data"]["spec"])
+        definition = self.plugin.repo.definition(run["task_id"])
+        updated = await self.plugin.request(
+            TaskRequest(
+                "update",
+                {
+                    "task_id": definition["id"],
+                    "revision": definition["revision"],
+                    "changes": {"execution": {"assessment": {"uncertainties": ["new"]}}},
+                },
+            )
+        )
+        execution = updated["spec"]["execution"]
+        self.assertEqual(execution["reason"], "stable reason")
+        self.assertEqual(execution["assessment"]["acceptance"], "verify")
+        self.assertEqual(execution["assessment"]["uncertainties"], ["new"])
+        self.assertEqual(self.plugin.repo.run(run["id"])["data"]["spec"], before)
+
     async def test_auto_effort_requires_caller_choice_when_main_is_auto(self):
         self.config.main_reasoning_effort = "auto"
         with self.assertRaisesRegex(ValueError, "initiating model"):

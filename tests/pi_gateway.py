@@ -144,6 +144,17 @@ def sse_tool_call(call_id, name, args_dict):
     ]
 
 
+def sse_tool_batch(calls):
+    """One native model response containing several function calls."""
+    responses = [sse_tool_call(*call) for call in calls]
+    events = [responses[0][0]]
+    for index, response in enumerate(responses):
+        events.extend({**event, "output_index": index} for event in response[1:-1])
+    final = responses[-1][-1]
+    final["response"]["output"] = [response[-1]["response"]["output"][0] for response in responses]
+    return [*events, final]
+
+
 def sse_text_reply(msg_id, text):
     return [
         {"type": "response.created", "response": {"id": f"resp_{msg_id}", "status": "in_progress"}},

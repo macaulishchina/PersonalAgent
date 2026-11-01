@@ -10,6 +10,11 @@ export type TraceEvent = {
   tool?: string;
   operation_id?: string;
   device_id?: string;
+  dispatch?: string;
+  result_state?: string;
+  error_code?: string;
+  stage?: string;
+  field?: string;
 };
 
 export type TraceStep = {
@@ -69,6 +74,17 @@ export function stepState(step: TraceStep, runState: string) {
       ? { label: "调用中", tone: "active" }
       : { label: "未收到结束记录", tone: "unknown" };
   }
+  if (step.ended.dispatch === "not_dispatched")
+    return {
+      label: ["tool_scope_denied", "tool_permission_denied"].includes(
+        step.ended.error_code || "",
+      )
+        ? "被禁止"
+        : "未执行",
+      tone: "unknown",
+    };
+  if (step.ended.result_state === "unknown")
+    return { label: "结果待确认", tone: "unknown" };
   const state = step.ended.status;
   if (state === "failed" || state === "declined")
     return {

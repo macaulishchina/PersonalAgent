@@ -1,8 +1,10 @@
 """Independent task MCP; thin typed capability mapping, no scheduler/provider code."""
 
+from assistant_runtime.mcp.contracts import checked
 from fastmcp import FastMCP
-from typing import Annotated
-from pydantic import Field
+from typing import Annotated, Literal
+from pydantic import Field, WithJsonSchema
+from .tool_contracts import EXECUTION, TRIGGER, CHANGES, SELF_SCHEDULE, SELF_COMPLETION, CHECKPOINT
 from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.api.annotations import READ, WRITE
 
@@ -46,8 +48,8 @@ def create_server(client, caller_run=None):
         request_id: str,
         title: str,
         prompt: str,
-        trigger: dict | None = None,
-        execution: dict | None = None,
+        trigger: Annotated[dict, WithJsonSchema(TRIGGER), checked(TRIGGER, "trigger")] | None = None,
+        execution: Annotated[dict, WithJsonSchema(EXECUTION), checked(EXECUTION, "execution")] | None = None,
         long_term: bool = False,
         workspace: str | None = None,
         resources: Annotated[
@@ -58,10 +60,14 @@ def create_server(client, caller_run=None):
         ] = None,
         notify_voice: bool = False,
         notify_completion: bool | None = None,
-        feedback_owner: str = "background",
+        feedback_owner: Literal["conversation", "background"] = "background",
         auto_archive: bool | None = None,
-        self_schedule: dict | None = None,
-        self_completion: dict | None = None,
+        self_schedule: Annotated[dict, WithJsonSchema(SELF_SCHEDULE), checked(SELF_SCHEDULE, "self_schedule")]
+        | None = None,
+        self_completion: Annotated[
+            dict, WithJsonSchema(SELF_COMPLETION), checked(SELF_COMPLETION, "self_completion")
+        ]
+        | None = None,
     ) -> dict:
         """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. feedback_owner=background hands result delivery to the background (default). Set conversation ONLY when you are explicitly retaining responsibility to wait for and answer this immediate task; its result is projected immediately into this conversation without a separate unread notice. Do not repeat that report verbatim; add only useful interpretation. If handing off and moving on, use background. get_task never transfers ownership. Use transfer_task_feedback with the returned execution round/version to explicitly take back or hand off an existing run. Ending/interruption of the owning turn releases undelivered results; no timer decides ownership. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. For authorized automatic ending, self_completion={condition:concrete stopping criteria} permits complete_own_task after verification. No grant is inferred from a prompt; children cannot receive either permission."""
         spec = {
@@ -113,7 +119,9 @@ def create_server(client, caller_run=None):
         return await call("get", task_id=task_id, before=before, limit=limit)
 
     @server.tool(annotations=WRITE)
-    async def transfer_task_feedback(run_id: str, round: int, version: int, owner: str) -> dict:
+    async def transfer_task_feedback(
+        run_id: str, round: int, version: int, owner: Literal["conversation", "background"]
+    ) -> dict:
         """Foreground only: explicitly transfer this execution's result delivery responsibility.
 
         Read get_task's run.feedback for round/version. owner=conversation takes responsibility
@@ -136,8 +144,12 @@ def create_server(client, caller_run=None):
         return await call("trace", run_id=run_id, after=after, limit=limit)
 
     @server.tool(annotations=WRITE)
-    async def update_task(task_id: str, revision: int, changes: dict) -> dict:
-        """Foreground management only; background callers must use update_own_task_schedule for preauthorized scheduling. Change future executions with optimistic revision checking; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Explicit user authorization may grant/revoke self_schedule. Active executions keep their creation-time settings; use supplement for active work."""
+    async def update_task(
+        task_id: str,
+        revision: int,
+        changes: Annotated[dict, WithJsonSchema(CHANGES), checked(CHANGES, "changes")],
+    ) -> dict:
+        """Foreground management only; background callers must use update_own_task_schedule for preauthorized scheduling. Patch future executions with optimistic revision checking; omitted nested fields stay unchanged, null clears optional fields and lists replace; use changes={"notify_completion": false} to disable completion notifications, true to enable. notify_voice independently controls spoken delivery when enabled. Explicit user authorization may grant/revoke self_schedule. Active executions keep their creation-time settings; use supplement for active work."""
         return await call("update", task_id=task_id, revision=revision, changes=changes)
 
     @server.tool(annotations=WRITE)
@@ -165,7 +177,7 @@ def create_server(client, caller_run=None):
     async def update_own_task_schedule(
         request_id: str,
         revision: int,
-        trigger: dict,
+        trigger: Annotated[dict, WithJsonSchema(TRIGGER), checked(TRIGGER, "trigger")],
         reason: str,
         evidence: str,
     ) -> dict:
@@ -254,7 +266,7 @@ def create_server(client, caller_run=None):
         cause: str,
         reason: str,
         evidence: str,
-        checkpoint: dict,
+        checkpoint: Annotated[dict, WithJsonSchema(CHECKPOINT), checked(CHECKPOINT, "checkpoint")],
         reasoning_effort: str | None = None,
     ) -> dict:
         """Request a bounded handoff to a named recommendation for THIS active run, then finish the current turn.

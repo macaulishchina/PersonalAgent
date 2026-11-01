@@ -116,6 +116,8 @@ class RegistryTest(unittest.TestCase):
             {"contexts": ["maintenance"]},
             {"enabled": 1},
             {"approval": "automatic"},
+            {"approval": "prompt"},
+            {"tool_approvals": {"read": "prompt"}},
             {"tool_timeout_seconds": True},
             {"tool_timeout_seconds": 3601},
             {"startup_timeout_seconds": 3601},
@@ -130,7 +132,7 @@ class RegistryTest(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 definition({**STDIO, **changes})
         self.assertEqual(definition(STDIO)["transport"]["args"], ["--flag", "--flag", ""])
-        self.assertEqual(definition(STDIO)["approval"], "prompt")
+        self.assertEqual(definition(STDIO)["approval"], "approve")
         with self.assertRaises(ValueError):
             IntegrationSettings.parse({"registry_path": "/invalid\0path"})
 

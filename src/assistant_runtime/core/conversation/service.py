@@ -206,6 +206,8 @@ class Conversation:
                     else (
                         "本轮执行已达到调用预算并停止，请查看任务进展。"
                         if event.get("error_code") == "ai_usage_blocked" and status != "unknown"
+                        else "相同的无效工具调用反复出现，本轮已停止。请查看调用原因，修正后再继续。"
+                        if event.get("error_code") == "repeated_invalid_call" and status != "unknown"
                         else "执行结果无法确认，未自动重做。"
                         if status == "unknown"
                         else {

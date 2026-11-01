@@ -35,7 +35,7 @@ Pi runs with isolated settings and an explicit MCP snapshot; it does not import 
 
 ## Definition and use
 
-Use the `integrations` MCP or `pa mcp` CLI. Both dispatch the typed
+Use the configuration console's **权限管理 → 第三方 MCP**, the `integrations` MCP or `pa mcp` CLI. Both dispatch the typed
 `IntegrationRequest` to the same plugin. The manager exposes list, inspect,
 configure, enable/disable, remove, verify, apply and reload. Interactive OAuth is unsupported in the Pi adapter; login requests return an error without a fabricated URL.
 Read the current global `revision` before editing. Identical configure retries are
@@ -68,16 +68,17 @@ Top-level definition fields:
 | `contexts` | foreground, background | Explicit usage scopes |
 | `allow_tools` | `null` | All tools; an empty list permits none |
 | `deny_tools` | `[]` | Excluded tools; denial wins |
-| `approval` | `prompt` | prompt / approve / reject |
-| `tool_approvals` | `{}` | Per-tool prompt / approve / reject |
+| `approval` | `approve` | approve / reject |
+| `tool_approvals` | `{}` | Per-tool approve / reject |
 | `startup_timeout_seconds` | 60 | Connection startup bound, 1–3600 |
 | `tool_timeout_seconds` | 600 | Native tool call bound, 1–3600 |
 
 `reject` denies calls (it is translated to native disabled-tool policy); it does
 not invent a provider approval enum. A server-wide reject denies every tool.
 Third-party tools never inherit the preapproval of internal device/memory tools.
-With a noninteractive approval policy, prompt-required calls may be declined;
-authorize only the intended tools explicitly when unattended use is wanted.
+Permissions use long-term allow/deny policies only. Service-wide rejection takes precedence
+over individual grants. Unsupported policy values fail validation; configuration parsing,
+CLI/MCP creation and the operator page share the same approve default.
 
 Top-level configure changes merge with the existing definition; a supplied
 `transport` replaces that entire object. Credentials should use environment
@@ -155,3 +156,10 @@ device, user conversation or model API. Unit tests cover optimistic concurrency,
 redaction, atomic-write failure, stale probes, bounded cancellation, scoped task
 management, unsupported OAuth reporting and configuration rollback. Real vendor pairing,
 OAuth authorization and device actions require that integration's own acceptance.
+
+The configuration console uses owner-defined `patch_registry` operations rather than
+round-tripping redacted definitions. Same-type partial connection edits retain all private
+fields; switching transport types requires the new transport's mandatory fields. The
+registry and global configuration revisions both prevent lost updates. New registrations
+are explicitly initialized with automatic approval, while updating an existing registration
+preserves its policy. No per-conversation approval engine or OS sandbox is implied.

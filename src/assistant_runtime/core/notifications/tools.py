@@ -25,13 +25,13 @@ def create_server(client, caller_run=None):
     async def call(action, /, **arguments):
         return await client.invoke(NotificationRequest(action, arguments, caller_run))
 
-    @server.tool(annotations=WRITE)
+    @server.tool(annotations={**WRITE, "idempotentHint": True})
     async def publish_notification(
         event_key: str,
         title: str,
         body: str,
         url: str = "",
-        priority: str = "normal",
+        priority: Literal["normal", "important"] = "normal",
         voice: bool = False,
         expires_at: float | None = None,
         group_key: str | None = None,
@@ -62,7 +62,7 @@ def create_server(client, caller_run=None):
         title: str,
         body: str,
         url: str = "",
-        priority: str = "normal",
+        priority: Literal["normal", "important"] = "normal",
         voice: bool = False,
         expires_at: float | None = None,
         kind: Literal["progress", "result", "attention"] | None = None,

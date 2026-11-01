@@ -125,7 +125,11 @@ class ModelPolicy:
             and not reason
             and all(v == "auto" for v in fixed.values())
         ):
-            raise ValueError("Explain task uncertainty and verification in execution.reason")
+            from assistant_runtime.api.tool_calls import invalid_arguments
+
+            raise invalid_arguments(
+                "Explain task uncertainty and verification in execution.reason", "execution.reason"
+            )
         for key in ("model", "reasoning_effort"):
             value = requested.get(key)
             if value is not None and (not isinstance(value, str) or not 1 <= len(value.strip()) <= 160):

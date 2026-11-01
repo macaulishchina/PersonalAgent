@@ -4,8 +4,9 @@ from typing import Annotated
 from fastmcp import FastMCP
 from pydantic import Field
 from assistant_runtime.api.contracts import SearchRequest
+from assistant_runtime.api.annotations import READ as LOCAL_READ
 
-READ = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True}
+READ = {**LOCAL_READ, "openWorldHint": True}
 
 
 def create_server(client, caller_run=None):

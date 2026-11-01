@@ -11,7 +11,8 @@ const pageCopy = {
   execution: ["对话与执行", "决定如何处理请求，以及一项工作可以使用多少资源。"],
   tasks: ["任务与通知", "安排后台工作，选择结果送达的方式。"],
   resources: ["文件与记忆", "管理工作内容的存放、保留和长期记忆。"],
-  connections: ["连接与设备", "让助手使用外部工具与已经配置的设备。"],
+  permissions: ["权限管理", "管理第三方 MCP 的连接、长期授权和使用范围。"],
+  connections: ["连接与设备", "管理已经配置的设备与设备连接。"],
   plugins: ["功能与插件", "按需要开启能力；每项能力都有自己的设置入口。"],
   access: ["实例管理", "查看运行状态，维护访问入口和实例。"],
 };
@@ -40,7 +41,6 @@ const pageSections = {
     ["实例技能", "管理明确选用的技能。", ["instance_skills"]],
   ],
   connections: [
-    ["外部工具", "通过 MCP 连接已经信任的工具服务。", ["external_mcp"]],
     ["设备", "普通设备独立配置；主语音绑定变更需要重启。", ["devices"]],
     ["语音连接", "主语音通道及音量策略。", []],
   ],
@@ -185,7 +185,7 @@ function workspaceRender() {
   for (const [section, pages] of [
     ["开始使用", ["overview", "models"]],
     ["工作空间", ["execution", "tasks", "resources", "connections"]],
-    ["管理", ["plugins", "access"]],
+    ["管理", ["permissions", "plugins", "access"]],
   ]) {
     navigation.append(node("p", section, "nav-label"));
     for (const page of pages) {
@@ -230,6 +230,7 @@ function workspaceRender() {
   renderChatShortcut();
   if (selected === "overview") renderOverview();
   else if (selected === "models") renderModels();
+  else if (selected === "permissions") renderPermissions();
   else if (selected === "plugins") renderPlugins();
   else renderSettingsPage();
   if (selected !== "models" || modelTab !== "connections") {
@@ -295,7 +296,7 @@ function renderOverview() {
   const shortcuts = node("div", undefined, "quick-grid");
   for (const [page, title, detail] of [
     ["execution", "控制工作量", "并发、队列与调用额度"],
-    ["connections", "连接工具", "MCP 服务与设备"],
+    ["permissions", "管理权限", "第三方 MCP 连接与工具授权"],
     ["plugins", "扩展能力", "任务、记忆与更多插件"],
     ["access", "维护实例", "访问入口、备份与恢复"],
   ]) {
@@ -1123,7 +1124,7 @@ let editorInputController = new AbortController();
 function renderEntityEditor() {
   editorInputController.abort();
   editorInputController = new AbortController();
-  if (!activeEditor) return;
+  if (!activeEditor || activeEditor.kind === "mcp") return;
   const { kind, name, field } = activeEditor;
   $("entry-title").textContent =
     {
@@ -1181,6 +1182,7 @@ function finishEntity(discard = false) {
     return;
   }
   if (discard) restoreCheckpoint(activeEditor.checkpoint);
+  activeEditor.dispose?.();
   activeEditor = null;
   $("entry-dialog").close();
   render();

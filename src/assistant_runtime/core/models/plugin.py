@@ -78,6 +78,7 @@ class ModelsPlugin:
             await self.client.start()
         except Exception:
             self.error = "model_initialization_failed"
+            context.set_health("degraded", self.error)
 
     async def maintenance_cancel(self):
         for task in list(self.active):
@@ -113,11 +114,13 @@ class ModelsPlugin:
                 self.context.own(client.close)
             if self.context:
                 self.context.runtime.timeouts[ModelRequest] = settings.timeout_seconds + 30
+                self.context.set_health("ready")
 
         async def rollback():
             self.settings, self.client, self.semaphore, self.error = previous
             if self.context:
                 self.context.runtime.timeouts[ModelRequest] = previous[0].timeout_seconds + 30
+                self.context.set_health("degraded" if self.error else "ready", self.error)
 
         async def release(committed):
             obsolete = previous[1] if committed else client

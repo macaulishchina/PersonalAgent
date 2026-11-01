@@ -4,6 +4,8 @@ from assistant_runtime.api.configuration_io import configuration_path
 
 import asyncio
 import copy
+from dataclasses import replace
+import logging
 from importlib.metadata import entry_points
 import re
 
@@ -13,6 +15,7 @@ from .plugin_metadata import installed_platforms, installed_backends, installed_
 from assistant_runtime.core.configuration.schema import resolve_definition
 
 GROUP = "personal_agent.plugins"
+log = logging.getLogger(__name__)
 
 
 def installed_entries(names, builtins=()):
@@ -99,15 +102,69 @@ class ToolRegistry:
     def register(self, owner, tool):
         from jsonschema import Draft202012Validator
 
-        if not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", tool.name) or not tool.description.strip():
+        if not isinstance(tool.name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", tool.name):
             raise ValueError("Invalid tool declaration")
         if tool.name in self.tools:
             raise ValueError("Duplicate tool: " + tool.name)
-        if tool.read_only and tool.destructive:
-            raise ValueError("Read-only tools cannot be destructive")
-        for schema in (tool.input_schema, tool.output_schema):
+        if not callable(tool.handler):
+            raise ValueError("Tool requires a callable handler")
+        warnings = []
+        description = tool.description.strip() if isinstance(tool.description, str) else ""
+        if not description:
+            description = tool.name
+            warnings.append("missing_description")
+        flags = {}
+        for key, fallback in (
+            ("read_only", False),
+            ("destructive", True),
+            ("idempotent", False),
+            ("external", True),
+        ):
+            value = getattr(tool, key)
+            flags[key] = value if type(value) is bool else fallback
+            if type(value) is not bool:
+                warnings.append("invalid_" + key)
+        if flags["read_only"] and flags["destructive"]:
+            flags["read_only"] = False
+            warnings.append("conflicting_behavior_hints")
+        schemas = []
+        for label, source in (("input", tool.input_schema), ("output", tool.output_schema)):
+            schema = copy.deepcopy(dict(source))
+            # Examples are documentation, not business constraints. Never let a
+            # broken example prevent an otherwise valid tool from running, nor
+            # send that example to the model as guidance.
+            examples = schema.pop("examples", None)
             Draft202012Validator.check_schema(schema)
-        self.tools[tool.name] = owner, tool
+            if examples is not None:
+                if isinstance(examples, list):
+                    validator = Draft202012Validator(schema)
+                    valid = [example for example in examples if validator.is_valid(example)]
+                    if len(valid) != len(examples):
+                        warnings.append("invalid_" + label + "_examples")
+                    if valid:
+                        schema["examples"] = valid
+                else:
+                    warnings.append("invalid_" + label + "_examples")
+            schemas.append(schema)
+        # Registration fixes one contract version. A caller must not accidentally
+        # mutate a live declaration through its original dict or a description.
+        self.tools[tool.name] = (
+            owner,
+            replace(
+                tool,
+                description=description,
+                input_schema=schemas[0],
+                output_schema=schemas[1],
+                **flags,
+            ),
+        )
+        if warnings:
+            log.warning(
+                "Tool declaration quality owner=%s tool=%s issues=%s; compatible registration retained",
+                owner,
+                tool.name,
+                ",".join(warnings),
+            )
 
     def describe(self):
         items = []
@@ -121,8 +178,8 @@ class ToolRegistry:
                 {
                     "name": name,
                     "description": tool.description,
-                    "input_schema": dict(tool.input_schema),
-                    "output_schema": dict(tool.output_schema),
+                    "input_schema": copy.deepcopy(dict(tool.input_schema)),
+                    "output_schema": copy.deepcopy(dict(tool.output_schema)),
                     "annotations": tool.annotations,
                 }
             )
@@ -141,12 +198,28 @@ class ToolRegistry:
 
     async def invoke(self, name, arguments, *, identity: CallIdentity, timeout=30):
         from jsonschema import Draft202012Validator
+        from jsonschema.exceptions import ValidationError
+        from assistant_runtime.api.tool_calls import ToolFailure, ToolOutcome
         import time
 
-        owner, tool = self.tools[name]
-        guard = self.guards.get(owner)
-        generation = guard() if guard else None
-        Draft202012Validator(tool.input_schema).validate(arguments)
+        try:
+            owner, tool = self.tools[name]
+            guard = self.guards.get(owner)
+            generation = guard() if guard else None
+        except (KeyError, RuntimeError):
+            raise ToolFailure(
+                ToolOutcome(
+                    "tool_unavailable",
+                    "preparation",
+                    "not_dispatched",
+                    "failed",
+                    "Tool owner is unavailable",
+                    next_action="inspect_definition",
+                )
+            ) from None
+        from assistant_runtime.mcp.contracts import validate
+
+        validate(arguments, tool.input_schema, "")
         if identity.deadline is not None:
             timeout = (
                 (identity.deadline - time.monotonic())
@@ -154,16 +227,66 @@ class ToolRegistry:
                 else min(timeout, identity.deadline - time.monotonic())
             )
         if timeout is not None and timeout <= 0:
-            raise TimeoutError("Request deadline exceeded")
+            raise ToolFailure(
+                ToolOutcome(
+                    "deadline_expired",
+                    "preparation",
+                    "not_dispatched",
+                    "cancelled",
+                    "Request deadline exceeded",
+                    next_action="inspect_request",
+                )
+            )
         token = current_call.set(identity)
         current = asyncio.current_task()
         active = self.active.setdefault(owner, set())
         active.add(current)
         try:
-            result = await asyncio.wait_for(tool.handler(copy.deepcopy(arguments)), timeout)
-            if guard and guard() != generation:
-                raise RuntimeError("Stale plugin tool result discarded")
-            Draft202012Validator(tool.output_schema).validate(result)
+            try:
+                result = await asyncio.wait_for(tool.handler(copy.deepcopy(arguments)), timeout)
+            except ToolFailure:
+                raise
+            except Exception as exc:
+                raise ToolFailure(
+                    ToolOutcome(
+                        "tool_result_unconfirmed",
+                        "return",
+                        "dispatched",
+                        "unknown",
+                        "Tool handler did not return a confirmed result; inspect the operation before repeating it",
+                        next_action="inspect_operation",
+                    )
+                ) from exc
+            try:
+                stale = guard and guard() != generation
+            except RuntimeError:
+                stale = True
+            if stale:
+                raise ToolFailure(
+                    ToolOutcome(
+                        "stale_tool_result",
+                        "result",
+                        "dispatched",
+                        "unknown",
+                        "Plugin owner changed after dispatch; inspect the received result without repeating the operation",
+                        next_action="inspect_operation",
+                    ),
+                    result=result,
+                )
+            try:
+                Draft202012Validator(tool.output_schema).validate(result)
+            except ValidationError:
+                raise ToolFailure(
+                    ToolOutcome(
+                        "invalid_tool_result",
+                        "result",
+                        "dispatched",
+                        "unknown",
+                        "Tool returned an invalid result. The operation may have completed; do not repeat it.",
+                        next_action="inspect_operation",
+                    ),
+                    result=result,
+                ) from None
             return result
         finally:
             current_call.reset(token)

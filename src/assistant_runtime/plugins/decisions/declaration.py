@@ -10,6 +10,7 @@ from assistant_runtime.api.contracts import (
     DecisionRequest,
     DecisionQuery,
     DecisionOutcome,
+    VoiceDecisionRequest,
 )
 
 
@@ -27,6 +28,7 @@ DECLARATION = PluginDefinition(
     uses=(
         TaskRequest,
         NotificationRequest,
+        VoiceDecisionRequest,
     ),
     provides=(
         DecisionRequest,

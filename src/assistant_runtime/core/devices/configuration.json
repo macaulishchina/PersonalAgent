@@ -55,6 +55,7 @@
             },
             "connection": {
               "type": "object",
+              "description": "连接参数由所选适配器及其平台实现校验；参考该插件的配置说明。这里有意允许各协议的不同字段，不隐式切换设备或主语音绑定。",
               "additionalProperties": {}
             },
             "enabled": {

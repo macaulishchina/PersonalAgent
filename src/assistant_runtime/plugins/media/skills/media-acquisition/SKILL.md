@@ -31,7 +31,7 @@ platforms; optionally filter `platforms=["aliyun"]` when only connected acquisit
 wanted. Aliases are bounded parallel queries, with diagnostics per query. Use verified
 web metadata when title identity is uncertain; do not invent a translated title.
 If useful and available, use existing public web search to supplement gaps; do not
-create scrapers, change model tiers or repeat the same exhausted query indefinitely. Prefer link-specific
+create scrapers, change configured models automatically or repeat the same exhausted query indefinitely. Prefer link-specific
 title matches, but inspect files before accepting candidates. A collection mentioning
 extras can still contain the requested full episodes. Page with returned `search_id`
 plus `next` as `before`, keeping the same query, aliases and platforms. If insufficient, wait

@@ -2,7 +2,7 @@
   "version": 1,
   "namespace": "external_mcp",
   "title": "外部 MCP",
-  "group": "connections",
+  "group": "permissions",
   "schema": {
     "type": "object",
     "additionalProperties": false,

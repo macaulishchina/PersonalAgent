@@ -66,14 +66,6 @@
         ],
         "x-group": "models"
       },
-      "hid_buttons": {
-        "type": "object",
-        "title": "硬件按键",
-        "default": {},
-        "additionalProperties": {},
-        "x-group": "resources",
-        "x-advanced": true
-      },
       "model_dir": {
         "type": "string",
         "title": "model_dir",
@@ -165,7 +157,6 @@
     "main_model": "boundary",
     "main_reasoning_effort": "boundary",
     "instance_skills": "boundary",
-    "hid_buttons": "boundary",
     "plugin_backends": "boundary"
   }
 }

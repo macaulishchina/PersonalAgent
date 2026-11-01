@@ -1,11 +1,14 @@
 """Optional semantic choices. Unauthorized external context always stays local."""
 
 import uuid
+from typing import Annotated
+from pydantic import WithJsonSchema
 
 from fastmcp import FastMCP
 from assistant_runtime.api.contracts import DecisionQuery, DecisionRequest, VoiceDecisionRequest
 from assistant_runtime.api.decisions import decide, fallback, report_decision
-from assistant_runtime.api.annotations import READ
+from assistant_runtime.api.annotations import READ, WRITE
+from .tool_contracts import CONTEXT, OPTIONS
 
 
 def create_server(client, caller_run=None):
@@ -29,8 +32,13 @@ def create_server(client, caller_run=None):
         except Exception:
             return {"enabled": False, **fallback("decision_service_unavailable")}
 
-    @server.tool(annotations=READ)
-    async def judge_options(request_id: str, question: str, context: dict, options: dict[str, str]) -> dict:
+    @server.tool(annotations={**READ, "idempotentHint": True, "openWorldHint": True})
+    async def judge_options(
+        request_id: str,
+        question: str,
+        context: Annotated[dict, WithJsonSchema(CONTEXT)],
+        options: Annotated[dict[str, str], WithJsonSchema(OPTIONS)],
+    ) -> dict:
         """Recommend one of 1..15 evidence-backed candidates, or use the original workflow.
 
         Requires explicit external_data_consent in the instance. With consent disabled,
@@ -73,7 +81,7 @@ def create_server(client, caller_run=None):
         """Foreground only: inspect a current voice correction/supplement suggestion, not an executed action."""
         return await client.invoke(VoiceDecisionRequest("get", caller_run=caller_run))
 
-    @server.tool(annotations={**READ, "readOnlyHint": False})
+    @server.tool(annotations=WRITE)
     async def confirm_voice_decision(decision_id: str, accept: bool) -> dict:
         """Foreground only. Confirm AFTER understanding the user's current correction/supplement.
 

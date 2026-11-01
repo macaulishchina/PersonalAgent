@@ -2,7 +2,9 @@
 
 from typing import Annotated, Literal
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import Field, WithJsonSchema
+from assistant_runtime.mcp.contracts import checked
+from .tool_contracts import CHANGES
 from assistant_runtime.api.contracts import IntegrationRequest
 from assistant_runtime.api.annotations import READ, WRITE
 
@@ -61,8 +63,12 @@ def create_server(client, caller_run=None, can_manage=False):
     if caller_run is None or can_manage:
 
         @server.tool(annotations=WRITE)
-        async def configure_mcp_server(name: Name, changes: dict, revision: Revision) -> dict:
-            """Add/update an instance MCP using the global registry revision from list/inspect. Top-level changes merge; transport replaces the entire transport object. transport: {type:stdio,command,args?,cwd?,env?,env_vars?} OR {type:http,url,headers?,env_headers?,bearer_token_env?}. Optional enabled=true, contexts=[foreground,background], allow_tools=null (all) or a list, deny_tools=[], approval=prompt|approve|reject, tool_approvals={tool:policy}, startup_timeout_seconds=60 and tool_timeout_seconds=600 (1..3600). Third-party approvals are explicit; built-in preapproval does not grant them. Stable names and optimistic revisions prevent lost edits; identical retries are idempotent. Returns a saved receipt, not an installation/connection success claim."""
+        async def configure_mcp_server(
+            name: Name,
+            changes: Annotated[dict, WithJsonSchema(CHANGES), checked(CHANGES, "changes")],
+            revision: Revision,
+        ) -> dict:
+            """Add/update an instance MCP using the global registry revision from list/inspect. Top-level changes merge; transport replaces the entire transport object. transport: {type:stdio,command,args?,cwd?,env?,env_vars?} OR {type:http,url,headers?,env_headers?,bearer_token_env?}. Optional enabled=true, contexts=[foreground,background], allow_tools=null (all) or a list, deny_tools=[], approval=approve|reject (new services default approve), tool_approvals={tool:policy}, startup_timeout_seconds=60 and tool_timeout_seconds=600 (1..3600). Permissions use long-term allow/deny policies; no per-call approval flow is provided. Stable names and optimistic revisions prevent lost edits; identical retries are idempotent. Returns a saved receipt, not an installation/connection success claim."""
             return await call("configure", name=name, changes=changes, revision=revision)
 
         @server.tool(annotations=WRITE)

@@ -622,9 +622,6 @@ class PiBackend:
                 )
             for question in p.get("questions", []):
                 await self._client_notice(question["question"], p.get("run_id"))
-        elif method == "approval.requested":
-            await self.client.respond(event["id"], {"decision": "decline"})
-            await self._client_notice("此 MCP 工具需要额外确认，尚未执行。", p.get("run_id"))
         else:
             await self.client.send(
                 {"id": event["id"], "error": {"code": -32601, "message": "Unsupported client request"}}

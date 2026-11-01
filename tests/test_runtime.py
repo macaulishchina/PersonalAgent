@@ -24,6 +24,24 @@ class Plugin:
 
 
 class RuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_owner_reported_startup_health_is_preserved(self):
+        runtime = Runtime(None)
+
+        class Partial:
+            manifest = Manifest("partial")
+
+            async def start(self, context):
+                context.set_health("degraded", "backend_not_ready")
+
+        runtime.add(Partial())
+        try:
+            await runtime.start()
+            self.assertEqual(runtime.health()["partial"]["state"], "degraded")
+            self.assertEqual(runtime.health()["partial"]["error"], "backend_not_ready")
+            self.assertTrue(runtime.ready.is_set())
+        finally:
+            await runtime.close()
+
     async def test_owner_deadline_is_inherited_overridden_and_cleaned_up(self):
         runtime = Runtime(None)
         cancelled = asyncio.Event()

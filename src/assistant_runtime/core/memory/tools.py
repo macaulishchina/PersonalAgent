@@ -6,15 +6,13 @@ from fastmcp import FastMCP
 from pydantic import Field
 
 from assistant_runtime.api.contracts import MemoryRequest
+from assistant_runtime.api.annotations import READ, WRITE
 from assistant_runtime.mcp.client import CapabilityClient
 
 Scope = Literal["user", "project"]
 Identifier = Annotated[str, Field(min_length=1, max_length=200)]
 Title = Annotated[str, Field(min_length=1, max_length=200)]
 Fact = Annotated[str, Field(min_length=1, max_length=4000)]
-
-READ = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
-WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
 
 
 def create_server(client: CapabilityClient) -> FastMCP:

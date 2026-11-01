@@ -38,6 +38,9 @@ def main():
         if args.service == "integrations":
             kwargs["can_manage"] = args.manage_integrations
         server = factory(client, **kwargs)
+    from .outcomes import ToolOutcomes
+
+    server.add_middleware(ToolOutcomes())
     server.run(transport="stdio", show_banner=False)
 
 

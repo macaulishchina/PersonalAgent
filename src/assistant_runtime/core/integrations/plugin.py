@@ -138,6 +138,23 @@ class IntegrationsPlugin:
             can_manage = info.get(request.caller_run, {}).get("mcp_management", False)
             if action not in {"list", "get", "verify"} and not can_manage:
                 raise ValueError("MCP management requires an active task with the mcp_management resource")
+        if action == "verify_draft":
+            if request.caller_run is not None:
+                raise ValueError("Draft verification is operator-only")
+            from .settings import definition, name
+
+            ident, scope = name(args.get("name")), args.get("context", "foreground")
+            spec = definition(args.get("definition"))
+            if scope not in spec["contexts"] or scope not in {"foreground", "background"}:
+                raise ValueError("Invalid verification scope")
+            if self.pending >= 4:
+                raise ValueError("MCP validation is busy")
+            self.pending += 1
+            try:
+                async with self.probing:
+                    return await self.adapter.verify(ident, scope, draft=spec)
+            finally:
+                self.pending -= 1
         if action == "list":
             return {
                 "revision": self.registry.revision,

@@ -69,6 +69,12 @@ python scripts/check_release.py
 
 ## 原生平台与安装包
 
+插件规范回归使用 `python scripts/check.py --test test_plugin_standards --test test_tool_outcomes`。
+前者逐个核对全部内置插件的声明、能力消费／提供、资源前提、配置和技能；后者枚举
+第一方 MCP 工具的 Schema、开放字段说明、属性和示例，并验证无副作用的参数拒绝、
+运行兼容、直接调用／MCP 一致性。规范检查不启动真实设备或供应商请求；插件自己的
+业务回归、真实 Pi 合成链路和原生平台验收仍分别运行。
+
 使用已安装好的 Python 和 Pi，在应用目录按需运行：
 
 ```sh

@@ -1,3 +1,4 @@
+from assistant_runtime.api.contracts import IntegrationRequest, TaskRequest
 from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import IntegrationSettings
@@ -10,6 +11,8 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
+    provides=(IntegrationRequest,),
+    uses=(TaskRequest,),
     configuration=configuration_spec(__file__),
     manifest=plugin_manifest(__file__),
     internal_factory=build,

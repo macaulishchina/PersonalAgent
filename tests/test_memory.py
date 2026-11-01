@@ -158,6 +158,11 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_capture_failure_stays_visible_during_retry_wait_and_clears_on_success(self):
         self.batch()
         self.plugin.context = SimpleNamespace(state="ready", error=None)
+
+        def set_health(state, error=None):
+            self.plugin.context.state, self.plugin.context.error = state, error
+
+        self.plugin.context.set_health = set_health
         self.plugin.process_job = AsyncMock(side_effect=[RuntimeError("model unavailable"), None])
         cycles = 0
 
@@ -166,7 +171,7 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
             cycles += 1
             if cycles <= 2:
                 self.assertEqual(self.plugin.context.state, "degraded")
-                self.assertEqual(self.plugin.context.error, "model unavailable")
+                self.assertEqual(self.plugin.context.error, "memory_processing_failed: RuntimeError")
                 if cycles == 2:
                     self.plugin.retry_after = 0
             else:

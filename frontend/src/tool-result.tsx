@@ -2,7 +2,7 @@ import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { RUN_LABELS } from "./task-presentation";
 
 export type ToolSummary = {
-  kind: "create_task" | "get_task" | "fetch_webpage";
+  kind: "create_task" | "get_task" | "fetch_webpage" | "tool";
   outcome: "completed" | "failed";
   task_id?: string;
   title?: string;
@@ -18,18 +18,39 @@ export type ToolSummary = {
   truncated?: boolean;
   cached?: boolean;
   error_code?: string;
+  dispatch?: string;
+  result_state?: string;
+  stage?: string;
+  field?: string;
 };
 
 export function toolOutcome(value: ToolSummary): string {
-  if (value.outcome === "failed") return "失败";
+  if (value.dispatch === "not_dispatched")
+    return value.stage === "authorization" ? "被禁止" : "未执行";
+  if (value.result_state === "unknown") return "结果待确认";
+  if (value.result_state === "cancelled") return "已取消";
+  if (value.outcome === "failed") return "调用失败";
   return {
     create_task: "已创建",
     get_task: "已查询",
     fetch_webpage: "读取成功",
+    tool: "调用完成",
   }[value.kind];
 }
 
 const errors: Record<string, string> = {
+  invalid_arguments: "参数不符合工具要求，操作未执行。",
+  revision_conflict: "任务已更新，请读取最新版本后再修改；本次修改未执行。",
+  deadline_expired: "请求期限已到，操作未发出。",
+  incomplete_tool_arguments: "模型未生成完整参数，操作未执行。",
+  prior_result_unknown: "前次相同操作的结果尚未确认，本次未重复执行。",
+  tool_unavailable: "工具尚未就绪或当前不可用，操作未执行。",
+  tool_scope_denied: "此执行没有该工具的使用权限。",
+  tool_permission_denied: "工具已被权限策略禁止，没有逐次审批弹窗。",
+  repeated_invalid_call: "相同的无效调用反复出现，本轮已停止。",
+  invalid_tool_result:
+    "工具已返回，但结果格式异常；请核对操作状态，勿重复执行。",
+  tool_result_unconfirmed: "工具调用后返回异常；操作是否生效需进一步核对。",
   authentication_failed: "服务鉴权失败",
   credentials_missing: "尚未配置凭据",
   credentials_invalid: "服务凭据无效",
@@ -52,10 +73,14 @@ export function ToolResult({
 }) {
   if (value.outcome === "failed")
     return (
-      <div className="tool-result tool-result-error">
+      <details className="tool-result">
+        <summary>查看原因</summary>
         {errors[value.error_code || ""] ||
           "未取得有效结果，可查看助手的后续说明。"}
-      </div>
+        {value.field && (
+          <div className="tool-result-meta">字段：{value.field}</div>
+        )}
+      </details>
     );
 
   if (value.kind === "create_task" || value.kind === "get_task") {

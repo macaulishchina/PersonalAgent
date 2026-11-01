@@ -1,3 +1,5 @@
+from assistant_runtime.api.contracts import MemoryRequest
+from assistant_runtime.api.models import ModelRequest
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from assistant_runtime.api.configuration import configuration_spec
 
@@ -26,7 +28,9 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    plugin_manifest(__file__),
+    provides=(MemoryRequest,),
+    uses=(ModelRequest,),
+    manifest=plugin_manifest(__file__),
     internal_factory=build,
     configuration=configuration_spec(__file__),
     service="memory",

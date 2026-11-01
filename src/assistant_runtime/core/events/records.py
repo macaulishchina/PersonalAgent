@@ -21,6 +21,10 @@ def timestamp(value):
 
 
 def validate(record):
+    from .tool_contracts import RECORD
+    from assistant_runtime.mcp.contracts import validate as validate_input
+
+    validate_input(record, RECORD, "record")
     fields = {
         "key",
         "type",

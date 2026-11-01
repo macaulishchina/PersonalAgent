@@ -41,6 +41,15 @@ Supplier authentication settings have one list, regardless of connection referen
 Only OAuth offers login/logout; API-key routes show credential checks, not login status.
 Neither local credential checks nor Pi's bundled catalog establish remote key validity.
 
+Model references share a searchable Provider tree from `model-editor.js`. The native
+select remains the value owner: options display alias and Provider, but saving still
+uses only the registered alias. Main conversation, memory, task defaults/recommendations
+and plugin-declared `model_api.entries` references use the same widget. Provider groups
+expand/collapse, filtering is local, and keyboard navigation/Escape do not submit forms.
+Missing references remain visible for repair; disabled Providers are labelled, not hidden.
+Run `PYTHONPATH=src python scripts/verify_model_picker.py` with Playwright/Chromium for
+isolated desktop acceptance; `--artifacts /private/path` optionally saves a preview.
+
 `static/connections.js` owns purpose-built connection and authentication forms shared by add/edit.
 Preset definitions come from the models owner. Serialization is exclusive: preset, custom API,
 or native account; never persist all generic schema fields together. Managed keys get internal
@@ -225,3 +234,45 @@ Public capability references use a searchable dropdown with all matching records
 `save_flow.py` validates the complete candidate with `ConfigurationFiles` before any save. A preview against the running worker supplies the same application policies used during actual updates. Hot changes are saved/applied first; restart-only edits remain in an instance-private proposal (`restart-draft.json`), never startup input. Invalid dependency-coupled partial candidates remain together. Proposals use opaque IDs and configuration revisions for conflict checks; credential values are retained only in private storage, not returned to the browser. Discard removes the proposal; explicit restart confirmation commits its candidate through the normal file transaction and manager lifecycle. The console exposes one save action and one optional restart confirmation.
 
 Worker update intents are acknowledged promptly and polled by attempt ID. Reconnecting cannot enqueue duplicate transactions; an explicit retry creates a fresh attempt. Prepare/commit/restore/cleanup stages have bounded waits and private progress receipts. Failed recovery blocks affected owners instead of pretending that the old state was restored.
+
+## Permissions and third-party MCP management
+
+**权限管理 → 第三方 MCP** is the single visual editing entrance. Devices stay under
+连接与设备. The table separates service enablement, long-term call policy, usage scope,
+configuration application and connection verification; neither enabled nor verified means
+a business tool has succeeded. The three-tab drawer edits connection settings, permissions
+and the discovered tool inventory. All changes join the shared save/apply flow, including
+cross-page drafts, cancellation, conflict detection and revisioned private resource writes.
+
+`permissions.py` provides authenticated operator projections and isolated discovery through
+`GET/POST /api/permissions/mcp` and `POST /api/permissions/mcp/verify`. Reading/editing works
+without a business worker or model authorization. Verification requires the running
+integrations/Pi capability and performs initialize/list-tools only, never inference or tool
+execution. Results bind to the exact definition, scope and configuration version; stale or
+failed results are not live availability claims. Bounded private verification metadata is
+cached under `state/configuration/`, not in another registration database.
+
+The browser submits one `mcp` resource operation with `op="patch"`, a registry revision and
+bounded named configure/remove operations. Integrations owns the merge, validation, defaults,
+redaction and effective-policy calculation. Unedited arguments, environment values, full
+HTTP URLs and literal headers remain private and intact; replacing or clearing them is
+explicit. Credential references reuse private environment storage. Newly entered private
+credentials must be saved before discovery can use them. The old whole-registry JSON editor
+is no longer displayed. Audits contain service identities and field names, never values.
+
+Registrations default to `approve`. The only supported service and per-tool policies are
+`approve` and `reject`; unsupported values fail validation. No per-call approval flow is
+provided. Service disable, service-wide rejection, context, execution scope, allow/deny
+lists and individual rejects take precedence.
+Configuration changes do not rewrite permissions inside running background snapshots.
+
+Run the isolated desktop acceptance with the pinned Pi runtime and Playwright installed:
+
+```sh
+python scripts/verify_mcp_permissions.py
+```
+
+`--browser /absolute/chromium` selects an existing browser. The check starts a private
+worker and real local MCP fixture, covers create/edit/verify/save/apply/remove with Chinese
+and space-containing paths, and asserts that no model inference or business tool runs.
+It never uses production configuration, credentials, accounts, media or devices.

@@ -20,6 +20,10 @@ class Batches:
         self.db.commit()
 
     def create(self, args, owner, caller):
+        from .tool_contracts import BATCH_ITEMS
+        from assistant_runtime.mcp.contracts import validate
+
+        validate(args.get("items"), BATCH_ITEMS, "items")
         ident = args.get("request_id")
         try:
             if str(uuid.UUID(ident)) != ident:

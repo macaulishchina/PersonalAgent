@@ -68,7 +68,7 @@ class OperationRecords:
             self.records.event(execution, "operation.observed", {"operation_id": ident, "kind": kind})
         return ident
 
-    def settle(self, execution, kind, native_id, state):
+    def settle(self, execution, kind, native_id, state, **evidence):
         if state not in {"completed", "failed", "not_sent", "unknown"}:
             raise ValueError("Invalid operation outcome")
         row = self.db.execute(
@@ -78,7 +78,7 @@ class OperationRecords:
         if row is None:
             return
         with self.db:
-            self.observe(execution, row[0], {"state": state, "late": row[1] != "observed"})
+            self.observe(execution, row[0], {"state": state, "late": row[1] != "observed", **evidence})
             if row[1] == "observed":
                 self.db.execute("UPDATE execution_operations SET state=? WHERE id=?", (state, row[0]))
 

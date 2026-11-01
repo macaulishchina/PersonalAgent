@@ -1,3 +1,13 @@
+from assistant_runtime.api.contracts import (
+    DeviceQuery,
+    DeviceOperationQuery,
+    DeviceOperationCancel,
+    AudioVolume,
+    CameraMotion,
+    VideoCapture,
+    VideoRecord,
+    Control,
+)
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from assistant_runtime.api.configuration import configuration_spec
 
@@ -7,7 +17,17 @@ def build(host):
 
 
 DECLARATION = PluginDefinition(
-    plugin_manifest(__file__),
+    provides=(
+        DeviceQuery,
+        DeviceOperationQuery,
+        DeviceOperationCancel,
+        AudioVolume,
+        CameraMotion,
+        VideoCapture,
+        VideoRecord,
+    ),
+    uses=(Control,),
+    manifest=plugin_manifest(__file__),
     internal_factory=build,
     configuration=configuration_spec(__file__),
     service="device",

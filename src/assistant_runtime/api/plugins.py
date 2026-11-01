@@ -64,7 +64,7 @@ class Tool:
     input_schema: Mapping[str, Any]
     output_schema: Mapping[str, Any]
     handler: Callable[[dict], Awaitable[Any]]
-    read_only: bool
+    read_only: bool = False
     destructive: bool = False
     idempotent: bool = False
     external: bool = False

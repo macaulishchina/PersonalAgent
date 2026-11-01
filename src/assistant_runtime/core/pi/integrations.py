@@ -42,7 +42,16 @@ class PiIntegrations:
         )
         self.inherited = result["config"].get("mcp_servers", {})
 
-    async def capture(self, context, task_run=None, *, cwd=None, probe=None, manage_integrations=False):
+    async def capture(
+        self,
+        context,
+        task_run=None,
+        *,
+        cwd=None,
+        probe=None,
+        manage_integrations=False,
+        probe_definition=None,
+    ):
         result = await self.backend.client.request(
             "configuration.read", {"includeLayers": False, "cwd": str(cwd or self.backend.config.workspace)}
         )
@@ -50,6 +59,7 @@ class PiIntegrations:
             context,
             task_run,
             probe=probe,
+            probe_definition=probe_definition,
             manage_integrations=manage_integrations,
             inherited=result["config"].get("mcp_servers", {}),
         )
@@ -74,7 +84,16 @@ class PiIntegrations:
                 pass
         return refs, values
 
-    def configuration(self, context, task_run=None, *, probe=None, manage_integrations=False, inherited=None):
+    def configuration(
+        self,
+        context,
+        task_run=None,
+        *,
+        probe=None,
+        manage_integrations=False,
+        inherited=None,
+        probe_definition=None,
+    ):
         cfg = self.backend.config
         disabled = context == "maintenance" or probe is not None
         result = {
@@ -94,6 +113,8 @@ class PiIntegrations:
         data = (
             self.registry.snapshot() if probe is not None or self.runtime_data is None else self.runtime_data
         )
+        if probe_definition is not None:
+            data = {"revision": 0, "removed": [], "servers": {probe: {"definition": probe_definition}}}
         for ident in data["removed"]:
             result["external_" + ident] = {
                 "command": sys.executable,
@@ -129,7 +150,7 @@ class PiIntegrations:
                 "enabled": ident == probe if probe is not None else (available and context != "maintenance"),
                 "startup_timeout_sec": spec["startup_timeout_seconds"],
                 "tool_timeout_sec": spec["tool_timeout_seconds"],
-                "default_tools_approval_mode": "prompt" if spec["approval"] == "reject" else spec["approval"],
+                "default_tools_approval_mode": spec["approval"],
                 "disabled_tools": sorted(
                     set(spec["deny_tools"])
                     | {tool for tool, policy in spec["tool_approvals"].items() if policy == "reject"}
@@ -261,9 +282,14 @@ class PiIntegrations:
             finally:
                 authorized.discard(transaction)
 
-    async def open_probe(self, ident, context):
+    async def open_probe(self, ident, context, probe_definition=None):
         self.registry.work.mkdir(parents=True, exist_ok=True, mode=0o700)
-        config = await self.capture(context, cwd=self.registry.work, probe=ident)
+        config = await self.capture(
+            context,
+            cwd=self.registry.work,
+            probe=ident,
+            **({"probe_definition": probe_definition} if probe_definition is not None else {}),
+        )
         opening = asyncio.create_task(
             self.backend.client.request(
                 "session.create",
@@ -302,8 +328,8 @@ class PiIntegrations:
         finally:
             self.probes.discard(thread)
 
-    async def verify(self, ident, context, schemas=False):
-        spec = self.registry.get(ident)["definition"]
+    async def verify(self, ident, context, schemas=False, *, draft=None):
+        spec = draft if draft is not None else self.registry.get(ident)["definition"]
         if context not in spec["contexts"]:
             raise ValueError("MCP server is excluded from this context")
         transport = spec["transport"]
@@ -324,7 +350,9 @@ class PiIntegrations:
                 command = str(directory / command)
             if not shutil.which(command, path=transport["env"].get("PATH", os.environ.get("PATH"))):
                 return {"state": "unavailable", "reason": "command_not_found"}
-        thread = await self.open_probe(ident, context)
+        thread = await self.open_probe(
+            ident, context, **({"probe_definition": spec} if draft is not None else {})
+        )
         try:
             result = await self.backend.client.request(
                 "mcp.inspect",
@@ -346,17 +374,22 @@ class PiIntegrations:
                 state = "auth_required"
             summaries = []
             for tool, data in list(tools.items())[:200]:
-                visible = (
-                    (spec["allow_tools"] is None or tool in spec["allow_tools"])
-                    and tool not in spec["deny_tools"]
-                    and spec["approval"] != "reject"
-                    and spec["tool_approvals"].get(tool) != "reject"
-                )
+                from assistant_runtime.core.integrations.configuration import tool_permission
+
+                permission = tool_permission(spec, tool, context)
+                visible = permission == "allowed"
                 summaries.append(
                     {
                         "name": tool,
                         "description": (data.get("description") or "")[:300],
                         "enabled_by_policy": visible,
+                        "permission": permission,
+                        "annotations": {
+                            k: v
+                            for k, v in (data.get("annotations") or {}).items()
+                            if k in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+                            and type(v) is bool
+                        },
                         **({"input_schema": data.get("inputSchema")} if schemas else {}),
                     }
                 )

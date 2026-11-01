@@ -6,7 +6,9 @@ from typing import Annotated
 from fastmcp import FastMCP
 from fastmcp.tools.base import ToolResult
 from mcp.types import ImageContent, TextContent
-from pydantic import Field
+from pydantic import Field, WithJsonSchema
+from assistant_runtime.mcp.contracts import checked
+from .tool_contracts import CHANGES, COLLECTION, BATCH_ITEMS
 
 from assistant_runtime.api.contracts import MediaRequest
 
@@ -81,7 +83,11 @@ def create_server(client, caller_run=None):
         )
 
     @server.tool(annotations=WRITE)
-    async def preview_media_changes(target: ID, changes: list[dict], location: str = "cloud") -> dict:
+    async def preview_media_changes(
+        target: ID,
+        changes: Annotated[list[dict], WithJsonSchema(CHANGES), checked(CHANGES, "changes")],
+        location: str = "cloud",
+    ) -> dict:
         """Persist a bounded exact plan, up to 100 changes. No provider mutation yet.
 
         Cloud changes: mkdir(folder_id,name), rename(file_id,name), move(file_id,folder_id),
@@ -109,7 +115,8 @@ def create_server(client, caller_run=None):
     async def media_collection(
         collection: ID,
         target: str | None = None,
-        definition: dict | None = None,
+        definition: Annotated[dict, WithJsonSchema(COLLECTION), checked(COLLECTION, "definition")]
+        | None = None,
         revision: int | None = None,
         before: str | None = None,
         limit: int = 20,
@@ -132,7 +139,12 @@ def create_server(client, caller_run=None):
         return await call("asset", asset_id=asset_id)
 
     @server.tool(annotations={**WRITE, "idempotentHint": True})
-    async def submit_media_batch(request_id: ID, target: ID, action: str, items: list[dict]) -> dict:
+    async def submit_media_batch(
+        request_id: ID,
+        target: ID,
+        action: str,
+        items: Annotated[list[dict], WithJsonSchema(BATCH_ITEMS), checked(BATCH_ITEMS, "items")],
+    ) -> dict:
         """Submit 1..100 explicit transfer/download items under one authorized target.
 
         Items use single-operation fields without request_id/target; no implicit folder

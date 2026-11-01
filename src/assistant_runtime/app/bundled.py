@@ -12,6 +12,24 @@ from .plugin_context import (
     ResourceRegistration,
 )
 
+# Provisioned before startup. This is availability, not a reverse lifecycle edge:
+# devices waits for its selected adapters to register during their own startup.
+RESOURCE_OWNERS = {
+    "usage": "ai_usage",
+    "conversation": "conversation",
+    **{
+        key: "devices"
+        for key in (
+            "directory",
+            "voice_binding",
+            "audio_outputs",
+            "audio_inputs",
+            "video_inputs",
+            "camera_controls",
+        )
+    },
+}
+
 
 def settings_for(config, name, spec):
     raw = getattr(config, spec.config_key) if spec.config_key else {}
@@ -67,6 +85,10 @@ def dependencies(host, name):
 def resources_for(host, name, keys):
     resources = {}
     for key in keys:
+        required = RESOURCE_OWNERS.get(key)
+        attribute = {"usage": "ai_usage", "directory": "devices", "voice_binding": "voice_io"}.get(key, key)
+        if required and getattr(host, attribute, None) is None:
+            raise ValueError(f"Plugin {name}: resource {key} requires enabled plugin {required}")
         if key == "system_io":
             from assistant_runtime.api.system import system
 

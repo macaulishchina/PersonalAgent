@@ -582,3 +582,20 @@ Task plans own scheduling, goals, upgrades and feedback; each attempt references
 public execution receipt through `data.execution_id`, also exposed as `execution` by get.
 Continuation and explicit handoffs create new attempt receipts while retaining the same
 work allowance and existing verified operation checkpoints.
+
+## 工具参数与部分更新
+
+`tool_contracts.py` 维护 execution、trigger、模型升级检查点和 update changes 的结构。
+MCP 声明、Pydantic 输入校验及任务运行时共享 Schema；通用校验使用 `mcp/contracts.py`。
+动态模型目录、资源和授权规则
+仍由任务模块检查。验证失败在创建/更新前结束，返回 `ToolFailure` 的字段路径及修正条件。
+
+`update_task.changes` 是递归字段补丁：未传字段保留、null 清除可选项、列表整体替换。
+改变 trigger/execution.kind 时重建对应变体，避免保留另一种变体的字段；组合后重新校验。
+用户明确选型保护、revision 冲突检查和运行中任务快照不变。仅修改标题或触发器不重新
+决定执行模型。示例：`{"execution":{"assessment":{"uncertainties":["待核实文件"]}}}`
+会保留 execution.reason 和 assessment.acceptance。
+明确改选 recommendation 时，会清除由旧推荐解析出的 model（同时显式提交 model 时仍
+要求二者一致）；直接更换 model 时移除旧推荐标签。原有用户选型只有明确的 user 来源
+才能替换，不把补丁中省略来源视为新的授权。未指定或 null 的模型/思考参数继续使用
+现有默认选择语义，不因新增 Schema 而要求调用者必须选型。

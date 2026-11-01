@@ -17,7 +17,21 @@ class TaskTrace:
         """)
 
     def append(self, run, value):
-        allowed = {"call_id", "phase", "kind", "server", "tool", "status", "operation_id", "device_id"}
+        allowed = {
+            "call_id",
+            "phase",
+            "kind",
+            "server",
+            "tool",
+            "status",
+            "operation_id",
+            "device_id",
+            "error_code",
+            "dispatch",
+            "result_state",
+            "stage",
+            "field",
+        }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Invalid execution trace metadata")
         if any(not isinstance(v, str) or len(v) > 300 for v in value.values()):

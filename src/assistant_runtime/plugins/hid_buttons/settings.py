@@ -2,6 +2,11 @@
 
 from dataclasses import dataclass
 import re
+from assistant_runtime.api.configuration import configuration_spec
+
+DEFAULT_DEBOUNCE = configuration_spec(__file__).schema["additionalProperties"]["properties"]["debounce_ms"][
+    "default"
+]
 
 
 @dataclass(frozen=True)
@@ -37,7 +42,7 @@ def parse(settings):
         report = data.get("report")
         if not isinstance(report, str) or not re.fullmatch(r"(?:[0-9a-fA-F]{2}){1,64}", report):
             raise ValueError("HID report must be 1..64 bytes encoded as hex, including report ID")
-        debounce = data.get("debounce_ms", 500)
+        debounce = data.get("debounce_ms", DEFAULT_DEBOUNCE)
         if type(debounce) is not int or not 100 <= debounce <= 5000:
             raise ValueError("HID debounce_ms must be 100..5000")
         if data.get("action") != "wake":

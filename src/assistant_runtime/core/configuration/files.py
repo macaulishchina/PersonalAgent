@@ -251,6 +251,7 @@ class ConfigurationFiles:
                     else self.resources.prepare(resource, resource_values[ident], operation)
                 )
                 touched.add(ident)
+                fields.extend(self.resources.audit_fields(resource, operation))
             if self.resources and not _repair:
                 self.resources.prepare_defaults(contents, resource_values, touched)
             self.validate_all(contents, resource_values, touched)

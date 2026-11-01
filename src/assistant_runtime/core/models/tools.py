@@ -1,6 +1,8 @@
 """No-tool auxiliary inference; caller identity is fixed by server construction."""
 
 from fastmcp import FastMCP
+from typing import Annotated
+from pydantic import Field
 from assistant_runtime.api.models import ModelRequest
 from assistant_runtime.api.annotations import READ
 
@@ -16,13 +18,20 @@ def create_server(client, caller_run=None):
         """Configured aliases, input capabilities and provider availability."""
         return await client.invoke(ModelRequest("list", caller_run=caller_run))
 
-    @server.tool()
+    # No action tools: bookkeeping receipts do not turn pure inference into a
+    # business write. Spending is still separately admitted and bounded.
+    @server.tool(annotations={**READ, "idempotentHint": True, "openWorldHint": True})
     async def infer_with_model(
         request_id: str,
         model: str,
         text: str,
         images: list[str] | None = None,
-        schema: dict | None = None,
+        schema: Annotated[
+            dict | None,
+            Field(
+                description="Optional JSON Schema for the requested result, not a tool/action specification. Arbitrary schema keywords are permitted; the model owner checks schema safety and supported output behavior."
+            ),
+        ] = None,
         reasoning_effort: str | None = None,
     ) -> dict:
         """Paid no-tool inference using a stable UUID and configured model alias.

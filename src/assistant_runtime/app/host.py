@@ -539,6 +539,17 @@ class AssistantService:
             response = {"ok": True, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": str(exc)[:200]}
+            from assistant_runtime.api.tool_calls import ToolFailure
+
+            if isinstance(exc, ToolFailure):
+                response["tool_outcome"] = exc.outcome.public()
+                if exc.result is not None:
+                    try:
+                        json.dumps(exc.result)
+                    except (TypeError, ValueError):
+                        pass
+                    else:
+                        response["tool_result"] = exc.result
             if action in {"configuration-update", "configuration-action", "model-test"}:
                 from assistant_runtime.api.configuration import ConfigurationError
 

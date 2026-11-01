@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "personal-agent-sample"
-version = "1.1.0"
+version = "1.1.1"
 requires-python = ">=3.12"
 [project.entry-points."personal_agent.plugins"]
 sample = "personal_agent_sample:definition"

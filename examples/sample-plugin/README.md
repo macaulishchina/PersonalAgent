@@ -8,7 +8,7 @@ Before adapting this example, read the [plugin contract](../../docs/development/
 
 The shipped example is certified for Linux only. `plugin.json` is included in
 the wheel and read by its `PluginDefinition`; static and runtime certifications
-must match. The same descriptor declares version `1.1.0`, API 2 and core range `>=0.4.0,<0.5.0`; `plugin_manifest(__file__)` creates the runtime manifest. The plugin release must match the distribution version. Windows and Windows Server refuse to enable this example. Certify a
+must match. The same descriptor declares version `1.1.1`, API 2 and core range `>=0.4.6,<0.5.0`; `plugin_manifest(__file__)` creates the runtime manifest. The plugin release must match the distribution version. Windows and Windows Server refuse to enable this example. Certify a
 new platform through an explicit release change after appropriate validation.
 
 For a new release, update `pyproject.toml` and `plugin.json` together. Keep the
@@ -37,3 +37,11 @@ artifact metadata. It never waits synchronously inside a parent model tool, recu
 executes another agent loop, or bypasses model configuration. Duplicate request UUIDs
 reuse the registered input and execution. Enable execution/workfiles (already in both
 presets). Real-model calls require the instance's normal authorization and budget. Only trusted packages should be installed; this is not a sandbox.
+
+The tool schemas include valid `examples`; development checks validate these without running
+the handlers. Runtime registration warns about and omits invalid documentation examples
+while preserving an otherwise callable tool. Dynamic length and request-ID conflicts raise public `ToolFailure` with
+the invalid field and confirmed `not_dispatched` status. Unexpected failures retain
+uncertainty; the sample never catches them to retry a report. Rewriting the identical
+note does not publish another event. Report submission returns an execution receipt;
+completion, result and artifacts are obtained through `sample_report_status`.

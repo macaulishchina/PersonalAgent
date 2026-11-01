@@ -484,3 +484,320 @@ function renderCapabilityPicker(initial, apply) {
   });
   return root;
 }
+
+// One model identity and grouped picker for every declared model reference.
+function modelDisplayName(alias) {
+  const entry = valueAt(["model_api", "entries"], {})[alias];
+  return `${alias} · ${entry?.provider || "未配置 Provider"}`;
+}
+function modelReferencePicker(select, { auto = false } = {}) {
+  const root = node("div", undefined, "model-reference"),
+    popup = node("div", undefined, "model-reference-popup"),
+    search = node("input", undefined, "model-reference-search"),
+    tree = node("div", undefined, "model-reference-tree"),
+    status = node("p", "", "model-reference-status");
+  const entries = valueAt(["model_api", "entries"], {}),
+    providers = valueAt(["model_api", "providers"], {}),
+    groups = new Map(),
+    specials = [],
+    collapsed = new Set();
+  const current = select.value;
+  for (const option of [...select.options]) {
+    const alias = option.value;
+    if (!alias || (auto && alias === "auto")) {
+      specials.push({ alias, label: option.textContent });
+      continue;
+    }
+    const entry = entries[alias],
+      provider = entry?.provider || "未配置 Provider";
+    if (!groups.has(provider)) groups.set(provider, []);
+    groups.get(provider).push({ alias, model: entry?.model || "" });
+  }
+  const ordered = [...groups].sort(([a], [b]) => a.localeCompare(b));
+  select.replaceChildren();
+  for (const item of specials) {
+    const option = node("option", item.label);
+    option.value = item.alias;
+    select.append(option);
+  }
+  for (const [provider, models] of ordered) {
+    const group = node("optgroup");
+    group.label = provider;
+    for (const item of models) {
+      const option = node("option", modelDisplayName(item.alias));
+      option.value = item.alias;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  select.value = current;
+  select.title = select.selectedOptions[0]?.label || "";
+  select.classList.add("model-reference-select");
+  select.setAttribute("aria-haspopup", "tree");
+  popup.id = "model-reference-" + configurationRequestId();
+  popup.setAttribute("popover", "auto");
+  tree.id = popup.id + "-tree";
+  select.setAttribute("aria-controls", tree.id);
+  select.setAttribute("aria-expanded", "false");
+  search.type = "search";
+  search.setAttribute("role", "searchbox");
+  search.setAttribute(
+    "aria-label",
+    (select.getAttribute("aria-label") || "模型") + " · 搜索模型或 Provider",
+  );
+  search.placeholder = "搜索模型或 Provider";
+  search.autocomplete = "off";
+  tree.setAttribute("role", "tree");
+  tree.setAttribute("aria-label", "按 Provider 分组的模型");
+  status.setAttribute("role", "status");
+  popup.append(search, tree, status);
+  root.append(select, popup);
+  if (!popup.showPopover) {
+    popup.hidden = true;
+    for (const name of ["aria-haspopup", "aria-controls", "aria-expanded"])
+      select.removeAttribute(name);
+    return root;
+  }
+  let watching;
+  const opened = () => popup.matches(":popover-open");
+  function close(restore = true) {
+    if (opened()) popup.hidePopover();
+    watching?.abort();
+    if (restore && select.isConnected) select.focus();
+  }
+  function choose(alias) {
+    close();
+    if (select.value === alias) return;
+    select.value = alias;
+    select.title = select.selectedOptions[0]?.label || "";
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function leaf(alias, label, model, parent) {
+    const item = node("button", undefined, "model-reference-option");
+    item.type = "button";
+    item.tabIndex = -1;
+    item.setAttribute("role", "treeitem");
+    item.setAttribute("aria-level", parent ? "2" : "1");
+    item.setAttribute("aria-label", parent ? modelDisplayName(alias) : label);
+    item.setAttribute("aria-selected", String(select.value === alias));
+    item.dataset.value = alias;
+    if (parent) item.dataset.provider = parent;
+    const copy = node("span", undefined, "model-reference-option-copy");
+    copy.append(node("strong", label));
+    if (model && model !== alias) copy.append(node("small", model));
+    item.append(
+      copy,
+      node("span", select.value === alias ? "✓" : "", "model-reference-check"),
+    );
+    item.addEventListener("click", () => choose(alias));
+    return item;
+  }
+  function draw() {
+    const query = search.value.trim().toLocaleLowerCase();
+    tree.replaceChildren();
+    let count = 0;
+    for (const item of specials)
+      if (!query || item.label.toLocaleLowerCase().includes(query))
+        tree.append(leaf(item.alias, item.label));
+    for (const [provider, models] of ordered) {
+      const matches = models.filter((item) =>
+        `${provider} ${item.alias} ${item.model}`
+          .toLocaleLowerCase()
+          .includes(query),
+      );
+      if (!matches.length) continue;
+      count += matches.length;
+      const group = node("div", undefined, "model-reference-group"),
+        heading = node("button", undefined, "model-reference-provider"),
+        children = node("div", undefined, "model-reference-children");
+      heading.type = "button";
+      heading.tabIndex = -1;
+      heading.setAttribute("role", "treeitem");
+      heading.setAttribute("aria-level", "1");
+      heading.setAttribute("aria-label", provider);
+      heading.setAttribute("aria-expanded", String(!collapsed.has(provider)));
+      children.id =
+        popup.id + "-group-" + ordered.findIndex(([name]) => name === provider);
+      heading.setAttribute("aria-controls", children.id);
+      heading.setAttribute("aria-owns", children.id);
+      heading.dataset.provider = provider;
+      heading.append(
+        node(
+          "span",
+          collapsed.has(provider) ? "›" : "⌄",
+          "model-reference-caret",
+        ),
+        node("strong", provider),
+      );
+      if (providers[provider]?.enabled === false)
+        heading.append(node("small", "未启用", "model-reference-disabled"));
+      heading.append(
+        node("span", String(matches.length), "model-reference-count"),
+      );
+      children.setAttribute("role", "group");
+      children.setAttribute("aria-label", provider + " 的模型");
+      children.hidden = collapsed.has(provider);
+      for (const item of matches)
+        children.append(leaf(item.alias, item.alias, item.model, provider));
+      heading.addEventListener("click", () => {
+        if (collapsed.has(provider)) collapsed.delete(provider);
+        else collapsed.add(provider);
+        draw();
+        [...tree.querySelectorAll(".model-reference-provider")]
+          .find((item) => item.dataset.provider === provider)
+          ?.focus();
+      });
+      group.append(heading, children);
+      tree.append(group);
+    }
+    status.textContent = count
+      ? `${count} 个模型 · ↑↓ 选择，Enter 确认，Esc 关闭`
+      : "没有匹配的模型";
+  }
+  function position() {
+    const rect = select.getBoundingClientRect(),
+      margin = 12,
+      gap = 6;
+    if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      close(false);
+      return;
+    }
+    const below = window.innerHeight - rect.bottom - margin,
+      above = rect.top - margin,
+      down = below >= Math.min(320, above),
+      height = Math.max(120, Math.min(420, down ? below : above) - gap),
+      width = Math.min(
+        Math.max(rect.width, 320),
+        window.innerWidth - margin * 2,
+      );
+    popup.style.width = width + "px";
+    popup.style.maxHeight = height + "px";
+    popup.style.left =
+      Math.max(
+        margin,
+        Math.min(rect.left, window.innerWidth - width - margin),
+      ) + "px";
+    popup.style.top =
+      (down
+        ? rect.bottom + gap
+        : Math.max(margin, rect.top - popup.offsetHeight - gap)) + "px";
+  }
+  function open() {
+    if (opened() || select.disabled) return;
+    search.value = "";
+    collapsed.clear();
+    draw();
+    popup.showPopover();
+    select.setAttribute("aria-expanded", "true");
+    position();
+    search.focus();
+    tree
+      .querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+    watching?.abort();
+    watching = new AbortController();
+    window.addEventListener("resize", position, { signal: watching.signal });
+    document.addEventListener(
+      "scroll",
+      (event) => {
+        if (!popup.contains(event.target)) position();
+      },
+      { capture: true, signal: watching.signal },
+    );
+  }
+  let pointerOpened = false;
+  select.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    pointerOpened = opened();
+    event.preventDefault();
+    select.focus();
+  });
+  select.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (pointerOpened) close();
+    else open();
+    pointerOpened = false;
+  });
+  select.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+      event.preventDefault();
+      open();
+    }
+  });
+  popup.addEventListener("toggle", () => {
+    select.setAttribute("aria-expanded", String(opened()));
+    if (!opened()) watching?.abort();
+  });
+  search.addEventListener("input", (event) => {
+    // Search is local UI state, never a change to the owning configuration field.
+    event.stopPropagation();
+    collapsed.clear();
+    draw();
+    position();
+  });
+  search.addEventListener("change", (event) => event.stopPropagation());
+  popup.addEventListener("keydown", (event) => {
+    const items = [...tree.querySelectorAll("[role=treeitem]")].filter(
+        (item) => item.getClientRects().length,
+      ),
+      index = items.indexOf(document.activeElement),
+      active = document.activeElement;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (event.key === "Tab") {
+      close();
+    } else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+      event.preventDefault();
+      items[
+        (index +
+          (event.key === "ArrowDown" ? 1 : index < 0 ? 0 : -1) +
+          items.length) %
+          items.length
+      ]?.focus();
+    } else if (["Home", "End"].includes(event.key) && active !== search) {
+      event.preventDefault();
+      items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+    } else if (event.key === "ArrowLeft" && active !== search) {
+      event.preventDefault();
+      const provider = active?.dataset.provider,
+        heading = [...tree.querySelectorAll(".model-reference-provider")].find(
+          (item) => item.dataset.provider === provider,
+        );
+      if (active === heading && active.getAttribute("aria-expanded") === "true")
+        heading.click();
+      else heading?.focus();
+    } else if (
+      event.key === "ArrowRight" &&
+      active?.classList.contains("model-reference-provider")
+    ) {
+      event.preventDefault();
+      if (active.getAttribute("aria-expanded") === "false") active.click();
+      else active.nextElementSibling.querySelector("[role=treeitem]")?.focus();
+    } else if (event.key === "Enter" && active === search) {
+      event.preventDefault();
+      const options = [
+        ...tree.querySelectorAll(".model-reference-option"),
+      ].filter((item) => item.getClientRects().length);
+      const selected = !search.value.trim()
+        ? options.find((item) => item.dataset.value === select.value)
+        : null;
+      (selected || options[0])?.click();
+    } else if (
+      active !== search &&
+      event.key.length === 1 &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key !== " "
+    ) {
+      event.preventDefault();
+      search.focus();
+      search.value += event.key;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  return root;
+}

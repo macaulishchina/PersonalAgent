@@ -231,16 +231,6 @@ class PiJobs:
                 self.notify(
                     ident, "waiting_user", questions=p.get("questions", []), progress="等待你补充信息"
                 )
-            elif method == "approval.requested":
-                response = (
-                    {"permissions": {}, "scope": "run"}
-                    if method == "permissions.requested"
-                    else {"decision": "decline"}
-                )
-                await self.client.respond(event["id"], response)
-                self.notify(
-                    ident, "waiting_user", progress="操作超出当前权限，未执行；请补充要求或取消任务。"
-                )
             else:
                 await self.client.send(
                     {
@@ -502,6 +492,16 @@ def tool_trace(method, params):
         "kind": kind,
         "status": "running" if phase == "started" else str(item.get("status", "unknown")),
     }
+    outcome = item.get("tool_outcome") or {}
+    for source, target in (
+        ("code", "error_code"),
+        ("dispatch", "dispatch"),
+        ("outcome", "result_state"),
+        ("stage", "stage"),
+        ("field", "field"),
+    ):
+        if isinstance(outcome.get(source), str):
+            result[target] = outcome[source]
     if kind == "mcp":
         result.update(server=str(item.get("server", "")), tool=str(item.get("tool", "")))
         args = item.get("arguments", {})
