@@ -1372,6 +1372,7 @@ dialog.wide-dialog {
   margin-bottom: 12px;
 }
 .editor-drawer {
+  --drawer-gutter: 28px;
   position: fixed;
   inset: 0 0 0 auto;
   margin: 0;
@@ -1382,15 +1383,37 @@ dialog.wide-dialog {
   border: 0;
   border-left: 1px solid var(--line);
   border-radius: 16px 0 0 16px;
+  overflow: hidden;
+}
+.editor-drawer[open] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 .editor-drawer .dialog-heading {
-  position: sticky;
-  top: 0;
+  grid-row: 1;
   background: white;
   z-index: 3;
+  min-width: 0;
+}
+.editor-drawer > .dialog-notice {
+  grid-row: 2;
+  margin: 0;
+  padding: 12px var(--drawer-gutter);
+  overflow-wrap: anywhere;
+}
+.editor-drawer .dialog-heading > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .editor-drawer #entry-body {
-  padding: 8px 0 95px;
+  grid-row: 3;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 0 24px;
 }
 .editor-drawer #entry-body > .field > .object-heading {
   display: none;
@@ -1414,14 +1437,12 @@ dialog.wide-dialog {
   margin-top: 4px;
 }
 .drawer-footer {
-  position: fixed;
-  bottom: 0;
-  right: 0;
-  width: var(--editor-width);
-  max-width: 100vw;
+  grid-row: 4;
+  position: relative;
+  min-width: 0;
   background: #fff;
   border-top: 1px solid var(--line);
-  padding: 18px 28px;
+  padding: 16px var(--drawer-gutter);
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -2443,3 +2464,124 @@ dialog.wide-dialog {
 }
 .capability-catalog-bar .hint { margin: 0; line-height: 1.5; }
 .capability-catalog-bar button { flex: 0 0 auto; padding: 8px 12px; }
+
+/* MCP editor layout follows the shared drawer spacing and scroll boundary. */
+.mcp-col-actions { width: 224px; }
+.mcp-table th:last-child,
+.mcp-table td:last-child { text-align: left; }
+.mcp-row-actions { justify-content: flex-start; }
+.editor-drawer #entry-body > .page-tabs {
+  margin: 20px var(--drawer-gutter) 24px;
+  max-width: calc(100% - 2 * var(--drawer-gutter));
+  flex-wrap: wrap;
+}
+.mcp-editor-section {
+  --mcp-label-width: 176px;
+  display: grid;
+  gap: 20px;
+  padding: 0 var(--drawer-gutter) 8px;
+  min-width: 0;
+}
+.mcp-editor-section[hidden],
+.mcp-field[hidden],
+.mcp-editor-section fieldset[hidden] {
+  display: none;
+}
+.mcp-editor-section fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.mcp-field {
+  display: grid;
+  grid-template-columns: var(--mcp-label-width) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  min-width: 0;
+}
+.mcp-field > span {
+  padding-top: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.mcp-field > input:not([type="checkbox"]),
+.mcp-field > select,
+.mcp-field > textarea {
+  width: 100%;
+  min-width: 0;
+}
+.mcp-field > textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+.mcp-field > input[type="checkbox"] {
+  margin: 12px 0;
+  justify-self: start;
+}
+.mcp-private-field {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.mcp-private-field > .hint {
+  margin: 0 0 0 calc(var(--mcp-label-width) + 20px);
+}
+.mcp-editor-section > details {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.mcp-editor-section > details > summary {
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.mcp-editor-section > details[open] > :not(summary) {
+  margin-top: 16px;
+}
+.mcp-editor-section > .hint {
+  margin: 0;
+}
+.mcp-editor-section > button {
+  justify-self: start;
+}
+.mcp-inline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.mcp-inline .mcp-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.mcp-inline .mcp-field > span {
+  padding: 0;
+}
+.mcp-inline .mcp-field > input[type="checkbox"] {
+  margin: 0;
+}
+.mcp-tool-list,
+.mcp-tool-row {
+  min-width: 0;
+}
+.mcp-tool-row {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.mcp-tool-row small {
+  display: block;
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}

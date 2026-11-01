@@ -134,7 +134,10 @@ function showDialog(id) {
   const dialog = $(id);
   $("notice").textContent = "";
   dialog.querySelector(".dialog-notice")?.remove();
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+    if (id === "entry-dialog") $("entry-body").scrollTop = 0;
+  }
 }
 for (const button of document.querySelectorAll("[data-close]"))
   button.addEventListener("click", () => $(button.dataset.close).close());
