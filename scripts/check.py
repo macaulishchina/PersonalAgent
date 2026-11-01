@@ -84,6 +84,7 @@ GROUPS = {
         "task_feedback",
         "tasks",
         "task_events",
+        "task_lifecycle",
         "task_models",
         "model_review",
         "model_choice",

@@ -218,6 +218,86 @@ export function TaskPanel({
         </p>
       )}
       <p>{runSummary(r)}</p>
+      {r.data.waiting && r.state === "queued" && (
+        <div className="task-hint" role="status">
+          {r.data.waiting.kind === "capacity"
+            ? "等待可用执行名额"
+            : "等待资源释放"}
+          {(r.data.waiting.blockers || []).map((blocker: any) => (
+            <div key={blocker.run_id}>
+              <button
+                className="text-button"
+                onClick={() => setSelectedId(blocker.task_id)}
+              >
+                查看阻塞任务 ↗
+              </button>{" "}
+              {blocker.resources.join("、")} ·{" "}
+              {RUN_LABELS[blocker.state] || blocker.state}
+              <small>执行 {blocker.run_id}</small>
+            </div>
+          ))}
+        </div>
+      )}
+      {r.data.initial_error && (
+        <details className="task-hint">
+          <summary>最初异常 · {r.data.initial_error.stage}</summary>
+          {r.data.initial_error.type} · {r.data.initial_error.code} ·{" "}
+          {r.data.initial_error.dispatch}
+          {r.data.initial_error.message && (
+            <p>{r.data.initial_error.message}</p>
+          )}
+        </details>
+      )}
+      {r.state === "unknown" && (
+        <div className="task-hint">
+          <button
+            disabled={busy}
+            onClick={() => act("reconcile_run", { run_id: r.id })}
+          >
+            核对执行
+          </button>
+          {r.data.recovery && (
+            <details>
+              <summary>核对结果与人工收尾</summary>
+              <p>
+                自动核对：
+                {RUN_LABELS[r.data.recovery.state] || r.data.recovery.state}
+                。不会自动重做。
+              </p>
+              <p>
+                请先核实外部操作回执及在途工作。人工收尾只解除占用，不表示业务成功。
+              </p>
+              <form
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const form = event.currentTarget;
+                  const reason = String(
+                    new FormData(form).get("reason") || "",
+                  ).trim();
+                  if (reason.length >= 10)
+                    await act("resolve_run", {
+                      run_id: r.id,
+                      revision: r.revision,
+                      reason,
+                      confirmed: true,
+                    });
+                }}
+              >
+                <textarea
+                  name="reason"
+                  required
+                  minLength={10}
+                  maxLength={2000}
+                  placeholder="填写已核实的操作回执、结果和收尾依据（至少 10 字）"
+                />
+                <button disabled={busy} type="submit">
+                  确认已核实，结束本次并解除占用
+                </button>
+              </form>
+            </details>
+          )}
+        </div>
+      )}
       <TaskTrace
         runId={r.id}
         runState={r.state}
@@ -240,7 +320,9 @@ export function TaskPanel({
           {r.data.artifacts.map((f: any) => (
             <p key={f.name}>
               <a
-                href={chatPath(`api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`)}
+                href={chatPath(
+                  `api/tasks/${r.id}/artifacts/${encodeURIComponent(f.name)}`,
+                )}
               >
                 {f.name}
               </a>{" "}
@@ -288,7 +370,7 @@ export function TaskPanel({
           </button>
         )}
         {!["archived", "terminated"].includes(selected?.state) &&
-          ["paused", "failed", "unknown", "canceled"].includes(r.state) && (
+          ["paused", "failed", "canceled"].includes(r.state) && (
             <button
               disabled={busy}
               onClick={() => {

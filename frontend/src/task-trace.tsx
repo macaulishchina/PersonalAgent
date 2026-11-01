@@ -37,6 +37,7 @@ export function TaskTrace({
   apiRef.current = api;
   const cache = useRef<TraceEvent[]>([]);
   const [items, setItems] = useState<TraceEvent[]>([]);
+  const [lifecycle, setLifecycle] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -79,6 +80,7 @@ export function TaskTrace({
           );
           if (disposed || controller.signal.aborted) return;
           if (result.run_id !== runId) throw new Error("执行记录归属不匹配");
+          setLifecycle(result.lifecycle?.items || []);
           const events: TraceEvent[] = result.items;
           cache.current = mergeTrace(cache.current, events);
           setItems(cache.current);
@@ -163,8 +165,45 @@ export function TaskTrace({
             <p className="task-hint">
               {!loaded
                 ? "正在加载执行过程…"
-                : "暂未记录到工具活动。正在理解请求或较早的执行记录可能没有这些数据。"}
+                : "暂未记录到工具活动。较早的执行可能没有这些数据。"}
             </p>
+          )}
+          {!!lifecycle.length && (
+            <details className="task-hint">
+              <summary>调度与恢复记录</summary>
+              <ol>
+                {lifecycle.map((item) => (
+                  <li key={item.seq}>
+                    {new Date(item.at * 1000).toLocaleString()} ·{" "}
+                    {(
+                      {
+                        state: "状态变化",
+                        dispatch: "派发证据",
+                        waiting: "等待原因",
+                        reconciliation: "执行核对",
+                        operator_resolution: "人工收尾",
+                        launch_error: "发起异常",
+                        stop_requested: "请求停止",
+                        stop_unconfirmed: "停止未确认",
+                        progress: "进展记录",
+                        archive_unresolved: "归档后仍待核实",
+                        restart: "重启核对",
+                      } as Record<string, string>
+                    )[item.kind] || item.kind}
+                    <div>
+                      {item.data.stage || item.data.type || ""}
+                      {item.kind === "state"
+                        ? ` ${item.data.before} → ${item.data.after}`
+                        : ""}
+                    </div>
+                    {item.data.reason &&
+                      typeof item.data.reason === "string" && (
+                        <p>{item.data.reason}</p>
+                      )}
+                  </li>
+                ))}
+              </ol>
+            </details>
           )}
           {!!steps.length && (
             <ol className="task-trace-list">

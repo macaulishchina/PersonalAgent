@@ -192,8 +192,9 @@ class ModelUpgrades:
                     turn_active=False,
                 )
                 dispatched = True
+                plugin.lifecycle.mark(ident, "handoff_prepare", "unknown")
                 await plugin.executor.launch(run, plugin.host.workfiles.area(plugin.owner(run)))
-        except Exception:
+        except Exception as exc:
             # Only this handoff may consume its failed preflight/dispatch. A user
             # stop or a newer request must keep its own state.
             async with lock:
@@ -205,13 +206,16 @@ class ModelUpgrades:
                     or current_upgrade["request_id"] != upgrade["request_id"]
                 ):
                     return
+                uncertain = (
+                    dispatched and plugin.lifecycle.failure(ident, exc, kind="handoff_error") == "unknown"
+                )
                 self.repo.update_run(
                     ident,
-                    "unknown" if dispatched else "paused",
+                    "unknown" if uncertain else "paused",
                     model_upgrades=replace(
                         run,
-                        phase="unknown" if dispatched else "blocked",
-                        error="handoff_unconfirmed" if dispatched else "handoff_preflight_failed",
+                        phase="unknown" if uncertain else "blocked",
+                        error="handoff_unconfirmed" if uncertain else "handoff_preflight_failed",
                     ),
                     progress="模型交接未确认，请核对执行记录后明确继续；未自动重做。",
                 )

@@ -5,6 +5,7 @@ import re
 import time
 
 from assistant_runtime.api.configuration import configuration_default
+from assistant_runtime.api.tool_calls import invalid_arguments
 
 GUIDANCE = (
     "Omit execution.model to use the configured main conversation model. "
@@ -30,6 +31,38 @@ class ModelPolicy:
         default_factory=lambda: configuration_default(__file__, "model_policy")["review_mode"]
     )
     recommendations: dict = field(default_factory=dict)
+
+    async def refresh_missing(self, executor, saved, fixed, main):
+        """Rebind a removed configuration before dispatch, never on provider failure."""
+        catalog = await executor.models(refresh=True)
+        available = {
+            name: row
+            for row in catalog
+            if row.get("available", True)
+            for name in (row.get("id"), row.get("model"))
+            if name
+        }
+        if saved.get("model") in available:
+            return saved
+        target = fixed["model"] if fixed["model"] != "auto" else main["model"]
+        if target not in available:
+            raise invalid_arguments(
+                "Saved task model was removed and the current task/main binding is unavailable; configure a model before running"
+            )
+        requested = {"reason": "原任务模型已从可用配置移除，派发前按当前实例任务／主对话配置重新评估"}
+        effort = (
+            fixed["reasoning_effort"] if fixed["reasoning_effort"] != "auto" else main["reasoning_effort"]
+        )
+        if effort == "auto" and saved.get("reasoning_effort") in supported(available[target]):
+            requested["reasoning_effort"] = saved["reasoning_effort"]
+        result = await self.resolve(executor, requested, fixed, main)
+        result["assessment"] = saved.get("assessment", {})
+        result["selection"]["prior_execution"] = {
+            "model": saved.get("model"),
+            "reasoning_effort": saved.get("reasoning_effort"),
+            "reason": "model_removed_from_configuration",
+        }
+        return result
 
     @classmethod
     def parse(cls, data):
@@ -125,8 +158,6 @@ class ModelPolicy:
             and not reason
             and all(v == "auto" for v in fixed.values())
         ):
-            from assistant_runtime.api.tool_calls import invalid_arguments
-
             raise invalid_arguments(
                 "Explain task uncertainty and verification in execution.reason", "execution.reason"
             )
@@ -217,7 +248,7 @@ class ModelPolicy:
             else:
                 choices[key], sources[key] = main[key], "main_conversation"
         if choices["model"] in (None, "auto", "unconfigured", ""):
-            raise ValueError(
+            raise invalid_arguments(
                 "Task model is not configured; configure the main model or choose execution.model"
             )
         if choices["reasoning_effort"] == "auto":
@@ -225,7 +256,7 @@ class ModelPolicy:
             entry = next((m for m in models if choices["model"] in (m.get("id"), m["model"])), {})
             levels = [e for e in supported(entry) if e != "auto"]
             if levels:
-                raise ValueError(
+                raise invalid_arguments(
                     "Task auto effort requires the initiating model to choose execution.reasoning_effort from: "
                     + ", ".join(levels)
                 )

@@ -41,6 +41,7 @@ export function toolOutcome(value: ToolSummary): string {
 const errors: Record<string, string> = {
   invalid_arguments: "参数不符合工具要求，操作未执行。",
   revision_conflict: "任务已更新，请读取最新版本后再修改；本次修改未执行。",
+  task_run_conflict: "任务已有未结束的执行，本次未重复创建。请先查看现有执行。",
   deadline_expired: "请求期限已到，操作未发出。",
   incomplete_tool_arguments: "模型未生成完整参数，操作未执行。",
   prior_result_unknown: "前次相同操作的结果尚未确认，本次未重复执行。",
@@ -79,6 +80,14 @@ export function ToolResult({
           "未取得有效结果，可查看助手的后续说明。"}
         {value.field && (
           <div className="tool-result-meta">字段：{value.field}</div>
+        )}
+        {value.task_id && (
+          <button
+            className="tool-result-link"
+            onClick={() => onOpenTask(value.task_id!)}
+          >
+            查看现有任务 <ArrowUpRight size={13} aria-hidden="true" />
+          </button>
         )}
       </details>
     );

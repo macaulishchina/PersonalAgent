@@ -46,6 +46,11 @@ class TaskEventsTest(unittest.IsolatedAsyncioTestCase):
             plugins=["tasks", "events"],
         )
         self.executor = SimpleNamespace(
+            models=AsyncMock(
+                return_value=[
+                    {"model": "test-model", "supported_reasoning_efforts": [{"reasoning_effort": "low"}]}
+                ]
+            ),
             select=AsyncMock(side_effect=lambda model, effort: {"model": model, "reasoning_effort": effort}),
             launch=AsyncMock(),
             reconcile=AsyncMock(return_value=("unknown", "not replayed")),

@@ -307,7 +307,16 @@ class WebPlugin:
         return web.json_response(
             {
                 key: result[key]
-                for key in ("run_id", "task_id", "state", "items", "next", "truncated", "outcome_scope")
+                for key in (
+                    "run_id",
+                    "task_id",
+                    "state",
+                    "items",
+                    "next",
+                    "truncated",
+                    "outcome_scope",
+                    "lifecycle",
+                )
             }
         )
 

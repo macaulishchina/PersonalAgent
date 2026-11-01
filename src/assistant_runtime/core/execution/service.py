@@ -146,6 +146,47 @@ class ExecutionService:
             raise ValueError("Execution belongs to another caller")
         return row
 
+    def task_evidence(self, reference, *, all_attempts=False):
+        """Internal tasks interface: durable attempts, including lost dispatch replies.
+
+        Tasks owns the reference. This is evidence only, never an execution retry or
+        a claim that absent historical telemetry proves no external side effects.
+        """
+        rows = self.records.db.execute(
+            "SELECT id,state,json_extract(data,'$.session_id'),json_extract(data,'$.turn_id') "
+            "FROM agent_runs WHERE json_extract(data,'$.source')='task' "
+            "AND json_extract(data,'$.reference')=? ORDER BY created DESC"
+            + ("" if all_attempts else " LIMIT 9"),
+            (reference,),
+        ).fetchall()
+        result = []
+        for ident, state, session, turn in rows if all_attempts else rows[:8]:
+            unresolved = self.records.db.execute(
+                "SELECT id,kind,state FROM execution_operations WHERE execution_id=? "
+                "AND state IN ('unknown','observed') LIMIT 3",
+                (ident,),
+            ).fetchall()
+            result.append(
+                {
+                    "id": ident,
+                    "state": state,
+                    "session_id": session,
+                    "turn_id": turn,
+                    "unresolved_operations": [dict(id=r[0], kind=r[1], state=r[2]) for r in unresolved[:2]],
+                    "more_unresolved": len(unresolved) > 2,
+                }
+            )
+        if not all_attempts and len(rows) > 8:
+            result.append(
+                {
+                    "id": None,
+                    "state": "unknown",
+                    "coverage": "older_attempts_not_in_summary",
+                    "unresolved_operations": [],
+                }
+            )
+        return result
+
     def view(self, row):
         data = row["data"]
         return {

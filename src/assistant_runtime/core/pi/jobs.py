@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import weakref
+from assistant_runtime.api.tool_calls import invalid_arguments
 
 from assistant_runtime.core.execution.instructions import INSTRUCTIONS
 from assistant_runtime.core.pi.mcp import server_config
@@ -51,9 +52,11 @@ class PiJobs:
             models = await self.models(refresh=True)
             selected = next((m for m in models if model in (m["id"], m["model"])), None)
         if not selected:
-            raise ValueError("Task model is not available: " + model)
+            raise invalid_arguments("Task model is not available: " + model, "execution.model")
         if effort not in [e["reasoning_effort"] for e in selected.get("supported_reasoning_efforts", [])]:
-            raise ValueError("Unsupported reasoning effort for " + model + ": " + effort)
+            raise invalid_arguments(
+                "Unsupported reasoning effort for " + model + ": " + effort, "execution.reasoning_effort"
+            )
         return {"model": selected["model"], "reasoning_effort": effort}
 
     async def launch(self, run, directory):
@@ -61,6 +64,11 @@ class PiJobs:
             await self._launch(run, directory)
 
     async def _launch(self, run, directory):
+        if (
+            self.notify(run["id"], None, dispatch={"stage": "executor_prepare", "state": "not_dispatched"})
+            is False
+        ):
+            return
         spec = run["data"]["spec"]
         cfg = self.backend.config
         selection = spec["execution"]
@@ -190,6 +198,8 @@ class PiJobs:
                 "无需行动时保持静默。设备动作使用稳定 operation_id，结果不确定时先查询，不盲目重做。"
                 "执行期间新事件由任务收件箱管理，不要自行创建同类监听或重复任务。"
             )
+        if self.notify(run["id"], None, dispatch={"stage": "run_start", "state": "unknown"}) is False:
+            return
         turn = await self.client.request(
             "run.start",
             {
@@ -206,7 +216,13 @@ class PiJobs:
             timeout=60,
         )
         self.handles[run["id"]]["turn_id"] = turn["run"]["id"]
-        self.notify(run["id"], None, turn_id=turn["run"]["id"], execution_id=turn.get("execution_id"))
+        self.notify(
+            run["id"],
+            None,
+            turn_id=turn["run"]["id"],
+            execution_id=turn.get("execution_id"),
+            dispatch={"stage": "run_started", "state": "dispatched"},
+        )
 
     async def event(self, event):
         p, method = event.get("data", {}), event.get("kind", "")
@@ -372,21 +388,26 @@ class PiJobs:
                 },
             )
 
-    async def stop(self, run, pause=False):
+    async def stop(self, run, pause=False, *, recorded=False):
         async with self.locks.setdefault(run["id"], asyncio.Lock()):
-            data = {**run["data"], **self.handles.get(run["id"], {})}
+            handles = self.handles.get(run["id"], {})
+            data = {**handles, **run["data"]} if recorded else {**run["data"], **handles}
             await self._stop({**run, "data": data}, pause)
 
     async def _stop(self, run, pause=False):
         thread = run["data"].get("execution_session_id")
         if not thread:
-            if run["state"] == "unknown":
+            if run["data"].get("dispatch", {}).get("state") == "not_dispatched":
+                return
+            if run["state"] != "queued":
                 raise RuntimeError("Cannot confirm cancellation without an execution thread")
             return
         if run["data"]["spec"].get("long_term") or run["data"].get("goal"):
             await self.client.request("goal.set", {"session_id": thread, "status": "paused"})
-        if run["data"].get("turn_id") or getattr(self.client, "admission", None):
+        if run["data"].get("turn_id"):
             await self.client.request("run.cancel", {"session_id": thread, "run_id": run["data"]["turn_id"]})
+        elif getattr(self.client, "admission", None):
+            await self.client.request("run.cancel", {"session_id": thread})
         cursor = None
         while True:
             page = await self.client.request(
@@ -400,6 +421,11 @@ class PiJobs:
             cursor = page.get("next_cursor")
             if not cursor:
                 break
+        summary = (await self.client.request("session.read", {"session_id": thread, "include_runs": False}))[
+            "session"
+        ]
+        if summary.get("status", {}).get("type") == "active":
+            raise RuntimeError("Execution is still active after cancellation")
         self.questions.pop(run["id"], None)
 
     @staticmethod
@@ -475,6 +501,26 @@ class PiJobs:
                 turn["status"]
             ], text
         return "unknown", "执行中断或结果未确认；请核对后明确继续，未自动重做"
+
+    async def recovery_evidence(self, run, *, recorded=False):
+        """Read-only native evidence. Never search/replay unrelated sessions."""
+        handles = self.handles.get(run["id"], {})
+        data = {**handles, **run["data"]} if recorded else {**run["data"], **handles}
+        session = data.get("execution_session_id")
+        if not session:
+            return {"state": "unidentified", "reason": "no_durable_session_identity"}
+        summary = (await self.client.request("session.read", {"session_id": session, "include_runs": False}))[
+            "session"
+        ]
+        state = summary.get("status", {}).get("type", "unknown")
+        operations = await self.client.request("operations.list", {"session_id": session})
+        return {
+            "state": state,
+            "session_id": session,
+            "active": state == "active" or bool(operations.get("data") or operations.get("next_cursor")),
+            "local_operations": len(operations.get("data", [])),
+            "external_effects": "unknown",
+        }
 
 
 def tool_trace(method, params):

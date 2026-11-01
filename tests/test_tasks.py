@@ -672,7 +672,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(run["id"], [r["id"] for r in self.plugin.repo.runs(d["id"])])
         result = await self.plugin.request(TaskRequest("list"))
         self.assertIn(run["id"], [r["id"] for r in result["runs"]])
-        with self.assertRaisesRegex(ValueError, "unfinished"):
+        with self.assertRaisesRegex(ValueError, "未结束"):
             await self.plugin.request(
                 TaskRequest("run", {"task_id": d["id"], "request_id": str(uuid.uuid4())})
             )
@@ -1419,7 +1419,7 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_parallel_limit_and_resource_lock(self):
         for number in range(3):
-            await self.create(title=str(number), resources=["same-project"])
+            await self.create(title=str(number), resources=["same-project"], resource_locks=["same-project"])
         await asyncio.sleep(0.8)
         self.assertEqual(self.executor.launch.await_count, 1)
         run = next(r for r in self.plugin.repo.runs() if r["state"] == "dispatching")
@@ -1580,6 +1580,9 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         run = self.plugin.repo.enqueue(task, "repair-lock", "waiting_user")
         owner = await self.create(resources=["media:quark_series"], auto_archive=False)
         other = self.plugin.repo.enqueue(owner, "owner", "unknown")
+        legacy_spec = {**other["data"]["spec"]}
+        legacy_spec.pop("resource_locks")
+        self.plugin.repo.update_run(other["id"], spec=legacy_spec)
         args = {
             "run_id": run["id"],
             "revision": run["revision"],

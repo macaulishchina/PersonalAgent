@@ -6,6 +6,11 @@ from assistant_runtime.core.pi.jobs import PiJobs
 
 class TaskExecutor(PiJobs):
     async def launch(self, run, directory):
+        if (
+            self.notify(run["id"], None, dispatch={"stage": "executor_prepare", "state": "not_dispatched"})
+            is False
+        ):
+            return
         upgrades = run["data"].get("model_upgrades", [])
         changed = bool(upgrades and upgrades[-1]["phase"] == "dispatching")
         if run["data"].get("execution_session_id") and changed:

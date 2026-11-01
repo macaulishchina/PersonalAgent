@@ -124,6 +124,12 @@ CHANGES = obj(
         "long_term": {"type": "boolean"},
         "workspace": text(4000),
         "resources": {"type": "array", "items": text(200), "maxItems": 16},
+        "resource_locks": {
+            "type": "array",
+            "items": text(200),
+            "maxItems": 16,
+            "description": "Explicit scheduling mutex objects. Separate from authorization resources; omit for plugin-owned transaction locking.",
+        },
         "notify_voice": {"type": "boolean"},
         "notify_completion": {"type": "boolean"},
         "auto_archive": {"type": "boolean"},

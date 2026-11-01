@@ -48,7 +48,7 @@ def tool_display(item):
         or {}
     )
     if outcome.get("outcome") in {"failed", "unknown", "cancelled"}:
-        return {
+        display = {
             "kind": "tool",
             "outcome": "failed",
             "error_code": short(outcome.get("code")),
@@ -57,6 +57,10 @@ def tool_display(item):
             "stage": short(outcome.get("stage")),
             "field": short(outcome.get("field")),
         }
+        receipt = mapping(outcome.get("receipt"))
+        if server == "tasks" and re.fullmatch(r"[a-f0-9]{32}", short(receipt.get("task_id"))):
+            display["task_id"] = receipt["task_id"]
+        return display
     if (server, tool) not in {("tasks", "create_task"), ("tasks", "get_task"), ("search", "fetch_webpage")}:
         return None
     result = mapping(item.get("result"))

@@ -41,7 +41,35 @@ class TaskRepository:
           next_at REAL NOT NULL DEFAULT 0, error TEXT, updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS job_finalizations_due ON job_finalizations(state,next_at);
         CREATE TABLE IF NOT EXISTS job_event_cursor (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS job_run_history (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+          at REAL NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS job_run_history_cursor ON job_run_history(run_id,seq);
         """)
+
+    def record(self, ident, kind, data):
+        """Owner evidence, separate from the mutable progress presentation."""
+        encoded = json.dumps(data, ensure_ascii=False)
+        if len(encoded.encode()) > 8192:
+            raise ValueError("Task lifecycle evidence exceeds 8 KiB")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO job_run_history(run_id,at,kind,data) VALUES(?,?,?,?)",
+                (ident, time.time(), kind, encoded),
+            )
+
+    def history(self, ident, cursor=0, limit=50):
+        if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid task history cursor or limit")
+        rows = self.db.execute(
+            "SELECT seq,at,kind,data FROM job_run_history WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?",
+            (ident, cursor, limit + 1),
+        ).fetchall()
+        return {
+            "items": [dict(seq=r[0], at=r[1], kind=r[2], data=json.loads(r[3])) for r in rows[:limit]],
+            "cursor": rows[min(limit, len(rows)) - 1][0] if rows else cursor,
+            "has_more": len(rows) > limit,
+        }
 
     def definition(self, ident):
         row = self.db.execute(
@@ -414,6 +442,28 @@ class TaskRepository:
         elif target not in TERMINAL:
             data.pop("finished_at", None)
         with self.db:
+            if "progress" in changes and changes["progress"] != r["data"].get("progress"):
+                self.db.execute(
+                    "INSERT INTO job_run_history(run_id,at,kind,data) VALUES(?,?,?,?)",
+                    (
+                        ident,
+                        now,
+                        "progress",
+                        json.dumps(
+                            {
+                                "before": str(r["data"].get("progress", ""))[:2000],
+                                "after": str(changes["progress"])[:2000],
+                                "bounded": True,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+            if target != r["state"]:
+                self.db.execute(
+                    "INSERT INTO job_run_history(run_id,at,kind,data) VALUES(?,?,?,?)",
+                    (ident, now, "state", json.dumps({"before": r["state"], "after": target})),
+                )
             self.db.execute(
                 "UPDATE job_runs SET state=?,data=?,updated=?,revision=revision+1 WHERE id=?",
                 (state or r["state"], json.dumps(data, ensure_ascii=False), time.time(), ident),

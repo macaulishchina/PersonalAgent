@@ -925,6 +925,16 @@ class PiClient:
             self.workers[ident] = PiSessionWorker(self, ident, meta)
             return self._session_reply(meta)
         ident = p["session_id"]
+        if (
+            command in {Command.READ, Command.RUNS, Command.OPERATIONS, Command.GOAL_GET}
+            and ident not in self.workers
+        ):
+            meta, _ = self._load_meta(ident)
+            if not meta:
+                raise RpcError("Unknown execution session")
+            # Recovery reads must not reserve one of the live session slots or
+            # start a process. Metadata is atomically persisted by its owner.
+            return await self._session_command(command, p, PiSessionWorker(self, ident, meta))
         async with self.locks.setdefault(ident, asyncio.Lock()):
             return await self._session_command(command, p, self._worker(ident))
 

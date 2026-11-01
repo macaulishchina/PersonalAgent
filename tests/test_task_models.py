@@ -151,6 +151,9 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
         models = await self.plugin.request(TaskRequest("models", {}))
         self.assertEqual(models["model_policy"]["defaults"]["model"], "gpt-6-luna")
         self.plugin.settings.execution = {"model": "fixed", "reasoning_effort": "high"}
+        self.executor.models.return_value.append(
+            {"model": "fixed", "supported_reasoning_efforts": [{"reasoning_effort": "high"}]}
+        )
         run = await self.make_running()
         receipt = run["data"]["model_selections"][0]
         self.assertEqual(receipt["model"], "fixed")

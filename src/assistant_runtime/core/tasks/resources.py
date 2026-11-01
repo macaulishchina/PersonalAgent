@@ -51,6 +51,7 @@ def repair_resources(plugin, args):
                 other["state"] in {"running", "dispatching", "waiting_user", "unknown"}
                 or other["id"] in plugin.launching
             )
+            and "resource_locks" not in other["data"]["spec"]
             and added.intersection(other["data"]["spec"].get("resources", []))
         ):
             raise ValueError("Requested resource is busy; wait for its owner before repairing this run")

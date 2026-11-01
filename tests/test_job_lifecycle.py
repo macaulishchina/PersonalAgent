@@ -138,7 +138,7 @@ class JobLifecycleTest(unittest.IsolatedAsyncioTestCase):
         )
         resume = next(c.args[1] for c in self.client.request.await_args_list if c.args[0] == "session.resume")
         self.assertEqual(resume["config"]["mcp_servers"], {"external_example": {"enabled": True}})
-        self.assertEqual(notices[0][1]["mcp_revision"], 7)
+        self.assertTrue(any(data.get("mcp_revision") == 7 for _, data in notices))
         self.assertEqual(self.runner.handles["run"]["mcp_revision"], 7)
 
     async def test_terminal_archive_releases_only_background_handles(self):

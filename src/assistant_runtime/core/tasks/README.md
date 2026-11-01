@@ -91,6 +91,50 @@ Jev 的传输、授权、阈值和判断日志全部属于 `decisions` 插件。
 
 ## Task definitions and runs
 
+### 派发、阻塞与恢复
+
+任务计划、单次执行和外部操作是三种不同状态。归档只结束计划；不能据此断言
+已经发出的操作结束。归档返回 `unfinished_runs`，保留未知执行及其占用。
+
+派发前持久记录 `data.dispatch`：准备、用量绑定、模型检查和会话创建没有发送
+Agent 轮次时为 `not_dispatched`；紧邻 `run.start` 之前记为 `unknown`，收到回执后
+记为 `dispatched`。准备失败结束为 `failed`，不占据未知资源。缺少历史 session ID
+不是未派发证明。取消失败、断连和迟到结果都不触发重做；未知执行不能直接继续。
+
+`resources` 只描述授权范围；新任务使用独立的 `resource_locks` 声明确实需要
+调度级互斥的对象。默认不加粗粒度互斥，实际写入仍由业务插件的事务、版本、
+幂等键和资源锁保证。同任务仍不允许重叠。旧快照没有 `resource_locks` 时保留
+原占用语义，尤其未知记录不能因升级被自动解锁。纠正授权范围不修改互斥锁。
+
+排队执行的 `data.waiting` 区分执行名额与资源等待，包含阻塞任务、执行、资源和
+建议动作；按接受顺序派发，解除阻塞后沿用原执行 ID，不另建执行。网页可直接
+查看阻塞任务，历史任务的未知执行仍有“核对执行”和人工收尾入口。
+
+操作者使用统一任务入口进行恢复，不直接编辑数据库：
+
+```sh
+pa tasks reconcile_run '{"run_id":"RUN_ID"}'
+pa tasks history '{"run_id":"RUN_ID","cursor":0,"limit":50}'
+pa tasks resolve_run '{"run_id":"RUN_ID","revision":LATEST_REVISION,"confirmed":true,"reason":"核对了哪些外部操作回执、结果及在途工作，为什么可以解除占用"}'
+```
+
+核对使用 Pi 原生状态及 execution 所有者的 `task_evidence` 内部接口；失去派发
+响应但唯一可关联的规范执行仍可找回身份。回执查询不调用模型、不重放任务。
+证据不足保持 `unknown`，并显示需要操作者核实。人工收尾必须先核对、通过
+版本检查、明确确认并填写至少十字依据；确认本地工作已停止后记为 `canceled`，
+不会声称业务成功，不恢复或重新执行。恢复操作不暴露为模型 MCP 工具。
+
+首次结构化异常（阶段、错误码、类型、调用栈位置）、后续停止、状态变化、核对
+和人工依据写入追加式 `job_run_history`，不再以唯一的 `progress` 充当错误证据。
+不保存异常局部变量或任意传输正文；可信 `ToolFailure` 保留其安全说明。
+CLI 游标可读取完整历史，网页过程只展示元数据，不复制进展正文、参数或凭据。
+规范执行摘要有界；超出摘要覆盖时保守提示未完全核对，不能据此自动解除保护。
+
+任务保存的模型已从当前可用目录移除时，在新轮次派发前按当前任务固定配置／
+主对话绑定重新评估并保存旧选型与原因。旧模型仍可用时保留其选型；供应商调用
+失败不触发换模型。当前绑定也不可用或没有可确定的思考深度时，明确准备失败，
+等待修改配置，不任意选择模型、猜测思考深度或调用付费判断服务。
+
 Definitions hold authorized objectives, trigger, workspace, model, notification policy
 and optional resource lock names. Runs snapshot the definition revision and have stable
 IDs, progress, questions, provider thread/turn IDs, results and artifacts. A reminder

@@ -70,12 +70,36 @@ class TaskTrace:
         truncated = self.db.execute(
             "SELECT truncated FROM job_trace_limits WHERE run_id=?", (run["id"],)
         ).fetchone()
+        lifecycle = self.repo.history(run["id"])
+        safe = {
+            "stage",
+            "state",
+            "code",
+            "type",
+            "dispatch",
+            "target",
+            "previous_state",
+            "action",
+            "outcome",
+            "authority",
+            "revision",
+        }
+        for entry in lifecycle["items"]:
+            entry["data"] = {
+                k: v
+                for k, v in entry["data"].items()
+                if k in safe or (entry["kind"] == "state" and k in {"before", "after"})
+            }
         return {
             "run_id": run["id"],
             "task_id": run["task_id"],
             "state": run["state"],
             "trigger_context": run["data"].get("trigger_context"),
             "model_review": run["data"].get("model_review"),
+            "waiting": run["data"].get("waiting"),
+            "dispatch": run["data"].get("dispatch"),
+            "recovery": run["data"].get("recovery"),
+            "lifecycle": lifecycle,
             "execution_session_id": run["data"].get("execution_session_id"),
             "turn_id": run["data"].get("turn_id"),
             "items": [{"seq": row[0], "at": row[1], **json.loads(row[2])} for row in rows[:limit]],

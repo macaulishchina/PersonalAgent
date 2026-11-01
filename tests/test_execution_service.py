@@ -65,6 +65,39 @@ class Client:
 
 
 class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_task_recovery_evidence_is_scoped_bounded_and_preserves_unknown_operations(self):
+        for number in range(12):
+            ident = "attempt-" + str(number)
+            self.service.records.create(
+                ident,
+                "operator",
+                ident,
+                {
+                    "source": "task",
+                    "reference": "task-run",
+                    "session_id": "session-" + str(number),
+                    "turn_id": "turn-" + str(number),
+                    "model": "test",
+                    "effort": "low",
+                },
+            )
+            if number == 11:
+                self.service.records.operations.begin(ident, "tool", "write-receipt")
+            self.service.records.update(ident, "unknown")
+        self.service.records.create(
+            "other", "operator", "other", {"source": "task", "reference": "another-task"}
+        )
+        evidence = self.service.task_evidence("task-run")
+        self.assertEqual(len(evidence), 9)
+        self.assertEqual(evidence[-1]["coverage"], "older_attempts_not_in_summary")
+        self.assertNotIn("other", [item["id"] for item in evidence])
+        all_attempts = self.service.task_evidence("task-run", all_attempts=True)
+        self.assertEqual(len(all_attempts), 12)
+        actual = next(a for a in all_attempts if a["id"] == "attempt-11")
+        self.assertEqual(actual["session_id"], "session-11")
+        self.assertTrue(actual["unresolved_operations"])
+        self.assertEqual(self.client.calls, [])
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

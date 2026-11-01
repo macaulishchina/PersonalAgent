@@ -38,6 +38,7 @@ from assistant_runtime.core.tasks.self_schedule import (
     completion_policy,
 )
 from assistant_runtime.core.tasks.feedback import TaskFeedback
+from .lifecycle import TaskLifecycle, locks, dispatched
 
 
 RUN_LABELS = {
@@ -78,6 +79,7 @@ class TasksPlugin:
         self.settings = TaskSettings.parse(host.config.tasks)
         self.model_policy = ModelPolicy.parse(self.settings.model_policy)
         self.repo = TaskRepository(host.store.db)
+        self.lifecycle = TaskLifecycle(self)
         self.feedback = TaskFeedback(self)
         self.delivering_results = set()
         self.event_inbox = EventInbox(self)
@@ -93,6 +95,7 @@ class TasksPlugin:
         self.started = False
         self.notification_error = None
         self.run_locks = weakref.WeakValueDictionary()
+        self.launch_locks = weakref.WeakValueDictionary()
 
     def model_defaults(self):
         """Configured main binding, captured at selection; never a parent's incidental model."""
@@ -110,7 +113,22 @@ class TasksPlugin:
         self.scheduler = AsyncIOScheduler(timezone=self.settings.timezone)
         self.scheduler.start(paused=True)
         for run in self.repo.pending():
+            if run["data"].get("stop_requested"):
+                self.repo.record(run["id"], "restart", {"stop_request_interrupted": True})
+                if run["state"] == "queued":
+                    self.repo.update_run(
+                        run["id"],
+                        "failed" if dispatched(run) == "not_dispatched" else "unknown",
+                        stop_requested=None,
+                        progress="停止期间服务中断，需核对记录；未自动重做。",
+                    )
+                    continue
+                run = self.repo.update_run(run["id"], stop_requested=None)
             if run["state"] in {"dispatching", "running", "waiting_user"}:
+                if dispatched(run) == "not_dispatched":
+                    self.repo.record(run["id"], "restart", {"dispatch": "not_dispatched"})
+                    self.repo.update_run(run["id"], "failed", progress="派发前服务中断，未执行；未自动重做。")
+                    continue
                 upgrade = pending_upgrade(run)
                 if upgrade and upgrade["phase"] == "dispatching":
                     self.repo.update_run(
@@ -314,9 +332,29 @@ class TasksPlugin:
 
     def provider_update(self, ident, state, **data):
         run = self.repo.run(ident)
+        if "dispatch" in data:
+            data["dispatch"] = {**run["data"].get("dispatch", {}), **data["dispatch"], "at": time.time()}
+            self.repo.record(ident, "dispatch", data["dispatch"])
         trace = data.pop("tool_trace", None)
         if trace:
             self.trace.append(ident, trace)
+        if run["state"] == "unknown" and state in TERMINAL:
+            identifiers = {
+                k: v for k, v in data.items() if k in {"execution_session_id", "turn_id", "execution_id"}
+            }
+            self.repo.record(ident, "late_outcome", {"state": state, **identifiers})
+            if identifiers:
+                self.repo.update_run(ident, **identifiers)
+            return False  # Reconciliation, not an unsolicited late callback, releases quarantine.
+        if run["data"].get("stop_requested") and state not in {"completed", "failed"}:
+            bookkeeping = {
+                k: v
+                for k, v in data.items()
+                if k in {"execution_session_id", "turn_id", "execution_id", "dispatch"}
+            }
+            if bookkeeping:
+                self.repo.update_run(ident, **bookkeeping)
+            return False
         if run["state"] in TERMINAL | {"paused"}:
             identifiers = {
                 k: v for k, v in data.items() if k in {"execution_session_id", "turn_id", "execution_id"}
@@ -396,6 +434,7 @@ class TasksPlugin:
             "long_term",
             "workspace",
             "resources",
+            "resource_locks",
             "execution",
             "notify_voice",
             "notify_completion",
@@ -413,6 +452,7 @@ class TasksPlugin:
             "long_term": False,
             "workspace": self.host.config.workspace,
             "resources": [],
+            "resource_locks": [],
             "execution": {},
             "notify_voice": False,
             "notify_completion": True,
@@ -433,7 +473,15 @@ class TasksPlugin:
             or len(s["resources"]) > 16
             or any(not isinstance(x, str) or not 0 < len(x) <= 200 for x in s["resources"])
         ):
-            raise ValueError("Invalid resource locks")
+            raise ValueError("Invalid resource grants")
+        lock_names = s["resource_locks"]
+        if (
+            not isinstance(lock_names, list)
+            or len(lock_names) > 16
+            or any(not isinstance(x, str) or not 0 < len(x) <= 200 for x in lock_names)
+            or len(set(lock_names)) != len(lock_names)
+        ):
+            raise ValueError("Invalid explicit resource locks")
         workspace = Path(s["workspace"]).expanduser().resolve()
         if not workspace.is_dir() or not workspace.is_relative_to(Path(self.host.config.workspace).resolve()):
             raise ValueError("Task workspace must be inside configured workspace")
@@ -463,7 +511,7 @@ class TasksPlugin:
         if caller:
             parent = self.repo.run(caller)
             p = parent["data"]["spec"]
-            if parent["state"] not in {"running", "waiting_user"}:
+            if parent["state"] not in {"running", "waiting_user"} or parent["data"].get("stop_requested"):
                 raise ValueError("Parent execution is not active")
             if (
                 tr["kind"] != "immediate"
@@ -472,6 +520,17 @@ class TasksPlugin:
                 or not set(s["resources"]) <= set(p["resources"])
             ):
                 raise ValueError("Child task exceeds parent execution scope")
+            ancestors = [parent]
+            previous = p.get("parent_id")
+            for _ in range(3):
+                if any(set(s["resource_locks"]).intersection(locks(ancestor)) for ancestor in ancestors):
+                    raise ValueError(
+                        "Child cannot reacquire ancestor task mutexes; use plugin-owned operation locks"
+                    )
+                if not previous:
+                    break
+                ancestors = self.repo.active_runs(previous)
+                previous = self.repo.definition(previous)["spec"].get("parent_id")
             children = [d for d in self.repo.definitions() if d["spec"].get("parent_id") == parent["task_id"]]
             if len(children) >= 16 or p.get("depth", 0) >= 3:
                 raise ValueError("Subtask limit reached")
@@ -568,6 +627,8 @@ class TasksPlugin:
             "supplement",
             "upgrade_model",
             "repair_resources",
+            "reconcile_run",
+            "resolve_run",
         }:
             lock = self.run_locks.setdefault(request.arguments["run_id"], asyncio.Lock())
             async with lock:
@@ -591,8 +652,20 @@ class TasksPlugin:
             raise ValueError(
                 "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
             )
+        if caller and a in {"create", "upgrade_model", "reschedule_self", "complete_self"}:
+            if a == "upgrade_model" and args["run_id"] != caller:
+                raise ValueError("A background task may request only its own model upgrade")
+            if self.repo.run(caller)["data"].get("stop_requested"):
+                raise invalid_arguments("Execution is stopping; no new delegated actions are accepted")
         if a == "transfer_feedback":
             return await self.feedback.transfer(args, caller)
+        if a in {"reconcile_run", "resolve_run", "history"}:
+            if caller:
+                raise ValueError("Execution recovery is an operator action")
+            if a == "history":
+                self.repo.run(args["run_id"])
+                return self.repo.history(args["run_id"], args.get("cursor", 0), args.get("limit", 50))
+            return await getattr(self.lifecycle, "reconcile" if a == "reconcile_run" else "resolve")(args)
         if a == "repair_resources":
             from assistant_runtime.core.tasks.resources import repair_resources
 
@@ -636,7 +709,7 @@ class TasksPlugin:
                     continue
                 result[ident] = {
                     "task_id": run["task_id"],
-                    "state": run["state"],
+                    "state": "stopping" if run["data"].get("stop_requested") else run["state"],
                     "resources": run["data"]["spec"].get("resources", []),
                     "execution_version": {
                         "execution_session_id": run["data"].get("execution_session_id"),
@@ -712,6 +785,12 @@ class TasksPlugin:
                     "Conversation feedback on creation requires immediate non-Goal work with completion enabled"
                 )
             event_cursor = await self.event_inbox.tail() if subscription(spec) else 0
+            if caller:
+                current_parent = self.repo.run(caller)
+                if current_parent["state"] not in {"running", "waiting_user"} or current_parent["data"].get(
+                    "stop_requested"
+                ):
+                    raise ValueError("Parent stopped while preparing delegation; no child was created")
             now, ident = time.time(), uuid.uuid4().hex
             at = next_time(spec["trigger"], self.settings.timezone, now)
             with self.repo.db:
@@ -777,6 +856,8 @@ class TasksPlugin:
                     raise ValueError("Execution is not running; use continue for a stopped task")
                 await self.executor.supplement(run, self.input_text(args))
             elif a == "continue":
+                if run["state"] == "unknown":
+                    raise ValueError("结果未知，必须先核对执行和操作回执；不能直接继续或重做。")
                 if run["state"] not in {"paused", "unknown", "failed", "canceled", "waiting_user"}:
                     raise ValueError("Execution cannot be continued in this state")
                 if run["state"] == "waiting_user":
@@ -791,6 +872,7 @@ class TasksPlugin:
                     goal={},
                     completion_delivered=False,
                     completion_round=run["data"].get("completion_round", 0) + 1,
+                    stop_requested=None,
                     artifacts=[],
                     questions=[],
                     turn_active=False,
@@ -804,11 +886,39 @@ class TasksPlugin:
                     if pending_upgrade(run)
                     else {}
                 )
-                self.repo.update_run(run["id"], target, **changes)
+                self.repo.record(
+                    run["id"], "stop_requested", {"target": target, "previous_state": run["state"]}
+                )
+                self.repo.update_run(run["id"], stop_requested=target, **changes)
                 try:
                     await self.executor.stop(run, pause=a == "pause_run")
-                except Exception:
-                    self.repo.update_run(run["id"], "unknown", progress="停止请求未确认，请核对执行状态")
+                    execution = getattr(self.host.backend, "executions", None)
+                    if execution and any(
+                        row["unresolved_operations"] for row in execution.task_evidence(run["id"])
+                    ):
+                        raise RuntimeError(
+                            "Owned process stopped, but external operation outcomes still require reconciliation"
+                        )
+                    current = self.repo.run(run["id"])
+                    if current["state"] not in TERMINAL:
+                        if run["state"] == "unknown" and dispatched(run) != "not_dispatched":
+                            self.repo.record(
+                                run["id"], "local_stop_confirmed", {"external_effects": "unknown"}
+                            )
+                            self.repo.update_run(
+                                run["id"],
+                                "unknown",
+                                stop_requested=None,
+                                turn_active=False,
+                                progress="本地停止已确认；外部操作结果仍需核对，保留保护。",
+                            )
+                        else:
+                            self.repo.update_run(run["id"], target, stop_requested=None, turn_active=False)
+                except Exception as exc:
+                    self.lifecycle.failure(run["id"], exc, kind="stop_unconfirmed")
+                    self.repo.update_run(
+                        run["id"], "unknown", stop_requested=None, progress="停止请求未确认，请核对执行状态"
+                    )
                     raise
             return self.repo.run(run["id"])
         d = self.repo.definition(args["task_id"])
@@ -933,7 +1043,12 @@ class TasksPlugin:
             if a in {"terminate", "archive"}:
                 for run in self.repo.active_runs(d["id"]):
                     if run["state"] in ACTIVE:
-                        await self.request(TaskRequest("cancel_run", {"run_id": run["id"]}))
+                        try:
+                            await self.request(TaskRequest("cancel_run", {"run_id": run["id"]}))
+                        except Exception as exc:
+                            self.repo.record(
+                                run["id"], "archive_unresolved", {"action": a, "error": type(exc).__name__}
+                            )
                 for child in self.repo.definitions():
                     if child["spec"].get("parent_id") == d["id"]:
                         await self.request(TaskRequest(a, {"task_id": child["id"]}))
@@ -948,12 +1063,17 @@ class TasksPlugin:
             if existing:
                 return self.repo.run(existing[0])
             if self.repo.active_runs(d["id"]):
-                raise ValueError("Task already has unfinished execution")
+                self.lifecycle.conflict(self.repo.active_runs(d["id"]))
             with self.repo.db:
                 return self.repo.enqueue(d, "manual:" + args["request_id"])
         else:
             raise ValueError("Unknown task operation")
         self.schedule(d)
+        if a in {"archive", "terminate"}:
+            d["unfinished_runs"] = [
+                {"run_id": r["id"], "state": r["state"], "resource_locks": locks(r)}
+                for r in self.repo.active_runs(d["id"])
+            ]
         return d
 
     @staticmethod
@@ -968,15 +1088,24 @@ class TasksPlugin:
         return f"tasks/{run['task_id']}/{run['id']}"
 
     async def launch(self, run):
+        async with self.launch_locks.setdefault(run["id"], asyncio.Lock()):
+            self.launching.add(run["id"])
+            await self._launch(run)
+
+    async def _launch(self, run):
         from assistant_runtime.api.ai_usage import current_usage
 
         ident = run["id"]
         usage_token = None
         try:
-            if self.repo.run(ident)["state"] != "queued":
+            if self.repo.run(ident)["state"] != "queued" or self.repo.run(ident)["data"].get(
+                "stop_requested"
+            ):
                 return
+            self.lifecycle.mark(ident, "preparing", "not_dispatched")
             usage = getattr(self.host, "ai_usage", None)
             if usage and run["data"]["spec"]["execution"]["kind"] == "agent":
+                self.lifecycle.mark(ident, "usage_admission", "not_dispatched")
                 parent = await usage.service.binding("plan:" + run["task_id"])
                 await usage.bind_task(run, parent)
                 scope = await usage.service.binding(ident)
@@ -989,9 +1118,11 @@ class TasksPlugin:
                         ident, "paused", progress="AI 调用预算已暂停，请明确调整额度后继续。"
                     )
                     return
+            self.lifecycle.mark(ident, "trigger_validation", "not_dispatched")
             if not await self.event_inbox.prepare(run):
                 return
             run = self.repo.run(ident)
+            self.lifecycle.mark(ident, "workfiles", "not_dispatched")
             directory = self.host.workfiles.area(self.owner(run))
             if run["data"]["spec"]["execution"]["kind"] == "reminder":
                 self.repo.update_run(ident, "dispatching")
@@ -1003,7 +1134,11 @@ class TasksPlugin:
                 )
                 self.repo.update_run(ident, "completed", progress=json.dumps(result, ensure_ascii=False))
             else:
+                self.lifecycle.mark(ident, "model_selection", "not_dispatched")
                 spec = json.loads(json.dumps(run["data"]["spec"]))
+                spec["execution"] = await self.model_policy.refresh_missing(
+                    self.executor, spec["execution"], self.settings.execution, self.model_defaults()
+                )
                 if any(
                     value != "auto" and value != spec["execution"].get(key)
                     for key, value in self.settings.execution.items()
@@ -1024,13 +1159,25 @@ class TasksPlugin:
                     return
                 run = self.repo.update_run(ident, "dispatching", spec=spec)
                 self.model_review.enqueue(run)
+                # An adapter without stage receipts is conservative from this call boundary.
+                self.lifecycle.mark(ident, "executor_prepare", "unknown")
                 await self.executor.launch(run, directory)
+        except asyncio.CancelledError as exc:
+            state = self.lifecycle.failure(ident, exc, kind="launch_interrupted")
+            current = self.repo.run(ident)
+            if current["state"] not in TERMINAL or state == "unknown":
+                self.repo.update_run(ident, state, progress="服务收尾中断本轮，未自动重做。")
+            raise
         except Exception as exc:
             # A provider request may have executed before its reply was lost.
             current = self.repo.run(ident)
-            if current["state"] not in {"canceled", "paused"}:
-                state = "failed" if run["data"]["spec"]["execution"]["kind"] != "agent" else "unknown"
-                self.repo.update_run(ident, state, progress=str(exc)[:600])
+            state = self.lifecycle.failure(ident, exc)
+            if current["state"] not in {"canceled", "paused"} or state == "unknown":
+                self.repo.update_run(
+                    ident,
+                    state,
+                    progress="准备失败，未执行。" if state == "failed" else "执行结果待核实，未自动重做。",
+                )
         finally:
             if usage_token is not None:
                 current_usage.reset(usage_token)
@@ -1058,23 +1205,17 @@ class TasksPlugin:
                 for r in runs
                 if r["state"] in {"running", "dispatching", "waiting_user"} or r["id"] in self.launching
             ]
-            used = {
-                x
-                for r in runs
-                if r in busy or r["state"] == "unknown"
-                for x in r["data"]["spec"]["resources"]
-            }
-            for r in reversed(runs):
+            for r in runs:
+                waiting = self.lifecycle.wait(r, busy, runs) if r["state"] == "queued" else None
                 if (
                     r["state"] == "queued"
+                    and not r["data"].get("stop_requested")
                     and r["id"] not in self.launching
                     and r["data"].get("event_retry_at", 0) <= time.time()
-                    and len(busy) < self.settings.concurrency
-                    and not used.intersection(r["data"]["spec"]["resources"])
+                    and waiting is None
                 ):
                     self.launching.add(r["id"])
                     busy.append(r)
-                    used.update(r["data"]["spec"]["resources"])
                     self.context.spawn(self.launch(r), "execute:" + r["id"])
             for r in runs:
                 if r["revision"] <= r["delivered"]:

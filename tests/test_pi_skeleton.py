@@ -88,6 +88,19 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
                 if event["kind"] == "run.completed":
                     return event["data"]["run"]
 
+    async def test_recovery_metadata_reads_do_not_exhaust_session_capacity(self):
+        saved = []
+        for _ in range(18):
+            ident = await self.session()
+            saved.append(ident)
+            await self.client.request("session.close", {"session_id": ident})
+        for ident in saved:
+            for command in ("session.read", "session.runs", "operations.list", "goal.get"):
+                await self.client.request(command, {"session_id": ident})
+        self.assertFalse(self.client.workers)
+        fresh = await self.session()
+        self.assertIn(fresh, self.client.workers)
+
     async def test_real_model_effort_auth_and_restart_resume(self):
         catalog = await self.client.request("models.list", {})
         self.assertEqual({row["id"] for row in catalog["data"]}, {"model-a", "model-b"})

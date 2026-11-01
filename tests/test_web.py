@@ -532,7 +532,8 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(page["items"]), 2)
         self.assertNotIn("private", str(page))
         self.assertEqual(
-            set(page), {"run_id", "task_id", "state", "items", "next", "truncated", "outcome_scope"}
+            set(page),
+            {"run_id", "task_id", "state", "items", "next", "truncated", "outcome_scope", "lifecycle"},
         )
         self.assertEqual(self.host.runtime.invoke.call_args.args[0].action, "trace")
         response = await self.client.get(path + f"?after={page['next']}&limit=2")

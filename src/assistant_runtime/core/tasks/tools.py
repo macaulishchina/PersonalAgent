@@ -58,6 +58,12 @@ def create_server(client, caller_run=None):
                 description="Internal resource bindings for the user's authorized objective. Discover exact keys from the owning capability before delegation (media_capabilities.target_bindings for media). Match provider/account, not a guessed generic alias. Bind necessary scope yourself; users need not supply resource keys or repeat existing authorization. Children must stay within parent resources."
             ),
         ] = None,
+        resource_locks: Annotated[
+            list[str] | None,
+            Field(
+                description="Optional exact objects requiring task-level exclusive scheduling. Not capability grants; normal plugin operations use their own transaction/resource locks."
+            ),
+        ] = None,
         notify_voice: bool = False,
         notify_completion: bool | None = None,
         feedback_owner: Literal["conversation", "background"] = "background",
@@ -77,6 +83,7 @@ def create_server(client, caller_run=None):
             "execution": execution or {},
             "long_term": long_term,
             "resources": resources or [],
+            "resource_locks": resource_locks or [],
             "notify_voice": notify_voice,
         }
         if notify_completion is not None:
