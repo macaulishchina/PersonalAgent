@@ -157,6 +157,23 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.complete(self.payload(), session_id="one"))["text"], "OK")
         self.assertEqual(len(self.requests), 4)
 
+    async def test_default_output_has_no_optional_wire_cap_and_keeps_usage_reservation(self):
+        for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
+            with self.subTest(protocol=protocol):
+                client = await self.client(protocol)
+                payload = self.payload()
+                payload["max_output_tokens"] = 0
+                self.assertGreater(await client.output_bound(payload), 16384)
+                self.assertEqual((await client.complete(payload))["text"], "OK")
+                wire = self.requests[-1][2]
+                if protocol == "anthropic":
+                    self.assertGreater(wire["max_tokens"], 16384)
+                else:
+                    for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+                        self.assertNotIn(key, wire)
+                    for config in ("config", "generationConfig"):
+                        self.assertNotIn("maxOutputTokens", wire.get(config, {}))
+
     async def test_effort_selection_auto_and_explicit_levels(self):
         client = await self.client()
         for level in ("auto", "none", "low", "high", "max"):

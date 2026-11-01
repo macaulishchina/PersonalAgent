@@ -495,7 +495,7 @@ default_reasoning_effort = "none"
                 await page.get_by_role("button", name="添加连接", exact=True).click()
                 setup = page.locator("#setup-dialog")
                 await capture(page, "configuration-desktop-connection-wizard.png")
-                await setup.get_by_role("radio", name="通过 API 连接", exact=True).check()
+                await setup.get_by_role("radio", name="API Key", exact=True).check()
                 await setup.get_by_label("连接名称", exact=True).fill("LeiHuo-OpenAI")
                 await setup.get_by_label("接口类型", exact=True).select_option("custom")
                 await setup.get_by_label("接口地址", exact=True).fill(directory + "/draft")
@@ -522,23 +522,32 @@ default_reasoning_effort = "none"
                 ).to_be_visible()
                 await setup.get_by_role("button", name="取消", exact=True).click()
                 await page.get_by_role("tab", name="连接", exact=True).click()
-                # Native setup stages account, connection and private credential atomically.
+                # OAuth setup stages its provider configuration and connection without an API key.
                 await page.get_by_role("button", name="添加连接", exact=True).click()
+                await setup.get_by_role("radio", name="OAuth 登录", exact=True).check()
                 await setup.get_by_label("连接名称", exact=True).fill("native_test")
                 await setup.get_by_label("供应商", exact=True).fill("openai")
-                await setup.locator("#setup-credential").fill("synthetic-native-key")
+                await expect(setup.locator("#setup-credential")).to_have_count(0)
                 await setup.get_by_role("button", name="添加连接", exact=True).click()
                 await expect(page.locator(".entity-card[data-entity=native_test]")).to_be_visible()
                 await expect(page.locator("#documents")).not_to_contain_text("synthetic-native-key")
+                # API Key remains available for providers requiring a native Pi adapter.
+                await page.get_by_role("button", name="添加连接", exact=True).click()
+                await setup.get_by_label("连接名称", exact=True).fill("pi_key_test")
+                await setup.get_by_text("高级适配", exact=True).click()
+                await setup.get_by_label("使用 Pi 原生供应商适配", exact=True).check()
+                await setup.get_by_label("供应商", exact=True).fill("openai")
+                await setup.locator("#setup-native-key").fill("synthetic-native-key")
+                await setup.get_by_role("button", name="添加连接", exact=True).click()
                 # A wizard cancellation creates neither an account nor a credential.
                 await page.get_by_role("button", name="添加连接", exact=True).click()
                 await setup.get_by_label("连接名称", exact=True).fill("cancelled_connection")
-                await setup.locator("#setup-credential").fill("discarded-secret")
+                await setup.locator("#setup-api-key").fill("discarded-secret")
                 await setup.get_by_role("button", name="取消", exact=True).click()
                 await expect(page.locator(".entity-card[data-entity=cancelled_connection]")).to_have_count(0)
                 # Creating a connection is still a draft; switching model tabs must retain it.
                 await page.get_by_role("button", name="添加连接", exact=True).click()
-                await setup.get_by_role("radio", name="通过 API 连接", exact=True).check()
+                await setup.get_by_role("radio", name="API Key", exact=True).check()
                 await setup.get_by_label("连接名称", exact=True).fill("discard_me")
                 await setup.get_by_label("接口类型", exact=True).select_option("deepseek")
                 await setup.get_by_role("button", name="添加连接", exact=True).click()
@@ -804,7 +813,10 @@ default_reasoning_effort = "none"
                 await expect(page.locator("#notice")).to_have_text("保存成功，设置已生效。")
                 saved = tomllib.loads(models.read_text())["model_api"]
                 assert saved["providers"]["native_test"]["account"] == "native_test"
-                native_reference = saved["accounts"]["native_test"]["key_env"]
+                assert saved["accounts"]["native_test"]["auth"] == "oauth"
+                assert "key_env" not in saved["accounts"]["native_test"]
+                assert saved["accounts"]["pi_key_test"]["auth"] == "api_key"
+                native_reference = saved["accounts"]["pi_key_test"]["key_env"]
                 assert native_reference.startswith("PA_CONNECTION_")
                 assert "cancelled_connection" not in saved["providers"]
                 assert "cancelled_model" not in saved["entries"]

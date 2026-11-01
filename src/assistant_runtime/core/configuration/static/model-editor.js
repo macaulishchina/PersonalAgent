@@ -169,7 +169,7 @@ function renderModelEditor(field) {
   const advanced = node("details", undefined, "advanced-fields model-budget");
   advanced.append(
     node("summary", "高级设置"),
-    node("p", "运行预算，与模型规格分开设置。", "hint"),
+    node("p", "可选的单次输出限制。0 表示由供应商／Pi 默认处理，与模型规格及累计用量限制独立。", "hint"),
   );
   for (const name of ["max_output_tokens", "execution_max_output_tokens"])
     advanced.append(input(name));

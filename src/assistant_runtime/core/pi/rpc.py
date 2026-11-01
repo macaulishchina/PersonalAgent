@@ -227,7 +227,12 @@ class PiSessionWorker:
                 msg = json.loads(line)
                 await self._handle_message(msg)
         except Exception as exc:
-            log.warning("Pi event stream failed (%s): %s", self.execution_session_id, type(exc).__name__, exc_info=True)
+            log.warning(
+                "Pi event stream failed (%s): %s",
+                self.execution_session_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
         finally:
             for fut in list(self.pending.values()):
                 if not fut.done():

@@ -165,7 +165,8 @@ class ModelSettings:
             ("execution_max_output_tokens", 131072),
         ):
             n = getattr(obj, key)
-            if type(n) is not int or not 1 <= n <= maximum:
+            minimum = 0 if key in {"max_output_tokens", "execution_max_output_tokens"} else 1
+            if type(n) is not int or not minimum <= n <= maximum:
                 raise ValueError("Invalid models." + key)
         if not isinstance(obj.providers, dict) or not isinstance(obj.entries, dict):
             raise ValueError("Model providers and entries must be tables")
@@ -302,10 +303,10 @@ class ModelSettings:
             ):
                 raise ValueError("Invalid model output limit")
             limit = m.get("max_output_tokens", obj.max_output_tokens)
-            if type(limit) is not int or not 1 <= limit <= 16384:
+            if type(limit) is not int or not 0 <= limit <= 16384:
                 raise ValueError("Invalid output token budget")
             execution_limit = m.get("execution_max_output_tokens", obj.execution_max_output_tokens)
-            if type(execution_limit) is not int or not 1 <= execution_limit <= 131072:
+            if type(execution_limit) is not int or not 0 <= execution_limit <= 131072:
                 raise ValueError("Invalid execution output token budget")
             m["max_output_tokens"] = output_bound(m, limit)
             m["execution_max_output_tokens"] = output_bound(m, execution_limit)

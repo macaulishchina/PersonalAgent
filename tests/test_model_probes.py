@@ -62,6 +62,13 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
                 wire = json.dumps(self.requests[-1][2])
                 self.assertIn("connectivity test", wire)
                 self.assertNotIn('"tools": [', wire)
+                request = self.requests[-1][2]
+                if protocol == "anthropic":
+                    self.assertGreater(request["max_tokens"], 16384)
+                else:
+                    for field in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+                        self.assertNotIn(field, request)
+                    self.assertNotIn("maxOutputTokens", request.get("generationConfig", {}))
                 self.assertIn(
                     "draft-private-key",
                     self.requests[-1][1].values()

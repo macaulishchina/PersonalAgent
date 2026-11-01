@@ -494,7 +494,9 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         _, business, console, _, _ = await self.management()
         version = business.files.snapshot().version
         with patch.object(
-            console.provider_queries, "capture", return_value=({"protocol": "pi", "account": "native"}, None)
+            console.provider_queries,
+            "capture",
+            return_value=({"protocol": "pi", "account": "native"}, None, {"native": {"auth": "oauth"}}),
         ):
             with patch.object(console.accounts, "action", new=AsyncMock(return_value={"connected": True})):
                 result = await console.provider_queries.action("native", "test", version)
@@ -509,6 +511,112 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
                     (await console.provider_queries.action("native", "models", version))["code"], "timeout"
                 )
         self.assertFalse(self.requests)
+
+    async def test_native_api_key_draft_and_model_probe_use_current_credentials_without_save(self):
+        import uuid
+
+        root, business, console, _, _ = await self.management()
+        entry = root / "config.toml"
+        entry.write_text(
+            entry.read_text()
+            + '\n[model_api.accounts.native]\nprovider="openai"\nauth="api_key"\nkey_env="PA_TEST_DIRECTORY_KEY"\n'
+        )
+        before = business.files.snapshot()
+        draft = {
+            "provider": {"account": "native", "enabled": True},
+            "account": {"provider": "openai", "auth": "api_key", "key_env": "PA_TEST_DIRECTORY_KEY"},
+            "key": "replacement-draft-key",
+        }
+        parsed, key, accounts = console.provider_queries.capture("unsaved", before.version, draft)
+        self.assertEqual(key, "replacement-draft-key")
+        self.assertEqual(parsed["protocol"], "pi")
+        self.assertEqual(accounts["native"], draft["account"])
+        captured = console.provider_queries.capture_model(
+            {
+                "request_id": str(uuid.uuid4()),
+                "name": "unsaved-model",
+                "version": before.version,
+                "draft": {"entry": {"provider": "unsaved", "model": "gpt-6.1-sol"}, "connection": draft},
+            }
+        )
+        self.assertEqual(captured["key"], "replacement-draft-key")
+        draft["account"] = {"provider": "openai", "auth": "api_key"}
+        _, key, accounts = console.provider_queries.capture("unsaved", before.version, draft)
+        self.assertEqual(key, "replacement-draft-key")
+        self.assertEqual(accounts["native"]["key_env"], "PA_PROVIDER_PROBE_KEY")
+        self.assertEqual(business.files.snapshot(), before)
+        self.assertEqual((root / ".env").read_text(), "PA_TEST_DIRECTORY_KEY=private-test-key\n")
+        self.assertFalse((root / "state/model-accounts").exists())
+
+    async def test_unsaved_oauth_is_save_first_but_unsaved_api_key_can_be_tested(self):
+        import uuid
+
+        from assistant_runtime.core.configuration.provider_queries import ProbeInput
+
+        _, business, console, _, _ = await self.management()
+        version = business.files.snapshot().version
+        provider = {"account": "new", "enabled": True}
+        with self.assertRaisesRegex(ProbeInput, "OAuth 登录需先保存"):
+            console.provider_queries.capture(
+                "new",
+                version,
+                {
+                    "provider": provider,
+                    "account": {"provider": "openai", "auth": "oauth", "output_limit": "model"},
+                },
+            )
+        draft = {
+            "provider": provider,
+            "account": {"provider": "openai", "auth": "api_key"},
+            "key": "draft-key",
+        }
+        _, key, accounts = console.provider_queries.capture("new", version, draft)
+        self.assertEqual(key, "draft-key")
+        self.assertEqual(accounts["new"]["auth"], "api_key")
+        captured = console.provider_queries.capture_model(
+            {
+                "request_id": str(uuid.uuid4()),
+                "name": "new-model",
+                "version": version,
+                "draft": {"entry": {"provider": "new", "model": "gpt-6.1-sol"}, "connection": draft},
+            }
+        )
+        self.assertEqual(captured["accounts"]["new"]["auth"], "api_key")
+        self.assertEqual(captured["key"], "draft-key")
+        for invalid in ("", "key\n", [], "x" * 32769):
+            with self.assertRaisesRegex(ProbeInput, "API Key"):
+                console.provider_queries.capture("new", version, {**draft, "key": invalid})
+
+    async def test_native_draft_query_uses_private_temporary_store_and_closes_worker(self):
+        from types import SimpleNamespace
+
+        root, _, console, _, _ = await self.management()
+        worker = SimpleNamespace(call=AsyncMock(return_value={"connected": True}))
+        native = SimpleNamespace(account=AsyncMock(return_value=worker), close=AsyncMock())
+        accounts = {"draft": {"provider": "openai", "auth": "api_key", "key_env": "PA_DRAFT_KEY"}}
+        with patch("assistant_runtime.core.pi.accounts.NativeAccounts", return_value=native) as factory:
+            reply = await console.provider_queries.native_query(
+                {"account": "draft"}, "private-key", accounts, "test"
+            )
+        self.assertTrue(reply["connected"])
+        options = factory.call_args.kwargs
+        self.assertEqual(options["credentials"], {"PA_DRAFT_KEY": "private-key"})
+        self.assertFalse(Path(options["state_dir"]).exists())
+        self.assertFalse((root / "state/model-accounts").exists())
+        native.close.assert_awaited_once()
+        for failure in (RuntimeError("private upstream detail"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                worker.call = AsyncMock(side_effect=failure)
+                native.close.reset_mock()
+                with patch(
+                    "assistant_runtime.core.pi.accounts.NativeAccounts", return_value=native
+                ) as factory:
+                    with self.assertRaises(type(failure)):
+                        await console.provider_queries.native_query(
+                            {"account": "draft"}, "private-key", accounts, "test"
+                        )
+                self.assertFalse(Path(factory.call_args.kwargs["state_dir"]).exists())
+                native.close.assert_awaited_once()
 
     async def test_unsaved_provider_and_secret_are_used_without_persistence(self):
         root, business, console, client, headers = await self.management()

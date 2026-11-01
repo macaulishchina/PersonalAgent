@@ -233,7 +233,7 @@ class NativeAccounts:
         worker = await self.connection(entry["provider"])
         args = {"model": entry["model"], "alias": alias, "effort": effort, "images": images, "schema": schema}
         validation = await worker.call("validate", args)
-        bound = validation["max_output_tokens"] if worker.spec.get("output_limit") == "model" else None
+        bound = validation["max_output_tokens"]
         return worker, args, bound
 
     async def close(self):
@@ -323,3 +323,12 @@ async def manage(root, settings, action, account=None, *, binary=None):
 
 async def terminal_input(*, secret):
     return await system.terminal_input(secret=secret)
+
+
+def output_reservation(worker, requested, model_bound):
+    """Reserve advertised capacity without introducing a provider request cap."""
+    if type(model_bound) is not int or model_bound < 1:
+        raise ValueError("Native model output capacity unavailable")
+    if worker.spec.get("output_limit") == "model" or not requested:
+        return model_bound
+    return min(requested, model_bound)

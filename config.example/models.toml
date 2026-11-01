@@ -1,6 +1,9 @@
 # Choose a model route explicitly before inference; no paid provider is enabled by default.
 [model_api]
 enabled = false
+# Single-call output limits default to 0: use supplier/Pi defaults, not a token budget.
+# max_output_tokens = 0
+# execution_max_output_tokens = 0
 # Context maintenance has a separate deadline; ordinary inference keeps its own timeout.
 timeout_seconds = 600
 compaction_timeout_seconds = 600

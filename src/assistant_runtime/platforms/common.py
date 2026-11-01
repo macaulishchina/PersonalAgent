@@ -85,7 +85,7 @@ class Platform:
                     except pywintypes.error as exc:
                         if exc.winerror not in {5, 32, 33} or attempt == 5:
                             raise file_error(exc, path) from exc
-                        time.sleep(0.01 * (2 ** attempt))
+                        time.sleep(0.01 * (2**attempt))
             else:
                 os.replace(name, path)
                 self.sync_directory(path.parent)

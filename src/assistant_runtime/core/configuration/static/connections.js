@@ -365,10 +365,13 @@ function renderProviderEditor(field, name) {
   const body = $("entry-body");
   body.replaceChildren();
   if (current.account) {
+    const account = valueAt(["model_api", "accounts"], {})[current.account] || {};
+    let auth;
     activeEditor.readConnection = () => {
       const value = currentValue(field);
       return {
         provider: { account: value.account, enabled: value.enabled === true },
+        secret: auth?.read().secret,
       };
     };
     activeEditor.commit = () => {
@@ -379,23 +382,38 @@ function renderProviderEditor(field, name) {
     const copy = structuredClone(field);
     copy.schema.properties = Object.fromEntries(
       Object.entries(copy.schema.properties).filter(([k]) =>
-        ["account", "enabled"].includes(k),
+        k === "enabled",
       ),
     );
     body.append(
       drawField(copy),
       node(
         "p",
-        "此连接使用原生账号认证，不需要填写 API 地址或网关鉴权参数。",
+        account.auth === "oauth"
+          ? "使用供应商 OAuth 登录。保存设置后完成登录，无需填写 API Key。"
+          : "使用供应商官方 API Key，无需账号登录。此连接沿用 Pi 原生供应商适配。",
         "inline-note",
       ),
     );
-    body.append(
-      button("编辑账号认证", () => {
-        finishEntity();
-        if (!activeEditor) openEntity("accounts", current.account);
-      }),
-    );
+    if (account.auth === "api_key") {
+      let previous = account.key_env;
+      auth = connectionCredentials(body, previous, {
+        onChange() {
+          const value = auth.read();
+          changed(["model_api", "accounts", current.account, "key_env"], "set", value.reference);
+          stageConnectionSecret(previous, value.reference, value.secret);
+          previous = value.reference;
+          updateSaveBar();
+        },
+      });
+    } else {
+      body.append(
+        button("编辑 OAuth 设置", () => {
+          finishEntity();
+          if (!activeEditor) openEntity("accounts", current.account);
+        }),
+      );
+    }
   } else {
     let previousSecret = providerKeyName(current);
     const editor = apiConnectionFields(body, current, {

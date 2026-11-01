@@ -60,19 +60,21 @@
       },
       "max_output_tokens": {
         "type": "integer",
-        "title": "辅助推理输出预算",
-        "default": 8192,
-        "minimum": 1,
+        "title": "辅助调用单次输出上限",
+        "default": 0,
+        "minimum": 0,
         "maximum": 16384,
-        "x-advanced": true
+        "x-advanced": true,
+        "description": "0 表示不指定单次输出上限，由供应商／Pi 原生适配决定；与累计用量限制独立。"
       },
       "execution_max_output_tokens": {
         "type": "integer",
-        "title": "执行输出预算",
-        "default": 16384,
-        "minimum": 1,
+        "title": "执行单次输出上限",
+        "default": 0,
+        "minimum": 0,
         "maximum": 131072,
-        "x-advanced": true
+        "x-advanced": true,
+        "description": "0 表示不指定单次输出上限，由供应商／Pi 原生适配决定；与累计用量限制独立。"
       },
       "providers": {
         "type": "object",
@@ -101,7 +103,7 @@
             },
             "account": {
               "type": "string",
-              "title": "原生账号",
+              "title": "供应商认证配置",
               "x-reference": "model_api.accounts"
             },
             "enabled": {
@@ -175,7 +177,7 @@
       },
       "accounts": {
         "type": "object",
-        "title": "账号",
+        "title": "供应商认证",
         "default": {},
         "additionalProperties": {
           "type": "object",
@@ -282,17 +284,19 @@
             },
             "max_output_tokens": {
               "type": "integer",
-              "minimum": 1,
+              "minimum": 0,
               "maximum": 16384,
               "title": "辅助调用输出上限",
-              "x-advanced": true
+              "x-advanced": true,
+              "description": "0 表示不指定单次输出上限；未填写时继承全局设置。"
             },
             "execution_max_output_tokens": {
               "type": "integer",
-              "minimum": 1,
+              "minimum": 0,
               "maximum": 131072,
               "title": "执行输出上限",
-              "x-advanced": true
+              "x-advanced": true,
+              "description": "0 表示不指定单次输出上限；未填写时继承全局设置。"
             },
             "capabilities": {
               "type": "object",

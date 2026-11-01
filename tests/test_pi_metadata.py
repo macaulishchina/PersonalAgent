@@ -1,4 +1,5 @@
 """Native durable Pi metadata writes; no provider request."""
+
 import json
 from pathlib import Path
 import tempfile

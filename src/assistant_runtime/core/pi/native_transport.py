@@ -8,6 +8,7 @@ from contextlib import aclosing
 from aiohttp import web
 
 from assistant_runtime.api.ai_usage import UsageError, UsageScope
+from .accounts import output_reservation
 
 
 def telemetry(message):
@@ -59,6 +60,7 @@ async def forward(transport, request, worker):
         client.admission.service.controlled.authorize_session(worker.execution_session_id, required=True)
     account, args, native_bound = await client.accounts.route(alias, payload["effort"], images=images)
     maximum = entry.get("execution_max_output_tokens", client.settings.execution_max_output_tokens)
+    reservation = output_reservation(account, maximum, native_bound)
     ident = worker.meta["budget_id"]
     try:
         scope = await client.usage.binding(worker.meta.get("budget_scope") or ident) or UsageScope(
@@ -76,13 +78,13 @@ async def forward(transport, request, worker):
             compaction=worker.compacting,
             bounds={
                 "input_tokens": entry.get("context_window", 32768),
-                "output_tokens": native_bound or maximum,
+                "output_tokens": reservation,
             },
             body=payload,
             details={
                 "model_alias": alias,
                 "reasoning_effort": payload["effort"],
-                "max_output_tokens": native_bound or maximum,
+                "max_output_tokens": reservation,
             },
         )
     except UsageError as exc:

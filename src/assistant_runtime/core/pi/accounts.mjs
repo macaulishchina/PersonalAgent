@@ -196,7 +196,7 @@ async function run(id, args, signal) {
   // Pi's legacy Anthropic adapter adds thinking tokens to maxTokens. Constrain
   // its shared ceiling first so it fits the budget instead of enlarging our cap.
   const model =
-    spec.protocol === "anthropic" && spec.entries
+    spec.protocol === "anthropic" && spec.entries && args.max_tokens
       ? {
           ...selectedModel,
           maxTokens: Math.min(selectedModel.maxTokens, args.max_tokens),
@@ -219,7 +219,7 @@ async function run(id, args, signal) {
     maxRetries: 0,
     timeoutMs: args.timeout_ms,
     transport: "sse",
-    maxTokens: args.max_tokens,
+    maxTokens: args.max_tokens || undefined,
     // Anthropic's simple adapter uses absent reasoning for disabled thinking;
     // passing the literal "off" is truthy and would enable adaptive thinking.
     reasoning:
@@ -294,7 +294,19 @@ async function run(id, args, signal) {
           payload.thinking.budget_tokens >= payload.max_tokens)
       )
         throw new Error("anthropic_thinking_budget_insufficient");
-      if (spec.output_limit !== "model") {
+      if (!args.max_tokens) {
+        // SDK simple adapters fill defaults; optional limits stay supplier-owned.
+        if (["openai-responses", "openai-completions"].includes(model.api)) {
+          delete payload.max_output_tokens;
+          delete payload.max_tokens;
+          delete payload.max_completion_tokens;
+        } else if (model.api === "google-generative-ai") {
+          if (payload.config) delete payload.config.maxOutputTokens;
+          if (payload.generationConfig) delete payload.generationConfig.maxOutputTokens;
+        }
+        // Anthropic requires max_tokens; keep Pi's model/context-derived value.
+      }
+      if (args.max_tokens && spec.output_limit !== "model") {
         const cap =
           payload.max_output_tokens ??
           payload.max_tokens ??

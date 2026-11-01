@@ -366,20 +366,6 @@ function renderModels() {
       .querySelector(".card-heading")
       .append(button("添加连接", openConnectionWizard, "primary"));
     renderModelCollection(panel, "providers");
-    const accounts = valueAt(["model_api", "accounts"], {}),
-      providers = valueAt(["model_api", "providers"], {});
-    const unbound = Object.keys(accounts).filter(
-      (name) => !Object.values(providers).some((p) => p.account === name),
-    );
-    if (unbound.length) {
-      const spare = advancedGroup("unbound-accounts");
-      spare.firstChild.textContent = "未绑定的账号";
-      for (const name of unbound)
-        spare.append(
-          button(name + " · 编辑账号", () => openEntity("accounts", name)),
-        );
-      panel.append(spare);
-    }
     $("documents").append(panel);
     const secrets = advancedGroup("model-secrets");
     secrets.firstChild.textContent = "维护 · 实例凭据清单";
@@ -531,7 +517,7 @@ function renderModelCollection(panel, kind) {
       emptyState(
         kind === "providers" ? "还没有模型连接" : "还没有模型",
         kind === "providers"
-          ? "添加一个连接，账号和 API Key 都可以。"
+          ? "添加 API Key 连接，或通过 OAuth 登录。"
           : "先有连接，再填写供应商提供的模型 ID。",
         kind === "providers" ? "添加第一个连接" : "添加第一个模型",
         kind === "providers"
@@ -587,7 +573,7 @@ ${item.description}`;
         "p",
         kind === "providers"
           ? value.account
-            ? "原生账号 · " + value.account
+            ? (providerAuthentication(value) === "oauth" ? "OAuth 登录 · " : "API Key · ") + value.account
             : "API 连接 · " + (value.preset || value.protocol || "待配置")
           : value.model || "尚未填写模型 ID",
         "entity-description",
@@ -612,14 +598,6 @@ ${item.description}`;
       actions.append(probe.button);
       probeStatus = probe.status;
     }
-    if (kind === "providers" && value.account)
-      actions.append(
-        button(
-          "账号设置",
-          () => openEntity("accounts", value.account),
-          "subtle",
-        ),
-      );
     actions.append(
       button(
         "移除",
@@ -1151,7 +1129,7 @@ function renderEntityEditor() {
     {
       providers: "编辑连接",
       entries: "编辑模型",
-      accounts: "编辑账号",
+      accounts: "编辑认证配置",
       recommendations: "编辑推荐",
     }[kind] +
     " · " +
@@ -1294,6 +1272,10 @@ function providerKeyName(provider) {
     provider.key_env || snapshot.provider_presets?.[provider.preset]?.key_env
   );
 }
+function providerAuthentication(provider) {
+  if (!provider?.account) return "api_key";
+  return valueAt(["model_api", "accounts"], {})[provider.account]?.auth;
+}
 function providerDraft(name) {
   const editing =
     activeEditor?.kind === "providers" && activeEditor.name === name
@@ -1357,9 +1339,10 @@ function providerTest(name) {
   const status = node("p", "", "provider-status");
   status.hidden = true;
   status.setAttribute("role", "status");
-  const label = valueAt(["model_api", "providers"], {})[name]?.account
-    ? "检查授权"
-    : "测试连接";
+  const provider = valueAt(["model_api", "providers"], {})[name];
+  const label = providerAuthentication(provider) === "oauth"
+    ? "检查登录"
+    : provider?.account ? "检查凭据" : "测试连接";
   const control = button(
     label,
     async () => {
@@ -1426,7 +1409,7 @@ function modelTest(name) {
       }
       const state = {
         pending: true,
-        message: "正在测试文本推理，最长等待 45 秒…",
+        message: "正在测试文本推理，最长等待 30 秒…",
         ok: null,
       };
       modelTestResults.set(name, state);
@@ -1440,7 +1423,7 @@ function modelTest(name) {
             request_id: configurationRequestId(),
             draft,
           },
-          AbortSignal.timeout(60000),
+          AbortSignal.timeout(45000),
         );
         if (JSON.stringify(current()) !== JSON.stringify(draft)) {
           state.ok = false;
@@ -1811,7 +1794,7 @@ function openAddEntity(kind) {
         p,
         p +
           " · " +
-          (item.account ? "原生账号" : "API 连接") +
+          (providerAuthentication(item) === "oauth" ? "OAuth 登录" : "API Key") +
           (item.enabled ? "" : "（未启用）"),
       ];
     }),
@@ -1877,11 +1860,11 @@ function openConnectionWizard() {
     "添加模型连接",
     "先连接服务，随后可以为它添加一个或多个模型。",
   );
-  const route = formInput(form, "route", "接入方式", {
+  const route = formInput(form, "route", "认证方式", {
     cards: true,
     choices: [
-      ["native", "直接连接账号", "使用供应商原生 OAuth 或 API Key"],
-      ["api", "通过 API 连接", "预设或自定义地址，使用 API Key 直接连接"],
+      ["api", "API Key", "官方或第三方接口，填写密钥即可，无需账号登录"],
+      ["native", "OAuth 登录", "使用供应商支持的账号登录授权"],
     ],
   });
   const name = formInput(form, "name", "连接名称", {
@@ -1902,16 +1885,6 @@ function openConnectionWizard() {
     ],
     hint: "可输入其他 Pi 支持的供应商；认证方式需与供应商匹配。",
   });
-  const auth = formInput(native, "auth", "认证方式", {
-    choices: [
-      ["api_key", "API Key"],
-      ["oauth", "账号登录（OAuth）"],
-    ],
-  });
-  const credential = formInput(native, "credential", "API Key", {
-    type: "password",
-    placeholder: "粘贴 API Key，或保存后通过账号授权录入",
-  });
   const apiSection = node("fieldset", undefined, "wizard-route");
   form.append(apiSection);
   const apiFields = apiConnectionFields(
@@ -1919,57 +1892,71 @@ function openConnectionWizard() {
     { enabled: true },
     { prefix: "setup-api", inputId: "setup-api-key" },
   );
-  const nativeReference = newCredentialReference();
+  const advanced = node("details", undefined, "connection-auth-options");
+  advanced.append(node("summary", "高级适配"));
+  const nativeApi = formInput(advanced, "native-api", "使用 Pi 原生供应商适配", {
+    type: "checkbox",
+    hint: "仅在需要供应商专用接入时使用。仍使用 API Key，无需账号登录；模型目录来自 Pi 本地。",
+  });
+  form.append(advanced);
+  const nativeKeyBox = node("fieldset", undefined, "wizard-route");
+  form.append(nativeKeyBox);
+  const nativeKey = connectionCredentials(nativeKeyBox, undefined, {
+    prefix: "setup-native", inputId: "setup-native-key",
+  });
   const note = node("p", "", "inline-note");
   form.append(note);
   function refresh() {
-    const useNative = route.value === "native";
+    const oauth = route.value === "native";
+    const useNative = oauth || nativeApi.checked;
     native.hidden = !useNative;
     native.disabled = !useNative;
     apiSection.hidden = useNative;
     apiSection.disabled = useNative;
-    credential.closest("label").hidden = auth.value === "oauth";
-    credential.disabled = auth.value === "oauth";
-    note.textContent = useNative
-      ? "账号和连接将一起添加。OAuth 授权需要先保存，再在账号授权区域登录；不会自动发起模型请求。"
-      : "填写供应商接口和凭据。保存并生效后，可为此连接添加模型。";
+    advanced.hidden = oauth;
+    nativeApi.disabled = oauth;
+    nativeKeyBox.hidden = oauth || !nativeApi.checked;
+    nativeKeyBox.disabled = nativeKeyBox.hidden;
+    note.textContent = oauth
+      ? "OAuth 登录需要先保存，再在供应商认证区域完成登录。不会自动发起模型请求。"
+      : useNative
+        ? "使用供应商 API Key，无需登录。可以直接检查草稿凭据，实际可用性请通过模型测试确认。"
+        : "填写供应商接口和凭据，可以直接测试草稿。保存并生效后用于运行。";
   }
-  for (const input of [route, auth]) input.addEventListener("change", refresh);
+  route.addEventListener("change", refresh);
+  nativeApi.addEventListener("change", refresh);
   refresh();
   wizardFooter(form, "添加连接");
   form.onsubmit = (event) => {
     event.preventDefault();
     if (!form.reportValidity()) return;
-    const id = name.value.trim(),
+    const oauth = route.value === "native",
+      useNative = oauth || nativeApi.checked,
+      id = name.value.trim(),
       accounts = valueAt(["model_api", "accounts"], {});
     if (
       Object.hasOwn(valueAt(["model_api", "providers"], {}), id) ||
-      (route.value === "native" && Object.hasOwn(accounts, id))
+      (useNative && Object.hasOwn(accounts, id))
     ) {
       showNotice("此连接名称或账号名称已存在，请使用其他名称。");
       return;
     }
     if (
-      route.value === "native" &&
+      useNative &&
       !/^[a-z][a-z0-9_-]{0,63}$/.test(provider.value.trim())
     ) {
       showNotice("请填写有效的供应商标识。");
       return;
     }
     const apiValue = apiFields.read();
-    const env =
-      route.value === "native" ? nativeReference : apiValue.provider.key_env;
-    const secret =
-      route.value === "native"
-        ? auth.value === "api_key"
-          ? credential.value
-          : ""
-        : apiValue.secret;
-    if (route.value === "native") {
-      const account = { provider: provider.value.trim(), auth: auth.value };
-      if (auth.value === "oauth" && account.provider === "openai")
+    const nativeValue = nativeKey.read();
+    const env = useNative ? nativeValue.reference : apiValue.provider.key_env;
+    const secret = oauth ? "" : useNative ? nativeValue.secret : apiValue.secret;
+    if (useNative) {
+      const account = { provider: provider.value.trim(), auth: oauth ? "oauth" : "api_key" };
+      if (oauth && account.provider === "openai")
         account.output_limit = "model";
-      if (secret) account.key_env = env;
+      if (!oauth) account.key_env = env;
       changed(["model_api", "accounts", id], "set", account);
       changed(["model_api", "providers", id], "set", {
         account: id,
@@ -1987,7 +1974,7 @@ function openConnectionWizard() {
     form.replaceChildren();
     render();
     showNotice(
-      "连接已加入草稿，可直接测试连接或查询模型；保存并生效后用于运行。原生 OAuth 账号需保存后授权。",
+      "连接已加入草稿，可直接测试连接或查询模型；保存并生效后用于运行。OAuth 登录需先保存，再完成授权。",
     );
   };
 }

@@ -5,6 +5,7 @@ from contextlib import aclosing
 
 from assistant_runtime.api.models import ModelCallError
 from assistant_runtime.core.pi.native_transport import telemetry
+from assistant_runtime.core.pi.accounts import output_reservation
 
 
 def arguments(payload, session_id, settings):
@@ -36,10 +37,10 @@ def arguments(payload, session_id, settings):
 
 async def output_bound(accounts, payload):
     args = arguments(payload, None, accounts.settings)
-    _, _, bound = await accounts.route(
+    worker, _, bound = await accounts.route(
         payload["model"], payload["reasoning"]["effort"], images=args["images"], schema=args["schema"]
     )
-    return bound or payload["max_output_tokens"]
+    return output_reservation(worker, payload["max_output_tokens"], bound)
 
 
 async def complete(accounts, payload, session_id):

@@ -32,8 +32,14 @@ restore administrator passwords.
 
 The console starts with an overview and setup progress. Model configuration follows
 connections → model library → usage, with card lists, guided additions and an editor drawer.
-Native connection creation stages the account, provider and private credential together;
-OAuth login stays an explicit operation after saving. Low-frequency maps/lists retain bounded structured editors.
+New connections choose API Key (official preset or custom endpoint) or OAuth login.
+API Key is the default and requires no account login. Advanced adapter selection retains
+Pi-specific native suppliers without introducing another authentication method. OAuth configuration is saved
+before explicit login. Existing Pi-native API-key connections remain editable without migration;
+their inline key editor shares the normal private credential draft transaction. Low-frequency maps/lists retain bounded structured editors.
+Supplier authentication settings have one list, regardless of connection references.
+Only OAuth offers login/logout; API-key routes show credential checks, not login status.
+Neither local credential checks nor Pi's bundled catalog establish remote key validity.
 
 `static/connections.js` owns purpose-built connection and authentication forms shared by add/edit.
 Preset definitions come from the models owner. Serialization is exclusive: preset, custom API,
@@ -49,7 +55,10 @@ manual IDs remain available. Changing the connection invalidates pending UI resu
 `POST /api/provider-query` uses the administrator session/origin checks and revision guard.
 It accepts only the selected connection/account draft and an optional transient API key;
 missing keys resolve through the selected reference using the normal environment/file precedence.
-Draft keys are used only for this request and never persisted or echoed. No unrelated drafts
+Draft keys are used only for this request and never persisted or echoed. Pi-native key probes
+use a temporary credential context that is closed and removed on success, failure or cancellation.
+Only changed OAuth settings require saving first; API-key drafts are testable immediately.
+Model tests capture the same provider/account/key snapshot without reloading a stale saved key. No unrelated drafts
 are validated. Owner validation maps to safe field-specific errors; the browser focuses the
 field and rejects results if inputs change in flight. Testing does not save, enable, apply or
 mark capabilities accepted. Native login remains an explicit account management operation.

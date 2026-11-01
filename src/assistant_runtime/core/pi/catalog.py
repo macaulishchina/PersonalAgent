@@ -8,7 +8,6 @@ MODEL_SESSION_HEADER = "x-assistant-session"
 
 def pi_models_config(settings, *, session_id=None, transport_url=""):
     models = {}
-    max_tokens = getattr(settings, "execution_max_output_tokens", 16384) if settings else 16384
     if settings and getattr(settings, "entries", None):
         for ident, entry in settings.entries.items():
             provider_cfg = settings.providers.get(entry["provider"], {})
@@ -28,7 +27,7 @@ def pi_models_config(settings, *, session_id=None, transport_url=""):
                 "samplingParamsByThinkingLevel": {"off": {"reasoning": {"effort": "none"}}},
                 "input": ["text", "image"] if entry.get("images") else ["text"],
                 "contextWindow": entry.get("context_window", 32768),
-                "maxTokens": entry.get("execution_max_output_tokens", max_tokens),
+                "maxTokens": entry.get("output_limit") or 131072,
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
             }
     return {

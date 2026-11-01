@@ -1510,7 +1510,10 @@ async function drawAccounts() {
     ($("model-panel") || $("documents")).append(section);
   }
   section.replaceChildren(
-    cardHeading("原生账号授权", "登录与退出即时生效，账号授权独立于配置保存。"),
+    cardHeading(
+      "供应商认证",
+      "API Key 无需登录；OAuth 登录与退出即时生效，独立于配置保存。",
+    ),
   );
   if (!data.accounts.length) {
     section.remove();
@@ -1522,17 +1525,17 @@ async function drawAccounts() {
       actions = node("div", undefined, "account-actions");
     title.append(
       node("strong", account.name),
-      node("span", account.provider + " · " + account.auth, "hint"),
+      node("span", account.provider + " · " + (account.auth === "oauth" ? "OAuth 登录" : "API Key"), "hint"),
     );
     row.append(title);
+    actions.append(button("编辑", () => openEntity("accounts", account.name)));
     for (const [name, label] of [
-      ["status", "检查授权"],
+      ["status", "检查登录"],
       ["catalog", "可用模型"],
       ["login", "登录"],
       ["logout", "退出授权"],
     ]) {
-      if (account.environment_key && ["login", "logout"].includes(name))
-        continue;
+      if (account.auth !== "oauth") continue;
       const button = node(
         "button",
         label,

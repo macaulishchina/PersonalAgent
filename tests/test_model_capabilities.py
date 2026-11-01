@@ -204,7 +204,7 @@ class CapabilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             reasoning_effort(entry, "none")
 
-    def test_snapshot_bounds_budgets_and_preserves_explicit_overrides(self):
+    def test_snapshot_retains_model_limits_without_imposing_output_cap(self):
         spec = self.spec()
         snapshot = profile(
             spec["providers"]["p"],
@@ -220,8 +220,9 @@ class CapabilityTest(unittest.TestCase):
         entry = ModelSettings.parse(spec).entry("m")
         self.assertFalse(entry["images"])
         self.assertEqual(entry["context_window"], 4096)
-        self.assertEqual(entry["max_output_tokens"], 1024)
-        self.assertEqual(entry["execution_max_output_tokens"], 1024)
+        self.assertEqual(entry["output_limit"], 1024)
+        self.assertEqual(entry["max_output_tokens"], 0)
+        self.assertEqual(entry["execution_max_output_tokens"], 0)
         self.assertEqual(entry["reasoning_efforts"], [])  # reasoning=true is not a level list
         self.assertEqual(spec["entries"]["m"]["capabilities"], snapshot)
 
@@ -232,8 +233,9 @@ class CapabilityTest(unittest.TestCase):
             output_limit=2048,
         )
         entry = ModelSettings.parse(spec).entry("m")
-        self.assertEqual(entry["max_output_tokens"], 2048)
-        self.assertEqual(entry["execution_max_output_tokens"], 2048)
+        self.assertEqual(entry["output_limit"], 2048)
+        self.assertEqual(entry["max_output_tokens"], 0)
+        self.assertEqual(entry["execution_max_output_tokens"], 0)
         self.assertEqual(entry["capabilities"]["output_limit"], 1024)  # provenance, not another active value
         for value in (0, -1, True, 10000001, "large"):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "output limit"):

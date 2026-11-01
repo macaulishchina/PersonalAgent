@@ -1,6 +1,7 @@
 """Operator draft probes: validate selected inputs without saving configuration or credentials."""
 
 import asyncio
+import tempfile
 import tomllib
 
 from assistant_runtime.core.models.catalog import models, query, result
@@ -39,7 +40,7 @@ def validation_message(message):
     if "authentication scheme" in message:
         return "auth_scheme", "鉴权方式：请选择 native 或 bearer。"
     if "account" in message:
-        return "account", "原生账号：请选择已配置的账号并完成授权。"
+        return "account", "供应商认证设置无效，请检查供应商、认证方式与凭据来源。"
     return "provider", "连接字段组合无效：预设连接使用接口类型，自定义连接使用协议和地址，请检查是否混填。"
 
 
@@ -75,12 +76,7 @@ class ProviderQueries:
             if not isinstance(entry, dict):
                 raise ProbeInput("model", "请先填写模型 ID 和连接。")
             connection = draft.get("connection")
-            saved_accounts = registry.get("accounts", {})
-        provider, key = self.capture(entry.get("provider"), version, connection)
-        account = provider.get("account")
-        accounts = {account: saved_accounts[account]} if account else {}
-        if account and accounts[account].get("key_env"):
-            key = credential(self.business.settings.root, accounts[account]["key_env"])
+        provider, key, accounts = self.capture(entry.get("provider"), version, connection)
         return {
             "request_id": ident,
             "name": name,
@@ -195,11 +191,25 @@ class ProviderQueries:
             account = provider.get("account")
             saved_account = registry.get("accounts", {}).get(account) if isinstance(account, str) else None
             account_spec = (draft or {}).get("account", saved_account)
-            if account and account_spec != saved_account:
+            if (
+                account
+                and isinstance(account_spec, dict)
+                and account_spec.get("auth") == "oauth"
+                and (account_spec != saved_account or draft is not None and "key" in draft)
+            ):
                 raise ProbeInput(
                     "account",
-                    "原生账号认证设置尚未建立；请保存该账号并完成授权。API 连接可直接使用草稿测试。",
+                    "OAuth 登录需先保存认证设置，再完成登录；API Key 无需账号登录。",
                 )
+            if (
+                account
+                and isinstance(account_spec, dict)
+                and account_spec.get("auth") == "api_key"
+                and draft is not None
+                and "key" in draft
+                and not account_spec.get("key_env")
+            ):
+                account_spec = {**account_spec, "key_env": "PA_PROVIDER_PROBE_KEY"}
             accounts = {account: account_spec} if isinstance(account, str) and account_spec else {}
             try:
                 # A draft's display name is irrelevant to endpoint testing.
@@ -209,7 +219,8 @@ class ProviderQueries:
                 raise ProbeInput(field, message) from None
             selected = settings.providers["probe"]
             key = None
-            if not account:
+            api_key = not account or account_spec.get("auth") == "api_key"
+            if api_key:
                 if draft is not None and "key" in draft:
                     key = draft["key"]
                     if (
@@ -221,15 +232,44 @@ class ProviderQueries:
                         raise ProbeInput("key", "API Key 为空或包含无效字符，请重新填写。")
                 else:
                     try:
-                        key = credential(self.business.settings.root, selected["key_env"])
+                        reference = account_spec.get("key_env") if account else selected["key_env"]
+                        # Existing native key storage remains available; drafts cannot
+                        # borrow credentials from a different saved provider/auth method.
+                        if reference:
+                            key = credential(self.business.settings.root, reference)
+                        elif account_spec != saved_account:
+                            raise ValueError("Draft key required")
                     except (ValueError, OSError):
                         raise ProbeInput(
                             "key",
                             "API Key 未填写，且此连接没有可读取的已保存凭据。请填写 API Key 后重试，无需保存。",
                         ) from None
-            elif draft is not None and "key" in draft:
-                raise ProbeInput("account", "原生账号授权使用账号管理入口；当前输入尚未应用到该账号。")
-            return selected, key
+            return selected, key, settings.accounts
+
+    async def native_query(self, provider, key, accounts, action):
+        """Check a draft key without mutating the live native credential store."""
+        spec = accounts[provider["account"]]
+        if key is None:
+            return await self.accounts.action(
+                provider["account"], "status" if action == "test" else "catalog", False
+            )
+        from assistant_runtime.core.pi.accounts import NativeAccounts
+
+        config, _ = self.accounts.configured()
+        settings = ModelSettings.parse({"accounts": accounts})
+        with tempfile.TemporaryDirectory(prefix="pa-provider-probe-") as folder:
+            native = NativeAccounts(
+                config.root,
+                settings,
+                state_dir=folder,
+                binary=config.pi_binary,
+                credentials={spec["key_env"]: key},
+            )
+            try:
+                worker = await native.account(provider["account"])
+                return await worker.call("status" if action == "test" else "catalog")
+            finally:
+                await native.close()
 
     def check_version(self, version):
         with self.business.files.locked():
@@ -243,7 +283,7 @@ class ProviderQueries:
             async with asyncio.timeout(18):
                 async with self.slots:
                     try:
-                        provider, key = await asyncio.to_thread(self.capture, name, version, draft)
+                        provider, key, accounts = await asyncio.to_thread(self.capture, name, version, draft)
                     except Conflict:
                         raise
                     except ProbeInput as exc:
@@ -253,24 +293,22 @@ class ProviderQueries:
                             False, "configuration", "无法读取连接配置，请检查配置文件格式。", field="provider"
                         )
                     if provider["protocol"] == "pi":
-                        data = await self.accounts.action(
-                            provider["account"], "status" if action == "test" else "catalog", False
-                        )
+                        data = await self.native_query(provider, key, accounts, action)
                         if action == "test":
                             connected = data.get("connected") is True
                             response = result(
                                 connected,
                                 "local_auth" if connected else "authentication",
-                                "原生账号已配置认证；此检查不验证供应商网络或模型推理。"
+                                "认证凭据已配置；此检查不验证供应商网络、Key 有效性或模型推理。"
                                 if connected
-                                else "账号尚未授权，请先登录或配置 API Key。",
+                                else "认证凭据不可用：API Key 请检查密钥来源，OAuth 请完成登录。",
                                 source="native",
                             )
                         else:
                             response = result(
                                 True,
                                 "native_catalog",
-                                "Pi 内置模型目录；是否可用仍取决于账号权限与实际验收。",
+                                "Pi 内置模型目录；尚未验证供应商访问权限或推理。",
                                 models=models(data),
                                 source="native",
                                 truncated=len(data) > 500,
@@ -286,7 +324,7 @@ class ProviderQueries:
         except Conflict:
             raise
         except (ValueError, RuntimeError, OSError, KeyError, TypeError):
-            return result(False, "account", "账号检查未完成，请检查 Pi 安装、账号配置及授权状态。")
+            return result(False, "account", "认证检查未完成，请检查 Pi 安装、供应商配置及凭据。")
 
     async def close(self):
         await self.references.close()

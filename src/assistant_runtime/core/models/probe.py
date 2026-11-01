@@ -15,7 +15,7 @@ from .client import ModelClient
 from .settings import ModelSettings, reasoning_effort
 
 log = logging.getLogger(__name__)
-TIMEOUT = 45
+TIMEOUT = 30
 PROMPT = "This is a text connectivity test. Please reply briefly with OK."
 
 

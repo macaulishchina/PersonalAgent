@@ -44,6 +44,8 @@ def settings(**changes):
 class SettingsTest(unittest.TestCase):
     def test_context_maintenance_configuration(self):
         settings = ModelSettings.parse({})
+        self.assertEqual(settings.max_output_tokens, 0)
+        self.assertEqual(settings.execution_max_output_tokens, 0)
         self.assertEqual(settings.compaction_timeout_seconds, 600)
         self.assertEqual(settings.timeout_seconds, 600)
         self.assertEqual(settings.tool_result_max_chars, 6000)

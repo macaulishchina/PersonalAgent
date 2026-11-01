@@ -132,8 +132,11 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
 
         self.gateway.script_fn = reply
         worker, args, _ = await self.accounts.route("subscription", "medium")
-        args.update(context={"messages": [{"role": "user", "content": "Synthetic stream only", "timestamp": 0}]},
-                    max_tokens=16384, timeout_ms=60000)
+        args.update(
+            context={"messages": [{"role": "user", "content": "Synthetic stream only", "timestamp": 0}]},
+            max_tokens=16384,
+            timeout_ms=60000,
+        )
         final = None
         async with asyncio.timeout(60):
             async for item in worker.events("stream", args):
@@ -147,8 +150,11 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
     async def test_oversized_native_frame_is_still_rejected_without_replay(self):
         self.gateway.script_fn = lambda step, body: sse_text_reply("oversized", "x" * (8 * 1024 * 1024))
         worker, args, _ = await self.accounts.route("subscription", "medium")
-        args.update(context={"messages": [{"role": "user", "content": "Synthetic frame only", "timestamp": 0}]},
-                    max_tokens=16384, timeout_ms=30000)
+        args.update(
+            context={"messages": [{"role": "user", "content": "Synthetic frame only", "timestamp": 0}]},
+            max_tokens=16384,
+            timeout_ms=30000,
+        )
         with self.assertRaisesRegex(RuntimeError, "native_stream_failed"):
             async with asyncio.timeout(30):
                 async for _ in worker.events("stream", args):

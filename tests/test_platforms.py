@@ -286,8 +286,13 @@ class WindowsContracts(unittest.IsolatedAsyncioTestCase):
             path = Path(folder) / "metadata.json"
             system.atomic_write(path, b"original")
             handle = win32file.CreateFile(
-                str(path), win32con.GENERIC_READ, win32con.FILE_SHARE_READ,
-                None, win32con.OPEN_EXISTING, 0, None,
+                str(path),
+                win32con.GENERIC_READ,
+                win32con.FILE_SHARE_READ,
+                None,
+                win32con.OPEN_EXISTING,
+                0,
+                None,
             )
             timer = threading.Timer(0.04, handle.Close)
             timer.start()

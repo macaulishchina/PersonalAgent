@@ -29,7 +29,7 @@ API connections declare a protocol, endpoint and credential reference. The owned
 
 Stable request UUIDs are scoped/fingerprinted and reserved before dispatch. Reusing a UUID returns its receipt; lost response, cancellation or restart during a request remains unknown. Do not resubmit uncertain work using a new UUID. Each receipt includes caller/version, selected model, upstream request ID, latency, usage and explicit outcome without copying input bodies into audit logs.
 
-Defaults: 4 workers, 16 queued calls, 600-second total deadline, 24,000 text characters, 4 images, 2 MiB response and 8,192 output tokens. Execution has its own 16,384-token per-request output default. Both output budgets allow per-entry overrides and include reasoning. A cap may truncate a tool argument or thinking as well as an answer; it is unrelated to account quota.
+Defaults: 4 workers, 16 queued calls, 600-second total deadline, 24,000 text characters, 4 images and a 2 MiB response bound. Single-call output caps default to disabled (`max_output_tokens=0`, `execution_max_output_tokens=0`) for tests, auxiliary inference, memory, foreground, tasks and compaction. Optional wire caps are omitted; required parameters such as Anthropic `max_tokens` retain Pi's model/context-derived value. Explicit positive global/per-entry caps remain opt-in and include reasoning. Advertised model capacity is reserved for usage admission when no request cap is specified; this reservation is accounting, not a parameter sent to the supplier. Cumulative usage policy, request counts, cancellation and deadlines remain independent.
 
 ## Native accounts and subscriptions
 
@@ -73,7 +73,7 @@ These are local operator commands, not model/MCP actions. Account management is 
 
 The official [Sign in with ChatGPT flow](https://developers.openai.com/siwc/quickstart) uses the public Responses endpoint, separate authorized scopes and a participating account. Its [preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) differ from API keys: stream/store requirements, supported tools and output parameters need real acceptance. Pi owns those protocol details; the framework does not translate subscription credentials into ordinary API keys.
 
-**Output limit exception:** ChatGPT subscription does not accept `max_output_tokens`. Configuration therefore requires explicit `output_limit="model"`; global/per-entry request token caps cannot constrain that upstream request. Usage reserves the native catalog's advertised maximum and records actual reported tokens. This is not proof that the supplier enforces that maximum. Work request limits, deadlines, stream bounds and accounting still apply. If strict monetary/token admission cannot reserve the request, it blocks. Other native routes must express a requested output cap in their built payload or fail before sending; no silent drop is accepted. Do not copy Pi's API price estimate into subscription financial charges.
+**Output limit exception:** ChatGPT subscription does not accept `max_output_tokens`. Configuration therefore requires explicit `output_limit="model"`; global/per-entry request token caps cannot constrain that upstream request. Usage reserves the native catalog's advertised maximum and records actual reported tokens. This is not proof that the supplier enforces that maximum. Work request limits, deadlines, stream bounds and accounting still apply. If strict monetary/token admission cannot reserve the request, it blocks. When a positive request cap is explicitly configured, other native routes must express it in their built payload or fail before sending; no silent drop is accepted. With the default zero setting, no artificial per-request cap is imposed. Do not copy Pi's API price estimate into subscription financial charges.
 
 No new provider is enabled or selected automatically. Register an alias with capabilities marked unaccepted, validate bounded synthetic requests, then enable only accepted uses. Both native accounts and custom API connections use the shared Pi adapter. Both execution and no-tool inference share existing durable usage admission and no-replay behavior.
 
@@ -113,8 +113,8 @@ The model-library **测试模型** button performs one bounded text inference ag
 current draft, without saving or enabling it. `probe.py` uses the same Pi adapters,
 model concurrency semaphore and durable usage service as normal inference. Its fixed
 synthetic prompt has no history, images or tools; the selected default effort is retained,
-and the deadline is 45 seconds. Tests use the model/global inference output budget,
-without a separate test-only token cap or a requirement that accounts enforce one.
+and the deadline is 30 seconds. Tests default to no per-request token cap, like other
+model uses; an explicitly configured global/per-model positive cap is still honored.
 Native `output_limit="model"` accounts use the existing adapter and native model bound
 for usage reservation; that bound is not presented as an enforced request cap.
 There are no retries or fallbacks. Request IDs have durable receipts so disconnected or
