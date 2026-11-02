@@ -261,7 +261,7 @@ default_reasoning_effort = "none"
                     while True:
                         assert process.returncode is None
                         try:
-                            await page.goto(origin)
+                            await page.goto(origin + "/config/")
                             break
                         except Exception:
                             await asyncio.sleep(0.1)

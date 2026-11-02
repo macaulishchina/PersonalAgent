@@ -1,6 +1,7 @@
 """Stable conversation ownership and queued input; no simulated provider claims."""
 
 import asyncio
+import json
 from pathlib import Path
 import tempfile
 import sqlite3
@@ -167,6 +168,221 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
         await self.call("cancel", session_id=session)
         self.assertFalse(chat.backend.busy)
         self.assertEqual((await self.call("queue", session_id=session))["requests"], [])
+
+    async def test_edit_queued_preserves_identity_and_initial_submission_deduplication(self):
+        session = (await self.call("create"))["id"]
+        await self.send(session, "running")
+        chat = await self.started(session)
+        ident, sent = await self.send(session, "original")
+        item = next(r for r in chat.queue() if r["id"] == ident)
+        updated = await self.call(
+            "edit_queued", session_id=session, request_id=ident, revision=item["revision"], text="edited"
+        )
+        self.assertEqual(updated["message"]["id"], sent["message"]["id"])
+        self.assertEqual(updated["message"]["ordinal"], sent["message"]["ordinal"])
+        self.assertEqual(updated["message"]["text"], "edited")
+        self.assertEqual(updated["message"]["status"], "queued")
+        self.assertEqual((await self.send(session, "original", ident))[1]["message"]["text"], "edited")
+        with self.assertRaises(ValueError):
+            await self.send(session, "edited", ident)
+        with self.assertRaises(ValueError):
+            await self.call(
+                "edit_queued", session_id=session, request_id=ident, revision=item["revision"], text="stale"
+            )
+        current = next(r for r in chat.queue() if r["id"] == ident)
+        with self.assertRaises(ValueError):
+            await self.call(
+                "edit_queued", session_id=session, request_id=ident, revision=current["revision"], text=" "
+            )
+        self.assertEqual(next(r for r in chat.queue() if r["id"] == ident), current)
+        self.assertEqual(chat.backend.calls, ["running"])
+
+    async def test_waiting_queue_dispatches_latest_order_and_edited_payload(self):
+        session = (await self.call("create"))["id"]
+        chat = await self.registry.get(session)
+        chat.backend.active_turn = chat.backend.last_turn = "external-turn"
+        first, _ = await self.send(session, "first")
+        second, _ = await self.send(session, "second")
+        await asyncio.sleep(0)  # The drain is waiting for the already active provider turn.
+        item = next(r for r in chat.queue() if r["id"] == second)
+        await self.call(
+            "edit_queued",
+            session_id=session,
+            request_id=second,
+            revision=item["revision"],
+            text="second edited",
+        )
+        await self.call(
+            "reorder_queue",
+            session_id=session,
+            request_ids=[second, first],
+            expected_order=[first, second],
+        )
+        await chat.backend.finish()
+        await self.started(session)
+        self.assertEqual(chat.backend.calls, ["second edited"])
+        await chat.backend.finish()
+        await self.started(session, 2)
+        self.assertEqual(chat.backend.calls, ["second edited", "first"])
+
+    async def test_history_follows_dispatch_order_not_original_queue_submission_time(self):
+        session = (await self.call("create"))["id"]
+        await self.send(session, "active")
+        chat = await self.started(session)
+        first, _ = await self.send(session, "first queued")
+        second, _ = await self.send(session, "second queued")
+        chat.store.put(
+            "late-reply", session, role="assistant", text="active reply finished", status="complete"
+        )
+        await self.call(
+            "reorder_queue", session_id=session, request_ids=[second, first], expected_order=[first, second]
+        )
+        await chat.backend.finish()
+        await self.started(session, 2)
+        await chat.backend.finish()
+        await self.started(session, 3)
+        history = (await self.call("history", session_id=session))["messages"]
+        self.assertEqual(
+            [m["text"] for m in history],
+            ["active", "active reply finished", "second queued", "first queued"],
+        )
+        self.assertEqual(
+            [m["id"] for m in history if m["role"] == "user"][-2:], ["cli:" + second, "cli:" + first]
+        )
+
+    async def test_reordering_is_session_scoped_and_rejects_stale_or_partial_orders(self):
+        a, b = [(await self.call("create"))["id"] for _ in range(2)]
+        active, _ = await self.send(a, "A active")
+        chat = await self.started(a)
+        first, _ = await self.send(a, "A first")
+        await self.send(b, "B active")
+        await self.started(b)
+        foreign, _ = await self.send(b, "B queued")
+        second, _ = await self.send(a, "A second")
+        before = dict(self.store.db.execute("SELECT id,ordinal FROM conversation_queue"))
+        await self.call(
+            "reorder_queue", session_id=a, request_ids=[second, first], expected_order=[first, second]
+        )
+        after = dict(self.store.db.execute("SELECT id,ordinal FROM conversation_queue"))
+        self.assertEqual(after[foreign], before[foreign])
+        self.assertEqual(after[active], before[active])
+        self.assertEqual(after[first], before[second])
+        self.assertEqual(after[second], before[first])
+        for ids, expected in [
+            ([first, second], [first, second]),
+            ([second], [second, first]),
+            ([second, second], [second, first]),
+            ([second, foreign], [second, first]),
+            ([active, first], [second, first]),
+        ]:
+            with self.assertRaises(ValueError):
+                await self.call("reorder_queue", session_id=a, request_ids=ids, expected_order=expected)
+            self.assertEqual(dict(self.store.db.execute("SELECT id,ordinal FROM conversation_queue")), after)
+        self.assertTrue(chat.backend.busy)
+
+    async def test_remove_queued_never_cancels_an_active_or_foreign_request(self):
+        session = (await self.call("create"))["id"]
+        active, _ = await self.send(session, "running")
+        chat = await self.started(session)
+        queued, sent = await self.send(session, "remove me")
+        item = next(r for r in chat.queue() if r["id"] == queued)
+        foreign = (await self.call("create"))["id"]
+        with self.assertRaises(ValueError):
+            await self.call("remove_queued", session_id=foreign, request_id=queued, revision=item["revision"])
+        result = await self.call(
+            "remove_queued", session_id=session, request_id=queued, revision=item["revision"]
+        )
+        self.assertEqual(result["message"]["id"], sent["message"]["id"])
+        self.assertEqual(result["message"]["status"], "cancelled")
+        self.assertNotIn(queued, [r["id"] for r in result["requests"]])
+        running = next(r for r in chat.queue() if r["id"] == active)
+        for action in ["remove_queued", "edit_queued"]:
+            with self.assertRaises(ValueError):
+                await self.call(
+                    action,
+                    session_id=session,
+                    request_id=active,
+                    revision=running["revision"],
+                    **({"text": "wrong"} if action == "edit_queued" else {}),
+                )
+        self.assertTrue(chat.backend.busy)
+        self.assertEqual(chat.backend.calls, ["running"])
+
+    async def test_queue_edit_preserves_accepted_media_and_notification_context(self):
+        session = (await self.call("create"))["id"]
+        await self.send(session, "running")
+        chat = await self.started(session)
+        ident, sent = await self.send(session, "text")
+        raw = self.store.db.execute("SELECT payload FROM conversation_queue WHERE id=?", (ident,)).fetchone()[
+            0
+        ]
+        payload = json.loads(raw)
+        payload["media"] = [{"id": "accepted-image", "name": "image.jpg", "type": "image/jpeg"}]
+        payload["notification_context"] = "accepted notification reference"
+        with self.store.db:
+            self.store.db.execute(
+                "UPDATE conversation_queue SET payload=? WHERE id=?", (json.dumps(payload), ident)
+            )
+        item = next(r for r in chat.queue() if r["id"] == ident)
+        result = await self.call(
+            "edit_queued", session_id=session, request_id=ident, revision=item["revision"], text="new text"
+        )
+        saved = json.loads(
+            self.store.db.execute("SELECT payload FROM conversation_queue WHERE id=?", (ident,)).fetchone()[0]
+        )
+        self.assertEqual(saved["media"], payload["media"])
+        self.assertEqual(saved["notification_context"], payload["notification_context"])
+        self.assertEqual(result["message"]["attachments"], payload["media"])
+        self.assertEqual(result["message"]["id"], sent["message"]["id"])
+
+    async def test_reorder_failure_rolls_back_all_ordinal_changes(self):
+        session = (await self.call("create"))["id"]
+        await self.send(session, "running")
+        await self.started(session)
+        first, _ = await self.send(session, "first")
+        second, _ = await self.send(session, "second")
+        before = list(self.store.db.execute("SELECT id,ordinal FROM conversation_queue ORDER BY ordinal"))
+        self.store.db.execute(
+            f"CREATE TEMP TRIGGER fail_reorder BEFORE UPDATE OF ordinal ON conversation_queue "
+            f"WHEN NEW.id='{second}' AND NEW.ordinal>0 BEGIN SELECT RAISE(ABORT,'test rollback'); END"
+        )
+        with self.assertRaises(sqlite3.DatabaseError):
+            await self.call(
+                "reorder_queue",
+                session_id=session,
+                request_ids=[second, first],
+                expected_order=[first, second],
+            )
+        self.assertEqual(
+            list(self.store.db.execute("SELECT id,ordinal FROM conversation_queue ORDER BY ordinal")), before
+        )
+
+    async def test_queued_mutations_reject_a_request_already_being_prepared(self):
+        session = (await self.call("create"))["id"]
+        chat = await self.registry.get(session)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def prepare(text):
+            entered.set()
+            await release.wait()
+
+        chat.prepare_dispatch = prepare
+        ident, _ = await self.send(session, "original")
+        item = next(r for r in chat.queue() if r["id"] == ident)
+        await entered.wait()
+        for action in ["remove_queued", "edit_queued"]:
+            with self.assertRaises(ValueError):
+                await self.call(
+                    action,
+                    session_id=session,
+                    request_id=ident,
+                    revision=item["revision"],
+                    **({"text": "do not replace"} if action == "edit_queued" else {}),
+                )
+        self.assertNotIn(ident, chat.cancel_pending)
+        release.set()
+        await self.started(session)
+        self.assertEqual(chat.backend.calls, ["original"])
 
     async def test_cancel_during_preparation_cannot_dispatch_or_cancel_next_turn(self):
         session = (await self.call("create"))["id"]

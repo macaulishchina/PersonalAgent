@@ -1,5 +1,10 @@
 import { chatPath } from "./http";
 import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
+import {
+  QueuedMessages,
+  type QueuedRequest,
+  type QueueAction,
+} from "./queued-messages";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -70,7 +75,7 @@ type State = {
   active_request_id?: string;
   question_id?: string | number;
   questions?: { id: string; question: string }[];
-  queue?: { id: string; state: string }[];
+  queue?: QueuedRequest[];
 };
 const initial: State = {
   name: "个人助理",
@@ -562,7 +567,11 @@ function App() {
     );
   const [deliveryMode, setDeliveryMode] = useDeliveryMode();
   const replying = !!state.active_request_id && deliveryMode === "steer";
-  const queued = state.queue?.filter((r) => r.state === "queued") || [];
+  const queued = state.queue?.filter(
+    (r) => r.state === "queued" && !messages.some(
+      (message) => message.id === r.message_id && message.status !== "queued",
+    ),
+  ) || [];
   const sendLabel = replying
     ? state.question_id != null
       ? "发送回答"
@@ -587,7 +596,11 @@ function App() {
     stopped = useRef(false),
     generation = useRef(0);
   // Derive activity from transport/provider state; never persist a fake reply.
-  const latestUser = messages
+  const displayedMessages = messages.filter(
+    (message) =>
+      message.role !== "user" || !["queued", "cancelled"].includes(message.status),
+  );
+  const latestUser = displayedMessages
     .filter((message) => message.role === "user")
     .at(-1);
   const pendingDispatch = latestUser?.status === "sending";
@@ -893,6 +906,30 @@ function App() {
       setSending(false);
     }
   }
+  async function queuedAction(
+    action: QueueAction,
+    args: Record<string, unknown>,
+  ) {
+    if (sending || !online || uploading) return false;
+    setSending(true);
+    setError("");
+    try {
+      const result = await api("conversation", {
+        method: "POST",
+        body: JSON.stringify({ action, ...args }),
+      });
+      if (result.message) merge([result.message]);
+      setState((current) => ({ ...current, queue: result.requests }));
+      return true;
+    } catch (e) {
+      fail(e);
+      // Reconcile presentation only; never repeat an uncertain mutation.
+      void api("session").then(setState).catch(fail);
+      return false;
+    } finally {
+      setSending(false);
+    }
+  }
   async function copy(id: string, text: string) {
     try {
       await clipboard(text);
@@ -1011,14 +1048,14 @@ function App() {
                 查看更早的消息
               </button>
             )}
-            {messages.length === 0 && (
+            {displayedMessages.length === 0 && (
               <div className="welcome empty">
                 <Mark />
                 <h1>从这里，继续对话。</h1>
                 <p>文字、图片和后台任务，共享同一段对话。</p>
               </div>
             )}
-            {groupMessages(messages).map((group) => (
+            {groupMessages(displayedMessages).map((group) => (
               <ConversationGroup
                 key={group.id}
                 group={group}
@@ -1072,6 +1109,15 @@ function App() {
                 </button>
               </div>
             )}
+            <QueuedMessages
+              items={queued}
+              disabled={sending || !online || uploading}
+              onAction={queuedAction}
+              onRestore={(text) => {
+                setDraft((current) => current ? current + "\n" + text : text);
+                requestAnimationFrame(() => input.current?.focus());
+              }}
+            />
             <form
               className="composer"
               onSubmit={send}
@@ -1199,13 +1245,13 @@ function App() {
                       <Plus size={20} strokeWidth={1.6} />
                     )}
                   </button>
+                </div>
+                <div className="composer-actions">
                   <DeliveryModeSelector
                     mode={deliveryMode}
                     onChange={setDeliveryMode}
                     disabled={sending}
                   />
-                </div>
-                <div className="composer-actions">
                   {state.speaking && (
                     <button
                       type="button"
@@ -1258,33 +1304,6 @@ function App() {
                 </p>
               )}
             </form>
-            {queued.length > 0 && (
-              <details className="composer-queue">
-                <summary>
-                  <ListTodo size={14} />
-                  <span>{queued.length} 条消息排队中</span>
-                  <ChevronDown size={14} />
-                </summary>
-                <ol>
-                  {queued.map((r, index) => (
-                    <li key={r.id}>
-                      <span title={r.id}>
-                        待发送消息 {index + 1}
-                        <small>{r.id.slice(0, 8)}</small>
-                      </span>
-                      <button
-                        type="button"
-                        disabled={sending || !online || uploading}
-                        aria-label={`取消第 ${index + 1} 条排队消息`}
-                        onClick={() => conversationAction("cancel", r.id)}
-                      >
-                        取消排队
-                      </button>
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            )}
             <div className="composer-caption">
               <div className="composer-shortcuts">
                 <button

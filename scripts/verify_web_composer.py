@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import base64
 import json
+import re
 from pathlib import Path
 import tempfile
 
@@ -24,6 +25,30 @@ async def main():
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+
+    def pending(ident, text, attachments=None):
+        return dict(
+            id=ident,
+            state="queued",
+            text=text,
+            revision="v1-" + ident,
+            message_id="web:" + ident,
+            attachments=attachments or [],
+        )
+
+    def message(item, status="queued"):
+        return dict(
+            id=item["message_id"],
+            ordinal=1,
+            role="user",
+            source="web",
+            kind="message",
+            text=item["text"],
+            status=status,
+            attachments=item["attachments"],
+            updated=1,
+        )
+
     state = dict(
         name="Personal Agent",
         voice="disabled",
@@ -34,10 +59,18 @@ async def main():
         web_dispatching=False,
         active_request_id="active-one",
         questions=[],
-        queue=[{"id": "queued-two", "state": "queued"}],
+        queue=[
+            pending("queued-two", "整理接口说明并补充示例"),
+            pending(
+                "queued-three",
+                "核对移动端的输入体验与消息顺序",
+                [{"id": "queued-image", "name": "image.jpg"}],
+            ),
+            pending("queued-four", "请检查消息队列和输入框在不同屏幕下的布局，保留完整内容且一行展示。" * 5),
+        ],
     )
     posts, errors = [], []
-    failure = {"next": False}
+    failure = {"next": False, "queue": False}
     output = Path(tempfile.mkdtemp(prefix="pa-composer-ui-"))
     try:
         async with async_playwright() as playwright:
@@ -56,12 +89,14 @@ async def main():
             async def route_api(route):
                 path = route.request.url.split("/api/")[1].split("?")[0]
                 data = {}
+                changed = False
                 if route.request.method == "POST":
                     if path == "uploads":
                         data = {"id": "image-one", "name": "test.png"}
                     else:
                         body = route.request.post_data_json
                         posts.append((path, body))
+                        action = body.get("action")
                         if path == "conversation" and failure["next"]:
                             failure["next"] = False
                             await route.fulfill(
@@ -69,19 +104,45 @@ async def main():
                             )
                             return
                         if path == "messages":
-                            data = {
-                                "message": dict(
-                                    id="sent-one",
-                                    ordinal=1,
-                                    role="user",
-                                    source="web",
-                                    kind="message",
-                                    text=body["text"],
-                                    status="queued",
-                                    attachments=[],
-                                    updated=1,
+                            item = pending(
+                                body["request_id"],
+                                body["text"],
+                                [{"id": ident, "name": "test.png"} for ident in body["attachments"]],
+                            )
+                            state["queue"].append(item)
+                            data = {"message": message(item), "state": "queued"}
+                            changed = True
+                        elif path == "conversation" and action in {
+                            "edit_queued",
+                            "remove_queued",
+                            "reorder_queue",
+                        }:
+                            if failure["queue"]:
+                                failure["queue"] = False
+                                await route.fulfill(
+                                    status=409, json={"error": "队列已变化，请核对后再操作。"}
                                 )
-                            }
+                                return
+                            if action == "reorder_queue":
+                                queued = [r for r in state["queue"] if r["state"] == "queued"]
+                                assert body["expected_order"] == [r["id"] for r in queued]
+                                assert set(body["request_ids"]) == {r["id"] for r in queued}
+                                lookup = {r["id"]: r for r in queued}
+                                state["queue"] = [r for r in state["queue"] if r["state"] != "queued"] + [
+                                    lookup[i] for i in body["request_ids"]
+                                ]
+                            else:
+                                item = next(r for r in state["queue"] if r["id"] == body["request_id"])
+                                assert item["state"] == "queued" and item["revision"] == body["revision"]
+                                if action == "edit_queued":
+                                    item["text"] = body["text"]
+                                    item["revision"] += "-edited"
+                                    data["message"] = message(item)
+                                else:
+                                    state["queue"] = [r for r in state["queue"] if r["id"] != item["id"]]
+                                    data["message"] = message(item, "cancelled")
+                            data["requests"] = state["queue"]
+                            changed = True
                 elif path == "messages":
                     data = {"messages": [], "state": state, "cursor": 0, "before": None}
                 elif path == "session":
@@ -95,6 +156,8 @@ async def main():
                     )
                     return
                 await route.fulfill(json=data)
+                if changed:
+                    await update()
 
             await page.route("**/api/**", route_api)
             await page.goto(origin + "/chat/")
@@ -119,6 +182,11 @@ async def main():
             await expect(page.get_by_role("button", name="直接引导", exact=True)).to_be_disabled()
             await expect(page.locator(".composer-context")).to_have_count(0)
             await expect(page.locator(".delivery-modes")).to_have_count(0)
+            await expect(switch).to_have_text("引导")
+            assert await switch.evaluate("e => !!e.closest('.composer-actions')")
+            queue_box = await page.locator(".composer-queue").bounding_box()
+            composer_box = await page.locator(".composer").bounding_box()
+            assert queue_box["y"] + queue_box["height"] <= composer_box["y"]
             await entry.fill("请把这项要求也考虑进去")
             await page.locator(".composer-wrap").screenshot(path=str(output / "running-dark.png"))
             await entry.press("Enter")
@@ -129,6 +197,7 @@ async def main():
             )
             await expect(page.get_by_role("button", name="添加图片", exact=True)).to_be_disabled()
             await choose("排队")
+            await expect(switch).to_have_text("排队")
             await entry.fill("下一轮处理这件事")
             await page.reload()
             await expect(entry).to_have_value("下一轮处理这件事")
@@ -179,10 +248,64 @@ async def main():
             await expect(switch).to_have_attribute("aria-checked", "true")
 
             await entry.fill("保留这份草稿")
-            await page.locator(".composer-queue summary").click()
-            await page.get_by_role("button", name="取消第 1 条排队消息", exact=True).click()
+            rows = page.locator(".queue-row")
+
+            def row(ident):
+                return page.locator(f'.queue-row[data-queue-id="{ident}"]')
+
+            # Drag and keyboard ordering send the complete pending snapshot, never a new message.
+            await (
+                row("queued-four")
+                .locator(".queue-grip")
+                .drag_to(row("queued-two"), target_position={"x": 180, "y": 3})
+            )
+            await expect(rows.first).to_have_attribute("data-queue-id", "queued-four")
+            assert posts[-1][1]["action"] == "reorder_queue"
+            await page.get_by_role("button", name="下移第 1 条排队消息", exact=True).focus()
+            await page.get_by_role("button", name="下移第 1 条排队消息", exact=True).press("Enter")
+            await expect(rows.first).to_have_attribute("data-queue-id", "queued-two")
+            assert posts[-1][1]["request_ids"][:2] == ["queued-two", "queued-four"]
+
+            # Editing is inline; neither a rejected edit nor a successful edit touches the composer draft.
+            await row("queued-two").get_by_role("button", name=re.compile("^编辑第")).click()
+            editor = page.get_by_role("textbox", name="修改排队消息", exact=True)
+            await expect(editor).to_have_value("整理接口说明并补充示例")
+            await editor.fill("更新后的接口说明\n保留第二行")
+            failure["queue"] = True
+            count = len(posts)
+            await page.get_by_role("button", name="保存排队消息修改", exact=True).click()
+            await expect(page.get_by_role("alert")).to_contain_text("队列已变化")
+            await expect(editor).to_have_value("更新后的接口说明\n保留第二行")
+            assert len(posts) == count + 1
             await expect(entry).to_have_value("保留这份草稿")
-            assert posts[-1][1] == {"action": "cancel", "request_id": "queued-two"}
+            await editor.press("Enter")
+            await expect(editor).to_have_count(0)
+            await expect(row("queued-two").locator(".queue-text")).to_have_text(
+                "更新后的接口说明\n保留第二行"
+            )
+            assert posts[-1][1]["action"] == "edit_queued"
+            await expect(page.locator('.conversation [data-message-id="web:queued-two"]')).to_have_count(0)
+
+            await row("queued-three").get_by_role("button", name=re.compile("^删除第")).click()
+            await expect(row("queued-three")).to_have_count(0)
+            await expect(entry).to_have_value("保留这份草稿")
+            assert posts[-1][1]["action"] == "remove_queued" and posts[-1][1]["request_id"] == "queued-three"
+            await entry.focus()
+            await page.locator(".composer-wrap").screenshot(path=str(output / "queue-dark.png"))
+
+            # If execution wins the race, keep the unsaved text and offer an explicit draft recovery.
+            await row("queued-two").get_by_role("button", name=re.compile("^编辑第")).click()
+            await editor.fill("尚未保存的队列修改")
+            next(r for r in state["queue"] if r["id"] == "queued-two")["state"] = "running"
+            await update()
+            await expect(page.locator(".queue-edit-note")).to_contain_text("已开始执行或已移出队列")
+            await expect(editor).to_have_value("尚未保存的队列修改")
+            await expect(page.get_by_role("button", name="保存排队消息修改", exact=True)).to_have_count(0)
+            count = len(posts)
+            await page.get_by_role("button", name="复制到输入框", exact=True).click()
+            await expect(entry).to_have_value("保留这份草稿\n尚未保存的队列修改")
+            assert len(posts) == count
+            await entry.fill("保留这份草稿")
             await page.get_by_role("button", name="停止当前执行", exact=True).click()
             await expect(page.get_by_role("button", name="停止当前执行", exact=True)).to_be_enabled()
             assert posts[-1][1] == {"action": "cancel", "request_id": "active-next"}
@@ -250,6 +373,7 @@ async def main():
         json.dumps(
             {
                 "composer_default_steer_persistence_routing_keyboard_attachments_disconnect": "passed",
+                "queue_display_drag_keyboard_edit_remove_conflict_recovery": "passed",
                 "desktop_mobile_layout": "passed",
                 "screenshots": str(output),
             },

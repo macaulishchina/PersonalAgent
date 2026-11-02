@@ -65,7 +65,7 @@ class Console:
                 pass
         expected = public_origin if trusted else request.scheme + "://" + request.host
         request["secure_context"] = expected.startswith("https://")
-        if request.path == "/chat" or request.path.startswith("/chat/"):
+        if request.path in {"/", "/chat"} or request.path.startswith("/chat/"):
             origin = request.headers.get("Origin")
             if (origin and origin != expected) or (
                 request.method not in {"GET", "HEAD"} and origin != expected
@@ -135,7 +135,9 @@ class Console:
         app = web.Application(middlewares=[self.guard], client_max_size=2 * 1024 * 1024)
         app.add_routes(
             [
-                web.get("/", self.index),
+                web.get("/", self.chat_gateway.forward),
+                web.get("/config", self.configuration_redirect),
+                web.get("/config/", self.index),
                 web.route("*", "/chat", self.chat_gateway.forward),
                 web.route("*", "/chat/{path:.*}", self.chat_gateway.forward),
                 web.get("/console.js", self.javascript),
@@ -214,6 +216,9 @@ class Console:
         await self.accounts.close()
         if self.runner:
             await self.runner.cleanup()
+
+    async def configuration_redirect(self, request):
+        raise web.HTTPPermanentRedirect("/config/")
 
     async def index(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "index.html")

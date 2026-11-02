@@ -236,7 +236,19 @@ class WebPlugin:
 
         data = await self.object_body(request)
         action = data.pop("action", None)
-        if action not in {"supplement", "answer", "cancel", "queue"} or "session_id" in data:
+        if (
+            action
+            not in {
+                "supplement",
+                "answer",
+                "cancel",
+                "queue",
+                "edit_queued",
+                "remove_queued",
+                "reorder_queue",
+            }
+            or "session_id" in data
+        ):
             raise ValueError("Unsupported web conversation operation")
         data["session_id"] = self.conversation.state()["session_id"]
         return web.json_response(await self.api.invoke(ConversationRequest(action, data)))

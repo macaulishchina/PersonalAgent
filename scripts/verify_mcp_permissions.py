@@ -140,7 +140,7 @@ m.run(transport="stdio",show_banner=False)
                 page = await browser.new_page(viewport={"width": 1440, "height": 1000})
                 page.on("pageerror", lambda e: errors.append(str(e)))
                 page.on("dialog", lambda dialog: dialog.accept())
-                await page.goto(f"http://127.0.0.1:{settings.port}")
+                await page.goto(f"http://127.0.0.1:{settings.port}/config/")
                 await page.get_by_label("管理员密码", exact=True).fill(
                     (business.state / "admin-token").read_text().strip()
                 )

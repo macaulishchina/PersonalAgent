@@ -85,7 +85,7 @@ function renderChatShortcut() {
     enabled = fieldAt(["web", "enable"])?.loaded_value;
   const address = plugins?.includes("web") && enabled &&
     ["running", "degraded"].includes($("health").dataset.state)
-    ? new URL("/chat/", location.origin).href : null;
+    ? new URL("/", location.origin).href : null;
   entry.disabled = !address;
   entry.title = address || "聊天网页尚未生效或当前地址不可访问";
   if (address) entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");

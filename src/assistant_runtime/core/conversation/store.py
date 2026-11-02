@@ -1,5 +1,6 @@
 """Durable, ordered conversation projection and resumable change notifications."""
 
+import hashlib
 import json
 import time
 from contextlib import nullcontext
@@ -36,6 +37,31 @@ class ConversationStore:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN tool_summary TEXT")
         if "task_id" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN task_id TEXT")
+
+    @staticmethod
+    def queue_revision(payload):
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def queue(self, session):
+        requests = []
+        for ident, state, turn, payload in self.db.execute(
+            "SELECT id,state,turn_id,payload FROM conversation_queue "
+            "WHERE session_id=? AND state IN ('queued','sending','running') ORDER BY ordinal",
+            (session,),
+        ):
+            data = json.loads(payload)
+            requests.append(
+                {
+                    "id": ident,
+                    "state": state,
+                    "turn_id": turn,
+                    "message_id": data["mid"],
+                    "text": data["text"],
+                    "attachments": data["media"],
+                    "revision": self.queue_revision(payload),
+                }
+            )
+        return requests
 
     def get(self, ident):
         row = self.db.execute("SELECT * FROM chat_messages WHERE id=?", (ident,)).fetchone()
@@ -99,6 +125,7 @@ class ConversationStore:
         tool_summary=None,
         task_id=None,
         commit=True,
+        new_ordinal=False,
     ):
         old = self.get(ident)
         if old and old["session_id"] != session:
@@ -108,18 +135,23 @@ class ConversationStore:
         tool_summary = tool_summary if tool_summary is not None else (old["tool_summary"] if old else None)
         task_id = task_id if task_id is not None else (old["task_id"] if old else None)
         values = (role, source, kind, text, status, turn_id, attachments, tool_summary, task_id)
-        if old and values == tuple(
-            old[k]
-            for k in (
-                "role",
-                "source",
-                "kind",
-                "text",
-                "status",
-                "turn_id",
-                "attachments",
-                "tool_summary",
-                "task_id",
+        if (
+            old
+            and not new_ordinal
+            and values
+            == tuple(
+                old[k]
+                for k in (
+                    "role",
+                    "source",
+                    "kind",
+                    "text",
+                    "status",
+                    "turn_id",
+                    "attachments",
+                    "tool_summary",
+                    "task_id",
+                )
             )
         ):
             return old
@@ -134,14 +166,14 @@ class ConversationStore:
                 """INSERT INTO chat_messages
                 (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(id) DO UPDATE SET role=excluded.role,source=excluded.source,
+                ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,source=excluded.source,
                 kind=excluded.kind,text=excluded.text,status=excluded.status,
                 turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated,
                 tool_summary=excluded.tool_summary,task_id=excluded.task_id""",
                 (
                     ident,
                     session,
-                    old["ordinal"] if old else seq,
+                    old["ordinal"] if old and not new_ordinal else seq,
                     *values[:6],
                     json.dumps(attachments),
                     time.time() if updated_at is None else updated_at,

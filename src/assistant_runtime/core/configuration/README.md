@@ -15,7 +15,7 @@ pa configuration reset-token --management /absolute/instance/management.toml
 ```
 
 Open port **8047**, listening on `0.0.0.0` by default. The random administrator token is
-private at `state/configuration/admin-token`; it is separate from the chat login. Optional chat shares this public origin at /chat/. The kernel listener survives absent/failed chat or business; implementation remains in the web extension. Private loopback endpoints are discovered only through operator IPC.
+private at `state/configuration/admin-token`; it is separate from the chat login. The configuration page is at `/config/`; optional chat opens directly at `/`, with its API and assets under `/chat/`. The kernel listener survives absent/failed chat or business; implementation remains in the web extension. Private loopback endpoints are discovered only through operator IPC.
 `configuration serve --management ...` is the explicit management entry point. `run`
 resolves the same bootstrap before parsing business configuration, so damaged business
 TOML does not prevent the repair page from starting. Initialization does not start services.

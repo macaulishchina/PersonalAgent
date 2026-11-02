@@ -470,13 +470,79 @@ class Conversation:
             return {"message": self.store.get(mid), "state": "queued"}
 
     def queue(self):
-        return [
-            {"id": row[0], "state": row[1], "turn_id": row[2]}
-            for row in self.store.db.execute(
-                "SELECT id,state,turn_id FROM conversation_queue WHERE session_id=? AND state IN ('queued','sending','running') ORDER BY ordinal",
-                (self.session,),
+        return self.store.queue(self.session)
+
+    def queued_request(self, ident, revision):
+        if not isinstance(ident, str) or not ident:
+            raise ValueError("需要提供排队消息标识")
+        row = self.store.db.execute(
+            "SELECT source,payload,state FROM conversation_queue WHERE id=? AND session_id=?",
+            (ident, self.session),
+        ).fetchone()
+        if row is None or row[2] != "queued":
+            raise ValueError("消息已开始执行或已移出队列，不能再修改或删除")
+        if not isinstance(revision, str) or revision != self.store.queue_revision(row[1]):
+            raise ValueError("排队消息已被修改，请重新打开后再操作")
+        return row
+
+    def edit_queued(self, ident, revision, text):
+        if not isinstance(text, str) or len(text) > 32000:
+            raise ValueError("文字最多 32000 字符")
+        with self.store.db:
+            source, raw, _ = self.queued_request(ident, revision)
+            payload = json.loads(raw)
+            if not text.strip() and not payload["media"]:
+                raise ValueError("请输入内容或保留图片")
+            payload["text"] = text
+            self.store.db.execute(
+                "UPDATE conversation_queue SET payload=? WHERE id=? AND session_id=?",
+                (json.dumps(payload), ident, self.session),
             )
-        ]
+            self.store.put(
+                payload["mid"],
+                self.session,
+                role="user",
+                source=source,
+                text=text,
+                status="queued",
+                attachments=payload["media"],
+                commit=False,
+            )
+            # The initial submission fingerprint remains immutable for lost-ack retries.
+        self.pending.set()
+        return {"message": self.store.get(payload["mid"]), "requests": self.queue()}
+
+    def remove_queued(self, ident, revision):
+        _, raw, _ = self.queued_request(ident, revision)
+        self.finish_pending(ident, "cancelled")
+        return {"message": self.store.get(json.loads(raw)["mid"]), "requests": self.queue()}
+
+    def reorder_queue(self, request_ids, expected_order):
+        if not isinstance(request_ids, list) or not isinstance(expected_order, list):
+            raise ValueError("需要提供完整的排队消息顺序")
+        with self.store.db:
+            rows = self.store.db.execute(
+                "SELECT id,ordinal FROM conversation_queue WHERE session_id=? AND state='queued' "
+                "ORDER BY ordinal",
+                (self.session,),
+            ).fetchall()
+            current = [row[0] for row in rows]
+            if expected_order != current:
+                raise ValueError("队列已变化，请核对最新顺序后重试")
+            if (
+                len(request_ids) != len(current)
+                or any(not isinstance(ident, str) for ident in request_ids)
+                or len(set(request_ids)) != len(current)
+                or set(request_ids) != set(current)
+            ):
+                raise ValueError("只能调整当前会话中尚未发送的完整队列")
+            # Reuse this session's existing ordinal slots; never touch another session or active run.
+            for ident, ordinal in rows:
+                self.store.db.execute("UPDATE conversation_queue SET ordinal=? WHERE id=?", (-ordinal, ident))
+            for ident, (_, ordinal) in zip(request_ids, rows):
+                self.store.db.execute("UPDATE conversation_queue SET ordinal=? WHERE id=?", (ordinal, ident))
+        self.pending.set()
+        return {"requests": self.queue()}
 
     async def drain(self):
         while True:
@@ -493,7 +559,14 @@ class Conversation:
                 while self.backend.busy:
                     await self.completed.wait()
                     self.completed.clear()
-                # A cancellation may have arrived while waiting for the prior turn.
+                # Editing, reordering or removal may occur while the prior turn is running.
+                row = self.store.db.execute(
+                    "SELECT id,source,payload FROM conversation_queue WHERE session_id=? AND state='queued' "
+                    "ORDER BY ordinal LIMIT 1",
+                    (self.session,),
+                ).fetchone()
+                if row is None:
+                    break
                 with self.store.db:
                     changed = self.store.db.execute(
                         "UPDATE conversation_queue SET state='sending' WHERE id=? AND state='queued'",
@@ -502,8 +575,20 @@ class Conversation:
                     if not changed:
                         continue
                     self.store.db.execute("UPDATE chat_requests SET state='sending' WHERE id=?", (row[0],))
+                    payload = json.loads(row[2])
+                    self.store.put(
+                        payload["mid"],
+                        self.session,
+                        role="user",
+                        source=row[1],
+                        text=payload["text"],
+                        status="sending",
+                        attachments=payload["media"],
+                        commit=False,
+                        new_ordinal=True,
+                    )
                 self.source = row[1]
-                await self.dispatch(row[0], **json.loads(row[2]))
+                await self.dispatch(row[0], **payload)
                 if self.backend.busy:
                     await self.completed.wait()
                 state = self.store.db.execute(

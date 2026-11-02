@@ -76,6 +76,9 @@ class Conversations:
             "state": {"session_id"},
             "submit": {"session_id", "request_id", "text", "attachments"},
             "queue": {"session_id"},
+            "edit_queued": {"session_id", "request_id", "revision", "text"},
+            "remove_queued": {"session_id", "request_id", "revision"},
+            "reorder_queue": {"session_id", "request_ids", "expected_order"},
             "cancel": {"session_id", "request_id"},
             "supplement": {"session_id", "request_id", "text"},
             "answer": {"session_id", "request_id", "question_id", "text"},
@@ -118,15 +121,7 @@ class Conversations:
             events = store.changes(ident, cursor)
             return {"events": events, "cursor": events[-1]["seq"] if events else store.cursor()}
         if action == "queue":
-            return {
-                "requests": [
-                    {"id": r[0], "state": r[1]}
-                    for r in store.db.execute(
-                        "SELECT id,state FROM conversation_queue WHERE session_id=? AND state IN ('queued','sending','running') ORDER BY ordinal",
-                        (ident,),
-                    )
-                ]
-            }
+            return {"requests": store.queue(ident)}
         if action == "state" and ident not in self.opened:
             return {
                 "session_id": ident,
@@ -142,6 +137,12 @@ class Conversations:
             )
         if action == "cancel":
             return await chat.cancel_request(args.get("request_id"))
+        if action == "edit_queued":
+            return chat.edit_queued(args.get("request_id"), args.get("revision"), args.get("text"))
+        if action == "remove_queued":
+            return chat.remove_queued(args.get("request_id"), args.get("revision"))
+        if action == "reorder_queue":
+            return chat.reorder_queue(args.get("request_ids"), args.get("expected_order"))
         row = store.db.execute(
             "SELECT state,turn_id FROM conversation_queue WHERE id=? AND session_id=?",
             (args.get("request_id"), ident),

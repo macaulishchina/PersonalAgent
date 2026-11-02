@@ -41,13 +41,13 @@ class ChatGateway:
             raise web.HTTPPermanentRedirect("/chat/")
         process = self.business.process
         if process is None or process.returncode is not None:
-            raise web.HTTPServiceUnavailable(text="聊天服务未运行；配置页面仍可使用。")
+            raise web.HTTPServiceUnavailable(text="聊天服务未运行；可通过 /config/ 访问配置页面。")
         try:
             endpoint = await self.business.request({"command": "http-frontend", "owner": "web"})
         except (OSError, ValueError, TimeoutError):
             raise web.HTTPServiceUnavailable(text="聊天服务正在启动或重启；请稍后重试。") from None
         if not endpoint:
-            raise web.HTTPNotFound(text="聊天网页未启用；可在配置页的功能与插件中开启。")
+            raise web.HTTPNotFound(text="聊天网页未启用；可在 /config/ 的功能与插件中开启。")
         host, port = endpoint["host"], endpoint["port"]
         if not ipaddress.ip_address(host).is_loopback or type(port) is not int or not 1 <= port <= 65535:
             raise web.HTTPServiceUnavailable(text="聊天入口不可用。")
@@ -68,7 +68,8 @@ class ChatGateway:
         outgoing["Host"] = urlsplit(outgoing["X-PA-Frontend-Origin"]).netloc
         outgoing["X-PA-Frontend-Peer"] = request.remote or "unknown"
         target = URL.build(scheme="http", host=host, port=port).with_path("/")
-        target = URL(str(target).rstrip("/") + request.raw_path[len("/chat") :], encoded=True)
+        path = request.raw_path if request.path == "/" else request.raw_path[len("/chat") :]
+        target = URL(str(target).rstrip("/") + path, encoded=True)
 
         async def body():
             size = 0

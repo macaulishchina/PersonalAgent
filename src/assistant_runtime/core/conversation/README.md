@@ -15,6 +15,9 @@ delivery. Optional assistant presentation lives in `core/speech`; slim never imp
 | supplement | session_id, request_id, text |
 | answer | session_id, request_id, question_id, text |
 | cancel | session_id, optional request_id (default active request only) |
+| edit_queued | session_id, request_id, revision, text |
+| remove_queued | session_id, request_id, revision |
+| reorder_queue | session_id, request_ids, expected_order |
 
 Request IDs are globally deduplicated; reuse with different contents or another session
 is rejected. Ordinary submissions persist before acknowledgment and never steer active
@@ -22,6 +25,17 @@ work. A session has one drain worker and at most one active turn. Waiting input 
 by `execution.queue_size`; native dispatch shares execution admission and AI usage limits
 with direct execution and tasks. Supplement/answer/cancel validate the current request;
 answers additionally validate the question identity. Explicit inputs remain in history.
+
+Queue projections include the message identity, text, attachment references and a payload
+revision. Editing/removal accepts only still-queued inputs with the observed revision;
+it cannot mutate or cancel an input that has started preparing or executing. Editing
+keeps attachments, notification context and the original submission fingerprint, so a
+lost-ack retry acknowledges the existing input rather than creating or replaying work.
+Removal records cancellation for audit. Reordering requires the complete observed pending
+order and atomically permutes only that session's pending ordinal slots. The drain rereads
+the selected input after waiting for an active turn, so it uses the latest order and text.
+At dispatch, the existing user message keeps its identity but receives its sending status
+and timeline ordinal before provider events, so history follows actual execution order.
 
 `transcripts.completed_inputs()` exposes bounded user evidence from completed queued
 turns across all sessions, including explicit supplements/answers. Memory owns capture

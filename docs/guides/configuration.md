@@ -4,7 +4,7 @@
 
 ## 登录配置网页
 
-默认地址为 `http://127.0.0.1:8047`。口令读取命令：
+默认地址为 `http://127.0.0.1:8047/config/`。口令读取命令：
 
 ```text
 pa configuration token --management <实例目录>/management.toml
@@ -14,8 +14,8 @@ pa configuration token --management <实例目录>/management.toml
 
 | 入口 | 默认监听 | 地址配置 | 口令 |
 | --- | --- | --- | --- |
-| 系统配置网页 | `0.0.0.0:8047` | `management.toml` 的 `host`、`port` | 独立管理员口令 |
-| 可选聊天网页 | 同一端口的 /chat/ | 在插件页启用 Web；对外地址仍由 management.toml 设置 | 独立聊天口令 |
+| 系统配置网页 | `0.0.0.0:8047/config/` | `management.toml` 的 `host`、`port` | 独立管理员口令 |
+| 可选聊天网页 | 同一端口的 `/` | 在插件页启用 Web；对外地址仍由 management.toml 设置 | 独立聊天口令 |
 
 远程访问使用服务器 IP，只需放行管理端口。配置页始终由内核管理服务提供；Web 未启用、业务故障或重启时仍可访问。聊天插件只使用本机内部传输，默认自动分配端口，无需额外配置防火墙。旧实例升级时将 [web].host 改为本机地址（如 127.0.0.1），port 可改为 0；它们只放在高级设置中。公网访问使用 HTTPS 反向代理并配置管理服务的受信来源。
 

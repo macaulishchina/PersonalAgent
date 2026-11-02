@@ -36,7 +36,11 @@ class SharedHttpTest(unittest.IsolatedAsyncioTestCase):
                     async def get(path):
                         return await client.get(origin + path)
 
-                    self.assertEqual((await get("/")).status, 200)
+                    self.assertEqual((await get("/")).status, 404)
+                    configuration = await get("/config")
+                    self.assertEqual(configuration.status, 200)
+                    self.assertEqual(configuration.url.path, "/config/")
+                    self.assertIn("登录系统配置", await configuration.text())
                     self.assertEqual((await get("/chat/")).status, 404)
                     self.assertEqual((await get("/api/configuration")).status, 401)
                     token = console.access.path.read_text().strip()
@@ -54,7 +58,15 @@ class SharedHttpTest(unittest.IsolatedAsyncioTestCase):
                     business.resources.provision(business.files.snapshot().contents)
                     await business.start(business.files.snapshot())
                     self.assertIn(business.outcome, {"running", "degraded"}, business.error)
-                    self.assertEqual((await get("/chat/")).status, 200)
+                    chat = await get("/")
+                    self.assertEqual(chat.status, 200)
+                    self.assertEqual(chat.url.path, "/")
+                    self.assertEqual(await chat.text(), await (await get("/chat/")).text())
+                    self.assertEqual((await get("/config/")).status, 200)
+                    self.assertEqual(
+                        (await client.get(origin + "/", headers={"Origin": "http://evil.test"})).status,
+                        403,
+                    )
                     self.assertEqual((await get("/chat/api/messages")).status, 401)  # Admin != chat.
                     with business.files.locked():
                         snapshot = business.files.snapshot()
@@ -86,10 +98,13 @@ class SharedHttpTest(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(business.apply_task, 15)
                     self.assertEqual(business.application["phase"], "applied", business.application)
                     self.assertEqual((await get("/chat/")).status, 404)
+                    self.assertEqual((await get("/")).status, 404)
+                    self.assertEqual((await get("/config/")).status, 200)
                     self.assertEqual((await get("/api/configuration")).status, 200)
                     await business.stop()
                     self.assertEqual((await get("/chat/")).status, 503)
-                    self.assertEqual((await get("/")).status, 200)
+                    self.assertEqual((await get("/")).status, 503)
+                    self.assertEqual((await get("/config/")).status, 200)
                     self.assertEqual((await get("/api/configuration")).status, 200)
             finally:
                 await business.stop()

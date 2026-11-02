@@ -151,6 +151,41 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 400)
 
+    async def test_queue_controls_are_authenticated_and_bound_to_the_web_session(self):
+        from unittest.mock import AsyncMock
+
+        calls = AsyncMock(return_value={"requests": []})
+        self.host.runtime.invoke = calls
+        operations = [
+            ("edit_queued", {"request_id": "queued", "revision": "seen", "text": "edited"}),
+            ("remove_queued", {"request_id": "queued", "revision": "seen"}),
+            ("reorder_queue", {"request_ids": ["b", "a"], "expected_order": ["a", "b"]}),
+        ]
+        response = await self.client.post(
+            self.base + "/api/conversation", json={"action": "remove_queued", **operations[1][1]}
+        )
+        self.assertEqual(response.status, 401)
+        calls.assert_not_awaited()
+        await self.login()
+        for action, arguments in operations:
+            with self.subTest(action=action):
+                response = await self.client.post(
+                    self.base + "/api/conversation", json={"action": action, **arguments}
+                )
+                self.assertEqual(response.status, 200)
+                received = calls.await_args.args[0]
+                self.assertEqual(received.action, action)
+                self.assertEqual(
+                    received.arguments, {**arguments, "session_id": self.host.conversation.session}
+                )
+                count = calls.await_count
+                response = await self.client.post(
+                    self.base + "/api/conversation",
+                    json={"action": action, **arguments, "session_id": "another-conversation"},
+                )
+                self.assertEqual(response.status, 400)
+                self.assertEqual(calls.await_count, count)
+
     async def test_task_pages_use_owner_filter_cursor_and_details(self):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock

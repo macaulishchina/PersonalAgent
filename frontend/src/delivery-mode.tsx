@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CornerDownLeft, ListOrdered } from "lucide-react";
 
 export type DeliveryMode = "steer" | "queue";
 const storageKey = "pa-delivery-mode";
@@ -48,25 +49,18 @@ export function DeliveryModeSelector({
       aria-label="直接引导"
       aria-checked={steering}
       aria-description={steering ? "补充或调整当前执行" : "当前执行结束后发送"}
-      title={steering ? "补充或调整当前执行" : "当前执行结束后发送"}
+      title={
+        steering ? "当前：引导 · 点击切换为排队" : "当前：排队 · 点击切换为引导"
+      }
       disabled={disabled}
       onClick={() => onChange(steering ? "queue" : "steer")}
     >
-      <span className="delivery-switch-thumb" aria-hidden="true" />
-      <span
-        className="delivery-switch-option"
-        data-selected={steering}
-        aria-hidden="true"
-      >
-        引导
-      </span>
-      <span
-        className="delivery-switch-option"
-        data-selected={!steering}
-        aria-hidden="true"
-      >
-        排队
-      </span>
+      {steering ? (
+        <CornerDownLeft size={13} aria-hidden="true" />
+      ) : (
+        <ListOrdered size={13} aria-hidden="true" />
+      )}
+      <span aria-hidden="true">{steering ? "引导" : "排队"}</span>
     </button>
   );
 }
