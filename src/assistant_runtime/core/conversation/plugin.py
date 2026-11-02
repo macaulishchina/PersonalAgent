@@ -68,12 +68,14 @@ class Conversations:
     async def request(self, request):
         action, args = request.action, request.arguments
         allowed = {
-            "create": {"title"},
+            "create": {"title", "request_id", "policy"},
             "list": {"before", "limit"},
             "open": {"operator", "session_id"},
             "history": {"session_id", "before"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
+            "receipt": {"session_id", "request_id"},
+            "receipts": {"session_id", "request_ids"},
             "submit": {"session_id", "request_id", "text", "attachments"},
             "queue": {"session_id"},
             "edit_queued": {"session_id", "request_id", "revision", "text"},
@@ -91,7 +93,7 @@ class Conversations:
         ):
             raise ValueError("Conversation operation is outside the bound execution")
         if action == "create":
-            return self.sessions.create(args.get("title", "New conversation"))
+            return self.sessions.create(args.get("title", "New conversation"), args.get("request_id"), args.get("policy"))
         if action == "list":
             return self.sessions.list(args.get("before"), args.get("limit", 50))
         if action == "open":
@@ -107,6 +109,20 @@ class Conversations:
         ident = args.get("session_id")
         self.sessions.get(ident)
         store = self.main.store
+        if action == "receipts":
+            ids = args.get("request_ids")
+            if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(i, str) for i in ids):
+                raise ValueError("Expected at most 100 request IDs")
+            ids = list(dict.fromkeys(str(uuid.UUID(i)) for i in ids))
+            if not ids:
+                return {}
+            marks = ",".join("?" for _ in ids)
+            rows = store.db.execute(f"SELECT r.id,q.state FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.session_id=? AND r.id IN ({marks})", (ident, *ids)).fetchall()
+            found = dict(rows)
+            return {i: {"found": i in found, "state": found.get(i)} for i in ids}
+        if action == "receipt":
+            row = store.db.execute("SELECT q.state,r.message_id FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.id=? AND r.session_id=?", (args.get("request_id"), ident)).fetchone()
+            return {"found": bool(row), "state": row[0] if row else None, "message": store.get(row[1]) if row else None}
         if action == "history":
             messages = store.history(ident, args.get("before"))
             return {

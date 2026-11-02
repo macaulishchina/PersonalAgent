@@ -74,6 +74,7 @@ def create_server(client, caller_run=None):
             dict, WithJsonSchema(SELF_COMPLETION), checked(SELF_COMPLETION, "self_completion")
         ]
         | None = None,
+        tools: list[str] | None = None,
     ) -> dict:
         """Persist authorized work. One-shot non-Goal tasks default to auto_archive=true: after success, failure, cancellation or a skipped occurrence they move to history, retaining results. Set false only when the user wants to keep the task reusable. Unfinished/waiting/uncertain tasks stay visible. Immediate one-shot work is categorized as temporary; scheduled and Goal work stays in plans. A multi-step task runs independently; do not also execute it in foreground. Use kind=reminder for simple notifications. Include authorized scope/completion criteria in prompt. All children must stay within the parent's scope. notify_completion controls automatic end-of-run notifications (including failures); notify_voice only adds speech when completion notifications are enabled. feedback_owner=background hands result delivery to the background (default). Set conversation ONLY when you are explicitly retaining responsibility to wait for and answer this immediate task; its result is projected immediately into this conversation without a separate unread notice. Do not repeat that report verbatim; add only useful interpretation. If handing off and moving on, use background. get_task never transfers ownership. Use transfer_task_feedback with the returned execution round/version to explicitly take back or hand off an existing run. Ending/interruption of the owning turn releases undelivered results; no timer decides ownership. Durable event subscriptions default to notify_completion=false; other tasks default true. For monitoring, set notify_completion=false and publish notifications only for meaningful new events; unchanged checks stay silent. Only an explicitly user-authorized reusable timed plan may set self_schedule={allowed_triggers:[exact interval/date/cron choices], condition:when the user permits change}. For authorized automatic ending, self_completion={condition:concrete stopping criteria} permits complete_own_task after verification. No grant is inferred from a prompt; children cannot receive either permission."""
         spec = {
@@ -92,6 +93,8 @@ def create_server(client, caller_run=None):
             spec["auto_archive"] = auto_archive
         if self_completion is not None:
             spec["self_completion"] = self_completion
+        if tools is not None:
+            spec["tools"] = tools
         if self_schedule is not None:
             spec["self_schedule"] = self_schedule
         if workspace:

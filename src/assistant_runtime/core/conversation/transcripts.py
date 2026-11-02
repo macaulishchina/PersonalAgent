@@ -29,6 +29,9 @@ class Transcripts:
         """Bounded, unconsumed user evidence; unfinished/uncertain turns are never inferred."""
         if not self.chat_position():
             return []
+        private = ""
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_policies'").fetchone():
+            private = " AND NOT EXISTS(SELECT 1 FROM conversation_policies p WHERE p.session_id=m.session_id AND json_extract(p.data,'$.capture_memory')=0) "
         rows = self.db.execute(
             "SELECT m.id,m.session_id,m.turn_id,m.source,m.text,m.updated,q.id,q.source "
             "FROM chat_messages m JOIN conversation_queue q "
@@ -36,7 +39,7 @@ class Transcripts:
             "WHERE q.state='completed' AND m.role='user' AND m.status='complete' "
             "AND m.ordinal>? AND trim(m.text)<>'' "
             "AND NOT EXISTS(SELECT 1 FROM transcripts t WHERE t.message_id=m.id) "
-            "ORDER BY q.ordinal,m.ordinal LIMIT 64",
+            + private + "ORDER BY q.ordinal,m.ordinal LIMIT 64",
             (after,),
         ).fetchall()
         keys = (

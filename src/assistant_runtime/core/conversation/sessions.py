@@ -13,6 +13,8 @@ class Sessions:
     def __init__(self, store):
         self.store, self.db = store, store.db
         tables = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.db.execute("CREATE TABLE IF NOT EXISTS conversation_creation_receipts (request_id TEXT PRIMARY KEY, title TEXT NOT NULL, session_id TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS conversation_policies (session_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
         if "conversation_sessions" in tables:
             return
         old = set()
@@ -70,12 +72,32 @@ class Sessions:
             raise ValueError("Unknown conversation")
         return dict(zip(("id", "title", "created"), row))
 
-    def create(self, title="New conversation"):
+    def create(self, title="New conversation", request_id=None, policy=None):
         if not isinstance(title, str) or not title.strip() or len(title) > 120:
             raise ValueError("Conversation title must be 1..120 characters")
+        policy = policy or {}
+        if not isinstance(policy, dict) or set(policy) - {"tools", "instructions", "capture_memory"}:
+            raise ValueError("Invalid conversation policy")
+        if "tools" in policy and (not isinstance(policy["tools"], list) or len(policy["tools"]) > 64 or any(not isinstance(t, str) or not 0 < len(t) <= 160 for t in policy["tools"])):
+            raise ValueError("Expected bounded tool names")
+        if "instructions" in policy and (not isinstance(policy["instructions"], str) or len(policy["instructions"]) > 4000):
+            raise ValueError("Expected bounded conversation instructions")
+        if "capture_memory" in policy and type(policy["capture_memory"]) is not bool:
+            raise ValueError("Expected memory capture flag")
+        fingerprint = json.dumps([title, policy], sort_keys=True, ensure_ascii=False)
+        if request_id is not None:
+            request_id = str(uuid.UUID(request_id))
+            old = self.db.execute("SELECT title,session_id FROM conversation_creation_receipts WHERE request_id=?", (request_id,)).fetchone()
+            if old:
+                if old[0] != fingerprint:
+                    raise ValueError("Conversation creation request reused with different title")
+                return self.get(old[1])
         ident = uuid.uuid4().hex
         with self.db:
             self.db.execute("INSERT INTO conversation_sessions VALUES(?,?,?)", (ident, title, time.time()))
+            self.db.execute("INSERT INTO conversation_policies VALUES(?,?)", (ident, json.dumps(policy)))
+            if request_id is not None:
+                self.db.execute("INSERT INTO conversation_creation_receipts VALUES(?,?,?)", (request_id, fingerprint, ident))
         return self.get(ident)
 
     def list(self, before=None, limit=50):

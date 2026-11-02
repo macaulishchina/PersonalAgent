@@ -131,6 +131,8 @@ class PiJobs:
                 else server_config(cfg.socket, task_run=run["id"], plugins=cfg.enabled_plugins),
             },
         }
+        if spec.get("tools") is not None:
+            params["config"]["allowed_tools"] = spec["tools"]
         existing = run["data"].get("execution_session_id")
         if existing:
             history = run["data"].get("model_upgrades", [])

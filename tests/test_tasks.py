@@ -853,6 +853,10 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
         self.plugin.repo.update_run(run["id"], "running")
+        own = await self.plugin.request(TaskRequest("execution_info", {"run_ids": [run["id"]]}, run["id"]))
+        self.assertEqual(own[run["id"]]["task_id"], d["id"])
+        with self.assertRaises(ValueError):
+            await self.plugin.request(TaskRequest("execution_info", {"run_ids": ["foreign-run"]}, run["id"]))
         with self.assertRaises(ValueError):
             await self.plugin.request(TaskRequest("terminate", {"task_id": d["id"]}, run["id"]))
         with self.assertRaises(ValueError):
@@ -870,6 +874,17 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
                     run["id"],
                 )
             )
+
+    async def test_explicit_tool_scope_is_retained_and_children_cannot_expand(self):
+        d = await self.create(tools=["request_user_input"])
+        self.assertEqual(d["spec"]["tools"], ["request_user_input"])
+        self.plugin.due(d["id"])
+        run = self.plugin.repo.runs(d["id"])[0]
+        self.plugin.repo.update_run(run["id"], "running")
+        child = await self.plugin.request(TaskRequest("create", {"request_id": str(uuid.uuid4()), "spec": {"title": "child", "prompt": "authorized child"}}, run["id"]))
+        self.assertEqual(child["spec"]["tools"], ["request_user_input"])
+        with self.assertRaises(ValueError):
+            await self.plugin.request(TaskRequest("create", {"request_id": str(uuid.uuid4()), "spec": {"title": "escape", "prompt": "invalid", "tools": ["write"]}}, run["id"]))
 
     async def test_running_progress_stays_in_task_but_clarification_is_delivered_once(self):
         definition = await self.create(notify_completion=False, auto_archive=False)

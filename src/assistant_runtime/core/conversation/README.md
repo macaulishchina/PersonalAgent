@@ -4,11 +4,17 @@
 logical sessions, entrance bindings, ordered input, messages, media references and result
 delivery. Optional assistant presentation lives in `core/speech`; slim never imports it.
 
+Creation receipts are durable and isolated by the authenticated caller. The optional
+`policy` object accepts an explicit `tools` allowlist, additional `instructions`, and
+`capture_memory` (default true). Policy restrictions apply to fresh and resumed turns;
+false memory capture excludes this session from automatic global transcript capture.
+
 `ConversationRequest(action, arguments)` supports:
 
 | Action | Arguments |
 | --- | --- |
-| create / list | title / before, limit |
+| create / list | title, optional request_id(UUID), policy / before, limit |
+| receipt / receipts | session_id, request_id / request_ids (at most 100) |
 | open | operator, optional session_id (CLI remembered selection) |
 | history / events / state / queue | session_id; optional before / cursor |
 | submit | session_id, request_id (UUID), text, optional attachments |

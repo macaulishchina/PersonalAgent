@@ -105,6 +105,28 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
     async def call(self, action, **args):
         return await self.registry.request(ConversationRequest(action, args))
 
+    async def test_idempotent_creation_policy_and_request_receipt(self):
+        ident = str(uuid.uuid4())
+        policy = {"tools": ["request_user_input"], "capture_memory": False, "instructions": "Scoped conversation"}
+        first = await self.call("create", title="scoped", request_id=ident, policy=policy)
+        second = await self.call("create", title="scoped", request_id=ident, policy=policy)
+        self.assertEqual(first, second)
+        with self.assertRaises(ValueError):
+            await self.call("create", title="different", request_id=ident, policy=policy)
+        with self.assertRaises(ValueError):
+            await self.call("create", title="scoped", request_id=ident, policy={})
+        request_id, _ = await self.send(first["id"], "a private issue message")
+        chat = await self.started(first["id"])
+        await chat.backend.finish()
+        receipt = await self.call("receipt", session_id=first["id"], request_id=request_id)
+        self.assertTrue(receipt["found"])
+        self.assertEqual(receipt["state"], "completed")
+        batch = await self.call("receipts", session_id=first["id"], request_ids=[request_id, str(uuid.uuid4())])
+        self.assertEqual(batch[request_id], {"found": True, "state": "completed"})
+        other = (await self.call("create", title="other"))["id"]
+        self.assertFalse((await self.call("receipt", session_id=other, request_id=request_id))["found"])
+        self.assertFalse(any(row["session_id"] == first["id"] for row in self.store.transcripts.completed_inputs(0)))
+
     async def send(self, session, text, ident=None):
         ident = ident or str(uuid.uuid4())
         return ident, await self.call("submit", session_id=session, request_id=ident, text=text)

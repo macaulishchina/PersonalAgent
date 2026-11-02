@@ -444,6 +444,7 @@ class TasksPlugin:
             "auto_archive",
             "self_schedule",
             "self_completion",
+            "tools",
         }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Unknown task specification fields")
@@ -463,6 +464,9 @@ class TasksPlugin:
         for key, maxlen in (("title", 200), ("prompt", 4000)):
             if not isinstance(s.get(key), str) or not 0 < len(s[key].strip()) <= maxlen:
                 raise ValueError(f"Invalid task {key}")
+        if s.get("tools") is not None:
+            from assistant_runtime.core.pi.scope import names
+            s["tools"] = names(s["tools"], "tools", 64)
         for key in ("long_term", "notify_voice", "notify_completion"):
             if type(s[key]) is not bool:
                 raise ValueError(key + " must be boolean")
@@ -511,6 +515,11 @@ class TasksPlugin:
         if caller:
             parent = self.repo.run(caller)
             p = parent["data"]["spec"]
+            if p.get("tools") is not None:
+                if s.get("tools") is None:
+                    s["tools"] = p["tools"]
+                elif not set(s["tools"]) <= set(p["tools"]):
+                    raise ValueError("Child task exceeds parent tool scope")
             if parent["state"] not in {"running", "waiting_user"} or parent["data"].get("stop_requested"):
                 raise ValueError("Parent execution is not active")
             if (
@@ -648,6 +657,7 @@ class TasksPlugin:
             "upgrade_model",
             "reschedule_self",
             "complete_self",
+            "execution_info",
         }:
             raise ValueError(
                 "Background executions cannot use general task management; use update_own_task_schedule for an explicitly authorized schedule change"
@@ -701,6 +711,8 @@ class TasksPlugin:
             ids = args.get("run_ids")
             if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(i, str) for i in ids):
                 raise ValueError("Expected at most 100 execution IDs")
+            if caller and set(ids) != {caller}:
+                raise ValueError("Background execution may inspect only its own identity")
             result = {}
             for ident in set(ids):
                 try:
