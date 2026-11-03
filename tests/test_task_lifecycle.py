@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -25,6 +26,34 @@ class LifecycleTest(unittest.IsolatedAsyncioTestCase):
         with self.store.db:
             run = self.plugin.repo.enqueue(definition, "fixture")
         return definition, run
+
+    async def test_model_retry_uses_checkpoint_and_persisted_request_identity(self):
+        _, run = await self.queued()
+        self.plugin.repo.update_run(
+            run["id"], "failed", turn_id="failed-turn", failure={"retry_allowed": True}
+        )
+        self.executor.model_retry_checkpoint = AsyncMock(return_value=True)
+        args = {
+            "run_id": run["id"],
+            "retry_request_id": str(uuid.uuid4()),
+            "retry_of": "failed-turn",
+            "text": "continue from confirmed results",
+        }
+        await self.plugin.request(TaskRequest("continue", args))
+        first = self.plugin.repo.run(run["id"])
+        await self.plugin.request(TaskRequest("continue", args))
+        self.assertEqual(self.plugin.repo.run(run["id"])["revision"], first["revision"])
+        self.assertEqual(first["state"], "queued")
+        self.assertEqual(first["data"]["model_retry_target"], "failed-turn")
+        self.executor.model_retry_checkpoint.assert_awaited_once()
+        self.plugin.repo.update_run(run["id"], "failed", turn_id="new-turn")
+        self.executor.model_retry_checkpoint.return_value = False
+        with self.assertRaisesRegex(ValueError, "不能直接重试"):
+            await self.plugin.request(
+                TaskRequest(
+                    "continue", {**args, "retry_request_id": str(uuid.uuid4()), "retry_of": "new-turn"}
+                )
+            )
 
     async def test_preparation_failure_is_failed_not_quarantined_and_keeps_first_error(self):
         _, run = await self.queued(resource_locks=["object:one"])

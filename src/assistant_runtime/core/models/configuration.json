@@ -391,6 +391,41 @@
         "default": 3,
         "title": "重复无效调用上限",
         "description": "同一轮中相同参数、定义及权限下，确定未执行的重复错误达到此次数后停止。"
+      },
+      "retry": {
+        "type": "object",
+        "title": "模型请求重试",
+        "description": "只重试符合条件的单次模型请求，不重放工具或切换模型；所有尝试共享原用量与总期限。",
+        "additionalProperties": false,
+        "default": {
+          "max_retries": 2,
+          "unknown_retries": 1,
+          "max_delay_seconds": 30
+        },
+        "properties": {
+          "max_retries": {
+            "type": "integer",
+            "title": "临时错误额外重试次数",
+            "default": 2,
+            "minimum": 0,
+            "maximum": 5
+          },
+          "unknown_retries": {
+            "type": "integer",
+            "title": "未分类错误额外重试次数",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "max_delay_seconds": {
+            "type": "number",
+            "title": "最大等待间隔（秒）",
+            "default": 30,
+            "minimum": 1,
+            "maximum": 600
+          }
+        },
+        "x-advanced": true
       }
     }
   },

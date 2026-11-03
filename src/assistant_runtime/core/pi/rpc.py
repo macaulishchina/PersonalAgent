@@ -98,6 +98,7 @@ class PiSessionWorker:
         self.active_turn = None
         self.turn_aborted = False
         self.turn_error = None
+        self.model_failure = None
         self.turn_items = []
         self.pending_msg = None
         self.pending_tools = {}
@@ -629,6 +630,7 @@ class PiSessionWorker:
             "status": status,
             "items": list(self.turn_items),
             "itemsView": "full",
+            "retry_of": self.meta.get("retry_of"),
         }
         if error:
             match = re.match(
@@ -640,6 +642,11 @@ class PiSessionWorker:
                 "code": "generation_failed",
                 **({"status": int(match[1])} if match else {}),
             }
+        failure = getattr(self, "model_failure", None)
+        if error and failure:
+            turn_record["error"] = dict(failure)
+            turn_record["failure"] = dict(failure)
+        turn_record["budget_id"] = self.meta.get("budget_id")
         if getattr(self, "tool_stop", False):
             turn_record["error"] = {
                 "code": "repeated_invalid_call",
@@ -662,15 +669,24 @@ class PiSessionWorker:
                 budget = {**self.parent.usage.snapshots.get(self.meta["budget_id"], {}), "unavailable": True}
             turn_record["ai_usage"] = budget
             # A lost model response retains unknown usage and its reservation. It
-            # does not undo Pi's authoritative terminal event. New user requests
-            # may proceed; the existing work's transport guard still prevents
-            # replay/continuation under an unresolved model request.
+            # does not undo Pi's authoritative terminal event. Only explicitly
+            # settled generation failures may continue; process loss remains guarded.
             if getattr(self, "usage_error", None) and status != "unknown":
                 turn_record["status"] = "failed"
                 turn_record["error"] = {"code": "ai_usage_blocked", "message": self.usage_error}
                 self.usage_error = None
         if self.meta.get("pending_operations"):
             turn_record["status"] = "unknown"
+        if turn_record.get("failure"):
+            unsafe = any(i.get("tool_outcome", {}).get("outcome") == "unknown" for i in self.turn_items)
+            turn_record["failure"]["retry_allowed"] = bool(
+                turn_record["status"] == "failed"
+                and failure.get("generation_settled")
+                and not unsafe
+                and turn_record.get("error", {}).get("code") != "ai_usage_blocked"
+            )
+            if turn_record.get("error", {}).get("code") == failure.get("code"):
+                turn_record["error"]["retry_allowed"] = turn_record["failure"]["retry_allowed"]
         self.meta["active_run"] = None
         turns = self.meta.setdefault("runs", [])
         existing = next((t for t in turns if t["id"] == turn_id), None)
@@ -1058,6 +1074,7 @@ class PiClient:
                         "status": "running" if active else "unknown",
                         "items": meta.get("current_items", []),
                         "itemsView": "full",
+                        "retry_of": meta.get("retry_of"),
                     }
                 )
             return result
@@ -1153,6 +1170,18 @@ class PiClient:
                 or any(r.get("status") == "unknown" for r in meta.get("runs", [])[-1:])
             ):
                 raise RpcError("Prior execution active or unknown; no new run started")
+            retry_of = p.get("retry_of")
+            prior = meta.get("runs", [])[-1] if meta.get("runs") else None
+            if retry_of:
+                if (
+                    not prior
+                    or prior["id"] != retry_of
+                    or prior.get("status") != "failed"
+                    or not prior.get("failure", {}).get("retry_allowed")
+                ):
+                    raise RpcError("Failed execution is not a current safe recovery checkpoint")
+                if any(i.get("tool_outcome", {}).get("outcome") == "unknown" for i in prior.get("items", [])):
+                    raise RpcError("Unknown tool outcome requires reconciliation")
             model, effort = p.get("model", meta["model"]), p.get("effort", meta["reasoning_effort"])
             self._selection(model, effort)
             if any(
@@ -1174,8 +1203,9 @@ class PiClient:
             run_id = uuid.uuid4().hex
             w.active_turn, w.turn_aborted, w.turn_error = run_id, False, None
             w.compaction_error = False
+            w.model_failure = None
             w.turn_items, w.pending_msg, w.pending_tools = [], None, {}
-            meta["budget_id"] = meta.get("budget_scope") or run_id
+            meta["budget_id"] = prior["budget_id"] if retry_of else meta.get("budget_scope") or run_id
             from assistant_runtime.api.ai_usage import UsageScope
 
             existing_scope = await self.usage.binding(meta["budget_id"])
@@ -1185,6 +1215,7 @@ class PiClient:
                 await self.usage.bind(meta["budget_id"], UsageScope(meta["budget_id"], "foreground"))
             self.last_work_id = meta["budget_id"]
             meta["active_run"] = run_id
+            meta["retry_of"] = retry_of
             meta["public_inputs"] = {}
             user_item = {
                 "id": run_id + "-input",

@@ -54,6 +54,8 @@ def task_event(method, params):
     common = {"turn_id": turn, "message_id": ident}
     if method == "run.started":
         return {**common, "kind": "turn_started"}
+    if method == "model.retry":
+        return {**common, "kind": "model_retry", "attempt": params.get("attempt")}
     if method == "run.completed":
         return {
             **common,
@@ -61,6 +63,7 @@ def task_event(method, params):
             "status": params["run"].get("status", "unknown"),
             "error_status": (params["run"].get("error") or {}).get("status"),
             "error_code": (params["run"].get("error") or {}).get("code"),
+            "failure": params["run"].get("failure"),
         }
     if method == "message.delta" and ident:
         return {**common, "kind": "message_delta", "delta": params.get("delta", "")}

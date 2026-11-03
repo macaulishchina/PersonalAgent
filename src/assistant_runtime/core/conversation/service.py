@@ -41,6 +41,7 @@ class Conversation:
         self.web_turns = set()
         self.web_dispatching = False
         self.last_state = None
+        self.retrying = None
         self.tasks = set()
         self.feedback = Feedback(self.store.db)
         self.task_replies = TaskReplies(self)
@@ -125,6 +126,7 @@ class Conversation:
                 getattr(self.backend.client, "settings", None), "enabled", True
             ),
             "task_running": self.backend.busy,
+            "retrying": self.retrying,
             "quiet": False,
             "backend_ready": self.backend.client.started,
             "web_dispatching": self.web_dispatching,
@@ -149,6 +151,11 @@ class Conversation:
         if not getattr(self.backend, "session_id", None):
             return
         kind, turn = event["kind"], event.get("turn_id")
+        if kind == "model_retry":
+            self.retrying = {"attempt": event.get("attempt")}
+            return
+        if kind in {"turn_started", "turn_completed", "message_delta", "message"}:
+            self.retrying = None
         if kind == "question":
             self.store.emit(self.session, "question", event)
             return
@@ -201,7 +208,10 @@ class Conversation:
                 self.store.put(
                     f"outcome:{self.session}:{turn}",
                     self.session,
-                    text="任务已取消。"
+                    failure=event.get("failure"),
+                    text=event["failure"]["message"]
+                    if event.get("failure")
+                    else "任务已取消。"
                     if status == "interrupted"
                     else (
                         "本轮执行已达到调用预算并停止，请查看任务进展。"
@@ -368,7 +378,9 @@ class Conversation:
             self.web_turns.add(turn)
 
     @admits_work()
-    async def submit(self, request_id, text, attachments, notification_id=None, *, source="web"):
+    async def submit(
+        self, request_id, text, attachments, notification_id=None, *, source="web", retry_of=None
+    ):
         if source not in {"web", "cli", "operator"}:
             raise ValueError("Unknown conversation entrance")
         if not getattr(getattr(self.backend.client, "settings", None), "enabled", True):
@@ -387,6 +399,8 @@ class Conversation:
         ):
             raise ValueError("每次最多发送四张图片")
         fingerprint_input = [self.session, source, text, attachments, notification_id]
+        if retry_of:
+            fingerprint_input.append(retry_of)
         fingerprint = hashlib.sha256(json.dumps(fingerprint_input, ensure_ascii=False).encode()).hexdigest()
         async with self.submit_lock:
             db = self.store.db
@@ -397,6 +411,28 @@ class Conversation:
                 if existing[0] != fingerprint:
                     raise ValueError("发送标识已用于其他消息")
                 return {"message": self.store.get(existing[1]), "state": existing[2]}
+            if retry_of:
+                previous = db.execute(
+                    "SELECT id FROM conversation_queue WHERE session_id=? AND json_extract(payload,'$.retry_of')=?",
+                    (self.session, retry_of),
+                ).fetchone()
+                if previous:
+                    return {"state": "accepted", "request_id": previous[0]}
+                outcome = self.store.get(f"outcome:{self.session}:{retry_of}")
+                latest = db.execute(
+                    "SELECT turn_id FROM conversation_queue WHERE session_id=? ORDER BY ordinal DESC LIMIT 1",
+                    (self.session,),
+                ).fetchone()
+                if (
+                    not outcome
+                    or not (outcome.get("failure") or {}).get("retry_allowed")
+                    or not latest
+                    or latest[0] != retry_of
+                    or self.queue()
+                    or self.backend.busy
+                    or not await self.backend.control_checkpoint(retry_of, stopped=True)
+                ):
+                    raise ValueError("当前失败记录已过期或存在未确认操作，无法直接重试")
             maximum = self.host.config.execution.get("queue_size", 64)
             if (
                 db.execute(
@@ -457,6 +493,7 @@ class Conversation:
                                 "text": text,
                                 "media": media,
                                 "notification_context": notification_context,
+                                **({"retry_of": retry_of} if retry_of else {}),
                             }
                         ),
                     ),
@@ -646,7 +683,7 @@ class Conversation:
             return {"cancelled": await self.backend.cancel(row[1])}
         return {"cancelled": False, "state": row[0]}
 
-    async def dispatch(self, request_id, mid, text, media, notification_context=""):
+    async def dispatch(self, request_id, mid, text, media, notification_context="", retry_of=None):
         async with self.dispatch_lock:
             self.web_dispatching = True
             self.dispatch_message = mid
@@ -662,6 +699,7 @@ class Conversation:
                     notification_context + text,
                     images=images,
                     cancelled=lambda: request_id in self.cancel_pending,
+                    **({"retry_of": retry_of} if retry_of else {}),
                 )
                 turn_id = self.backend.active_turn or self.backend.last_turn
                 if request_id in self.cancel_pending and self.backend.busy:

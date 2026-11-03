@@ -144,10 +144,19 @@ class PiBackend:
                 else server_config(self.config.socket, plugins=self.config.enabled_plugins),
             },
         }
-        policy_table = self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_policies'").fetchone()
-        policy_row = self.store.db.execute("SELECT data FROM conversation_policies WHERE session_id=?", (self.session_id,)).fetchone() if policy_table else None
+        policy_table = self.store.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_policies'"
+        ).fetchone()
+        policy_row = (
+            self.store.db.execute(
+                "SELECT data FROM conversation_policies WHERE session_id=?", (self.session_id,)
+            ).fetchone()
+            if policy_table
+            else None
+        )
         if policy_row:
             import json
+
             policy = json.loads(policy_row[0])
             if "tools" in policy:
                 params["config"]["allowed_tools"] = policy["tools"]
@@ -290,7 +299,7 @@ class PiBackend:
             },
         )
 
-    async def submit(self, text, images=(), *, cancelled=lambda: False):
+    async def submit(self, text, images=(), *, cancelled=lambda: False, retry_of=None):
         if not self.foreground:
             raise RuntimeError("Conversation capability is not enabled")
         if not self.client.settings.enabled:
@@ -304,6 +313,12 @@ class PiBackend:
                 raise ConversationCancelled("Conversation input cancelled before dispatch")
             if self.integrations:
                 self.integrations.require_confirmed()
+            if retry_of and (
+                self.active_turn
+                or self.pending_question
+                or not await self.control_checkpoint(retry_of, stopped=True)
+            ):
+                raise ValueError("无法安全恢复：当前执行或操作状态需要先核对")
             if self.pending_question:
                 if images:
                     raise ValueError("请先用文字回答待确认的问题，再发送图片")
@@ -342,6 +357,7 @@ class PiBackend:
                         "input": inputs,
                         "model": self.config.main_model,
                         "effort": self.config.main_reasoning_effort,
+                        **({"retry_of": retry_of} if retry_of else {}),
                     },
                     timeout=60,
                 )
@@ -451,6 +467,8 @@ class PiBackend:
                 continue
             if item.get("server") == "decisions" and item.get("tool") == "confirm_voice_decision":
                 continue
+            if item.get("tool_outcome", {}).get("outcome") == "unknown":
+                return False
             if item.get("status") not in {"completed", "failed", "declined"}:
                 return False
         terminals = await self.client.request("operations.list", {"session_id": self.execution_session_id})

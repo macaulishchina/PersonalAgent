@@ -38,6 +38,14 @@ class ConversationStore:
         if "task_id" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN task_id TEXT")
 
+        if "failure" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
+            self.db.execute("ALTER TABLE chat_messages ADD COLUMN failure TEXT")
+        self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS conversation_retry_target "
+            "ON conversation_queue(session_id,json_extract(payload,'$.retry_of')) "
+            "WHERE json_extract(payload,'$.retry_of') IS NOT NULL"
+        )
+
     @staticmethod
     def queue_revision(payload):
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -81,10 +89,12 @@ class ConversationStore:
             "updated",
             "tool_summary",
             "task_id",
+            "failure",
         )
         result = dict(zip(keys, row))
         result["attachments"] = json.loads(result["attachments"])
         result["tool_summary"] = json.loads(result["tool_summary"]) if result["tool_summary"] else None
+        result["failure"] = json.loads(result["failure"]) if result["failure"] else None
         return result
 
     def attachment_sessions(self, ident):
@@ -124,6 +134,7 @@ class ConversationStore:
         updated_at=None,
         tool_summary=None,
         task_id=None,
+        failure=None,
         commit=True,
         new_ordinal=False,
     ):
@@ -134,7 +145,8 @@ class ConversationStore:
         attachments = attachments if attachments is not None else (old["attachments"] if old else [])
         tool_summary = tool_summary if tool_summary is not None else (old["tool_summary"] if old else None)
         task_id = task_id if task_id is not None else (old["task_id"] if old else None)
-        values = (role, source, kind, text, status, turn_id, attachments, tool_summary, task_id)
+        failure = failure if failure is not None else (old["failure"] if old else None)
+        values = (role, source, kind, text, status, turn_id, attachments, tool_summary, task_id, failure)
         if (
             old
             and not new_ordinal
@@ -151,6 +163,7 @@ class ConversationStore:
                     "attachments",
                     "tool_summary",
                     "task_id",
+                    "failure",
                 )
             )
         ):
@@ -164,12 +177,12 @@ class ConversationStore:
                 self.db.execute("DELETE FROM chat_events WHERE seq < ?", (seq - 20000,))
             self.db.execute(
                 """INSERT INTO chat_messages
-                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id,failure)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,source=excluded.source,
                 kind=excluded.kind,text=excluded.text,status=excluded.status,
                 turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated,
-                tool_summary=excluded.tool_summary,task_id=excluded.task_id""",
+                tool_summary=excluded.tool_summary,task_id=excluded.task_id,failure=excluded.failure""",
                 (
                     ident,
                     session,
@@ -179,6 +192,7 @@ class ConversationStore:
                     time.time() if updated_at is None else updated_at,
                     json.dumps(tool_summary) if tool_summary is not None else None,
                     task_id,
+                    json.dumps(failure) if failure is not None else None,
                 ),
             )
         return self.get(ident)

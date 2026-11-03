@@ -131,6 +131,8 @@ class ModelSettings:
     entries: dict = field(default_factory=lambda: configuration_default(__file__, "entries"))
     memory: str = field(default_factory=lambda: configuration_default(__file__, "memory"))
 
+    retry: dict = field(default_factory=lambda: configuration_default(__file__, "retry"))
+
     @property
     def outer_timeout_seconds(self):
         return max(self.timeout_seconds, self.compaction_timeout_seconds) + TRANSPORT_MARGIN_SECONDS
@@ -158,6 +160,15 @@ class ModelSettings:
                     **{k: v for k, v in provider.items() if k != "preset"},
                 }
         obj = cls(**value)
+        defaults = configuration_default(__file__, "retry")
+        keys(obj.retry, defaults)
+        obj.retry.update({k: v for k, v in defaults.items() if k not in obj.retry})
+        for key, maximum in (("max_retries", 5), ("unknown_retries", 1)):
+            if type(obj.retry[key]) is not int or not 0 <= obj.retry[key] <= maximum:
+                raise ValueError("Invalid models.retry." + key)
+        for key, minimum, maximum in (("max_delay_seconds", 1, 600),):
+            if type(obj.retry[key]) not in (int, float) or not minimum <= obj.retry[key] <= maximum:
+                raise ValueError("Invalid models.retry." + key)
         if type(obj.enabled) is not bool:
             raise ValueError("models.enabled must be boolean")
         for key, maximum in (

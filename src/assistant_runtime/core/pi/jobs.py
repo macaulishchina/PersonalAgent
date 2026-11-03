@@ -213,6 +213,11 @@ class PiJobs:
                 },
                 "model": selection["model"],
                 "effort": selection["reasoning_effort"],
+                **(
+                    {"retry_of": run["data"]["model_retry_target"]}
+                    if run["data"].get("model_retry_target")
+                    else {}
+                ),
                 "input": [{"type": "text", "text": prompt}],
             },
             timeout=60,
@@ -295,6 +300,7 @@ class PiJobs:
                 state,
                 turn_id=p["run"]["id"],
                 provider_error=p["run"].get("error"),
+                failure=p["run"].get("failure"),
                 ai_usage=p["run"].get("ai_usage"),
                 model_failure=model_failure(p["run"].get("error")) if state == "failed" else None,
                 turn_active=False,
@@ -478,6 +484,21 @@ class PiJobs:
             self.threads.pop(thread, None)
             self.handles.pop(run["id"], None)
             self.questions.pop(run["id"], None)
+
+    async def model_retry_checkpoint(self, run, turn_id):
+        session = run["data"].get("execution_session_id")
+        if not session or run["data"].get("turn_id") != turn_id:
+            return False
+        result = await self.client.request("session.read", {"session_id": session, "include_runs": True})
+        turns = result["session"].get("runs", [])
+        if not turns or turns[-1]["id"] != turn_id or not turns[-1].get("failure", {}).get("retry_allowed"):
+            return False
+        if result["session"].get("status", {}).get("type") == "active":
+            return False
+        if any(i.get("tool_outcome", {}).get("outcome") == "unknown" for i in turns[-1].get("items", [])):
+            return False
+        operations = await self.client.request("operations.list", {"session_id": session})
+        return not operations.get("data") and not operations.get("next_cursor")
 
     async def reconcile(self, run):
         thread = run["data"].get("execution_session_id")

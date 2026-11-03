@@ -84,8 +84,9 @@ All framework AI-service calls pass the independent [ai_usage plugin](../ai_usag
 ## Failure and explicit model changes
 
 A request invokes only its selected model. Provider rejection is a failure; unknown
-transport outcomes remain unknown. Neither tasks nor auxiliary inference automatically
-switch models or replay calls. Removed `fallbacks` configuration is rejected.
+transport outcomes retain their evidence and cost reservations. Safe pre-output failures
+use the single Pi request-retry policy; tasks and inference never switch models or replay
+uncertain tool operations. Removed `fallbacks` configuration is rejected.
 
 Task model changes require an explicit recommendation, a clean checkpoint and verified
 idle operations. The old context is archived; the new context receives confirmed progress,
@@ -193,3 +194,21 @@ The editor shows the snapshot retrieval time, update state and a manual check/re
 Updated candidates are refreshed without applying them. Search, select a reference and use
 the single fill action to stage known facts into normal parameter fields. Metadata updates
 never save model configuration, replace an editing draft or change an active model route.
+
+
+## 请求重试配置
+
+```toml
+[model_api.retry]
+max_retries = 2
+unknown_retries = 1
+max_delay_seconds = 30
+```
+
+配置界面按本模块声明自动显示。`max_retries=0` 关闭自动重试；未知错误最多额外一次，
+仍计入总次数。退避使用锁定 Pi 的默认实现，不提供第二套退避参数。
+认证、余额、明确额度及无效参数不原样重试；部分输出和未知操作不自动重发。
+每次实际尝试单独准入和结算，共享原工作额度与总期限；不改变模型或输出上限。
+模型测试继续使用 30 秒总期限，成功只证明此次文字推理，未验证图片或工具。
+安全的供应商错误说明与请求标识保留在失败回执中；原始响应和凭据不回显。
+人工恢复与边界见 [Pi 请求错误与恢复](../pi/README.md#模型请求错误与恢复)。

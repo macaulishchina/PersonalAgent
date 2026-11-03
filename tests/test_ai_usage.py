@@ -73,6 +73,35 @@ class UsageTest(unittest.IsolatedAsyncioTestCase):
         await self.done(reserved)
         self.assertEqual((await self.usage.snapshot("work"))["requests"], 2)
 
+    async def test_settled_generation_keeps_unknown_cost_without_unknown_operation_guard(self):
+        self.policy(work_limits={"max_output_tokens": 100})
+
+        async def admit(output):
+            return await self.usage.admit(
+                self.scope,
+                service="execution",
+                provider="p",
+                model="m",
+                bounds={"input_tokens": 100, "output_tokens": output},
+            )
+
+        ticket = await admit(60)
+        await self.usage.settle(ticket["id"], state="unknown", generation_settled=True)
+        snapshot = await self.usage.snapshot("work")
+        self.assertEqual(snapshot["unknown_requests"], 1)
+        self.assertEqual(snapshot["unknown_execution_requests"], 0)
+        uncertain = await admit(10)
+        await self.usage.settle(uncertain["id"], state="unknown")
+        self.assertEqual((await self.usage.snapshot("work"))["unknown_execution_requests"], 1)
+        with self.assertRaises(UsageError):
+            await admit(40)  # Both unknown requests still reserve their output allowance.
+        await self.usage.close()
+        self.usage = UsageService(self.root)
+        await self.usage.start()
+        snapshot = await self.usage.snapshot("work")
+        self.assertEqual(snapshot["unknown_requests"], 2)
+        self.assertEqual(snapshot["unknown_execution_requests"], 1)
+
     async def test_default_128_warning_256_allowed_257_denied(self):
         for n in range(256):
             ticket = await self.admit()

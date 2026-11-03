@@ -540,7 +540,11 @@ class AssistantService:
         except Exception as exc:
             response = {"ok": False, "error": str(exc)[:200]}
             from assistant_runtime.api.tool_calls import ToolFailure
+            from assistant_runtime.api.models import ModelCallError
 
+            if isinstance(exc, ModelCallError):
+                response["model_failure"] = exc.failure
+                response["error_code"] = exc.code
             if isinstance(exc, ToolFailure):
                 response["tool_outcome"] = exc.outcome.public()
                 if exc.result is not None:

@@ -8,10 +8,10 @@ import time
 import uuid
 from copy import deepcopy
 
-from assistant_runtime.api.ai_usage import UsageError, UsageScope, metered
+from assistant_runtime.api.ai_usage import UsageError, UsageScope
 from assistant_runtime.api.models import ModelCallError
 from assistant_runtime.core.pi.accounts import NativeAccounts
-from .client import ModelClient
+from .client import ModelClient, metered_complete
 from .settings import ModelSettings, reasoning_effort
 
 log = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class ModelProbes:
                     "accounts": accounts,
                     "timeout_seconds": TIMEOUT,
                     "max_output_tokens": self.owner.settings.max_output_tokens,
+                    "retry": self.owner.settings.retry,
                 }
             )
             selected = settings.entry(name)
@@ -109,15 +110,16 @@ class ModelProbes:
                 async with self.owner.semaphore:
                     await client.start()
                     bound = await client.output_bound(payload)
-                    reply = await metered(
-                        self.owner.host.ai_usage.service,
-                        UsageScope("model-test:" + ident, "configuration"),
-                        "inference",
-                        selected["provider"],
-                        selected["model"],
-                        lambda: client.complete(payload, session_id="model-test:" + ident),
+                    reply = await metered_complete(
+                        client,
+                        payload,
+                        session_id="model-test:" + ident,
+                        usage=self.owner.host.ai_usage.service,
+                        scope=UsageScope("model-test:" + ident, "configuration"),
+                        service="inference",
+                        provider=selected["provider"],
+                        model=selected["model"],
                         bounds={"input_tokens": 1024, "output_tokens": bound},
-                        body=payload,
                     )
                     result = response(
                         True,
@@ -141,7 +143,11 @@ class ModelProbes:
                 "model_http_429": "供应商限流或配额不足，请稍后再试。",
             }
             result = response(
-                False, exc.code, messages.get(exc.code, "供应商拒绝或未能完成推理请求，请检查服务状态。")
+                False,
+                exc.code,
+                exc.failure.get("message")
+                or messages.get(exc.code, "供应商拒绝或未能完成推理请求，请检查服务状态。"),
+                failure=exc.failure,
             )
         except (ValueError, KeyError, TypeError):
             result = response(

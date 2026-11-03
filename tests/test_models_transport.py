@@ -175,7 +175,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             ("redirect", "unknown"),
             ("truncated", "unknown"),
             ("incomplete", "unknown"),
-            ("tool", "complete text"),
+            ("tool", "model_result_invalid"),
             ("oversized", "unknown"),
         ):
             self.mode = mode

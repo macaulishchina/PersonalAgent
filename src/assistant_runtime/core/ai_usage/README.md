@@ -57,3 +57,11 @@ The web UI does not display request counters or routine usage warnings. Accounti
 ## Acceptance
 
 `check.py --group models --group execution --group decisions --group search --group tasks --group web` covers the adjacent contracts; full checks remain required before deployment. `test_ai_usage` verifies exact 128/256/257 behavior, concurrent reservation, durable identities, cancellation/restart, missing telemetry, optional limits, failure closure, privacy and retention. Real Pi subprocess tests exercise file/tools/MCP, native compaction, shared fallback budgets and mixed main/child identity against synthetic local endpoints. No automatic check sends a paid supplier request or restarts production.
+
+
+Model retry attempts have separate durable calls under one `logical_request_id` and the
+original work scope. Records include attempt number and prior backoff wait. A confirmed
+terminal model-generation failure may carry `generation_settled=true`; unknown billing
+and conservative reservations are retained, while this evidence removes only the unresolved
+generation guard. Old unknowns, process loss and unconfirmed cancellation remain guarded.
+This flag never resolves a tool operation or grants a new allowance. Restart does not retry.

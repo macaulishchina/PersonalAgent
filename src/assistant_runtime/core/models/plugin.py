@@ -340,28 +340,29 @@ class ModelsPlugin:
                                     key,
                                 ),
                             )
-                        from assistant_runtime.api.ai_usage import metered
+                        from .client import metered_complete
 
                         scope = await self.host.ai_usage.scope(request.caller_run)
                         payload["reasoning"] = {"effort": effort}
                         try:
-                            result = await metered(
-                                self.host.ai_usage.service,
-                                scope,
-                                "memory" if scope.work_id.startswith("memory:") else "inference",
-                                m["provider"],
-                                m["model"],
-                                lambda: self.client.complete(payload, session_id=session_id),
+                            result = await metered_complete(
+                                self.client,
+                                payload,
+                                session_id=session_id,
+                                usage=self.host.ai_usage.service,
+                                scope=scope,
+                                service="memory" if scope.work_id.startswith("memory:") else "inference",
+                                provider=m["provider"],
+                                model=m["model"],
                                 bounds={
                                     "input_tokens": m.get("context_window", 128000),
                                     "output_tokens": await self.client.output_bound(payload)
                                     if hasattr(self.client, "output_bound")
                                     else payload["max_output_tokens"],
                                 },
-                                body=payload,
                             )
                         except ModelCallError as exc:
-                            attempted.update(state="failed", error=exc.code)
+                            attempted.update(state="failed", error=exc.code, failure=exc.failure)
                             raise
                         attempted["state"] = "completed"
                         result.update(selected_model=a["model"], reasoning_effort=effort, attempts=attempts)
@@ -399,7 +400,18 @@ class ModelsPlugin:
                                 "UPDATE model_calls SET state=?,result=? WHERE id=?",
                                 (
                                     state,
-                                    json.dumps({"state": state, "request_id": ident, "attempts": attempts}),
+                                    json.dumps(
+                                        {
+                                            "state": state,
+                                            "request_id": ident,
+                                            "attempts": attempts,
+                                            **(
+                                                {"failure": exc.failure}
+                                                if isinstance(exc, ModelCallError)
+                                                else {}
+                                            ),
+                                        }
+                                    ),
                                     key,
                                 ),
                             )

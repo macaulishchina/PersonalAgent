@@ -63,6 +63,7 @@ def local_package(root, installed, url):
     # connections must still exercise the real SDK's protocol factories.
     for relative in (
         "auth/helpers.js",
+        "utils/provider-retry.js",
         "api/openai-responses.lazy.js",
         "api/openai-completions.lazy.js",
         "api/anthropic-messages.lazy.js",
@@ -387,9 +388,11 @@ class AccountsTest(unittest.IsolatedAsyncioTestCase):
                             runs.append(event["data"]["run"])
                             break
             self.assertEqual([run["status"] for run in runs], ["failed", "completed"])
-            self.assertEqual(runs[0]["error"]["code"], "generation_failed")
+            self.assertEqual(runs[0]["error"]["code"], "model_unknown")
+            self.assertTrue(runs[0]["failure"]["output_started"])
             self.assertEqual(len(self.gateway.requests), 2)
-            self.assertEqual((await usage.snapshot(runs[0]["id"]))["unknown_execution_requests"], 1)
+            self.assertEqual((await usage.snapshot(runs[0]["id"]))["unknown_execution_requests"], 0)
+            self.assertEqual((await usage.snapshot(runs[0]["id"]))["unknown_requests"], 1)
         finally:
             await client.close()
             await usage.close()

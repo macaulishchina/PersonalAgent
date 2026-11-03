@@ -35,7 +35,7 @@ from assistant_runtime.api.contracts import (
     VoiceDecisionRequest,
 )
 
-from assistant_runtime.api.models import ModelRequest
+from assistant_runtime.api.models import ModelRequest, ModelCallError
 from assistant_runtime.api.ai_usage import UsageRequest
 
 Request = (
@@ -149,6 +149,8 @@ class LocalRuntimeClient:
                 if not isinstance(reply, dict) or type(reply.get("ok")) is not bool:
                     raise ValueError("Invalid capability response")
                 if not reply["ok"]:
+                    if isinstance(reply.get("model_failure"), dict):
+                        raise ModelCallError(reply.get("error_code", "model_unknown"), reply["model_failure"])
                     if isinstance(reply.get("tool_outcome"), dict):
                         raise ToolFailure(
                             ToolOutcome(**reply["tool_outcome"]), result=reply.get("tool_result")

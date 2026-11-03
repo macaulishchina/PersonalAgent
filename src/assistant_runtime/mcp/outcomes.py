@@ -3,6 +3,7 @@
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.base import ToolResult
 from assistant_runtime.api.tool_calls import ToolFailure, ToolOutcome
+from assistant_runtime.api.models import ModelCallError
 from .contracts import validate
 
 
@@ -34,6 +35,20 @@ class ToolOutcomes(Middleware):
             current = exc
             while current is not None and id(current) not in seen:
                 seen.add(id(current))
+                if isinstance(current, ModelCallError):
+                    problem = current.failure
+                    not_sent = problem.get("submission") == "not_submitted"
+                    current = ToolFailure(
+                        ToolOutcome(
+                            current.code,
+                            "return",
+                            "not_dispatched" if not_sent else "dispatched",
+                            "failed" if not_sent or problem.get("generation_settled") else "unknown",
+                            problem.get("message") or current.code,
+                            next_action="inspect_model_failure",
+                        ),
+                        result={"failure": problem},
+                    )
                 if isinstance(current, ToolFailure):
                     value = current.outcome.public()
                     return ToolResult(

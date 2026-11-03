@@ -91,6 +91,16 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def handle(self, request):
         self.requests.append((request.path, dict(request.headers), await request.json()))
+        if self.mode == "quota":
+            return web.json_response(
+                {
+                    "error": {
+                        "code": "insufficient_quota",
+                        "message": "synthetic quota exhausted draft-private-key",
+                    }
+                },
+                status=429,
+            )
         if self.mode == "reject":
             return web.Response(status=429, text="private-synthetic-key must never reach diagnostics")
         if self.mode == "slow":

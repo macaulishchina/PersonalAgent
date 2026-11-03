@@ -97,12 +97,27 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
         receipts = json.dumps(self.store.db.execute("SELECT * FROM model_probes").fetchall())
         self.assertNotIn("draft-private-key", receipts)
 
-    async def test_rejections_do_not_retry_or_expose_bodies(self):
+    async def test_transient_rejections_are_bounded_and_do_not_expose_credentials(self):
         self.mode = "reject"
-        reply = await self.plugin.test_model(self.arguments())
-        self.assertEqual(reply["code"], "model_http_429")
-        self.assertNotIn("private-synthetic-key", json.dumps(reply))
-        self.assertEqual(len(self.requests), 1)
+        for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
+            with self.subTest(protocol=protocol):
+                before = len(self.requests)
+                reply = await self.plugin.test_model(self.arguments(protocol))
+                self.assertEqual(reply["code"], "model_http_429", reply)
+                self.assertNotIn("private-synthetic-key", json.dumps(reply))
+                self.assertEqual(len(self.requests) - before, 3)
+                self.assertEqual(reply["failure"]["attempt_count"], 3)
+
+    async def test_explicit_quota_exhaustion_never_retries_any_protocol(self):
+        self.mode = "quota"
+        for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
+            with self.subTest(protocol=protocol):
+                before = len(self.requests)
+                reply = await self.plugin.test_model(self.arguments(protocol))
+                self.assertEqual(len(self.requests) - before, 1)
+                self.assertEqual(reply["failure"]["category"], "quota", reply)
+                self.assertEqual(reply["failure"]["provider_code"], "insufficient_quota")
+                self.assertNotIn("draft-private-key", json.dumps(reply))
 
     async def test_usage_denial_prevents_dispatch(self):
         with patch.object(

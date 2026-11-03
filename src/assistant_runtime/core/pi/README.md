@@ -10,7 +10,7 @@ Repeated turns resume the same native model context; Pi compression and retained
 history remain separate. Generic instructions include only enabled capabilities;
 personal-assistant presentation and instructions remain owned by `core/speech`.
 
-`catalog.py` derives the model definitions from `ModelSettings`. Actual model and thinking level are checked before each new run. Gateway and Pi automatic retries are disabled. Checkpointed model changes belong to tasks. MCP definitions and Skill paths are explicit; main and task contexts have different server-bound identities. MCP discovery returns real schemas without executing tools.
+`catalog.py` derives the model definitions from `ModelSettings`. Actual model and thinking level are checked before each new run. Nested SDK/Agent retries are disabled; the shared adapter uses Pi’s public request-retry helper with a durable permit for every attempt. Checkpointed model changes belong to tasks. MCP definitions and Skill paths are explicit; main and task contexts have different server-bound identities. MCP discovery returns real schemas without executing tools.
 
 Execution is full-permission; no OS sandbox is claimed. MCP tool policy remains enforced. Voice remains an unavailable placeholder owned by `core/speech/disabled.py`, pending independent acceptance. Pi owns no voice object and has no device-plugin dependency. Interactive MCP OAuth is not implemented; no login URL is fabricated.
 
@@ -30,7 +30,7 @@ the Windows default; explicit Bash requires a native Bash installation. The
 Linux tool implementation is unchanged. The platform helper is packaged with the
 application, so both source and installed-package acceptance must cover it.
 
-`transport.py` authenticates Pi traffic and forwards normalized streaming events through the shared provider adapter. Before dispatch it obtains a durable permit from the shared [ai_usage plugin](../ai_usage/README.md); that plugin owns all counters, policies, storage and statistics. Native compaction passes through the same gate and counts only when a request is actually sent. Missing token telemetry is distinct from a lost execution result. Task continuation, explicit handoff and restart preserve work identity. Pi automatic retries and paid cache warming remain disabled.
+`transport.py` authenticates Pi traffic and forwards normalized streaming events through the shared provider adapter. Before dispatch it obtains a durable permit from the shared [ai_usage plugin](../ai_usage/README.md); that plugin owns all counters, policies, storage and statistics. Native compaction passes through the same gate and counts only when a request is actually sent. Missing token telemetry is distinct from a lost execution result. Task continuation, explicit handoff and restart preserve work identity. Nested SDK/Agent retries and paid cache warming remain disabled.
 
 
 Skill selection belongs to the composition root: enabled plugins contribute their
@@ -48,7 +48,7 @@ instructions. This controls automatic loading, not arbitrary filesystem permissi
 
 `accounts.mjs` runs only the pinned `pi-ai` provider/auth library and Pi's file credential store. It cannot execute tools or run an agent. The Python adapter owns process bounds, lifecycle and private IPC; each configured account has independent credentials, and upstream file locks serialize refresh across main, auxiliary inference and operator processes. It never loads global Pi/Codex accounts, project extensions or Coding AI skills. Login/refresh credentials remain within the helper; model processes receive only the existing authenticated loopback route.
 
-The execution extension registers native model aliases and forwards Pi-native normalized transcripts/events through the host's metered `/native` transport. It does not emulate Responses for another provider. Account/alias/effort/work identities are bound on the host; request parameters cannot choose an endpoint, account or key. Models auxiliary/memory inference uses the same provider library with no tool declarations and rejects tool output. Provider SDK errors are sanitized before leaving the helper. No request is automatically retried; an unfinished stream remains unknown, while an authoritative HTTP rejection is recorded separately. Credential and process failures do not restart or replay an agent turn.
+The execution extension registers native model aliases and forwards Pi-native normalized transcripts/events through the host's metered `/native` transport. It does not emulate Responses for another provider. Account/alias/effort/work identities are bound on the host; request parameters cannot choose an endpoint, account or key. Models auxiliary/memory inference uses the same provider library with no tool declarations and rejects tool output. Provider SDK errors are sanitized before leaving the helper. Safe transient failures may retry through the single bounded request path described below; an unfinished stream retains unknown usage, while an authoritative HTTP rejection is recorded separately. Credential and process failures do not restart or replay an agent turn.
 
 Provider catalogs are bundled metadata, not account entitlements. Actual images, structured output and tools still need per-route acceptance. ChatGPT's official OAuth route does not accept a request output cap, so `output_limit="model"` is mandatory; the host reserves the catalog maximum. Other provider request caps are checked against the actual constructed payload before send; unsupported encodings fail instead of losing a limit. Run the model-account tests with the models group; they use real Pi/SDK subprocesses and a localhost endpoint, never paid services.
 
@@ -94,12 +94,14 @@ An upstream's own truncation cannot be undone by this layer.
 
 Pi retains the original context until a summary completes. Compaction failure is
 reported as `context_compaction_failed`, not a successful task and not an unknown tool
-action. There is no automatic paid retry loop or provider fallback. Explicit continuation
+action. Only the bounded shared request policy may retry a safe, settled pre-output failure; there is no provider fallback. Explicit continuation
 can retry native compaction/use the retained context; normal shared request, compaction,
 time and cost budgets still apply. Unknown summary requests remain in the usage ledger
 and retain conservative reservations, but do not poison future execution admission.
-Unknown ordinary model requests retain their ledger entries and reservations, and block
-continuation within the same work allowance until reconciled. This accounting uncertainty
+Unknown ordinary model requests retain their ledger entries and reservations. Only a
+confirmed terminal generation error is marked `generation_settled`; its unknown billing
+does not block safe continuation. Process loss and unconfirmed requests continue to block
+the same work allowance until reconciled. This accounting uncertainty
 does not make a settled agent run an unknown operation: if Pi reports `agent_settled` and
 all tools have ended, a generation failure is `failed`, allowing a new explicit user
 request in the same conversation without retrying the failed request. Process loss,
@@ -247,5 +249,36 @@ to zero, so PA conservatively reports zero/absent cache-read and cache-write cou
 (unknown), and preserves positive reported counts. It cannot distinguish an explicit zero
 from SDK default zero without provider-level evidence. Total input/output accounting stays
 unchanged; cache counts are subsets, never added again to already normalized totals.
-Cache warming and automatic paid retries stay disabled. Stable requests improve eligibility,
+Cache warming and nested SDK/Agent retries stay disabled. Safe request retries use the shared policy below. Stable requests improve eligibility,
 but do not guarantee cache hits, routing, retention, or a lower bill.
+
+
+## 模型请求错误与恢复
+
+`reliability.mjs` 复用 Pi 1.4.0 公开的 `utils/provider-retry`，负责唯一的请求重试循环。
+SDK 与 Agent 重试均为零。`attempts.py` 通过已有私有 JSONL 通道逐次准入、结算，
+未收到准入或结算确认时不继续请求。主对话、任务、辅助推理、记忆和模型测试复用此路径；
+测试或内部未计量的单次适配器调用不启用重试。
+
+默认 `model_api.retry = { max_retries = 2, unknown_retries = 1, max_delay_seconds = 30 }`。
+次数表示额外尝试，未知错误计入总上限。退避、抖动、Retry-After 与可取消等待来自 Pi；
+供应商等待要求超过上限时停止，不提前重试。所有尝试共用外层总期限与原工作额度。
+
+结构化 HTTP/流式错误先提取安全字段；原始响应正文、密钥和调用参数不作为错误日志。
+认证、权限、余额、明确配额和参数错误不原样重试；临时故障可重试；未知错误最多一次。
+已交付文字、思考或工具片段、未确认操作、取消与截止时间均阻止自动重发。
+错误描述、请求标识、发生阶段、尝试耗时与等待时间进入现有执行/模型记录。
+本地 IPC 传递公共 ModelCallError 证据；MCP 复用 ToolOutcomes，将确认失败与未知结果
+分别写入标准错误封套，并保留 received_result.failure，不退化为截断异常字符串。
+
+`generation_settled` 只说明本地生成明确结束，不说明供应商未计费。未知费用继续保留预留；
+旧记录、进程断连或取消不补造该证据。重启不自动恢复任何请求。
+
+人工恢复使用原会话、已确认工具结果和同一预算，通过服务端校验最近失败检查点、
+待确认操作与请求身份后发起新的继续轮次。旧错误保留。会话恢复有持久化唯一目标和
+请求幂等；任务恢复沿用已有 continue 路径，额外绑定失败 turn 与操作者请求 ID。
+它不是供应商断点续传，也不保证模型不会主动提出新的操作。
+
+验收：`python scripts/check.py --test test_model_reliability` 使用真实 Pi/SDK 和本地合成
+HTTP 服务验证重试、逐次计量、取消、部分输出、文件工具结果及人工恢复。
+`scripts/verify_web_composer.py` 验证错误详情和重试按钮。合成通过不等于供应商故障实测。

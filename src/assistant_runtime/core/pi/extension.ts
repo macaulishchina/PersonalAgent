@@ -251,7 +251,7 @@ export default function (pi: any) {
                   while ((end = buffer.indexOf("\n")) !== -1) {
                     const event = JSON.parse(buffer.slice(0, end));
                     buffer = buffer.slice(end + 1);
-                    if (["dispatch", "response"].includes(event.type)) continue;
+                    if (["dispatch", "response", "retry"].includes(event.type)) continue;
                     for (const key of ["partial", "message", "error"]) {
                       if (event[key])
                         Object.assign(event[key], {

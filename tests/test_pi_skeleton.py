@@ -319,7 +319,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.gateway.requests), 1)
         self.assertFalse(run["ai_usage"]["inflight"])
 
-    async def test_truncated_stream_settles_execution_but_retains_shared_work_guard(self):
+    async def test_terminal_stream_failure_keeps_cost_and_requires_explicit_recovery(self):
         self.gateway.script_fn = lambda step, body: sse_text_reply("truncated", "partial")[:-1]
         ident = await self.session(budget_id="truncated-run")
         await self.client.request(
@@ -327,16 +327,39 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         run = await self.completed()
         self.assertEqual(run["status"], "failed")
-        self.assertEqual(run["error"]["code"], "generation_failed")
-        self.assertEqual(run["ai_usage"]["unknown_execution_requests"], 1)
+        self.assertEqual(run["error"]["code"], "model_unknown")
+        self.assertEqual(run["ai_usage"]["unknown_execution_requests"], 0)
+        self.assertEqual(run["ai_usage"]["unknown_requests"], 1)
+        self.assertEqual(len(self.gateway.requests), 1)  # Partial output never retries automatically.
         await self.client.close()
         await self.client.start()
         await self.client.request("session.resume", {"session_id": ident})
+        self.assertEqual(len(self.gateway.requests), 1)  # Restart does not replay.
+        self.gateway.script_fn = lambda step, body: sse_text_reply("recovered", "done")
         await self.client.request(
-            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "continue"}]}
+            "run.start",
+            {"session_id": ident, "retry_of": run["id"], "input": [{"type": "text", "text": "continue"}]},
         )
-        self.assertEqual((await self.completed())["error"]["code"], "ai_usage_blocked")
-        self.assertEqual(len(self.gateway.requests), 1)
+        recovered = await self.completed()
+        self.assertEqual(recovered["status"], "completed")
+        self.assertEqual(recovered["budget_id"], run["budget_id"])
+        self.assertEqual(recovered["ai_usage"]["unknown_requests"], 1)
+        self.assertEqual(len(self.gateway.requests), 2)
+
+    async def test_unconfirmed_request_still_blocks_shared_work_without_dispatch(self):
+        from assistant_runtime.api.ai_usage import UsageScope
+
+        ticket = await self.usage.admit(
+            UsageScope("unconfirmed", "foreground"), service="execution", provider="test", model="model-a"
+        )
+        await self.usage.settle(ticket["id"], state="unknown")
+        ident = await self.session(budget_id="unconfirmed")
+        await self.client.request(
+            "run.start", {"session_id": ident, "input": [{"type": "text", "text": "do not replay"}]}
+        )
+        run = await self.completed()
+        self.assertEqual(run["error"]["code"], "ai_usage_blocked")
+        self.assertEqual(len(self.gateway.requests), 0)
 
     async def test_model_stream_failure_allows_new_user_request_without_replaying_tool(self):
         def script(step, body):
@@ -355,7 +378,8 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         )
         failed = await self.completed()
         self.assertEqual(failed["status"], "failed")
-        self.assertEqual(failed["ai_usage"]["unknown_execution_requests"], 1)
+        self.assertEqual(failed["ai_usage"]["unknown_execution_requests"], 0)
+        self.assertEqual(failed["ai_usage"]["unknown_requests"], 1)
         self.assertEqual(len(self.gateway.requests), 2)  # No automatic retry.
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "new question"}]}
@@ -372,7 +396,8 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.root / "evidence.txt").read_text(encoding="utf-8-sig"), "once\n")
         prior = await self.usage.snapshot(failed["id"])
         self.assertEqual(prior["requests"], 2)
-        self.assertEqual(prior["unknown_execution_requests"], 1)
+        self.assertEqual(prior["unknown_execution_requests"], 0)
+        self.assertEqual(prior["unknown_requests"], 1)
 
     async def test_unrendered_tool_remains_unknown_until_confirmed_end(self):
         ident = await self.session()
@@ -513,7 +538,7 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RpcError):
             await worker.command({"type": "compact"})
         snapshot = await self.usage.snapshot("compact-recover")
-        self.assertEqual(snapshot["unknown_requests"], 1)
+        self.assertEqual(snapshot["unknown_requests"], 2)
         self.assertEqual(snapshot["unknown_execution_requests"], 0)
 
         def slow_summary(step, body):
@@ -525,8 +550,8 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         self.gateway.script_fn = slow_summary
         await worker.command({"type": "compact"})
         snapshot = await self.usage.snapshot("compact-recover")
-        self.assertEqual(snapshot["compactions"], 2)
-        self.assertEqual(snapshot["requests"], 4)
+        self.assertEqual(snapshot["compactions"], 3)
+        self.assertEqual(snapshot["requests"], 5)
         self.gateway.script_fn = lambda step, body: sse_text_reply("continued", "done")
         await self.client.request(
             "run.start", {"session_id": ident, "input": [{"type": "text", "text": "continue"}]}

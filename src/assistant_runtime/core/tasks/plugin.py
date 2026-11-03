@@ -466,6 +466,7 @@ class TasksPlugin:
                 raise ValueError(f"Invalid task {key}")
         if s.get("tools") is not None:
             from assistant_runtime.core.pi.scope import names
+
             s["tools"] = names(s["tools"], "tools", 64)
         for key in ("long_term", "notify_voice", "notify_completion"):
             if type(s[key]) is not bool:
@@ -868,6 +869,24 @@ class TasksPlugin:
                     raise ValueError("Execution is not running; use continue for a stopped task")
                 await self.executor.supplement(run, self.input_text(args))
             elif a == "continue":
+                retry_id = args.get("retry_request_id")
+                retry_target = args.get("retry_of")
+                retries = dict(run["data"].get("model_retry_requests", {}))
+                if retry_id is not None or retry_target is not None:
+                    if caller or not isinstance(retry_id, str) or not isinstance(retry_target, str):
+                        raise ValueError("Model recovery requires an operator request and failed turn")
+                    uuid.UUID(retry_id)
+                    if retry_id in retries:
+                        if retries[retry_id] != retry_target:
+                            raise ValueError("Retry ID belongs to a different failed execution")
+                        return run
+                    if retry_target in retries.values():
+                        return run
+                    if run["state"] != "failed" or not await self.executor.model_retry_checkpoint(
+                        run, retry_target
+                    ):
+                        raise ValueError("失败执行已过期或操作状态未确认，不能直接重试")
+                    retries[retry_id] = retry_target
                 if run["state"] == "unknown":
                     raise ValueError("结果未知，必须先核对执行和操作回执；不能直接继续或重做。")
                 if run["state"] not in {"paused", "unknown", "failed", "canceled", "waiting_user"}:
@@ -881,6 +900,8 @@ class TasksPlugin:
                     run["id"],
                     "queued",
                     continuation=self.input_text(args),
+                    model_retry_requests=dict(list(retries.items())[-20:]),
+                    model_retry_target=retry_target,
                     goal={},
                     completion_delivered=False,
                     completion_round=run["data"].get("completion_round", 0) + 1,

@@ -11,20 +11,15 @@ from assistant_runtime.api.ai_usage import UsageError, UsageScope
 from .accounts import output_reservation
 
 
-def telemetry(message):
-    usage = message.get("usage")
-    if not isinstance(usage, dict) or not any(
-        isinstance(usage.get(key), (int, float)) and usage[key] > 0
-        for key in ("input", "output", "cacheRead", "cacheWrite")
-    ):
-        return None
+def usage_failure(code):
     return {
-        "input_tokens": usage.get("input", 0) + usage.get("cacheRead", 0) + usage.get("cacheWrite", 0),
-        "output_tokens": usage.get("output", 0),
-        # Pi normalizes absent cache counters to zero. A positive count is
-        # observed evidence; zero cannot distinguish unreported from a real miss.
-        "cached_input_tokens": usage.get("cacheRead") or None,
-        "cache_write_input_tokens": usage.get("cacheWrite") or None,
+        "code": code,
+        "category": "usage",
+        "message": "用量保护阻止了模型请求：" + code,
+        "phase": "admission",
+        "submission": "not_submitted",
+        "retry_allowed": False,
+        "generation_settled": False,
     }
 
 
@@ -70,49 +65,20 @@ async def forward(transport, request, worker):
             "unknown_execution_requests"
         ):
             raise UsageError("usage_execution_unresolved", ident)
-        ticket = await client.usage.admit(
-            scope,
-            service="execution",
-            provider=entry["provider"],
-            model=entry["model"],
-            compaction=worker.compacting,
-            bounds={
-                "input_tokens": entry.get("context_window", 32768),
-                "output_tokens": reservation,
-            },
-            body=payload,
-            details={
-                "model_alias": alias,
-                "reasoning_effort": payload["effort"],
-                "max_output_tokens": reservation,
-            },
-        )
     except UsageError as exc:
         worker.usage_error = exc.code
+        worker.model_failure = usage_failure(exc.code)
         return web.json_response({"error": {"message": "AI usage stopped: " + exc.code}}, status=400)
     timeout = (
         client.settings.compaction_timeout_seconds if worker.compacting else client.settings.timeout_seconds
     )
-    state, usage, status, request_id, settled = "not_sent", None, None, None, False
-    response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
+    from .attempts import AttemptMeter
 
-    async def finish():
-        nonlocal settled
-        await client.usage.settle(
-            ticket["id"], state=state, usage=usage, http_status=status, provider_request_id=request_id
-        )
-        settled = True
-        if client.admission:
-            client.admission.operation(
-                worker.execution_session_id, "model", ticket["id"], "failed" if state == "rejected" else state
-            )
+    def admitted(ticket):
+        worker.last_usage_call = ticket["id"]
+        from .input_receipts import consumed
 
-    worker.last_usage_call = ticket["id"]
-    started = time.monotonic()
-    try:
-        transport.authenticate(request)
-        if worker.meta.get("controlled_context"):
-            client.admission.service.controlled.authorize_session(worker.execution_session_id, required=True)
+        consumed(client, worker, context, ticket["id"])
         if client.admission:
             client.admission.operation(
                 worker.execution_session_id,
@@ -121,54 +87,137 @@ async def forward(transport, request, worker):
                 compaction=worker.compacting,
                 turn_id=worker.active_turn,
             )
-        from .input_receipts import consumed
 
-        consumed(client, worker, context, ticket["id"])
+    def settled(ticket, record, generation_settled):
+        if client.admission:
+            state = record["state"]
+            if generation_settled and state in {"rejected", "unknown"}:
+                state = "failed"
+            client.admission.operation(worker.execution_session_id, "model", ticket["id"], state)
+
+    meter = AttemptMeter(
+        client.usage,
+        scope,
+        service="execution",
+        provider=entry["provider"],
+        model=entry["model"],
+        compaction=worker.compacting,
+        bounds={"input_tokens": entry.get("context_window", 32768), "output_tokens": reservation},
+        body=payload,
+        details={
+            "model_alias": alias,
+            "reasoning_effort": payload["effort"],
+            "max_output_tokens": reservation,
+        },
+        on_ticket=admitted,
+        on_settle=settled,
+    )
+    response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
+    started = time.monotonic()
+    try:
+        transport.authenticate(request)
+        if worker.meta.get("controlled_context"):
+            client.admission.service.controlled.authorize_session(worker.execution_session_id, required=True)
         await response.prepare(request)
         args.update(
             context=payload["context"],
             max_tokens=maximum,
             timeout_ms=timeout * 1000,
             session_id=worker.execution_session_id,
+            retry=client.settings.retry,
         )
         async with asyncio.timeout(timeout):
-            async with aclosing(account.events("stream", args)) as events:
+            async with aclosing(account.events("stream", args, on_attempt=meter.gate)) as events:
                 async for item in events:
                     event = item.get("event")
                     if not event:
                         continue
-                    if event["type"] == "dispatch":
-                        state = "unknown"
-                    elif event["type"] == "response":
-                        status, request_id = event["status"], event.get("request_id")
-                    elif event["type"] == "done":
-                        # Length-limited generation is observed but is not a completed business operation.
-                        state, usage = "completed", telemetry(event["message"])
-                        request_id = request_id or event["message"].get("responseId")
-                        logging.getLogger(__name__).info(
-                            "native_model_timing call=%s model=%s input_tokens=%s cached_input_tokens=%s timings=%s",
-                            ticket["id"],
-                            alias,
-                            (usage or {}).get("input_tokens"),
-                            (usage or {}).get("cached_input_tokens"),
-                            event.get("transport_timings", {}),
-                        )
-                        await finish()
+                    meter.observe(event)
+                    if event["type"] == "done":
+                        worker.model_failure = None
                     elif event["type"] == "error":
-                        status = event.get("http_status", status)
-                        state = "rejected" if status and status != 200 else state
-                        await finish()
+                        worker.model_failure = event.get("failure") or event.get("error", {}).get("failure")
+                        if worker.model_failure:
+                            worker.model_failure.update(model=alias, provider=entry["provider"])
+                    elif event["type"] == "retry":
+                        await client.events.put(
+                            {
+                                "kind": "model.retry",
+                                "data": {
+                                    "session_id": worker.execution_session_id,
+                                    "run_id": worker.active_turn,
+                                    "attempt": event["attempt"],
+                                    "category": event["category"],
+                                },
+                            }
+                        )
                     await response.write((json.dumps(event) + "\n").encode())
         await response.write_eof()
         return response
-    except TimeoutError:
+    except UsageError as exc:
+        worker.usage_error = exc.code
+        worker.model_failure = usage_failure(exc.code)
+        await response.write(
+            (
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "role": "assistant",
+                            "content": [],
+                            "stopReason": "error",
+                            "errorMessage": exc.code,
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await response.write_eof()
+        return response
+    except (TimeoutError, RuntimeError, OSError, ValueError) as exc:
+        deadline = isinstance(exc, TimeoutError)
+        problem = {
+            "code": "model_deadline" if deadline else "model_transport",
+            "category": "deadline" if deadline else "transport",
+            "message": "模型请求已达到总等待期限，未自动继续。"
+            if deadline
+            else "模型适配连接中断，无法确认本次请求结果。",
+            "phase": "receiving",
+            "submission": "possibly_submitted",
+            "generation_settled": False,
+            "retry_allowed": False,
+            "model": alias,
+            "provider": entry["provider"],
+            "attempt_count": len(meter.attempts) + bool(meter.ticket),
+        }
+        worker.model_failure = problem
         logging.getLogger(__name__).warning(
-            "model_timeout layer=native compaction=%s timeout_seconds=%s elapsed_seconds=%.3f",
-            worker.compacting,
+            "model_request_stopped model=%s category=%s timeout_seconds=%s elapsed_seconds=%.3f",
+            alias,
+            problem["category"],
             timeout,
             time.monotonic() - started,
         )
-        raise
+        await response.write(
+            (
+                json.dumps(
+                    {
+                        "type": "error",
+                        "failure": problem,
+                        "error": {
+                            "role": "assistant",
+                            "content": [],
+                            "stopReason": "error",
+                            "failure": problem,
+                            "errorMessage": problem["message"],
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await response.write_eof()
+        return response
     finally:
-        if not settled:
-            await finish()
+        await meter.finish()

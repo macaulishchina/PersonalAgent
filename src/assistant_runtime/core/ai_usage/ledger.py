@@ -386,7 +386,7 @@ class Ledger:
             "unknown_requests": sum(r[0] == "unknown" for r in calls),
             "unknown_compaction_requests": sum(r[0] == "unknown" and r[4] for r in calls),
             "unknown_execution_requests": self.db.execute(
-                "SELECT count(*) FROM calls WHERE work_id=? AND service='execution' AND state='unknown' AND compaction=0",
+                "SELECT count(*) FROM calls WHERE work_id=? AND service='execution' AND state='unknown' AND compaction=0 AND coalesce(json_extract(data,'$.generation_settled'),0)!=1",
                 (work,),
             ).fetchone()[0],
             "input_tokens": sum(r[1] or 0 for r in calls) + archived[1],

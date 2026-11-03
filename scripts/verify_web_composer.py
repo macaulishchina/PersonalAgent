@@ -49,6 +49,7 @@ async def main():
             updated=1,
         )
 
+    fixture_messages = []
     state = dict(
         name="Personal Agent",
         voice="disabled",
@@ -144,7 +145,7 @@ async def main():
                             data["requests"] = state["queue"]
                             changed = True
                 elif path == "messages":
-                    data = {"messages": [], "state": state, "cursor": 0, "before": None}
+                    data = {"messages": fixture_messages, "state": state, "cursor": 0, "before": None}
                 elif path == "session":
                     data = state
                 elif path.startswith("uploads/"):
@@ -365,6 +366,61 @@ async def main():
             await page.evaluate("window.fixtureEvents.onerror()")
             await expect(page.get_by_role("button", name="直接引导", exact=True)).to_be_disabled()
             await expect(page.get_by_role("button", name="停止当前执行", exact=True)).to_be_disabled()
+            state.update(active_request_id=None, task_running=False, web_dispatching=False, queue=[])
+            fixture_messages.extend(
+                [
+                    dict(
+                        id="failed-user",
+                        ordinal=1,
+                        role="user",
+                        source="web",
+                        kind="message",
+                        text="合成恢复测试",
+                        status="complete",
+                        attachments=[],
+                        updated=1,
+                        turn_id="failed-turn",
+                    ),
+                    dict(
+                        id="failed-model",
+                        ordinal=2,
+                        role="assistant",
+                        source="task",
+                        kind="message",
+                        text="暂时繁忙",
+                        status="complete",
+                        attachments=[],
+                        updated=2,
+                        turn_id="failed-turn",
+                        failure=dict(
+                            code="model_transient",
+                            category="transient",
+                            status=503,
+                            message="Synthetic upstream overloaded",
+                            request_id="synthetic-request",
+                            retry_allowed=True,
+                            stop_reason="attempts_exhausted",
+                            attempts=[dict(attempt=1, elapsed_ms=120, category="transient", status=503)],
+                        ),
+                    ),
+                ]
+            )
+            await page.set_viewport_size({"width": 1366, "height": 900})
+            await page.reload()
+            retry = page.get_by_role("button", name="重试", exact=True)
+            await expect(retry).to_be_enabled()
+            await expect(page.get_by_text("Synthetic upstream overloaded")).to_be_visible()
+            await page.locator(".model-failure summary").click()
+            await expect(page.get_by_text("synthetic-request", exact=True)).to_be_visible()
+            failure["next"] = True
+            await retry.click()
+            await expect(page.locator(".model-failure [role='alert']")).to_be_visible()
+            retry_id = posts[-1][1]["request_id"]
+            await retry.click()
+            await expect(page.get_by_role("button", name="已提交继续执行")).to_be_disabled()
+            assert posts[-1][1] == dict(action="retry", turn_id="failed-turn", request_id=retry_id)
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            await page.screenshot(path=str(output / "model-failure-recovery.png"))
             assert not errors, errors
             await browser.close()
     finally:
@@ -375,6 +431,7 @@ async def main():
                 "composer_default_steer_persistence_routing_keyboard_attachments_disconnect": "passed",
                 "queue_display_drag_keyboard_edit_remove_conflict_recovery": "passed",
                 "desktop_mobile_layout": "passed",
+                "model_failure_details_retry_idempotent_request": "passed",
                 "screenshots": str(output),
             },
             ensure_ascii=False,

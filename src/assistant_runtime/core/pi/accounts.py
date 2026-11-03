@@ -131,7 +131,7 @@ class AccountWorker:
                     queue.get_nowait()
                 queue.put_nowait({"error": "native_connection_lost"})
 
-    async def events(self, action, arguments=None):
+    async def events(self, action, arguments=None, *, on_attempt=None):
         if len(self.pending) >= 16:
             raise RuntimeError("Native account queue full")
         ident = uuid.uuid4().hex
@@ -145,6 +145,31 @@ class AccountWorker:
                 if "error" in data:
                     terminal = True
                     raise RuntimeError(data["error"])
+                event = data.get("event", {})
+                if event.get("type") in {"attempt_start", "attempt_end"}:
+                    try:
+                        if on_attempt is None:
+                            raise RuntimeError("Native request requires usage admission")
+                        result = await on_attempt(event)
+                    except BaseException:
+                        await self.send(
+                            {
+                                "action": "attempt_ack",
+                                "target": ident,
+                                "permit": event["permit"],
+                                "error": "admission_failed",
+                            }
+                        )
+                        raise
+                    await self.send(
+                        {
+                            "action": "attempt_ack",
+                            "target": ident,
+                            "permit": event["permit"],
+                            "result": result,
+                        }
+                    )
+                    continue
                 yield data
                 if "result" in data:
                     terminal = True

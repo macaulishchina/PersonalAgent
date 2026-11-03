@@ -881,10 +881,25 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.due(d["id"])
         run = self.plugin.repo.runs(d["id"])[0]
         self.plugin.repo.update_run(run["id"], "running")
-        child = await self.plugin.request(TaskRequest("create", {"request_id": str(uuid.uuid4()), "spec": {"title": "child", "prompt": "authorized child"}}, run["id"]))
+        child = await self.plugin.request(
+            TaskRequest(
+                "create",
+                {"request_id": str(uuid.uuid4()), "spec": {"title": "child", "prompt": "authorized child"}},
+                run["id"],
+            )
+        )
         self.assertEqual(child["spec"]["tools"], ["request_user_input"])
         with self.assertRaises(ValueError):
-            await self.plugin.request(TaskRequest("create", {"request_id": str(uuid.uuid4()), "spec": {"title": "escape", "prompt": "invalid", "tools": ["write"]}}, run["id"]))
+            await self.plugin.request(
+                TaskRequest(
+                    "create",
+                    {
+                        "request_id": str(uuid.uuid4()),
+                        "spec": {"title": "escape", "prompt": "invalid", "tools": ["write"]},
+                    },
+                    run["id"],
+                )
+            )
 
     async def test_running_progress_stays_in_task_but_clarification_is_delivered_once(self):
         definition = await self.create(notify_completion=False, auto_archive=False)

@@ -2001,3 +2001,16 @@ p {
   .queue-actions { opacity: 1; }
   .composer-queue button { min-height: 30px; }
 }
+
+.model-failure { max-width: 48rem; padding: .15rem 0; }
+.model-failure p { margin: 0 0 .5rem; }
+.model-failure-title { color: var(--text); font-weight: 500; }
+.model-failure-reason { opacity: .8; overflow-wrap: anywhere; white-space: pre-wrap; }
+.model-failure-actions { display: flex; align-items: flex-start; gap: 1rem; margin-top: .6rem; font-size: .85rem; }
+.model-failure-actions button, .model-failure-actions summary { display: flex; align-items: center; gap: .4rem; cursor: pointer; }
+.model-failure-actions button { padding: .3rem .55rem; border: 1px solid currentColor; border-radius: .4rem; background: transparent; color: inherit; }
+.model-failure-actions button:disabled { opacity: .45; cursor: default; }
+.model-failure-actions summary { list-style: none; opacity: .7; padding: .35rem 0; }
+.model-failure-actions dl { display: grid; grid-template-columns: auto minmax(0,1fr); gap: .4rem .8rem; margin: .5rem 0; }
+.model-failure-actions dt { opacity: .65; }
+.model-failure-actions dd { margin: 0; overflow-wrap: anywhere; }

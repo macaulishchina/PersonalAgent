@@ -6,11 +6,17 @@ import { dirname, join } from "node:path";
 import { findPackageJSON } from "node:module";
 import { pathToFileURL } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
+import {
+  observeFetch,
+  observeError,
+  failure,
+  reliableRequest,
+  attemptContext,
+} from "./reliability.mjs";
 
 // Never forward configured credentials to a redirected host.
 const nativeFetch = globalThis.fetch;
-globalThis.fetch = (input, init) =>
-  nativeFetch(input, { ...init, redirect: "error" });
+globalThis.fetch = observeFetch(nativeFetch, () => argsKey);
 const installation = process.argv[2];
 const load = (path) => import(pathToFileURL(join(installation, path)).href);
 // npm ci may hoist dependencies alongside the agent instead of nesting them.
@@ -22,12 +28,14 @@ const aiRoot = dirname(
 );
 const loadAI = (path) => import(pathToFileURL(join(aiRoot, "dist", path)).href);
 const ai = await loadAI("index.js");
+const { retryProviderRequest } = await loadAI("utils/provider-retry.js");
 const { builtinProviders } = await loadAI("providers/all.js");
 const { AuthStorage } = await load("dist/core/auth-storage.js");
 const providers = builtinProviders();
 let runtime, spec, folder, storage, argsKey;
 const active = new Map(),
-  prompts = new Map();
+  prompts = new Map(),
+  permits = new Map();
 let writing = Promise.resolve();
 function emit(value) {
   writing = writing.then(async () => {
@@ -188,7 +196,7 @@ function modelFor(args) {
   return { model, effort };
 }
 
-async function run(id, args, signal) {
+async function runAttempt(id, args, signal, evidence) {
   const started = performance.now();
   const timings = {};
   const elapsed = () => Math.round(performance.now() - started);
@@ -213,7 +221,7 @@ async function run(id, args, signal) {
       });
     }
   }
-  let dispatched = false;
+  const buffered = [];
   const options = {
     signal,
     maxRetries: 0,
@@ -302,7 +310,8 @@ async function run(id, args, signal) {
           delete payload.max_completion_tokens;
         } else if (model.api === "google-generative-ai") {
           if (payload.config) delete payload.config.maxOutputTokens;
-          if (payload.generationConfig) delete payload.generationConfig.maxOutputTokens;
+          if (payload.generationConfig)
+            delete payload.generationConfig.maxOutputTokens;
         }
         // Anthropic requires max_tokens; keep Pi's model/context-derived value.
       }
@@ -319,9 +328,19 @@ async function run(id, args, signal) {
       }
       timings.request_bytes = Buffer.byteLength(JSON.stringify(payload));
       timings.prepared_ms = elapsed();
-      dispatched = true;
+      // Authentication may have used HTTP before model payload preparation.
+      evidence.submission = "not_submitted";
+      delete evidence.status;
+      delete evidence.request_id;
+      delete evidence.headers;
+      delete evidence.provider_code;
+      delete evidence.provider_message;
+      // Payload preparation is not evidence of an HTTP submission.
       await emit({ id, event: { type: "dispatch" } });
       return payload;
+    },
+    onProviderStreamEvent: (data) => {
+      observeError(data?.error || data?.response?.error, evidence, argsKey);
     },
     onResponse: async (response) => {
       timings.response_headers_ms = elapsed();
@@ -336,7 +355,8 @@ async function run(id, args, signal) {
     },
   };
   const stream = runtime.streamSimple(model, context, options);
-  let emitted = 0, largestPartial = 0;
+  let emitted = 0,
+    largestPartial = 0;
   for await (const event of stream) {
     if (event.type.endsWith("_delta") && event.delta?.length) {
       timings.first_content_ms ??= elapsed();
@@ -345,21 +365,47 @@ async function run(id, args, signal) {
     if (event.type === "done" || event.type === "error")
       event.transport_timings = { ...timings, total_ms: elapsed() };
     if (event.type === "error") {
-      // Native SDK errors can include request bodies and credentials. Only fixed codes leave here.
-      const raw = event.error?.errorMessage || "";
-      const status =
-        /(?:API error\s*\(?|status[=: ]+)(401|402|403|404|408|429|500|502|503|504)/i.exec(
-          raw,
-        )?.[1];
-      if (status) event.http_status = Number(status);
-      event.error.errorMessage = status
-        ? `native_model_http_${status}`
-        : dispatched
-          ? "native_model_outcome_unknown"
-          : "native_auth_or_request_failed";
+      evidence.output ||= event.error?.content?.some(
+        (part) =>
+          part.type === "toolCall" ||
+          part.text?.length ||
+          part.thinking?.length,
+      );
+      evidence.terminal = !signal.aborted;
+      const problem = failure(event.error, evidence, argsKey);
+      event.error.errorMessage = problem.message;
+      event.error.failure = problem;
+      event.http_status = problem.status;
+      return { terminal: event, failure: problem };
     }
-    if (args.inference && !["done", "error", "text_delta"].includes(event.type))
+    if (event.type === "done") {
+      if (Buffer.byteLength(JSON.stringify(event)) > 8 * 1024 * 1024)
+        throw new Error("native_response_exceeds_bound");
+      evidence.terminal = true;
+      for (const bufferedEvent of buffered)
+        await emit({ id, event: bufferedEvent });
+      return { terminal: event };
+    }
+    if (
+      !evidence.output &&
+      Buffer.byteLength(JSON.stringify(event)) > 8 * 1024 * 1024
+    )
+      throw new Error("native_response_exceeds_bound");
+    if (
+      (event.type.endsWith("_delta") && event.delta?.length) ||
+      event.type === "toolcall_start"
+    ) {
+      evidence.output = true;
+      for (const bufferedEvent of buffered.splice(0))
+        await emit({ id, event: bufferedEvent });
+    }
+    if (!evidence.output) {
+      if (buffered.length >= 32)
+        throw new Error("native_event_buffer_exceeded");
+      buffered.push(structuredClone(event));
       continue;
+    }
+    if (args.inference && event.type !== "text_delta") continue;
     const forwarded =
       args.inference && event.type === "text_delta"
         ? { type: "text_delta" }
@@ -368,7 +414,9 @@ async function run(id, args, signal) {
     // Bound each IPC frame and unique response data, not the quadratic sum
     // of identical prefixes (fine-grained providers can emit one char/event).
     const { partial, ...incremental } = forwarded;
-    const partialBytes = partial ? Buffer.byteLength(JSON.stringify(partial)) : 0;
+    const partialBytes = partial
+      ? Buffer.byteLength(JSON.stringify(partial))
+      : 0;
     const incrementalBytes = Buffer.byteLength(JSON.stringify(incremental));
     if (partialBytes + incrementalBytes > 8 * 1024 * 1024)
       throw new Error("native_response_exceeds_bound");
@@ -378,6 +426,47 @@ async function run(id, args, signal) {
       throw new Error("native_response_exceeds_bound");
     await emit({ id, event: forwarded });
   }
+  throw new Error("native_stream_incomplete");
+}
+
+async function run(id, args, signal) {
+  if (!args.retry) {
+    const evidence = { submission: "not_submitted", output: false };
+    const result = await attemptContext.run(evidence, () =>
+      runAttempt(id, args, signal, evidence),
+    );
+    await emit({ id, event: result.terminal });
+    return { finished: true };
+  }
+  const gate = (event) =>
+    new Promise((resolve, reject) => {
+      const permit = randomUUID();
+      const abort = () => {
+        permits.delete(permit);
+        reject(new Error("native_cancelled"));
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      permits.set(permit, {
+        id,
+        done: (answer) => {
+          permits.delete(permit);
+          signal.removeEventListener("abort", abort);
+          if (answer.error) reject(new Error("native_admission_failed"));
+          else resolve(answer.result);
+        },
+      });
+      if (signal.aborted) abort();
+      else void emit({ id, event: { ...event, permit } });
+    });
+  const terminal = await reliableRequest({
+    retryProviderRequest,
+    gate,
+    signal,
+    policy: args.retry || { max_retries: 0 },
+    attempt: (evidence) => runAttempt(id, args, signal, evidence),
+    emit: (event) => emit({ id, event }),
+  });
+  await emit({ id, event: terminal });
   return { finished: true };
 }
 
@@ -486,6 +575,11 @@ for await (const line of lines) {
   } catch {
     process.exitCode = 1;
     break;
+  }
+  if (request.action === "attempt_ack") {
+    const permit = permits.get(request.permit);
+    if (permit?.id === request.target) permit.done(request);
+    continue;
   }
   if (request.action === "cancel") {
     active.get(request.target)?.abort();

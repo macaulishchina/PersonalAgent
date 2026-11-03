@@ -82,6 +82,7 @@ class Conversations:
             "remove_queued": {"session_id", "request_id", "revision"},
             "reorder_queue": {"session_id", "request_ids", "expected_order"},
             "cancel": {"session_id", "request_id"},
+            "retry": {"session_id", "request_id", "turn_id"},
             "supplement": {"session_id", "request_id", "text"},
             "answer": {"session_id", "request_id", "question_id", "text"},
         }.get(action)
@@ -93,7 +94,9 @@ class Conversations:
         ):
             raise ValueError("Conversation operation is outside the bound execution")
         if action == "create":
-            return self.sessions.create(args.get("title", "New conversation"), args.get("request_id"), args.get("policy"))
+            return self.sessions.create(
+                args.get("title", "New conversation"), args.get("request_id"), args.get("policy")
+            )
         if action == "list":
             return self.sessions.list(args.get("before"), args.get("limit", 50))
         if action == "open":
@@ -117,12 +120,22 @@ class Conversations:
             if not ids:
                 return {}
             marks = ",".join("?" for _ in ids)
-            rows = store.db.execute(f"SELECT r.id,q.state FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.session_id=? AND r.id IN ({marks})", (ident, *ids)).fetchall()
+            rows = store.db.execute(
+                f"SELECT r.id,q.state FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.session_id=? AND r.id IN ({marks})",
+                (ident, *ids),
+            ).fetchall()
             found = dict(rows)
             return {i: {"found": i in found, "state": found.get(i)} for i in ids}
         if action == "receipt":
-            row = store.db.execute("SELECT q.state,r.message_id FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.id=? AND r.session_id=?", (args.get("request_id"), ident)).fetchone()
-            return {"found": bool(row), "state": row[0] if row else None, "message": store.get(row[1]) if row else None}
+            row = store.db.execute(
+                "SELECT q.state,r.message_id FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.id=? AND r.session_id=?",
+                (args.get("request_id"), ident),
+            ).fetchone()
+            return {
+                "found": bool(row),
+                "state": row[0] if row else None,
+                "message": store.get(row[1]) if row else None,
+            }
         if action == "history":
             messages = store.history(ident, args.get("before"))
             return {
@@ -150,6 +163,16 @@ class Conversations:
         if action == "submit":
             return await chat.submit(
                 args.get("request_id"), args.get("text"), args.get("attachments", []), source="cli"
+            )
+        if action == "retry":
+            if not isinstance(args.get("turn_id"), str) or not args["turn_id"]:
+                raise ValueError("需要提供失败执行标识")
+            return await chat.submit(
+                args.get("request_id"),
+                "继续上一轮未完成的请求，沿用已确认的操作结果。",
+                [],
+                source="operator",
+                retry_of=args["turn_id"],
             )
         if action == "cancel":
             return await chat.cancel_request(args.get("request_id"))

@@ -1,4 +1,5 @@
 import { chatPath } from "./http";
+import { ModelFailureNotice, type ModelFailure } from "./model-failure";
 import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
 import {
   QueuedMessages,
@@ -54,6 +55,7 @@ type Message = MessageOrigin & {
   turn_id?: string | null;
   tool_summary?: ToolSummary | null;
   task_id?: string | null;
+  failure?: ModelFailure | null;
 };
 type MessageGroup = {
   id: string;
@@ -76,6 +78,7 @@ type State = {
   question_id?: string | number;
   questions?: { id: string; question: string }[];
   queue?: QueuedRequest[];
+  retrying?: { attempt: number } | null;
 };
 const initial: State = {
   name: "个人助理",
@@ -243,7 +246,10 @@ function ToolActivity({
   label: string;
 }) {
   const busy = message.status === "streaming";
-  const failed = message.status === "failed" && message.tool_summary?.dispatch !== "not_dispatched" && message.tool_summary?.result_state !== "unknown";
+  const failed =
+    message.status === "failed" &&
+    message.tool_summary?.dispatch !== "not_dispatched" &&
+    message.tool_summary?.result_state !== "unknown";
   const labels: Record<string, string> = {
     streaming: "进行中",
     complete: "完成",
@@ -272,12 +278,16 @@ function MessageEntry({
   onOpenTask,
   onResolvedTask,
   showReportSource = false,
+  onRetry,
+  retryDisabled,
 }: {
   message: Message;
   onOpen: (url: string) => void;
   onOpenTask: (id: string) => void;
   onResolvedTask: (id: string) => void;
   showReportSource?: boolean;
+  onRetry: (turn: string, requestId: string) => Promise<void>;
+  retryDisabled: boolean;
 }) {
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
@@ -300,7 +310,14 @@ function MessageEntry({
         detail ? detail.label : m.role === "user" ? "你的消息" : "助手消息"
       }
     >
-      {isReport(m) ? (
+      {m.failure ? (
+        <ModelFailureNotice
+          value={m.failure}
+          turn={m.turn_id}
+          onRetry={onRetry}
+          disabled={retryDisabled}
+        />
+      ) : isReport(m) ? (
         <TaskReport
           message={m}
           showSource={showReportSource}
@@ -393,8 +410,12 @@ function ConversationGroup({
   onCopy,
   onOpen,
   onOpenTask,
+  onRetry,
+  retryDisabled,
 }: {
   group: MessageGroup;
+  onRetry: (turn: string, requestId: string) => Promise<void>;
+  retryDisabled: boolean;
   name: string;
   copied: string;
   onCopy: (id: string, text: string) => Promise<void>;
@@ -422,6 +443,8 @@ function ConversationGroup({
     <MessageEntry
       key={m.id}
       message={m}
+      onRetry={onRetry}
+      retryDisabled={retryDisabled}
       onOpen={onOpen}
       onOpenTask={onOpenTask}
       onResolvedTask={setResolvedTask}
@@ -567,11 +590,15 @@ function App() {
     );
   const [deliveryMode, setDeliveryMode] = useDeliveryMode();
   const replying = !!state.active_request_id && deliveryMode === "steer";
-  const queued = state.queue?.filter(
-    (r) => r.state === "queued" && !messages.some(
-      (message) => message.id === r.message_id && message.status !== "queued",
-    ),
-  ) || [];
+  const queued =
+    state.queue?.filter(
+      (r) =>
+        r.state === "queued" &&
+        !messages.some(
+          (message) =>
+            message.id === r.message_id && message.status !== "queued",
+        ),
+    ) || [];
   const sendLabel = replying
     ? state.question_id != null
       ? "发送回答"
@@ -598,7 +625,8 @@ function App() {
   // Derive activity from transport/provider state; never persist a fake reply.
   const displayedMessages = messages.filter(
     (message) =>
-      message.role !== "user" || !["queued", "cancelled"].includes(message.status),
+      message.role !== "user" ||
+      !["queued", "cancelled"].includes(message.status),
   );
   const latestUser = displayedMessages
     .filter((message) => message.role === "user")
@@ -624,7 +652,9 @@ function App() {
           ? "正在准备回复…"
           : streamingReply
             ? ""
-            : "正在处理…";
+            : state.retrying
+              ? "模型服务暂时不可用，正在重试…"
+              : "正在处理…";
   const merge = useCallback(
     (items: Message[]) =>
       setMessages((prev) => {
@@ -878,6 +908,24 @@ function App() {
       fail(e);
     }
   }
+  async function retryModel(turn: string, requestId: string) {
+    if (sending || !online) throw new Error("请等待连接恢复或当前操作结束");
+    setSending(true);
+    try {
+      const result = await api("conversation", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "retry",
+          turn_id: turn,
+          request_id: requestId,
+        }),
+      });
+      if (result.message) merge([result.message]);
+      setState(await api("session"));
+    } finally {
+      setSending(false);
+    }
+  }
   async function conversationAction(
     action: string,
     requestId = state.active_request_id,
@@ -1059,6 +1107,13 @@ function App() {
               <ConversationGroup
                 key={group.id}
                 group={group}
+                onRetry={retryModel}
+                retryDisabled={
+                  sending ||
+                  !online ||
+                  foregroundBusy ||
+                  group.turn_id !== latestUser?.turn_id
+                }
                 name={state.name}
                 copied={copied}
                 onCopy={copy}
@@ -1114,7 +1169,7 @@ function App() {
               disabled={sending || !online || uploading}
               onAction={queuedAction}
               onRestore={(text) => {
-                setDraft((current) => current ? current + "\n" + text : text);
+                setDraft((current) => (current ? current + "\n" + text : text));
                 requestAnimationFrame(() => input.current?.focus());
               }}
             />

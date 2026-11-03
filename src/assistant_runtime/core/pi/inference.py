@@ -4,7 +4,7 @@ import time
 from contextlib import aclosing
 
 from assistant_runtime.api.models import ModelCallError
-from assistant_runtime.core.pi.native_transport import telemetry
+from assistant_runtime.core.pi.native_telemetry import telemetry
 from assistant_runtime.core.pi.accounts import output_reservation
 
 
@@ -43,7 +43,7 @@ async def output_bound(accounts, payload):
     return output_reservation(worker, payload["max_output_tokens"], bound)
 
 
-async def complete(accounts, payload, session_id):
+async def complete(accounts, payload, session_id, *, meter=None):
     args = arguments(payload, session_id, accounts.settings)
     worker, route, _ = await accounts.route(
         payload["model"], payload["reasoning"]["effort"], images=args["images"], schema=args["schema"]
@@ -52,30 +52,54 @@ async def complete(accounts, payload, session_id):
     started, first, status, request_id, message = time.monotonic(), None, None, None, None
     timings = None
     args["inference"] = True
-    async with aclosing(worker.events("stream", args)) as events:
+    if meter:
+        args["retry"] = accounts.settings.retry
+    async with aclosing(worker.events("stream", args, on_attempt=meter.gate if meter else None)) as events:
         async for item in events:
             event = item.get("event", {})
             kind = event.get("type")
+            if meter and kind:
+                meter.observe(event)
             if kind == "response":
                 status, request_id = event["status"], event.get("request_id")
             elif kind == "text_delta" and first is None:
                 first = time.monotonic() - started
             elif kind == "error":
                 status = event.get("http_status", status)
-                if status and status != 200:
-                    raise ModelCallError("model_http_" + str(status))
-                raise RuntimeError("Native model outcome unknown or authentication unavailable")
+                problem = event.get("failure") or event.get("error", {}).get("failure") or {}
+                raise ModelCallError(
+                    "model_http_" + str(status)
+                    if status and status != 200
+                    else problem.get("code", "model_unknown"),
+                    problem,
+                )
             elif kind == "done":
                 message = event["message"]
                 timings = event.get("transport_timings")
                 request_id = request_id or message.get("responseId")
+
+    def invalid_result(reason):
+        return ModelCallError(
+            "model_result_invalid",
+            {
+                "code": "model_result_invalid",
+                "category": "result",
+                "message": reason,
+                "phase": "result_processing",
+                "submission": "response_received",
+                "generation_settled": bool(message),
+                "retry_allowed": False,
+                **({"request_id": request_id} if request_id else {}),
+            },
+        )
+
     if not message or message["stopReason"] != "stop":
-        raise RuntimeError("Native model did not confirm complete text")
+        raise invalid_result("供应商已返回结果，但未确认完整文字回复；没有重新生成。")
     if any(part["type"] not in {"text", "thinking"} for part in message["content"]):
-        raise ValueError("Auxiliary inference cannot request or execute tools")
+        raise invalid_result("辅助推理返回了不允许执行的工具调用；工具未执行，没有重新生成。")
     text = "".join(part["text"] for part in message["content"] if part["type"] == "text")
     if not text or len(text) > 128000:
-        raise ValueError("Missing or oversized native model text")
+        raise invalid_result("模型返回的文字为空或超过本地结果大小限制；没有重新生成。")
     return {
         "text": text,
         "usage": telemetry(message),
@@ -83,4 +107,9 @@ async def complete(accounts, payload, session_id):
         "elapsed_ms": round((time.monotonic() - started) * 1000),
         "first_text_ms": round(first * 1000) if first is not None else None,
         "transport_timings": timings,
+        **(
+            {"usage_call_id": meter.attempts[-1]["call_id"], "request_attempts": meter.attempts}
+            if meter and meter.attempts
+            else {}
+        ),
     }

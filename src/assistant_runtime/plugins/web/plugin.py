@@ -240,6 +240,7 @@ class WebPlugin:
             action
             not in {
                 "supplement",
+                "retry",
                 "answer",
                 "cancel",
                 "queue",

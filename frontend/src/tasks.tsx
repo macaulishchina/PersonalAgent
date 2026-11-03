@@ -7,6 +7,7 @@ import { PanelHeader } from "./panel-header";
 import { useTaskFeed } from "./task-feed";
 import { MessageMedia } from "./message-media";
 import { TaskTrace } from "./task-trace";
+import { ModelFailureNotice } from "./model-failure";
 
 function EndTaskButton({
   active,
@@ -217,7 +218,35 @@ export function TaskPanel({
             ` · 启动前已排除 ${r.data.trigger_context.invalidated_before_dispatch} 条失效观察`}
         </p>
       )}
-      <p>{runSummary(r)}</p>
+      {r.data.failure ? (
+        <ModelFailureNotice
+          value={{ ...r.data.failure, model: r.data.spec.execution.model }}
+          turn={r.data.turn_id}
+          disabled={busy || r.state !== "failed"}
+          onRetry={async (turn, requestId) => {
+            setBusy(true);
+            try {
+              await api("tasks", {
+                method: "POST",
+                body: JSON.stringify({
+                  action: "continue",
+                  arguments: {
+                    run_id: r.id,
+                    retry_of: turn,
+                    retry_request_id: requestId,
+                    text: "继续上次未完成的请求，沿用已确认的操作结果。",
+                  },
+                }),
+              });
+              await refresh();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : (
+        <p>{runSummary(r)}</p>
+      )}
       {r.data.waiting && r.state === "queued" && (
         <div className="task-hint" role="status">
           {r.data.waiting.kind === "capacity"

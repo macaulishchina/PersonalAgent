@@ -14,7 +14,7 @@ from assistant_runtime.app.store import Store
 from assistant_runtime.core.ai_usage.service import UsageService
 from assistant_runtime.core.execution.service import ExecutionService
 from assistant_runtime.core.pi.plugin import PiPlugin
-from assistant_runtime.core.pi.native_transport import telemetry
+from assistant_runtime.core.pi.native_telemetry import telemetry
 from assistant_runtime.core.workfiles import WorkFiles
 from assistant_runtime.kernel.runtime import Manifest, Runtime
 from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call

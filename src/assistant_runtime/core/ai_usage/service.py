@@ -123,6 +123,9 @@ class UsageService:
             "max_output_tokens",
             "operation",
             "input_bytes",
+            "logical_request_id",
+            "attempt",
+            "retry_wait_ms",
         } or any(type(v) not in (str, int, bool) for v in details.values()):
             raise UsageError("usage_invalid_details")
         captured = self.sanitize(body) if self.settings.body_enabled and body is not None else None
@@ -177,10 +180,13 @@ class UsageService:
         provider_request_id=None,
         error=None,
         response_body=None,
+        generation_settled=False,
     ):
         if state not in {"completed", "rejected", "unknown", "not_sent"}:
             raise ValueError("Invalid usage outcome")
         result = {"state": state}
+        if generation_settled is True:
+            result["generation_settled"] = True
         if isinstance(usage, dict):
             result["usage"] = {
                 k: v

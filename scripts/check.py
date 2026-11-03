@@ -21,6 +21,7 @@ GROUPS = {
         "models",
         "models_transport",
         "model_failures",
+        "model_reliability",
         "task_configuration",
         "model_accounts",
         "model_connections",
