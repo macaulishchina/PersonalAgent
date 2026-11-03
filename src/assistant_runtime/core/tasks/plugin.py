@@ -1332,8 +1332,10 @@ class TasksPlugin:
     @staticmethod
     def result_payload(r):
         body = r["data"].get("progress") or RUN_SUMMARIES[r["state"]]
+        excerpt = bool(r["data"].get("result_is_preview"))
         if len(body) > 7600:
             body = body[:5000] + "\n\n[报告节选]\n\n" + body[-2400:]
+            excerpt = True
         if r["data"].get("result_delivery_error"):
             body += "\n\n完整结果留存失败；当前内容与操作状态保留，不会因此重新执行。"
         return {
@@ -1345,6 +1347,7 @@ class TasksPlugin:
             "body": body,
             "voice": r["data"]["spec"]["notify_voice"],
             "result_ref": r["data"].get("result_ref"),
+            "presentation": {"body": "excerpt" if excerpt else "complete"},
         }
 
     async def deliver_result(self, r):

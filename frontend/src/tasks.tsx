@@ -1,4 +1,4 @@
-import { ResultContent } from "./result-content";
+import { ResultBody } from "./result-content";
 import { chatPath } from "./http";
 import { useEffect, useState, useRef } from "react";
 import { Search, ListTodo, ArrowLeft, ChevronRight } from "lucide-react";
@@ -246,9 +246,15 @@ export function TaskPanel({
           }}
         />
       ) : (
-        <p>{runSummary(r)}</p>
+        <ResultBody
+          text={runSummary(r)}
+          reference={r.data.result_ref}
+          presentation={{
+            body: r.data.result_is_preview ? "excerpt" : "complete",
+          }}
+          render={(text) => <p>{text}</p>}
+        />
       )}
-      <ResultContent reference={r.data.result_ref} />
       {r.data.result_delivery_error && (
         <p className="task-hint">
           结果留存受限：{r.data.result_delivery_error}。原操作状态不变。

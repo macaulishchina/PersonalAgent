@@ -4,6 +4,15 @@
 logical sessions, entrance bindings, ordered input, messages, media references and result
 delivery. Optional assistant presentation lives in `core/speech`; slim never imports it.
 
+Web presentation uses recorded message metadata: `presentation.phase` separates tools /
+commentary from final answers, `turn_status` records turn completion, and `body` identifies
+a complete body or an excerpt. Result references alone never request an extra result viewer.
+Excerpt ranges address the corresponding message inside the retained final text, so reading
+one message cannot duplicate another final message. The Web replaces its preview in place,
+renders Markdown once, and keeps raw JSON inspection inside tool details. Consecutive process
+entries remain open during execution and default closed when the turn settles; manual reopening
+survives later updates. Final answers, media and failure notices remain visible outside that fold.
+
 Creation receipts are durable and isolated by the authenticated caller. The optional
 `policy` object accepts an explicit `tools` allowlist, additional `instructions`, and
 `capture_memory` (default true). Policy restrictions apply to fresh and resumed turns;

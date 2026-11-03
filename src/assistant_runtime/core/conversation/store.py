@@ -42,6 +42,8 @@ class ConversationStore:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN failure TEXT")
         if "result_ref" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN result_ref TEXT")
+        if "presentation" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
+            self.db.execute("ALTER TABLE chat_messages ADD COLUMN presentation TEXT")
         self.db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS conversation_retry_target "
             "ON conversation_queue(session_id,json_extract(payload,'$.retry_of')) "
@@ -93,12 +95,14 @@ class ConversationStore:
             "task_id",
             "failure",
             "result_ref",
+            "presentation",
         )
         result = dict(zip(keys, row))
         result["attachments"] = json.loads(result["attachments"])
         result["tool_summary"] = json.loads(result["tool_summary"]) if result["tool_summary"] else None
         result["failure"] = json.loads(result["failure"]) if result["failure"] else None
         result["result_ref"] = json.loads(result["result_ref"]) if result["result_ref"] else None
+        result["presentation"] = json.loads(result["presentation"]) if result["presentation"] else {}
         return result
 
     def attachment_sessions(self, ident):
@@ -140,6 +144,7 @@ class ConversationStore:
         task_id=None,
         failure=None,
         result_ref=None,
+        presentation=None,
         commit=True,
         new_ordinal=False,
     ):
@@ -151,6 +156,7 @@ class ConversationStore:
         task_id = task_id if task_id is not None else (old["task_id"] if old else None)
         failure = failure if failure is not None else (old["failure"] if old else None)
         result_ref = result_ref if result_ref is not None else (old["result_ref"] if old else None)
+        presentation = presentation if presentation is not None else (old["presentation"] if old else {})
         values = (
             role,
             source,
@@ -163,6 +169,7 @@ class ConversationStore:
             task_id,
             failure,
             result_ref,
+            presentation,
         )
         if (
             old
@@ -182,6 +189,7 @@ class ConversationStore:
                     "task_id",
                     "failure",
                     "result_ref",
+                    "presentation",
                 )
             )
         ):
@@ -195,12 +203,13 @@ class ConversationStore:
                 self.db.execute("DELETE FROM chat_events WHERE seq < ?", (seq - 20000,))
             self.db.execute(
                 """INSERT INTO chat_messages
-                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id,failure,result_ref)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id,failure,result_ref,presentation)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,source=excluded.source,
                 kind=excluded.kind,text=excluded.text,status=excluded.status,
                 turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated,
-                tool_summary=excluded.tool_summary,task_id=excluded.task_id,failure=excluded.failure,result_ref=excluded.result_ref""",
+                tool_summary=excluded.tool_summary,task_id=excluded.task_id,failure=excluded.failure,result_ref=excluded.result_ref,
+                presentation=excluded.presentation""",
                 (
                     ident,
                     session,
@@ -212,6 +221,7 @@ class ConversationStore:
                     task_id,
                     json.dumps(failure) if failure is not None else None,
                     json.dumps(result_ref) if result_ref is not None else None,
+                    json.dumps(presentation),
                 ),
             )
         return self.get(ident)

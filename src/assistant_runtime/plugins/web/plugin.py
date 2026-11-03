@@ -346,13 +346,18 @@ class WebPlugin:
         from assistant_runtime.api.files import FileRequest
         from assistant_runtime.api.results import ResultAccessError
 
-        if set(request.query) - {"offset", "version", "path"}:
+        if set(request.query) - {"offset", "version", "path", "length"}:
             raise web.HTTPBadRequest()
-        args = {
-            "id": request.match_info["id"],
-            "offset": int(request.query.get("offset", "0")),
-            "length": 16000,
-        }
+        try:
+            args = {
+                "id": request.match_info["id"],
+                "offset": int(request.query.get("offset", "0")),
+                "length": int(request.query.get("length", "16000")),
+            }
+        except ValueError:
+            raise web.HTTPBadRequest() from None
+        if args["offset"] < 0 or not 1 <= args["length"] <= 16000:
+            raise web.HTTPBadRequest()
         for field in ("version", "path"):
             if field in request.query:
                 args[field] = request.query[field]

@@ -588,11 +588,18 @@ class ExecutionService:
             )
         elif kind == "run.completed":
             run = data["run"]
-            result = "\n".join(
-                i.get("text", "")
+            final_messages = [
+                i
                 for i in run.get("items", [])
                 if i.get("type") == "message" and i.get("phase") != "commentary"
-            )
+            ]
+            result = "\n".join(i.get("text", "") for i in final_messages)
+            offset = 0
+            data["result_messages"] = []
+            for message in final_messages:
+                length = len(message.get("text", ""))
+                data["result_messages"].append({"id": message.get("id"), "offset": offset, "length": length})
+                offset += length + 1
             state = {"interrupted": "cancelled"}.get(run["status"], run["status"])
             if (
                 row["data"].get("context_id")
@@ -609,6 +616,7 @@ class ExecutionService:
             if delivery.get("result_ref") and len(result) > 6000:
                 preview = result[:3900] + "\n[…节选；完整结果可按引用读取…]\n" + result[-2000:]
             data["result"] = preview
+            data["result_is_preview"] = preview != result
             self.records.update(
                 ident,
                 state if state in TERMINAL else "unknown",

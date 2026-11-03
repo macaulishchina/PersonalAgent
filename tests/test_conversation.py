@@ -376,6 +376,58 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         rows = c.store.history(c.session)
         self.assertEqual([row["text"] for row in rows], ["第一部分", "第二部分"])
         self.assertEqual(rows[-1]["result_ref"], reference)
+        self.assertEqual(rows[-1]["presentation"]["body"], "complete")
+        self.assertTrue(all(row["presentation"]["turn_status"] == "completed" for row in rows))
+
+    async def test_long_final_messages_have_exact_ranges_and_process_completion(self):
+        c = self.host.conversation
+        finals = [("one", "第一份😀" * 1700), ("two", "第二份🌳" * 1800)]
+        c.provider_event(
+            task_event(
+                "activity.completed",
+                {
+                    "run_id": "web",
+                    "item": {"id": "note", "type": "message", "phase": "commentary", "text": "准备检查"},
+                },
+            )
+        )
+        for ident, text in finals:
+            c.provider_event(
+                task_event(
+                    "activity.completed",
+                    {
+                        "run_id": "web",
+                        "item": {"id": ident, "type": "message", "phase": "final", "text": text},
+                    },
+                )
+            )
+        before = c.store.history(c.session)
+        self.assertTrue(all("turn_status" not in row["presentation"] for row in before))
+        c.provider_event(
+            {
+                "kind": "turn_completed",
+                "turn_id": "web",
+                "status": "completed",
+                "result_ref": {"id": "full", "version": "v1"},
+                "result_messages": [
+                    {"id": "one", "offset": 0, "length": len(finals[0][1])},
+                    {"id": "two", "offset": len(finals[0][1]) + 1, "length": len(finals[1][1])},
+                ],
+            }
+        )
+        rows = c.store.history(c.session)
+        self.assertEqual(rows[0]["presentation"]["phase"], "commentary")
+        for row, (_, text) in zip(rows[1:], finals):
+            self.assertEqual(row["presentation"]["body"], "excerpt")
+            self.assertEqual(row["presentation"]["result_length"], len(text))
+            self.assertEqual(row["presentation"]["turn_status"], "completed")
+            self.assertLess(len(row["text"]), len(text))
+        self.assertEqual(rows[2]["presentation"]["result_offset"], len(finals[0][1]) + 1)
+        self.assertEqual([row["ordinal"] for row in rows], [row["ordinal"] for row in before])
+        self.assertEqual([row["updated"] for row in rows], [row["updated"] for row in before])
+        # Presentation survives a reload and body/attachment updates, without re-reading results.
+        reopened = ConversationStore(c.store.store)
+        self.assertEqual(reopened.get(rows[2]["id"])["presentation"], rows[2]["presentation"])
 
     async def test_restore_repairs_display_without_reordering_or_task_dispatch(self):
         c = self.host.conversation

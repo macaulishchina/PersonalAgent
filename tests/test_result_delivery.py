@@ -339,6 +339,13 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 history = await invoke(ConversationRequest, "history", {"session_id": session})
                 refs = [m["result_ref"] for m in history["messages"] if m.get("result_ref")]
                 self.assertEqual(await full(refs[-1]), final)
+                excerpts = [
+                    m for m in history["messages"] if m.get("presentation", {}).get("body") == "excerpt"
+                ]
+                self.assertEqual(len(excerpts), 1)
+                self.assertEqual(excerpts[0]["presentation"]["result_offset"], 0)
+                self.assertEqual(excerpts[0]["presentation"]["result_length"], len(final))
+                self.assertEqual(excerpts[0]["presentation"]["turn_status"], "completed")
                 task = await invoke(
                     TaskRequest,
                     "create",
@@ -360,6 +367,7 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.05)
                 self.assertEqual(runs[0]["state"], "completed", runs[0])
                 self.assertEqual(await full(runs[0]["data"]["result_ref"]), final)
+                self.assertTrue(runs[0]["data"]["result_is_preview"])
                 self.assertEqual(count.read_text(), "xxx")
                 self.assertEqual(len(gateway.requests), 12)
                 self.assertEqual(len(observed), 3)

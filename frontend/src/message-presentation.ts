@@ -1,6 +1,13 @@
 /** Presentation follows recorded channels and identities, never prose guesses. */
 export type MessageOrigin = {
   result_ref?: { id: string; version: string; bytes?: number } | null;
+  presentation?: {
+    phase?: string | null;
+    body?: "complete" | "excerpt";
+    turn_status?: string;
+    result_offset?: number;
+    result_length?: number;
+  } | null;
   id: string;
   role: string;
   kind: string;
@@ -19,6 +26,48 @@ export type MessageOrigin = {
     important: boolean;
   };
 };
+
+export function isExecutionStep(message: MessageOrigin) {
+  return (
+    message.role === "assistant" &&
+    !isReport(message) &&
+    (message.presentation?.phase === "tool" ||
+      (message.kind === "detail" &&
+        ["调用工具", "执行命令", "修改文件", "检索资料"].includes(
+          message.text?.split("\n", 1)[0] || "",
+        )))
+  );
+}
+
+/** Preserve order and identity: only consecutive process entries share a fold. */
+export function replySections<T extends MessageOrigin>(messages: T[]) {
+  const sections: { id: string; process: boolean; messages: T[] }[] = [];
+  for (const message of messages) {
+    const process =
+      isExecutionStep(message) || message.presentation?.phase === "commentary";
+    const last = sections.at(-1);
+    if (process && last?.process) last.messages.push(message);
+    else sections.push({ id: message.id, process, messages: [message] });
+  }
+  return sections;
+}
+
+export function replySettled(
+  messages: MessageOrigin[],
+  activeTurn: string | null | undefined,
+  stateKnown: boolean,
+) {
+  if (
+    messages.some((m) =>
+      ["completed", "failed", "unknown", "interrupted", "cancelled"].includes(
+        m.presentation?.turn_status || "",
+      ),
+    )
+  )
+    return true;
+  const turn = messages.find((m) => m.turn_id)?.turn_id;
+  return Boolean(turn && stateKnown && turn !== activeTurn);
+}
 
 /** Durable association, scoped to its recorded task/run; purpose is a member property. */
 function reportGroupKey(message: MessageOrigin) {

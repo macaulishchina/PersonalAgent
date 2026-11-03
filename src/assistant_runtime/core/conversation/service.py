@@ -116,6 +116,7 @@ class Conversation:
             "active_request_id": next(
                 (r["id"] for r in self.queue() if r["state"] in {"sending", "running"}), None
             ),
+            "active_turn_id": getattr(self.backend, "active_turn", None) if self.backend.busy else None,
             "queue": self.queue(),
             "question_id": question["id"] if question else None,
             "questions": question["data"].get("questions", []) if question else [],
@@ -160,6 +161,8 @@ class Conversation:
             self.store.emit(self.session, "question", event)
             return
         self.event_context(event, restored)
+        if kind == "turn_started" and not restored:
+            self.store.emit(self.session, "state", self.state())
         ident = event.get("message_id")
         if kind == "message_delta" and ident:
             mid = f"task:{self.session}:{ident}"
@@ -185,6 +188,7 @@ class Conversation:
                 attachments=references or None,
                 tool_summary=None if restored else event.get("tool_summary"),
                 result_ref=event.get("result_ref"),
+                presentation={"phase": "tool" if event["detail"] else event.get("phase"), "body": "complete"},
                 updated_at=old["updated"]
                 if old and (restored or event.get("images") or event.get("attachments"))
                 else None,
@@ -215,25 +219,6 @@ class Conversation:
         elif kind == "turn_completed":
             status = event["status"]
             reference = event.get("result_ref")
-            if reference:
-                rows = self.store.db.execute(
-                    "SELECT id FROM chat_messages WHERE session_id=? AND turn_id=? AND role='assistant' AND kind='message' ORDER BY ordinal DESC LIMIT 1",
-                    (self.session, turn),
-                ).fetchall()
-                if rows:
-                    old = self.store.get(rows[0][0])
-                    self.store.put(
-                        old["id"],
-                        self.session,
-                        text=old["text"]
-                        if len(old["text"]) <= 6000
-                        else old["text"][:3900] + "\n\n[节选；完整结果可展开读取]\n\n" + old["text"][-2000:],
-                        kind=old["kind"],
-                        turn_id=turn,
-                        status=old["status"],
-                        result_ref=reference,
-                    )
-
             if event.get("result_delivery_error"):
                 self.store.put(
                     f"retention:{self.session}:{turn}",
@@ -271,18 +256,43 @@ class Conversation:
                     turn_id=turn,
                 )
 
-            for (mid,) in self.store.db.execute(
-                "SELECT id FROM chat_messages WHERE session_id=? AND turn_id=? AND status='streaming'",
+            ranges = {
+                f"task:{self.session}:{item['id']}": item
+                for item in event.get("result_messages", [])
+                if item.get("id")
+            }
+            rows = self.store.db.execute(
+                "SELECT id FROM chat_messages WHERE session_id=? AND turn_id=? AND role='assistant' ORDER BY ordinal",
                 (self.session, turn),
-            ).fetchall():
+            ).fetchall()
+            prose = [mid for (mid,) in rows if self.store.get(mid)["kind"] == "message"]
+            for (mid,) in rows:
                 m = self.store.get(mid)
+                presentation = {**m["presentation"], "turn_status": status}
+                text = m["text"]
+                result_ref = None
+                if reference and m["kind"] == "message" and mid in ranges and len(text) > 6000:
+                    span = ranges[mid]
+                    presentation.update(
+                        body="excerpt", result_offset=span["offset"], result_length=span["length"]
+                    )
+                    text = text[:3900] + "\n\n[…正文尚未完整显示…]\n\n" + text[-2000:]
+                    result_ref = reference
+                elif reference and prose and mid == prose[-1]:
+                    result_ref = reference
                 self.store.put(
                     mid,
                     self.session,
-                    text=m["text"],
+                    text=text,
+                    source=m["source"],
                     kind=m["kind"],
                     turn_id=turn,
-                    status="complete" if status == "completed" else status,
+                    status=("complete" if status == "completed" else status)
+                    if m["status"] == "streaming"
+                    else m["status"],
+                    presentation=presentation,
+                    result_ref=result_ref,
+                    updated_at=m["updated"],
                 )
 
     def image_failed(self, mid):

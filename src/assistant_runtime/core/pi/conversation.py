@@ -76,6 +76,7 @@ def task_event(method, params):
             "result_ref": params.get("result_ref"),
             "result_preview": params.get("result"),
             "result_delivery_error": params.get("result_delivery_error"),
+            "result_messages": params.get("result_messages", []),
             **common,
             "kind": "turn_completed",
             "status": params["run"].get("status", "unknown"),
@@ -122,6 +123,8 @@ def task_event(method, params):
         else ("failed" if item.get("status") in ("failed", "declined") else "complete")
     )
     event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
+    if kind == "message":
+        event["phase"] = item.get("phase") or "final"
     if kind == "mcp" and method == "activity.completed":
         raw_result = item.get("result")
         delivery = raw_result.get("details", {}) if isinstance(raw_result, dict) else {}

@@ -118,9 +118,17 @@ class NotificationsPlugin:
             "group_title",
             "kind",
             "report_with_task",
+            "presentation",
         }
         if set(args) - allowed:
             raise ValueError("Unknown notification fields")
+        presentation = args.get("presentation")
+        if presentation is not None and (
+            not isinstance(presentation, dict)
+            or set(presentation) != {"body"}
+            or presentation["body"] not in ("complete", "excerpt")
+        ):
+            raise ValueError("Invalid notification presentation")
         for key, limit in (("title", 200), ("body", 8000)):
             if not isinstance(args.get(key), str) or not 0 < len(args[key].strip()) <= limit:
                 raise ValueError("Invalid notification " + key)
@@ -161,6 +169,7 @@ class NotificationsPlugin:
             raise ValueError("report_with_task requires a normal, unspoken result")
         self.group_fields(args)
         return {
+            **({"presentation": presentation} if presentation is not None else {}),
             **({"report_with_task": True} if covered else {}),
             **{
                 key: args.get(key, default)

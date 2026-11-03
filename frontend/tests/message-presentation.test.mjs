@@ -252,3 +252,84 @@ test("removing a report from between ordinary replies does not merge them", () =
     [["a"], ["middle"], ["b"]],
   );
 });
+
+test("process sections follow recorded phase, preserve final replies and do not cross reports", async () => {
+  const { replySections, replySettled } =
+    await import("../src/message-presentation.ts");
+  const message = (id, extra = {}) => ({
+    id,
+    role: "assistant",
+    kind: "message",
+    source: "web",
+    turn_id: "one",
+    text: "正文",
+    ...extra,
+  });
+  const rows = [
+    message("before", { presentation: { phase: "commentary" } }),
+    message("tool", {
+      kind: "detail",
+      text: "调用工具\nlookup",
+      status: "complete",
+    }),
+    message("final", { presentation: { phase: "final", body: "complete" } }),
+    message("next-tool", {
+      kind: "detail",
+      text: "执行命令\nresult",
+      status: "complete",
+    }),
+  ];
+  const original = JSON.stringify(rows);
+  assert.deepEqual(
+    replySections(rows).map((s) => [s.process, s.messages.map((m) => m.id)]),
+    [
+      [true, ["before", "tool"]],
+      [false, ["final"]],
+      [true, ["next-tool"]],
+    ],
+  );
+  assert.equal(
+    replySettled(rows, "one", true),
+    false,
+    "completed tools are not a completed turn",
+  );
+  assert.equal(
+    replySettled(rows, null, false),
+    false,
+    "missing state is not completion evidence",
+  );
+  assert.equal(
+    replySettled(rows, "two", true),
+    true,
+    "a later active turn never keeps old process open",
+  );
+  assert.equal(
+    replySettled(
+      [
+        ...rows,
+        message("done", { presentation: { turn_status: "completed" } }),
+      ],
+      "one",
+      true,
+    ),
+    true,
+  );
+  for (const status of ["failed", "interrupted", "unknown"]) {
+    assert.equal(
+      replySettled(
+        [message("end", { presentation: { turn_status: status } })],
+        "one",
+        true,
+      ),
+      true,
+    );
+  }
+  assert.equal(JSON.stringify(rows), original);
+  assert.deepEqual(
+    replySections([
+      message("normal"),
+      message("legacy-prose", { kind: "detail", text: "普通回复" }),
+    ]).map((s) => s.process),
+    [false, false],
+  );
+});

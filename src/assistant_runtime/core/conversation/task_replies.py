@@ -77,6 +77,7 @@ class TaskReplies:
             task_id=result["task_id"],
             attachments=attachments,
             result_ref=payload.get("result_ref"),
+            presentation=payload.get("presentation"),
         )
         state = "submitting" if voice else "delivered"
         with self.db:

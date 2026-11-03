@@ -81,6 +81,12 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         r = await self.client.post(self.base + "/api/login", json={"token": self.token})
         self.assertEqual(r.status, 200)
 
+    async def test_result_reader_rejects_invalid_or_unbounded_ranges(self):
+        await self.login()
+        for query in ("offset=bad", "offset=-1", "length=0", "length=16001", "length=bad"):
+            response = await self.client.get(self.base + "/api/results/example?" + query)
+            self.assertEqual(response.status, 400, query)
+
     async def test_auth_origin_and_restart_cookie(self):
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)

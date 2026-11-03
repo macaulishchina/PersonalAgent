@@ -308,6 +308,7 @@ class PiJobs:
                 result=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 progress=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 result_ref=p.get("result_ref"),
+                result_is_preview=p.get("result_is_preview", False),
                 result_delivery_error=p.get("result_delivery_error"),
             )
         elif method == "usage.updated":

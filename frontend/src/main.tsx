@@ -1,4 +1,5 @@
-import { ResultContent } from "./result-content";
+import { ResultContent, ResultBody } from "./result-content";
+import { ExecutionProcess } from "./execution-process";
 import { chatPath } from "./http";
 import { ModelFailureNotice, type ModelFailure } from "./model-failure";
 import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
@@ -39,6 +40,9 @@ import {
   needsAttention,
   reportTask,
   groupMessages,
+  isExecutionStep,
+  replySections,
+  replySettled,
   type MessageOrigin,
 } from "./message-presentation";
 import { TaskReport, ReportCollection } from "./task-report";
@@ -76,6 +80,7 @@ type State = {
   sync_error?: string;
   configuration_required?: boolean;
   active_request_id?: string;
+  active_turn_id?: string | null;
   question_id?: string | number;
   questions?: { id: string; question: string }[];
   queue?: QueuedRequest[];
@@ -281,6 +286,7 @@ function MessageEntry({
   showReportSource = false,
   onRetry,
   retryDisabled,
+  showMedia = true,
 }: {
   message: Message;
   onOpen: (url: string) => void;
@@ -289,6 +295,7 @@ function MessageEntry({
   showReportSource?: boolean;
   onRetry: (turn: string, requestId: string) => Promise<void>;
   retryDisabled: boolean;
+  showMedia?: boolean;
 }) {
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
@@ -331,22 +338,30 @@ function MessageEntry({
             })
           }
           renderBody={(text) => (
-            <div className="message-body">
-              <Markdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {text}
-              </Markdown>
-            </div>
+            <ResultBody
+              text={text}
+              reference={m.result_ref}
+              presentation={m.presentation}
+              render={(body) => (
+                <div className="message-body">
+                  <Markdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {body}
+                  </Markdown>
+                </div>
+              )}
+            />
           )}
         >
-          <ResultContent reference={m.result_ref} />
-          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          {showMedia && (
+            <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          )}
         </TaskReport>
       ) : detail ? (
         <>
-          {!detail.body ? (
+          {!detail.body && !m.result_ref ? (
             <ToolActivity message={m} name={detail.name} label={detail.label} />
           ) : (
             <details>
@@ -366,25 +381,35 @@ function MessageEntry({
                   {detail.body}
                 </Markdown>
               </div>
+              <ResultContent reference={m.result_ref} />
             </details>
           )}
           {m.tool_summary && (
             <ToolResult value={m.tool_summary} onOpenTask={onOpenTask} />
           )}
-          <ResultContent reference={m.result_ref} />
-          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          {showMedia && (
+            <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          )}
         </>
       ) : (
         <>
-          <ResultContent reference={m.result_ref} />
-          <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          {showMedia && (
+            <MessageMedia attachments={m.attachments} onOpen={onOpen} />
+          )}
           <div className="message-body">
-            <Markdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-            >
-              {m.text}
-            </Markdown>
+            <ResultBody
+              text={m.text}
+              reference={m.result_ref}
+              presentation={m.presentation}
+              render={(text) => (
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {text}
+                </Markdown>
+              )}
+            />
             {m.status === "streaming" && !m.text && (
               <span className="thinking">
                 正在思考<span>···</span>
@@ -416,10 +441,12 @@ function ConversationGroup({
   onOpenTask,
   onRetry,
   retryDisabled,
+  settled,
 }: {
   group: MessageGroup;
   onRetry: (turn: string, requestId: string) => Promise<void>;
   retryDisabled: boolean;
+  settled: boolean;
   name: string;
   copied: string;
   onCopy: (id: string, text: string) => Promise<void>;
@@ -443,18 +470,21 @@ function ConversationGroup({
     .map((m) => m.text)
     .filter(Boolean)
     .join("\n\n");
-  const entries = group.messages.map((m) => (
+  const entry = (m: Message, showMedia = true) => (
     <MessageEntry
       key={m.id}
       message={m}
       onRetry={onRetry}
       retryDisabled={retryDisabled}
+      showMedia={showMedia}
       onOpen={onOpen}
       onOpenTask={onOpenTask}
       onResolvedTask={setResolvedTask}
       showReportSource={group.messages.length === 1}
     />
-  ));
+  );
+  const entries = group.messages.map((m) => entry(m));
+  const sections = replySections(group.messages);
   return (
     <section
       className={"message-group " + group.role}
@@ -533,7 +563,35 @@ function ConversationGroup({
           {entries}
         </ReportCollection>
       ) : (
-        entries
+        sections.map((section) => {
+          const steps = section.messages.filter(isExecutionStep);
+          if (!section.process || !steps.length)
+            return section.messages.map((m) => entry(m));
+          const attachments = [
+            ...new Map(
+              section.messages
+                .flatMap((m) => m.attachments)
+                .map((ref) => [ref.id, ref]),
+            ).values(),
+          ];
+          const attention = steps.filter(
+            (m) =>
+              ["failed", "unknown", "interrupted"].includes(m.status) ||
+              m.tool_summary?.result_state === "unknown",
+          ).length;
+          return (
+            <React.Fragment key={section.id}>
+              <ExecutionProcess
+                settled={settled}
+                count={steps.length}
+                attention={attention}
+              >
+                {section.messages.map((m) => entry(m, false))}
+              </ExecutionProcess>
+              <MessageMedia attachments={attachments} onOpen={onOpen} />
+            </React.Fragment>
+          );
+        })
       )}
     </section>
   );
@@ -1111,6 +1169,11 @@ function App() {
               <ConversationGroup
                 key={group.id}
                 group={group}
+                settled={replySettled(
+                  group.messages,
+                  state.active_turn_id,
+                  Boolean(state.session_id),
+                )}
                 onRetry={retryModel}
                 retryDisabled={
                   sending ||
