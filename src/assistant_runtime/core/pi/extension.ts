@@ -1,10 +1,9 @@
 import { registerControlled } from "./controlled_tools.ts";
 import { registerToolLifecycle } from "./tool_lifecycle.ts";
+import { registerResultDelivery } from "./tool_results.ts";
 import { registerDiscovery } from "./discovery.ts";
 import { Type } from "typebox";
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
@@ -126,72 +125,7 @@ export default function (pi: any) {
     Number(process.env.ASSISTANT_TOOL_SCHEMA_BYTES || 65536),
     origin,
   );
-  const resultLimit = Number(
-    process.env.ASSISTANT_TOOL_RESULT_MAX_CHARS || 6000,
-  );
-  // Keep full received text on disk; model context receives a bounded preview.
-  // Preserve image blocks and error status, and never turn an executed write into a retry.
-  pi.on("tool_result", async (event: any, ctx: any) => {
-    // A reference is useful only when this execution can read the saved evidence.
-    if (
-      !pi
-        .getActiveTools()
-        .some((name: string) => ["read", "bash", "powershell"].includes(name))
-    )
-      return;
-    const texts = event.content.filter((block: any) => block.type === "text");
-    const text = texts.map((block: any) => block.text).join("\n");
-    const structured =
-      event.structuredContent === undefined
-        ? ""
-        : JSON.stringify(event.structuredContent);
-    if (text.length + structured.length <= resultLimit) return;
-    try {
-      const directory = join(ctx.cwd, "tool-results");
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const path = join(directory, randomUUID() + ".json");
-      writeFileSync(
-        path,
-        JSON.stringify(
-          {
-            tool: event.toolName,
-            call_id: event.toolCallId,
-            is_error: event.isError,
-            content: texts,
-            structured_content: event.structuredContent,
-          },
-          null,
-          2,
-        ),
-        { mode: 0o600, flag: "wx" },
-      );
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `[Partial tool result preview; is_error=${event.isError === true}; received text stored at ${path}. Omitted items are not evidence of absence or success. Read selected ranges or parse this file for needed fields; do not repeat the operation to recover its output. Upstream truncation, if any, is unchanged.]\n` +
-              (text || structured).slice(0, resultLimit),
-          },
-          ...event.content.filter((block: any) => block.type !== "text"),
-        ],
-        isError: event.isError,
-        // Only owner metadata survives the preview; full structured output is in the file.
-        details: event.details,
-        structuredContent: event.structuredContent?.tool_outcome
-          ? { tool_outcome: event.structuredContent.tool_outcome }
-          : event.structuredContent?.structuredContent?.tool_outcome
-            ? {
-                tool_outcome:
-                  event.structuredContent.structuredContent.tool_outcome,
-              }
-            : undefined,
-      };
-    } catch {
-      // Storage failure must not hide evidence or misreport a tool's business outcome.
-      return;
-    }
-  });
+  registerResultDelivery(pi, policy.allowed_tools);
   const modelPath = process.env.ASSISTANT_PI_MODELS;
   if (modelPath) {
     const provider = JSON.parse(readFileSync(modelPath, "utf8")).providers

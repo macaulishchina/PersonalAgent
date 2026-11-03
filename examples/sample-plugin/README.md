@@ -45,3 +45,23 @@ the invalid field and confirmed `not_dispatched` status. Unexpected failures ret
 uncertainty; the sample never catches them to retry a report. Rewriting the identical
 note does not publish another event. Report submission returns an execution receipt;
 completion, result and artifacts are obtained through `sample_report_status`.
+
+## 完整结果与按需读取
+
+`sample_report_status` 保留公共执行接口返回的 `result_ref`，不要只取预览字符串，
+也不要再次调用 `sample_report` 来补取报告。完整正文可通过同一公共文件接口分页读取：
+
+```python
+from assistant_runtime.api import FileRequest
+
+page = await context.invoke(FileRequest("result_read", {
+    "id": result_ref["id"], "version": result_ref["version"],
+    "path": "/text", "offset": 0, "length": 6000,
+}))
+# 后续读取使用 page["next_offset"]，直到 page["eof"]。
+```
+
+调用身份由宿主绑定，复制引用不会取得读取权限。过期、无权限和完整性错误应直接说明，
+不重新执行原任务。工具返回无需自行截断或生成临时文件：框架为大结果保留完整内容，
+模型使用 `read_result` 按需读取。可选的展示摘要契约见
+[插件开发规范](../../docs/development/plugins.md)，缺少摘要时仍能正常使用确定性节选。

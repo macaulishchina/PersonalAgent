@@ -99,7 +99,7 @@ def main():
     executions.add_argument(
         "arguments", help="JSON operation arguments; submit requires a stable request_id UUID"
     )
-    files = sub.add_parser("files", help="Register and inspect bounded input resources")
+    files = sub.add_parser("files", help="Register inputs, read retained results and inspect storage")
     files.add_argument(
         "action",
         choices=[
@@ -108,11 +108,18 @@ def main():
             "finalize",
             "artifact_get",
             "artifact_read",
+            "result_get",
+            "result_read",
+            "result_usage",
+            "result_collect",
             "artifact_retain",
             "artifact_release",
         ],
     )
-    files.add_argument("arguments", help="JSON: put accepts name, base64 data, and optional kind=file|image")
+    files.add_argument(
+        "arguments",
+        help="JSON arguments: put uses name/data/kind; result_read uses id/version/path/offset/length",
+    )
     management = sub.add_parser("configuration", help="Independent operator configuration console")
     management.add_argument("action", choices=["serve", "token", "reset-token", "check", "apply", "status"])
     management.add_argument("--management", required=True, help="Independent management.toml path")

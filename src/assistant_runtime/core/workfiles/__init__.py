@@ -13,7 +13,14 @@ from assistant_runtime.api import plugin_manifest
 class WorkFiles:
     def __init__(self, state, db, settings=None):
         settings = settings or {}
-        if set(settings) - {"root", "retention_days", "artifact_storage_bytes"}:
+        if set(settings) - {
+            "root",
+            "retention_days",
+            "artifact_storage_bytes",
+            "result_retention_days",
+            "result_storage_bytes",
+            "result_max_bytes",
+        }:
             raise ValueError("Unknown work_files settings")
         self.root = Path(settings.get("root", state / "work")).expanduser().absolute()
         self.artifact_storage_bytes = settings.get("artifact_storage_bytes", 512 * 1024 * 1024)
@@ -33,8 +40,17 @@ class WorkFiles:
         from .artifacts import ArtifactFiles
 
         self.publications = ArtifactFiles(self)
+        from .tool_media import ToolMedia
+
+        self.tool_media = ToolMedia(self)
+        from .results import ResultFiles
+
+        self.results = ResultFiles(self, settings)
+        self.media.on_read = self.results.touch_attachment
 
     async def request(self, request):
+        if request.action.startswith("result_"):
+            return await self.results.request(request)
         if request.action == "finalize" or request.action.startswith("artifact_"):
             return await self.publications.request(request)
         return await self.inputs.request(request)
@@ -154,7 +170,18 @@ class WorkFilesMaintenance:
             raise ConfigurationError(
                 ["work_files", "artifact_storage_bytes"], "range", "Invalid artifact quota"
             )
-        return attributes([(self.files, "days", days), (self.files, "artifact_storage_bytes", quota)])
+        from .results import settings
+
+        result_days, result_quota, maximum = settings(config.work_files)
+        return attributes(
+            [
+                (self.files, "days", days),
+                (self.files, "artifact_storage_bytes", quota),
+                (self.files.results, "days", result_days),
+                (self.files.results, "quota", result_quota),
+                (self.files.results, "maximum", maximum),
+            ]
+        )
 
     async def start(self, context):
         from assistant_runtime.api.files import FileRequest
@@ -166,4 +193,12 @@ class WorkFilesMaintenance:
         while True:
             await self.files.collect(True)
             await self.files.publications.collect()
+            try:
+                await self.files.results.collect()
+            except (OSError, ValueError):
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Result cleanup incomplete; will retry next maintenance cycle"
+                )
             await asyncio.sleep(3600)

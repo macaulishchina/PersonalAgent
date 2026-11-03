@@ -184,11 +184,21 @@ class Conversation:
                 status=event["status"],
                 attachments=references or None,
                 tool_summary=None if restored else event.get("tool_summary"),
+                result_ref=event.get("result_ref"),
                 updated_at=old["updated"]
                 if old and (restored or event.get("images") or event.get("attachments"))
                 else None,
             )
-            if references:
+            receipt = event.get("media_delivery")
+            if receipt and (receipt.get("state") != "ready" or not references):
+                self.store.put(
+                    "image-error:" + mid,
+                    self.session,
+                    text="工具已返回图片，但附件保存或交付尚未完成。原操作结果保留，请勿为此重复执行原操作。",
+                    status="complete",
+                    turn_id=turn,
+                )
+            elif references:
                 self.image_recovered(mid)
             if (
                 event.get("images")
@@ -204,6 +214,37 @@ class Conversation:
                     self.image_failed(mid)
         elif kind == "turn_completed":
             status = event["status"]
+            reference = event.get("result_ref")
+            if reference:
+                rows = self.store.db.execute(
+                    "SELECT id FROM chat_messages WHERE session_id=? AND turn_id=? AND role='assistant' AND kind='message' ORDER BY ordinal DESC LIMIT 1",
+                    (self.session, turn),
+                ).fetchall()
+                if rows:
+                    old = self.store.get(rows[0][0])
+                    self.store.put(
+                        old["id"],
+                        self.session,
+                        text=old["text"]
+                        if len(old["text"]) <= 6000
+                        else old["text"][:3900] + "\n\n[节选；完整结果可展开读取]\n\n" + old["text"][-2000:],
+                        kind=old["kind"],
+                        turn_id=turn,
+                        status=old["status"],
+                        result_ref=reference,
+                    )
+
+            if event.get("result_delivery_error"):
+                self.store.put(
+                    f"retention:{self.session}:{turn}",
+                    self.session,
+                    text="完整结果留存失败（"
+                    + event["result_delivery_error"]
+                    + "）。当前收到的内容保持原样；不会重新执行操作。",
+                    kind="context",
+                    status="complete",
+                    turn_id=turn,
+                )
             if status in ("interrupted", "failed", "unknown") and turn in self.web_turns:
                 self.store.put(
                     f"outcome:{self.session}:{turn}",
@@ -256,7 +297,7 @@ class Conversation:
 
     def image_recovered(self, mid):
         notice = self.store.get("image-error:" + mid)
-        if notice and "未能显示" in notice["text"]:
+        if notice and ("未能显示" in notice["text"] or "附件保存或交付尚未完成" in notice["text"]):
             self.store.put(
                 notice["id"],
                 notice["session_id"],

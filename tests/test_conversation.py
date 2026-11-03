@@ -354,6 +354,29 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(m["kind"] == "message" and m["text"] == "检查完成。" for m in rows))
 
+    async def test_final_reference_does_not_duplicate_prior_final_messages(self):
+        c = self.host.conversation
+        for ident, text in (("one", "第一部分"), ("two", "第二部分")):
+            c.provider_event(
+                task_event(
+                    "activity.completed",
+                    {"run_id": "web", "item": {"type": "message", "id": ident, "text": text}},
+                )
+            )
+        reference = {"id": "result", "version": "v1"}
+        c.provider_event(
+            {
+                "kind": "turn_completed",
+                "turn_id": "web",
+                "status": "completed",
+                "result_ref": reference,
+                "result_preview": "第一部分\n\n第二部分",
+            }
+        )
+        rows = c.store.history(c.session)
+        self.assertEqual([row["text"] for row in rows], ["第一部分", "第二部分"])
+        self.assertEqual(rows[-1]["result_ref"], reference)
+
     async def test_restore_repairs_display_without_reordering_or_task_dispatch(self):
         c = self.host.conversation
         events = [

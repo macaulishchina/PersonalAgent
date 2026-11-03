@@ -1,7 +1,7 @@
 """Provider-neutral tool outcomes. Dispatch and business success are independent."""
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 
 @dataclass(frozen=True)
@@ -40,3 +40,11 @@ def invalid_arguments(message, field=None):
             next_action="correct_arguments",
         )
     )
+
+
+class ToolMediaReceipt(TypedDict):
+    """Framework retention/delivery evidence, independent of tool business outcome."""
+
+    state: Literal["ready", "partial", "failed"]
+    attachments: list[dict[str, Any]]
+    issues: list[dict[str, Any]]

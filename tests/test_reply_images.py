@@ -126,6 +126,33 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         self.host.backend.submit.assert_not_awaited()
         self.host.voice.say.assert_not_awaited()
 
+    async def test_framework_receipt_reuses_attachment_and_reports_storage_separately(self):
+        c = self.host.conversation
+        ref = await c.media.add_image(
+            base64.b64decode(picture()["data"]), "retained.png", mime_type="image/png"
+        )
+        item = provider_item([picture()], "retained")
+        item["item"]["result"]["details"] = {
+            "personal_agent.tool_media": {"state": "ready", "attachments": [ref], "issues": []}
+        }
+        c.provider_event(task_event("activity.completed", item))
+        await c.image_queue.join()
+        self.assertEqual(c.store.get("task:session:retained")["attachments"], [ref])
+        self.assertEqual(c.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 1)
+        item = provider_item([picture()], "unretained")
+        item["item"]["result"]["details"] = {
+            "personal_agent.tool_media": {
+                "state": "failed",
+                "attachments": [],
+                "issues": [{"code": "tool_media_retention_failed"}],
+            }
+        }
+        c.provider_event(task_event("activity.completed", item))
+        self.assertEqual(c.store.get("task:session:unretained")["status"], "complete")
+        self.assertIn("附件保存或交付尚未完成", c.store.get("image-error:task:session:unretained")["text"])
+        self.assertEqual(c.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 1)
+        self.host.backend.submit.assert_not_awaited()
+
     async def test_restart_recovers_existing_tool_picture_without_recapture(self):
         c = self.host.conversation
         wrapped = {"type": "text", "text": json.dumps({"content": [picture()]})}

@@ -6,6 +6,7 @@ import re
 NATIVE_TOOLS = frozenset(
     {
         "read",
+        "read_result",
         "write",
         "edit",
         "bash",

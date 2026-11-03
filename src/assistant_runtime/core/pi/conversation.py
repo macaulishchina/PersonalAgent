@@ -9,9 +9,24 @@ def tool_name(item):
     return item.get("tool", "")
 
 
+def tool_media_receipt(result):
+    details = result.get("details") if isinstance(result, dict) else None
+    receipt = details.get("personal_agent.tool_media") if isinstance(details, dict) else None
+    if (
+        isinstance(receipt, dict)
+        and receipt.get("state") in {"ready", "partial", "failed"}
+        and isinstance(receipt.get("attachments"), list)
+    ):
+        return receipt
+    return None
+
+
 def image_content(result, *, task_result=False):
     """Normalize native and JSON-wrapped MCP media; preserve durable asset refs."""
     images, attachments = [], []
+    receipt = tool_media_receipt(result)
+    if receipt:
+        return [], receipt["attachments"][:4]
 
     def visit(value, depth=0):
         if depth > 6 or not isinstance(value, dict):
@@ -58,6 +73,9 @@ def task_event(method, params):
         return {**common, "kind": "model_retry", "attempt": params.get("attempt")}
     if method == "run.completed":
         return {
+            "result_ref": params.get("result_ref"),
+            "result_preview": params.get("result"),
+            "result_delivery_error": params.get("result_delivery_error"),
             **common,
             "kind": "turn_completed",
             "status": params["run"].get("status", "unknown"),
@@ -105,6 +123,13 @@ def task_event(method, params):
     )
     event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
     if kind == "mcp" and method == "activity.completed":
+        raw_result = item.get("result")
+        delivery = raw_result.get("details", {}) if isinstance(raw_result, dict) else {}
+        if isinstance(delivery, dict):
+            event["result_ref"] = (delivery.get("personal_agent.result") or {}).get("reference")
+        receipt = tool_media_receipt(item.get("result"))
+        if receipt:
+            event["media_delivery"] = receipt
         display = tool_display(item)
         if display:
             event["tool_summary"] = display

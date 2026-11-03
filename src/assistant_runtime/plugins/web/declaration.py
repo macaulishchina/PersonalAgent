@@ -6,6 +6,7 @@ from .settings import WebSettings
 
 from assistant_runtime.api.contracts import TaskRequest, NotificationRequest
 from assistant_runtime.api.conversation import ConversationRequest
+from assistant_runtime.api.files import FileRequest
 
 
 def create(api):
@@ -21,6 +22,7 @@ DECLARATION = PluginDefinition(
     create=create,
     uses=(
         ConversationRequest,
+        FileRequest,
         TaskRequest,
         NotificationRequest,
     ),

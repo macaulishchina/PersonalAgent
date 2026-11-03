@@ -83,12 +83,16 @@ function renderChatShortcut() {
   if (entry.hidden) return;
   const plugins = fieldAt(["plugins"])?.loaded_value,
     enabled = fieldAt(["web", "enable"])?.loaded_value;
-  const address = plugins?.includes("web") && enabled &&
+  const address =
+    plugins?.includes("web") &&
+    enabled &&
     ["running", "degraded"].includes($("health").dataset.state)
-    ? new URL("/", location.origin).href : null;
+      ? new URL("/", location.origin).href
+      : null;
   entry.disabled = !address;
   entry.title = address || "聊天网页尚未生效或当前地址不可访问";
-  if (address) entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
+  if (address)
+    entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
 }
 function moveTo(page, tab) {
   if (page !== selected && hasLocalChanges()) {
@@ -120,7 +124,8 @@ async function leavePage(save) {
     if (save) await saveChanges();
     else {
       for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
-      for (const patch of pendingRestart?.patches || []) edits.set(key(patch.path), patch);
+      for (const patch of pendingRestart?.patches || [])
+        edits.set(key(patch.path), patch);
     }
     $("leave-dialog").close();
     pendingNavigation = null;
@@ -574,7 +579,9 @@ ${item.description}`;
         "p",
         kind === "providers"
           ? value.account
-            ? (providerAuthentication(value) === "oauth" ? "OAuth 登录 · " : "API Key · ") + value.account
+            ? (providerAuthentication(value) === "oauth"
+                ? "OAuth 登录 · "
+                : "API Key · ") + value.account
             : "API 连接 · " + (value.preset || value.protocol || "待配置")
           : value.model || "尚未填写模型 ID",
         "entity-description",
@@ -630,7 +637,113 @@ ${item.description}`;
     panel.append(filter, grid, empty);
   } else panel.append(grid);
 }
+function renderResultStorage() {
+  const panel = surface(
+      "结果存储",
+      "占用和清理依据已生效策略。永久保留不会自动删除；手动清理不重做任何任务。",
+    ),
+    status = node("p", "点击查看占用与清理预览。", "hint"),
+    list = node("div"),
+    actions = node("div", undefined, "result-storage-actions"),
+    body = node("div", undefined, "result-storage-body");
+  let preview = null;
+  const selectedIds = new Set();
+  const call = async (body) => {
+    const response = await fetch("/api/result-storage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "结果存储暂时不可用");
+    return data;
+  };
+  const display = (data) => {
+    preview = data;
+    status.textContent = `已用 ${(data.used_bytes / 1048576).toFixed(1)} MiB / ${(data.quota_bytes / 1048576).toFixed(0)} MiB；${data.protected_count} 项受保护；本次可清理 ${data.eligible_count} 项，共 ${(data.eligible_bytes / 1048576).toFixed(1)} MiB。`;
+    confirm.hidden = data.eligible_count === 0;
+    confirm.textContent = "确认清理以上结果";
+  };
+  const refresh = button("查看占用", async () => {
+    refresh.disabled = true;
+    try {
+      selectedIds.clear();
+      list.replaceChildren();
+      const data = await call({});
+      display(data);
+      const details = node("details"),
+        summary = node("summary", "选择结果手动清理（最多显示 1000 项）");
+      details.append(summary);
+      for (const item of data.results || []) {
+        const row = node("label", undefined, "result-storage-row"),
+          check = node("input");
+        check.type = "checkbox";
+        check.disabled = item.protected;
+        check.onchange = () => {
+          check.checked
+            ? selectedIds.add(item.id)
+            : selectedIds.delete(item.id);
+          preview = null;
+          confirm.hidden = true;
+        };
+        row.append(
+          check,
+          node(
+            "span",
+            `${item.id} · ${(item.bytes / 1024).toFixed(1)} KiB${item.protected ? " · 受保护" : ""}`,
+          ),
+        );
+        details.append(row);
+      }
+      list.append(details);
+    } catch (e) {
+      status.textContent = e.message;
+    } finally {
+      refresh.disabled = false;
+    }
+  });
+  const inspect = button("预览选中项清理", async () => {
+    if (!selectedIds.size) {
+      status.textContent = "请先选择需要清理的结果。";
+      return;
+    }
+    try {
+      display(await call({ ids: [...selectedIds] }));
+    } catch (e) {
+      status.textContent = e.message;
+    }
+  });
+  const confirm = button("确认清理以上结果", async () => {
+    if (!preview) return;
+    confirm.disabled = true;
+    try {
+      const data = await call({
+        apply: true,
+        confirmed: true,
+        version: preview.version,
+        ...(selectedIds.size ? { ids: [...selectedIds] } : {}),
+      });
+      status.textContent = `已清理 ${data.deleted} 项结果内容，执行记录保持不变。`;
+      preview = null;
+      confirm.hidden = true;
+      list.replaceChildren();
+    } catch (e) {
+      status.textContent = `${e.message}。请重新查看占用并预览。`;
+      preview = null;
+      confirm.hidden = true;
+    } finally {
+      confirm.disabled = false;
+    }
+  });
+  confirm.hidden = true;
+  actions.append(refresh, inspect, confirm);
+  body.append(status, actions, list);
+  panel.append(body);
+  $("documents").append(panel);
+}
+
 function renderSettingsPage() {
+  if (selected === "resources") renderResultStorage();
   const enabled = valueAt(["plugins"], []),
     all = snapshot.fields.filter(
       (f) => fieldGroup(f) === selected && interfaceVisible(f),
@@ -1342,9 +1455,12 @@ function providerTest(name) {
   status.hidden = true;
   status.setAttribute("role", "status");
   const provider = valueAt(["model_api", "providers"], {})[name];
-  const label = providerAuthentication(provider) === "oauth"
-    ? "检查登录"
-    : provider?.account ? "检查凭据" : "测试连接";
+  const label =
+    providerAuthentication(provider) === "oauth"
+      ? "检查登录"
+      : provider?.account
+        ? "检查凭据"
+        : "测试连接";
   const control = button(
     label,
     async () => {
@@ -1526,10 +1642,13 @@ function searchableSelect(label, filterLabel, identity, signal) {
   Object.defineProperty(root, "value", {
     get: () => selected,
     set: (value) => {
-      const row = [...list.children].find((item) => item.dataset.value === value);
+      const row = [...list.children].find(
+        (item) => item.dataset.value === value,
+      );
       selected = row ? value : "";
       trigger.textContent = row?.textContent || "请选择参考模型…";
-      for (const item of list.children) item.setAttribute("aria-pressed", String(item === row));
+      for (const item of list.children)
+        item.setAttribute("aria-pressed", String(item === row));
       root.dispatchEvent(new Event("change", { bubbles: true }));
     },
   });
@@ -1796,7 +1915,9 @@ function openAddEntity(kind) {
         p,
         p +
           " · " +
-          (providerAuthentication(item) === "oauth" ? "OAuth 登录" : "API Key") +
+          (providerAuthentication(item) === "oauth"
+            ? "OAuth 登录"
+            : "API Key") +
           (item.enabled ? "" : "（未启用）"),
       ];
     }),
@@ -1896,15 +2017,21 @@ function openConnectionWizard() {
   );
   const advanced = node("details", undefined, "connection-auth-options");
   advanced.append(node("summary", "高级适配"));
-  const nativeApi = formInput(advanced, "native-api", "使用 Pi 原生供应商适配", {
-    type: "checkbox",
-    hint: "仅在需要供应商专用接入时使用。仍使用 API Key，无需账号登录；模型目录来自 Pi 本地。",
-  });
+  const nativeApi = formInput(
+    advanced,
+    "native-api",
+    "使用 Pi 原生供应商适配",
+    {
+      type: "checkbox",
+      hint: "仅在需要供应商专用接入时使用。仍使用 API Key，无需账号登录；模型目录来自 Pi 本地。",
+    },
+  );
   form.append(advanced);
   const nativeKeyBox = node("fieldset", undefined, "wizard-route");
   form.append(nativeKeyBox);
   const nativeKey = connectionCredentials(nativeKeyBox, undefined, {
-    prefix: "setup-native", inputId: "setup-native-key",
+    prefix: "setup-native",
+    inputId: "setup-native-key",
   });
   const note = node("p", "", "inline-note");
   form.append(note);
@@ -1943,19 +2070,23 @@ function openConnectionWizard() {
       showNotice("此连接名称或账号名称已存在，请使用其他名称。");
       return;
     }
-    if (
-      useNative &&
-      !/^[a-z][a-z0-9_-]{0,63}$/.test(provider.value.trim())
-    ) {
+    if (useNative && !/^[a-z][a-z0-9_-]{0,63}$/.test(provider.value.trim())) {
       showNotice("请填写有效的供应商标识。");
       return;
     }
     const apiValue = apiFields.read();
     const nativeValue = nativeKey.read();
     const env = useNative ? nativeValue.reference : apiValue.provider.key_env;
-    const secret = oauth ? "" : useNative ? nativeValue.secret : apiValue.secret;
+    const secret = oauth
+      ? ""
+      : useNative
+        ? nativeValue.secret
+        : apiValue.secret;
     if (useNative) {
-      const account = { provider: provider.value.trim(), auth: oauth ? "oauth" : "api_key" };
+      const account = {
+        provider: provider.value.trim(),
+        auth: oauth ? "oauth" : "api_key",
+      };
       if (oauth && account.provider === "openai")
         account.output_limit = "model";
       if (!oauth) account.key_env = env;

@@ -75,10 +75,22 @@ class NotificationsPlugin:
             changes.append((channels["voice"], "settings", settings))
         return attributes(changes, ready=lambda: not self.maintenance_pending())
 
+    def result_protected(self, ident):
+        # Include prior revisions: a committed delivery owns its original version.
+        return bool(
+            self.repo.db.execute(
+                "SELECT 1 FROM notification_deliveries WHERE notification_id=? "
+                "AND state IN ('pending','inflight','unknown') LIMIT 1",
+                (ident,),
+            ).fetchone()
+        )
+
     async def start(self, context):
         if set(self.settings.channels) - self.channels.keys():
             raise ValueError("Configured notification channel is not registered")
         self.context = context
+        if getattr(self.host, "workfiles", None):
+            self.host.workfiles.results.protection_checks["notification"] = self.result_protected
         context.register(NotificationRequest, self.request)
         context.register(NotificationLink, self.link)
         for name, channel in self.channels.items():
@@ -230,7 +242,15 @@ class NotificationsPlugin:
         if request.caller_run and action not in {"publish", "update", "get", "list", "groups", "group"}:
             raise ValueError("Background tasks cannot mark user notifications read or retry delivery")
         if action in {"publish", "update"}:
-            payload = self.validate(args)
+            reference = args.get("result_ref")
+            payload = self.validate({k: v for k, v in args.items() if k != "result_ref"})
+            if reference:
+                from assistant_runtime.api.files import FileRequest
+
+                stored = await self.host.runtime.invoke(FileRequest("result_get", {"id": reference["id"]}))
+                if stored["version"] != reference["version"]:
+                    raise ValueError("Result version conflict")
+                payload["result_ref"] = {k: stored[k] for k in ("id", "version", "bytes")}
             source, origin = self.source(request.caller_run)
             if action == "update" and not args.get("id"):
                 raise ValueError("Update requires notification id")
@@ -281,7 +301,7 @@ class NotificationsPlugin:
                     payload["group"] = old["payload"]["group"]
                 payload["origin"] = old["payload"].get("origin", {})
             channels = policy.channels(payload, self.settings.channels)
-            return self.repo.publish(
+            published = self.repo.publish(
                 source,
                 args.get("event_key", ""),
                 payload,
@@ -289,6 +309,9 @@ class NotificationsPlugin:
                 ident=args.get("id"),
                 revision=args.get("revision"),
             )
+            if reference:
+                self.host.workfiles.results.hold(reference["id"], "notification:" + published["id"])
+            return published
         if action == "get":
             return (await self.describe([self.repo.get(args["id"])]))[0]
         if action == "list":

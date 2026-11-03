@@ -14,7 +14,7 @@ function canonical(value: any): string {
     );
   return JSON.stringify(value) ?? "null";
 }
-function ownerOutcome(result: any, depth = 0): any {
+export function ownerOutcome(result: any, depth = 0): any {
   if (!result || typeof result !== "object" || depth > 4) return undefined;
   const value =
     result._meta?.["personal_agent.tool_outcome"] || result.tool_outcome;

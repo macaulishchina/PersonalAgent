@@ -134,6 +134,40 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             {"kind": kind, "data": {"session_id": row["data"]["session_id"], **data}}
         )
 
+    async def test_tool_media_rejects_stale_turns_and_does_not_attach_after_cancel(self):
+        from test_tool_media import picture
+        from unittest.mock import patch
+
+        _, image = picture()
+        self.service.records.create("media-run", "operator", "media", {"turn_id": "turn"})
+        self.service.records.update("media-run", "running")
+        self.service.sessions["session"] = "media-run"
+        for session, turn in (("other", "turn"), ("session", "stale")):
+            with self.assertRaises(PermissionError):
+                await self.service.register_tool_media(session, turn, "call", [image])
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM chat_uploads").fetchone()[0], 0)
+        started, release = asyncio.Event(), asyncio.Event()
+        register = self.files.tool_media.register
+
+        async def blocked(*args, **kwargs):
+            started.set()
+            await release.wait()
+            return await register(*args, **kwargs)
+
+        with patch.object(self.files.tool_media, "register", side_effect=blocked):
+            pending = asyncio.create_task(
+                self.service.register_tool_media("session", "turn", "call", [image])
+            )
+            await started.wait()
+            self.service.records.update("media-run", "cancelled")
+            release.set()
+            with self.assertRaises(PermissionError):
+                await pending
+        self.assertNotIn("attachments", self.service.records.get("media-run")["data"])
+        self.assertFalse(
+            any(e["kind"] == "tool.media" for e in self.service.records.events("media-run")["items"])
+        )
+
     async def test_duplicate_conflict_queue_bound_and_queued_cancel(self):
         first, args = await self.submit()
         await self.client.starting.wait()

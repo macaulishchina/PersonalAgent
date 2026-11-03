@@ -60,8 +60,14 @@ class ConversationAccess:
         media = conversation.media
         row = media.db.execute("SELECT media_type FROM chat_uploads WHERE id=?", (ident,)).fetchone()
         path = media.folder / ident
-        if not row or row[0] not in {"image/jpeg", "video/mp4"} or not path.is_file():
+        if (
+            not row
+            or row[0] not in {"image/jpeg", "image/png", "image/webp", "video/mp4"}
+            or not path.is_file()
+        ):
             raise FileNotFoundError()
+        if media.on_read:
+            media.on_read(ident)
         return path, row[0]
 
     def expire_uploads(self):

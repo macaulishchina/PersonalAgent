@@ -10,7 +10,8 @@
   "requires_core": "core",
   "requires": {},
   "optional": {
-    "conversation": "core"
+    "conversation": "core",
+    "workfiles": "core"
   },
   "critical": false
 }

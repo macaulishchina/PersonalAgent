@@ -14,9 +14,11 @@ class ExecutionTransport:
         self.slots = asyncio.Semaphore(client.settings.concurrency)
 
     async def start(self):
-        app = web.Application(client_max_size=32 * 1024 * 1024)
+        app = web.Application(client_max_size=96 * 1024 * 1024)
         app.router.add_post("/v1/native", self.forward)
         app.router.add_post("/v1/resources", self.resources)
+        app.router.add_post("/v1/tool-result", self.tool_result)
+        app.router.add_post("/v1/result-read", self.result_read)
         self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=2, handler_cancellation=True)
         await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
@@ -41,6 +43,74 @@ class ExecutionTransport:
             if not token or not compare_digest(request.headers.get("x-assistant-control", ""), token):
                 raise web.HTTPForbidden()
         return worker
+
+    async def tool_result(self, request):
+        worker = self.authenticate(request)
+        if worker.meta.get("controlled_context") or not self.client.admission:
+            raise web.HTTPForbidden()
+        payload = await request.json()
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"call_id", "payload", "images"}
+            or not isinstance(payload["payload"], dict)
+            or not isinstance(payload["call_id"], str)
+            or len(payload["call_id"]) > 200
+        ):
+            raise web.HTTPBadRequest()
+        if payload["call_id"] not in worker.meta.get("pending_operations", {}):
+            raise web.HTTPConflict(reason="Tool call is not active")
+        turn = worker.active_turn
+        try:
+            receipt = await self.client.admission.service.register_tool_result(
+                worker.execution_session_id, turn, payload["call_id"], payload["payload"], payload["images"]
+            )
+            if self.authenticate(request) is not worker or worker.active_turn != turn:
+                raise web.HTTPConflict()
+            return web.json_response(receipt)
+        except PermissionError:
+            raise web.HTTPForbidden() from None
+        except (ValueError, OSError):
+            return web.json_response({"error": "result_registration_failed"}, status=400)
+
+    async def result_read(self, request):
+        from assistant_runtime.api.files import FileRequest
+        from assistant_runtime.api.results import ResultAccessError
+
+        worker = self.authenticate(request)
+        if worker.meta.get("controlled_context") or not self.client.admission:
+            raise web.HTTPForbidden()
+        payload = await request.json()
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"action", "arguments"}
+            or payload["action"] not in {"result_read", "result_get"}
+        ):
+            raise web.HTTPBadRequest()
+        service = self.client.admission.service
+        ident = service.sessions.get(worker.execution_session_id)
+        if not ident:
+            raise web.HTTPForbidden()
+        owner = service.records.get(ident)["owner"]
+        arguments = payload["arguments"]
+        if not isinstance(arguments, dict):
+            raise web.HTTPBadRequest()
+        turn = worker.active_turn
+        length = arguments.get("length", 6000)
+        if (
+            arguments.get("format", "text") not in {"text", "json"}
+            or type(length) is not int
+            or not 1 <= length <= 6000
+        ):
+            raise web.HTTPBadRequest()
+        try:
+            result = await service.files.results.request(
+                FileRequest(payload["action"], arguments), owner=owner, model_limit=6000
+            )
+            if self.authenticate(request) is not worker or worker.active_turn != turn:
+                raise web.HTTPConflict()
+            return web.json_response(result)
+        except ResultAccessError as error:
+            return web.json_response({"error": error.code}, status=400)
 
     async def resources(self, request):
         worker = self.authenticate(request)

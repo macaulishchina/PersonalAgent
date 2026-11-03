@@ -2,6 +2,7 @@
 
 from .configuration import ConfigurationSpec
 from .files import FileRequest
+from .results import ResultReference, ResultAccessError
 from .control import ExecutionControl
 from .runs import ExecutionRequest
 from .conversation import ConversationRequest
@@ -29,4 +30,6 @@ __all__ = [
     "ExecutionControl",
     "ConversationRequest",
     "FileRequest",
+    "ResultReference",
+    "ResultAccessError",
 ]

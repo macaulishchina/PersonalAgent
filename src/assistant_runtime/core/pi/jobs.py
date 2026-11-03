@@ -286,10 +286,11 @@ class PiJobs:
                 self.backend.server_tasks.add(task)
                 task.add_done_callback(self.backend.server_tasks.discard)
         elif method == "activity.completed" and p.get("item", {}).get("type") == "message":
-            text = p["item"].get("text", "")[:16000]
+            text = p["item"].get("text", "")
             self.notify(ident, None, progress=text)
             if p["item"].get("phase") != "commentary":
-                self.handles.setdefault(ident, {})["result"] = text
+                handle = self.handles.setdefault(ident, {})
+                handle["result"] = "\n".join(filter(None, (handle.get("result", ""), text)))
         elif method == "run.completed":
             status = p["run"]["status"]
             state = {"completed": "completed", "interrupted": "canceled", "failed": "failed"}.get(
@@ -304,7 +305,10 @@ class PiJobs:
                 ai_usage=p["run"].get("ai_usage"),
                 model_failure=model_failure(p["run"].get("error")) if state == "failed" else None,
                 turn_active=False,
-                result=self.handles.get(ident, {}).get("result", ""),
+                result=p.get("result", self.handles.get(ident, {}).get("result", "")),
+                progress=p.get("result", self.handles.get(ident, {}).get("result", "")),
+                result_ref=p.get("result_ref"),
+                result_delivery_error=p.get("result_delivery_error"),
             )
         elif method == "usage.updated":
             usage = p.get("usage", {})

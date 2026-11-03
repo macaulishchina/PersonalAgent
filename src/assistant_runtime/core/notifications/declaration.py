@@ -1,4 +1,5 @@
 from assistant_runtime.api.contracts import NotificationRequest, NotificationLink, TaskRequest
+from assistant_runtime.api.files import FileRequest
 from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import NotificationSettings
@@ -15,7 +16,7 @@ DECLARATION = PluginDefinition(
         NotificationRequest,
         NotificationLink,
     ),
-    uses=(TaskRequest,),
+    uses=(TaskRequest, FileRequest),
     configuration=configuration_spec(__file__),
     manifest=plugin_manifest(__file__),
     internal_factory=build,

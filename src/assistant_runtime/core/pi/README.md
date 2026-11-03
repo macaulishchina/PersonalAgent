@@ -82,15 +82,28 @@ independent of ordinary `timeout_seconds`. The host enforces the deadline on bot
 Responses and native-account routes; Pi's outer provider timeout permits this longer
 maintenance operation. The provider adapter still owns the only execution loop.
 
-Tool text exceeding `model_api.tool_result_max_chars` (default 6000 characters) is saved
-in private `tool-results/*.json` under the execution working directory. Pi receives a
-partial preview and a reference to the received content, including structured output.
-Image blocks and error status are preserved. The preview explicitly cannot establish
-absence or success. Read selected ranges/fields instead of repeatedly dumping entire
-files. This operates across tools, not through media-specific rules. If the execution
-cannot read local files, or saving fails, the original result is retained; a completed
-business action must not appear failed or become unreadable because of presentation.
-An upstream's own truncation cannot be undone by this layer.
+Tool text/structured content exceeding `model_api.tool_result_max_chars` (default
+6000 characters) is retained by workfiles under a stable execution/call result ID.
+This is a model-visible **preview** budget, never a model output limit. Original
+native image bytes stay attached and do not consume that text budget. The private
+`/tool-result` transport binds the current worker, admission, turn and pending call.
+Controlled contexts keep their separate publication boundary.
+
+Pi's `tool_result` hook returns an explicitly labelled head/tail excerpt and owner
+outcome evidence; `read_result` reads authorized text ranges or JSON-pointer pages
+without running the tool again. Explicit tool allowlists must include `read_result`
+to use text externalization; otherwise original text stays available. Readers never
+externalize their own output. Missing/expired/corrupt/forbidden are distinct errors.
+Ordinary short results remain native, requiring neither a file nor a model round trip.
+Unreachable storage leaves original content available with a separate delivery error.
+An upstream's own truncation cannot be undone or silently called complete here.
+
+Retained projections are appended once; subsequent reads are new tool messages.
+No historical replacement, automatic summary inference or cache warming is introduced.
+Result IDs/version digests and deterministic serialization remain stable. Existing Pi
+input/cache usage telemetry is unchanged; savings require measurement, not an assumed
+cache hit rate. Result reads produce normal bounded tool events; storage usage is
+available through `FileRequest(result_usage)`.
 
 Pi retains the original context until a summary completes. Compaction failure is
 reported as `context_compaction_failed`, not a successful task and not an unknown tool
@@ -282,3 +295,23 @@ SDK 与 Agent 重试均为零。`attempts.py` 通过已有私有 JSONL 通道逐
 验收：`python scripts/check.py --test test_model_reliability` 使用真实 Pi/SDK 和本地合成
 HTTP 服务验证重试、逐次计量、取消、部分输出、文件工具结果及人工恢复。
 `scripts/verify_web_composer.py` 验证错误详情和重试按钮。合成通过不等于供应商故障实测。
+
+### 工具图片与操作结果分开确认
+
+`tool_media.ts` 在统一 `tool_result` 边界识别原生图片块及已有 JSON 结果包中的
+图片。它通过现有鉴权本地传输交给 execution/workfiles，在下一次模型请求前完成
+留存；不启动另一个 MCP 操作、执行循环或网络文件下载。传输校验活动执行、轮次
+和工具调用；请求不能指定所有者或保存路径。原图块、业务 `isError` 和工具操作回执
+保留，附件失败不会改变业务调用结论。非图片结果不增加登记请求。
+
+框架保留的 `details["personal_agent.tool_media"]` 以及简短文字回执说明附件状态、
+登记引用、产物路径、字节数及摘要；上游自填同名元数据不能冒充此证据。
+状态为 `ready/partial/failed`，只描述文件留存，不表示用户已经看过图片或外部操作
+成功。主对话和任务投影复用登记 ID，slim 执行查询也能读取附件及产物。
+图片已留存时，无需为“展示给用户”再调用外部保存工具；用户明确要求指定目标时
+仍可进行另行导出。存储故障单独报告，禁止为补附件重做原操作。
+
+此改动不调整长文本截断计数和历史上下文压缩策略。登记失败有有界等待，
+不自动重试设备或媒体操作；取消、迟到结果不能附到另一轮执行。
+`test_tool_media` 通过锁定 Pi＋本地合成 MCP 验证留存先于下一模型请求，
+并覆盖普通对话、独立执行、文件故障及来源元数据；不代表真实设备验收。

@@ -43,16 +43,28 @@ let snapshot,
   resourceInventory = [],
   selected = "overview",
   saving = false;
-let configurationBusy = false, needsRetry = false, pendingRestart = null;
+let configurationBusy = false,
+  needsRetry = false,
+  pendingRestart = null;
 let showInactive = false;
 const openEntries = new Set();
 const resourceEdits = new Map();
-const dirty = () => edits.size + resourceEdits.size + (pendingRestart?.opaque_count || 0);
+const dirty = () =>
+  edits.size + resourceEdits.size + (pendingRestart?.opaque_count || 0);
 const edits = new Map();
 function hasLocalChanges() {
-  const retained = new Map((pendingRestart?.patches || []).map(p => [key(p.path), p]));
-  return invalid.size || resourceEdits.size || edits.size !== retained.size ||
-    [...edits].some(([id, patch]) => JSON.stringify(patch) !== JSON.stringify(retained.get(id)));
+  const retained = new Map(
+    (pendingRestart?.patches || []).map((p) => [key(p.path), p]),
+  );
+  return (
+    invalid.size ||
+    resourceEdits.size ||
+    edits.size !== retained.size ||
+    [...edits].some(
+      ([id, patch]) =>
+        JSON.stringify(patch) !== JSON.stringify(retained.get(id)),
+    )
+  );
 }
 const invalid = new Map();
 const drafts = new Map();
@@ -306,8 +318,13 @@ function updateSaveBar() {
     : dirty()
       ? `${dirty()} 项未保存`
       : "没有未保存的修改";
-  $("save").disabled = saving || configurationBusy || (!dirty() && !needsRetry) || Boolean(invalid.size);
-  $("save").textContent = saving || configurationBusy ? "保存并生效中…" : "保存并生效";
+  $("save").disabled =
+    saving ||
+    configurationBusy ||
+    (!dirty() && !needsRetry) ||
+    Boolean(invalid.size);
+  $("save").textContent =
+    saving || configurationBusy ? "保存并生效中…" : "保存并生效";
   $("discard").disabled = saving || (!dirty() && !invalid.size);
   for (const id of ["refresh", "history", "password-open"])
     $(id).disabled = saving;
@@ -500,6 +517,44 @@ function drawField(field) {
   bottom.append(fieldSource(field));
   if (!rule.readOnly) bottom.append(resetControl(field, secret));
   else bottom.append(node("span", "仅本机维护", "hint"));
+  if (
+    JSON.stringify(path) ===
+    JSON.stringify(["work_files", "result_retention_days"])
+  ) {
+    const mode = node("select"),
+      days = node("select");
+    mode.id = id;
+    mode.setAttribute("aria-label", "结果保留方式");
+    days.setAttribute("aria-label", "自动删除时间");
+    for (const [v, label] of [
+      ["0", "永久保留"],
+      ["auto", "自动删除"],
+    ]) {
+      const option = node("option", label);
+      option.value = v;
+      mode.append(option);
+    }
+    for (const [v, label] of [
+      [7, "7 天"],
+      [30, "30 天"],
+      [365, "1 年"],
+    ]) {
+      const option = node("option", label);
+      option.value = String(v);
+      days.append(option);
+    }
+    mode.value = Number(value || 0) === 0 ? "0" : "auto";
+    days.value = String(value || 30);
+    days.hidden = mode.value === "0";
+    mode.onchange = () => {
+      days.hidden = mode.value === "0";
+      changed(path, "set", mode.value === "0" ? 0 : Number(days.value));
+    };
+    days.onchange = () => changed(path, "set", Number(days.value));
+    control.append(mode, days);
+    row.append(copy, control, bottom);
+    return row;
+  }
   const objectForm =
     rule.type === "object" &&
     (rule.properties || Object.keys(rule.additionalProperties || {}).length) &&
@@ -987,7 +1042,8 @@ function render() {
 }
 async function load({ discardLocal = false } = {}) {
   if (
-    !discardLocal && hasLocalChanges() &&
+    !discardLocal &&
+    hasLocalChanges() &&
     !confirm("重新加载会放弃尚未保存的编辑，是否继续？")
   )
     return;
@@ -1011,7 +1067,8 @@ async function load({ discardLocal = false } = {}) {
   }
   edits.clear();
   pendingRestart = config.pending_restart;
-  for (const patch of pendingRestart?.patches || []) edits.set(key(patch.path), patch);
+  for (const patch of pendingRestart?.patches || [])
+    edits.set(key(patch.path), patch);
   invalid.clear();
   drafts.clear();
   $("diagnostics").replaceChildren(
@@ -1101,49 +1158,81 @@ $("password-change").addEventListener("submit", (e) => {
   });
 });
 $("refresh").addEventListener("click", () => action(load));
-$("discard").addEventListener("click", () => action(async () => {
-  if (pendingRestart) await api("/api/configuration/discard", {pending_id: pendingRestart.id});
-  await load({discardLocal: true});
-  showNotice("已放弃修改。", 4000);
-}));
+$("discard").addEventListener("click", () =>
+  action(async () => {
+    if (pendingRestart)
+      await api("/api/configuration/discard", {
+        pending_id: pendingRestart.id,
+      });
+    await load({ discardLocal: true });
+    showNotice("已放弃修改。", 4000);
+  }),
+);
 function askRestart() {
   if (!pendingRestart) return;
-  $("restart-summary").textContent = `还有 ${pendingRestart.count} 项修改需要重启；无需重启的设置已处理完成。`;
+  $("restart-summary").textContent =
+    `还有 ${pendingRestart.count} 项修改需要重启；无需重启的设置已处理完成。`;
   showDialog("restart-dialog");
 }
 async function waitForApplication() {
   for (;;) {
-    const status = await api("/api/status"), application = status.application || {};
-    if (!["preparing", "waiting", "applying", "recovering", "cancelling", "restarting"].includes(application.phase)) {
-      if (application.phase === "failed") throw Object.assign(
-        Error((application.issues || []).map(i => i.message).join("；") || "设置未能生效，原运行配置已保留。请重试保存；如仍失败，请检查日志。"),
-        {issues: application.issues || []});
-      if (application.phase === "pending_restart") throw Error("这些修改需要一起重启才能应用，请重新保存后确认重启。");
+    const status = await api("/api/status"),
+      application = status.application || {};
+    if (
+      ![
+        "preparing",
+        "waiting",
+        "applying",
+        "recovering",
+        "cancelling",
+        "restarting",
+      ].includes(application.phase)
+    ) {
+      if (application.phase === "failed")
+        throw Object.assign(
+          Error(
+            (application.issues || []).map((i) => i.message).join("；") ||
+              "设置未能生效，原运行配置已保留。请重试保存；如仍失败，请检查日志。",
+          ),
+          { issues: application.issues || [] },
+        );
+      if (application.phase === "pending_restart")
+        throw Error("这些修改需要一起重启才能应用，请重新保存后确认重启。");
       return application;
     }
-    await new Promise(resolve => setTimeout(resolve, 750));
+    await new Promise((resolve) => setTimeout(resolve, 750));
   }
 }
 async function saveChanges() {
-  if (invalid.size) throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
+  if (invalid.size)
+    throw Error("请先修正字段格式：" + [...invalid.values()].join("、"));
   if (!dirty() && !needsRetry) return;
   saving = true;
   $("notice").textContent = "";
   updateSaveBar();
   try {
     const saved = await api("/api/configuration", {
-      version: snapshot.version, patches: [...edits.values()],
-      resources: [...resourceEdits.values()], pending_id: pendingRestart?.id || null,
+      version: snapshot.version,
+      patches: [...edits.values()],
+      resources: [...resourceEdits.values()],
+      pending_id: pendingRestart?.id || null,
     });
     // The server has committed a new file revision even if a module cannot switch.
     // Keep the editable candidate for an explicit retry; never resubmit an old revision.
     snapshot.version = saved.version;
     pendingRestart = saved.pending_restart;
     const applied = saved.application ? await waitForApplication() : {};
-    await load({discardLocal: true});
+    await load({ discardLocal: true });
     if (pendingRestart) askRestart();
-    else showNotice(applied.phase === "pending_start" ? "保存成功，下次启动时生效。" :
-      applied.phase === "partially_applied" ? "保存成功；部分功能仍需处理，请查看实例日志。" : "保存成功，设置已生效。", 6000);
+    else
+      showNotice(
+        applied.phase === "pending_start"
+          ? "保存成功，下次启动时生效。"
+          : applied.phase === "partially_applied"
+            ? "保存成功；部分功能仍需处理，请查看实例日志。"
+            : "保存成功，设置已生效。",
+        6000,
+      );
   } finally {
     saving = false;
     await applicationStatus().catch(() => {});
@@ -1154,27 +1243,32 @@ $("restart-later").addEventListener("click", () => {
   $("restart-dialog").close();
   showNotice("无需重启的修改已生效，其余修改保留在变更记录中。", 6000);
 });
-$("restart-confirm").addEventListener("click", () => action(async () => {
-  if (!pendingRestart) return;
-  saving = true;
-  $("restart-confirm").disabled = true;
-  updateSaveBar();
-  try {
-    const saved = await api("/api/configuration/restart", {version: snapshot.version,
-      pending_id: pendingRestart.id, confirmed: true});
-    snapshot.version = saved.version;
-    $("restart-dialog").close();
-    showNotice("正在重启并应用设置…");
-    await waitForApplication();
-    await load({discardLocal: true});
-    showNotice("保存成功，重启后设置已生效。", 6000);
-  } finally {
-    saving = false;
-    $("restart-confirm").disabled = false;
-    await applicationStatus().catch(() => {});
+$("restart-confirm").addEventListener("click", () =>
+  action(async () => {
+    if (!pendingRestart) return;
+    saving = true;
+    $("restart-confirm").disabled = true;
     updateSaveBar();
-  }
-}));
+    try {
+      const saved = await api("/api/configuration/restart", {
+        version: snapshot.version,
+        pending_id: pendingRestart.id,
+        confirmed: true,
+      });
+      snapshot.version = saved.version;
+      $("restart-dialog").close();
+      showNotice("正在重启并应用设置…");
+      await waitForApplication();
+      await load({ discardLocal: true });
+      showNotice("保存成功，重启后设置已生效。", 6000);
+    } finally {
+      saving = false;
+      $("restart-confirm").disabled = false;
+      await applicationStatus().catch(() => {});
+      updateSaveBar();
+    }
+  }),
+);
 $("save").addEventListener("click", () => action(saveChanges));
 $("history").addEventListener("click", () =>
   action(async () => {
@@ -1182,11 +1276,21 @@ $("history").addEventListener("click", () =>
     $("versions").replaceChildren();
     if (dirty()) {
       const current = node("article");
-      current.append(node("h3", "当前修改"), node("p", [
-        ...new Set([...edits.values()].map(p => p.path.join("."))),
-        ...new Set([...resourceEdits.values()].map(p => "resource:" + p.id)),
-        ...(pendingRestart?.labels || []),
-      ].filter((item,index,all) => all.indexOf(item) === index).join("、")));
+      current.append(
+        node("h3", "当前修改"),
+        node(
+          "p",
+          [
+            ...new Set([...edits.values()].map((p) => p.path.join("."))),
+            ...new Set(
+              [...resourceEdits.values()].map((p) => "resource:" + p.id),
+            ),
+            ...(pendingRestart?.labels || []),
+          ]
+            .filter((item, index, all) => all.indexOf(item) === index)
+            .join("、"),
+        ),
+      );
       $("versions").append(current);
     }
     if (!history.versions.length)
@@ -1280,12 +1384,29 @@ async function applicationStatus() {
   const status = await api("/api/status"),
     application = status.application || { phase: "idle" };
   if ($("editor").hidden) return;
-  configurationBusy = ["preparing", "waiting", "applying", "recovering", "cancelling", "restarting"].includes(application.phase);
+  configurationBusy = [
+    "preparing",
+    "waiting",
+    "applying",
+    "recovering",
+    "cancelling",
+    "restarting",
+  ].includes(application.phase);
   updateSaveBar();
-  needsRetry = Boolean(!configurationBusy && snapshot && status.loaded_version &&
-    status.loaded_version !== snapshot.version && application.phase !== "pending_start");
-  $("state").textContent = configurationBusy ? "正在保存并生效…" : needsRetry ? "有保存的修改尚未生效，请重试保存。" : "";
-  document.querySelector(".configuration-state").hidden = !configurationBusy && !needsRetry;
+  needsRetry = Boolean(
+    !configurationBusy &&
+    snapshot &&
+    status.loaded_version &&
+    status.loaded_version !== snapshot.version &&
+    application.phase !== "pending_start",
+  );
+  $("state").textContent = configurationBusy
+    ? "正在保存并生效…"
+    : needsRetry
+      ? "有保存的修改尚未生效，请重试保存。"
+      : "";
+  document.querySelector(".configuration-state").hidden =
+    !configurationBusy && !needsRetry;
   updateSaveBar();
   $("health").textContent =
     {
@@ -1376,7 +1497,8 @@ function resourceGroup(resource) {
 function drawResources(target = $("documents"), filter) {
   const resources = resourceInventory.filter(
     (r) =>
-      r.kind !== "asset" && r.id !== "mcp" &&
+      r.kind !== "asset" &&
+      r.id !== "mcp" &&
       (filter ? filter(r) : resourceGroup(r) === selected),
   );
   if (!resources.length) return;
@@ -1557,7 +1679,13 @@ async function drawAccounts() {
       actions = node("div", undefined, "account-actions");
     title.append(
       node("strong", account.name),
-      node("span", account.provider + " · " + (account.auth === "oauth" ? "OAuth 登录" : "API Key"), "hint"),
+      node(
+        "span",
+        account.provider +
+          " · " +
+          (account.auth === "oauth" ? "OAuth 登录" : "API Key"),
+        "hint",
+      ),
     );
     row.append(title);
     actions.append(button("编辑", () => openEntity("accounts", account.name)));

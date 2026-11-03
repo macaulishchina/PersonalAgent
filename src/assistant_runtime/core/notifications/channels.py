@@ -78,6 +78,7 @@ class ChatChannel:
             kind="notification",
             status="complete",
             text=content(item),
+            result_ref=item["payload"].get("result_ref"),
             turn_id="notification:" + item["id"],
             attachments=attachments,
             task_id=origin.get("task_id")

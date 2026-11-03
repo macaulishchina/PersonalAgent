@@ -1,6 +1,5 @@
 """Real Pi subprocess acceptance against a private synthetic model endpoint."""
 
-from platform_support import private_mode
 from assistant_runtime.platforms.executables import command_tools
 
 import asyncio
@@ -477,14 +476,11 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
         results = [item for item in body["input"] if item.get("type") == "function_call_output"]
         self.assertEqual(len(results), 1)
         preview = json.dumps(results[0], ensure_ascii=False)
-        self.assertLess(len(preview), 7500)
-        self.assertIn("Partial tool result preview", preview)
-        files = list(self.root.glob("tool-results/*.json"))
-        self.assertEqual(len(files), 1)
-        saved = json.loads(files[0].read_text())
-        self.assertGreater(len(saved["content"][0]["text"]), 11000)
-        self.assertFalse(saved["is_error"])
-        self.assertEqual(private_mode(files[0]), 0o600)
+        # A standalone PiClient has no admitted framework result store. Preserve the
+        # full returned evidence and report retention failure; never fabricate a file.
+        self.assertGreater(len(preview), 11000)
+        self.assertIn("result_delivery_unavailable", preview)
+        self.assertFalse(list(self.root.glob("tool-results/*.json")))
         self.assertEqual(len(self.gateway.requests), 2)
 
     async def test_slow_first_response_and_stream_use_configured_total_deadline(self):

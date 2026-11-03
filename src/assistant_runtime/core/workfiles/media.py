@@ -16,6 +16,7 @@ MAX_BYTES = 10 * 1024 * 1024
 
 class MediaAttachments:
     def __init__(self, state_dir, db):
+        self.on_read = None
         self.folder, self.db = state_dir / "web-uploads", db
         self.recordings = state_dir / "video-recordings"
         db.execute(
@@ -41,7 +42,7 @@ class MediaAttachments:
                 media.append({"id": ident, "name": row[0], "type": row[1]})
         return media
 
-    def prepare(self, data, key):
+    def prepare(self, data, key, mime_type=None):
         from PIL import Image, ImageOps
 
         if not data or len(data) > MAX_BYTES:
@@ -49,11 +50,19 @@ class MediaAttachments:
         with Image.open(io.BytesIO(data)) as image:
             if image.format not in ("JPEG", "PNG", "WEBP") or image.width * image.height > 20_000_000:
                 raise ValueError("请使用不超过 2000 万像素的 JPEG、PNG 或 WebP 图片")
-            image = ImageOps.exif_transpose(image)
-            image.thumbnail((2048, 2048))
-            image = image.convert("RGB")
-            normalized = io.BytesIO()
-            image.save(normalized, format="JPEG", quality=90)
+            if mime_type is not None:
+                actual = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[image.format]
+                if mime_type != actual:
+                    raise ValueError("Image media type does not match its bytes")
+                image.verify()
+                stored = bytes(data)
+            else:
+                image = ImageOps.exif_transpose(image)
+                image.thumbnail((2048, 2048))
+                image = image.convert("RGB")
+                normalized = io.BytesIO()
+                image.save(normalized, format="JPEG", quality=90)
+                stored = normalized.getvalue()
         ident = hashlib.sha256(key.encode() + b"\0" + data).hexdigest()[:32] if key else uuid.uuid4().hex
         self.folder.mkdir(parents=True, mode=0o700, exist_ok=True)
         path = self.folder / ident
@@ -62,7 +71,7 @@ class MediaAttachments:
             with tempfile.NamedTemporaryFile(dir=self.folder, delete=False) as f:
                 temporary = Path(f.name)
                 try:
-                    f.write(normalized.getvalue())
+                    f.write(stored)
                     system.private(temporary)
                     f.close()  # Flush and release the handle before Windows rename.
                     temporary.replace(path)
@@ -71,10 +80,10 @@ class MediaAttachments:
                     temporary.unlink(missing_ok=True)
         return ident, created
 
-    async def add_image(self, data, name, *, key=None, attached=False):
+    async def add_image(self, data, name, *, key=None, attached=False, mime_type=None):
         # Finish the bounded worker before owned cleanup; never leave a late write
         # racing service restart or the expiration sweep.
-        worker = asyncio.create_task(asyncio.to_thread(self.prepare, bytes(data), key))
+        worker = asyncio.create_task(asyncio.to_thread(self.prepare, bytes(data), key, mime_type))
         try:
             ident, created = await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -90,7 +99,7 @@ class MediaAttachments:
             with self.db:
                 self.db.execute(
                     "INSERT OR IGNORE INTO chat_uploads VALUES(?,?,?,?,?)",
-                    (ident, filename, "image/jpeg", time.time(), int(attached)),
+                    (ident, filename, mime_type or "image/jpeg", time.time(), int(attached)),
                 )
                 if attached:
                     self.db.execute("UPDATE chat_uploads SET attached=1 WHERE id=?", (ident,))
@@ -98,7 +107,7 @@ class MediaAttachments:
             if created:
                 (self.folder / ident).unlink(missing_ok=True)
             raise
-        return {"id": ident, "name": filename, "type": "image/jpeg"}
+        return {"id": ident, "name": filename, "type": mime_type or "image/jpeg"}
 
     async def add_video(self, clip, name):
         """Adopt only a trusted, completed local recording; never a model file path."""
@@ -169,4 +178,7 @@ class MediaAttachments:
 
     def image_bytes(self, ident):
         self.image_record(ident)
-        return (self.folder / ident).read_bytes()
+        data = (self.folder / ident).read_bytes()
+        if self.on_read:
+            self.on_read(ident)
+        return data

@@ -40,6 +40,8 @@ class ConversationStore:
 
         if "failure" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
             self.db.execute("ALTER TABLE chat_messages ADD COLUMN failure TEXT")
+        if "result_ref" not in {row[1] for row in self.db.execute("PRAGMA table_info(chat_messages)")}:
+            self.db.execute("ALTER TABLE chat_messages ADD COLUMN result_ref TEXT")
         self.db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS conversation_retry_target "
             "ON conversation_queue(session_id,json_extract(payload,'$.retry_of')) "
@@ -90,11 +92,13 @@ class ConversationStore:
             "tool_summary",
             "task_id",
             "failure",
+            "result_ref",
         )
         result = dict(zip(keys, row))
         result["attachments"] = json.loads(result["attachments"])
         result["tool_summary"] = json.loads(result["tool_summary"]) if result["tool_summary"] else None
         result["failure"] = json.loads(result["failure"]) if result["failure"] else None
+        result["result_ref"] = json.loads(result["result_ref"]) if result["result_ref"] else None
         return result
 
     def attachment_sessions(self, ident):
@@ -135,18 +139,31 @@ class ConversationStore:
         tool_summary=None,
         task_id=None,
         failure=None,
+        result_ref=None,
         commit=True,
         new_ordinal=False,
     ):
         old = self.get(ident)
         if old and old["session_id"] != session:
             raise ValueError("Message belongs to another session")
-        text = text[:200000]
         attachments = attachments if attachments is not None else (old["attachments"] if old else [])
         tool_summary = tool_summary if tool_summary is not None else (old["tool_summary"] if old else None)
         task_id = task_id if task_id is not None else (old["task_id"] if old else None)
         failure = failure if failure is not None else (old["failure"] if old else None)
-        values = (role, source, kind, text, status, turn_id, attachments, tool_summary, task_id, failure)
+        result_ref = result_ref if result_ref is not None else (old["result_ref"] if old else None)
+        values = (
+            role,
+            source,
+            kind,
+            text,
+            status,
+            turn_id,
+            attachments,
+            tool_summary,
+            task_id,
+            failure,
+            result_ref,
+        )
         if (
             old
             and not new_ordinal
@@ -164,6 +181,7 @@ class ConversationStore:
                     "tool_summary",
                     "task_id",
                     "failure",
+                    "result_ref",
                 )
             )
         ):
@@ -177,12 +195,12 @@ class ConversationStore:
                 self.db.execute("DELETE FROM chat_events WHERE seq < ?", (seq - 20000,))
             self.db.execute(
                 """INSERT INTO chat_messages
-                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id,failure)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (id,session_id,ordinal,role,source,kind,text,status,turn_id,attachments,updated,tool_summary,task_id,failure,result_ref)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET ordinal=excluded.ordinal,role=excluded.role,source=excluded.source,
                 kind=excluded.kind,text=excluded.text,status=excluded.status,
                 turn_id=excluded.turn_id,attachments=excluded.attachments,updated=excluded.updated,
-                tool_summary=excluded.tool_summary,task_id=excluded.task_id,failure=excluded.failure""",
+                tool_summary=excluded.tool_summary,task_id=excluded.task_id,failure=excluded.failure,result_ref=excluded.result_ref""",
                 (
                     ident,
                     session,
@@ -193,6 +211,7 @@ class ConversationStore:
                     json.dumps(tool_summary) if tool_summary is not None else None,
                     task_id,
                     json.dumps(failure) if failure is not None else None,
+                    json.dumps(result_ref) if result_ref is not None else None,
                 ),
             )
         return self.get(ident)

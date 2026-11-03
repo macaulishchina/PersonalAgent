@@ -20,7 +20,7 @@ class Turn:
             del self.messages[next(iter(self.messages))]
         self.progress = item.get("text", "")[:16000]
         if item.get("phase") != "commentary":
-            self.result = self.progress
+            self.result = "\n\n".join(filter(None, (self.result, item.get("text", ""))))
         return True
 
 

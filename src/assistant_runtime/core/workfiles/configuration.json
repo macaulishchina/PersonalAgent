@@ -42,6 +42,34 @@
             "maximum": 1099511627776,
             "x-advanced": true,
             "description": "默认 512 MiB。0 禁止新发布；每次发布预留最多 64 MiB。降低上限不删除已有产物，已过期产物由维护任务回收。"
+          },
+          "result_retention_days": {
+            "type": "integer",
+            "title": "结果保留时间",
+            "default": 0,
+            "enum": [
+              0,
+              7,
+              30,
+              365
+            ],
+            "description": "0 表示永久保留；自动删除可选 7 天、30 天、1 年。按最后成功读取计算；活动执行和待交付结果受保护。保存配置不立即清理。"
+          },
+          "result_storage_bytes": {
+            "type": "integer",
+            "title": "结果存储容量（字节）",
+            "default": 536870912,
+            "minimum": 0,
+            "maximum": 1099511627776,
+            "description": "容量不足会报告留存受限；不会提前删除未到期或受保护的结果。"
+          },
+          "result_max_bytes": {
+            "type": "integer",
+            "title": "单份结果上限（字节）",
+            "default": 67108864,
+            "minimum": 1,
+            "maximum": 1073741824,
+            "x-advanced": true
           }
         }
       }

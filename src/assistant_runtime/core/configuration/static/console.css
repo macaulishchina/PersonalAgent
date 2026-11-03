@@ -2834,3 +2834,23 @@ dialog.wide-dialog {
   margin: 5px 0;
   overflow-wrap: anywhere;
 }
+
+
+.result-storage-body {
+  padding: 20px 24px;
+  display: grid;
+  gap: 16px;
+}
+.result-storage-body > .hint { margin: 0; }
+.result-storage-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.result-storage-body summary { color: var(--muted); cursor: pointer; }
+.result-storage-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.result-storage-row input { flex: none; }
+.field-control:has([aria-label="结果保留方式"]) { display: grid; gap: 10px; }

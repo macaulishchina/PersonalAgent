@@ -161,6 +161,7 @@ class Console:
                 web.post("/api/configuration/restart", self.restart),
                 web.get("/api/catalog", self.describe),
                 web.get("/api/resources", self.resources),
+                web.post("/api/result-storage", self.result_storage),
                 web.get("/api/accounts", self.account_inventory),
                 web.post("/api/account", self.account_action),
                 web.post("/api/provider-query", self.provider_query),
@@ -423,6 +424,27 @@ class Console:
         async with self.writes:
             self.writable()
             return web.json_response(self.business.update(data.get("version")), status=202)
+
+    async def result_storage(self, request):
+        data = await request.json()
+        if set(data) - {"apply", "ids", "version", "confirmed"}:
+            raise ValueError("Unknown result storage fields")
+        if data.get("apply") and data.get("confirmed") is not True:
+            raise ValueError("Result deletion requires confirmation")
+        arguments = {key: value for key, value in data.items() if key != "confirmed"}
+        try:
+            result = await self.business.request(
+                {
+                    "command": "files",
+                    "action": "result_collect" if data.get("apply") else "result_usage",
+                    "arguments": arguments,
+                }
+            )
+        except (RuntimeError, OSError, TimeoutError):
+            return web.json_response(
+                {"error": "业务服务或文件能力不可用；仍可编辑保留策略，启动后查看占用及清理。"}, status=503
+            )
+        return web.json_response(result)
 
     async def configuration_action(self, request):
         data = await request.json()

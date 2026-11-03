@@ -1,3 +1,4 @@
+import { ResultContent } from "./result-content";
 import { chatPath } from "./http";
 import { ModelFailureNotice, type ModelFailure } from "./model-failure";
 import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
@@ -340,6 +341,7 @@ function MessageEntry({
             </div>
           )}
         >
+          <ResultContent reference={m.result_ref} />
           <MessageMedia attachments={m.attachments} onOpen={onOpen} />
         </TaskReport>
       ) : detail ? (
@@ -369,10 +371,12 @@ function MessageEntry({
           {m.tool_summary && (
             <ToolResult value={m.tool_summary} onOpenTask={onOpenTask} />
           )}
+          <ResultContent reference={m.result_ref} />
           <MessageMedia attachments={m.attachments} onOpen={onOpen} />
         </>
       ) : (
         <>
+          <ResultContent reference={m.result_ref} />
           <MessageMedia attachments={m.attachments} onOpen={onOpen} />
           <div className="message-body">
             <Markdown

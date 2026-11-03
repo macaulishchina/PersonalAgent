@@ -1,5 +1,6 @@
 /** Presentation follows recorded channels and identities, never prose guesses. */
 export type MessageOrigin = {
+  result_ref?: { id: string; version: string; bytes?: number } | null;
   id: string;
   role: string;
   kind: string;

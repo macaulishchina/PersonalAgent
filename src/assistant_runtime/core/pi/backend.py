@@ -599,6 +599,8 @@ class PiBackend:
                 if item.get("type") == "message":
                     record.message(item)
             record.status = turn["status"]
+            if "result" in p:
+                record.result = p["result"]
             self.store.executions.update_task(record.task_id, turn["status"], ident, result=record.result)
             if self.on_conversation_done:
                 task = asyncio.create_task(self.on_conversation_done(ident, record.result, turn["status"]))

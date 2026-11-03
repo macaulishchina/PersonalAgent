@@ -104,8 +104,16 @@ class TasksPlugin:
             "reasoning_effort": self.host.config.main_reasoning_effort,
         }
 
+    def result_protected(self, ident):
+        try:
+            run = self.repo.run(ident)
+        except ValueError:
+            return True
+        return run["state"] not in TERMINAL or not run["data"].get("completion_delivered")
+
     async def start(self, context):
         self.context = context
+        self.host.workfiles.results.protection_checks["task"] = self.result_protected
         self.executor = self.host.task_executor(self.provider_update)
         self.host.backend.jobs = self.executor
         context.own(self.close)
@@ -746,6 +754,10 @@ class TasksPlugin:
             runs, active, before, updates = self.repo.run_page(ident, args)
             for run in [*runs, *active, *updates]:
                 run["feedback"] = self.feedback.describe(run)
+                if run["data"].get("result_ref"):
+                    from assistant_runtime.core.workfiles.inputs import caller as result_caller
+
+                    self.host.workfiles.results.grant(run["data"]["result_ref"]["id"], result_caller())
                 execution = getattr(self.host.backend, "executions", None)
                 if execution and run["data"].get("execution_id"):
                     run["execution"] = execution.view(execution.records.get(run["data"]["execution_id"]))
@@ -1319,14 +1331,20 @@ class TasksPlugin:
 
     @staticmethod
     def result_payload(r):
+        body = r["data"].get("progress") or RUN_SUMMARIES[r["state"]]
+        if len(body) > 7600:
+            body = body[:5000] + "\n\n[报告节选]\n\n" + body[-2400:]
+        if r["data"].get("result_delivery_error"):
+            body += "\n\n完整结果留存失败；当前内容与操作状态保留，不会因此重新执行。"
         return {
             "kind": "result",
             "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
             "title": r["data"]["spec"]["title"]
             + " · "
             + ("本次执行结束" if r["state"] == "completed" else RUN_LABELS[r["state"]]),
-            "body": (r["data"].get("progress") or RUN_SUMMARIES[r["state"]])[:8000],
+            "body": body,
             "voice": r["data"]["spec"]["notify_voice"],
+            "result_ref": r["data"].get("result_ref"),
         }
 
     async def deliver_result(self, r):
@@ -1351,6 +1369,8 @@ class TasksPlugin:
                 completion_feedback=feedback_receipt,
                 artifacts=self.host.workfiles.artifacts(self.owner(r)),
             )
+            if r["state"] != "unknown":
+                self.host.workfiles.results.release("task:" + r["id"])
             self.notification_error = None
         except Exception as exc:
             self.notification_error = str(exc)[:240]

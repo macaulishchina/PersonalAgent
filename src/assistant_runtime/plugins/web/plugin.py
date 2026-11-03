@@ -58,6 +58,7 @@ class WebPlugin:
                 web.get("/api/notifications", self.notification_list),
                 web.post("/api/notifications", self.notification_action),
                 web.get("/api/tasks", self.task_list),
+                web.get("/api/results/{id}", self.read_result),
                 web.post("/api/tasks", self.task_action),
                 web.get("/api/tasks/{run_id}/trace", self.task_trace),
                 web.get("/api/tasks/{run_id}/artifacts/{name}", self.task_artifact),
@@ -340,6 +341,27 @@ class WebPlugin:
         return web.json_response(
             await self.api.invoke(TaskRequest(d["action"], d.get("arguments", {})), timeout=90)
         )
+
+    async def read_result(self, request):
+        from assistant_runtime.api.files import FileRequest
+        from assistant_runtime.api.results import ResultAccessError
+
+        if set(request.query) - {"offset", "version", "path"}:
+            raise web.HTTPBadRequest()
+        args = {
+            "id": request.match_info["id"],
+            "offset": int(request.query.get("offset", "0")),
+            "length": 16000,
+        }
+        for field in ("version", "path"):
+            if field in request.query:
+                args[field] = request.query[field]
+        try:
+            return web.json_response(await self.api.invoke(FileRequest("result_read", args)))
+        except ResultAccessError as error:
+            return web.json_response(
+                {"error": error.code}, status=410 if error.code == "result_expired" else 400
+            )
 
     async def task_artifact(self, request):
         import re

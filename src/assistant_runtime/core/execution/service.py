@@ -5,6 +5,7 @@ from assistant_runtime.api.lifecycle import admits_work
 import asyncio
 import hashlib
 import json
+import sqlite3
 import uuid
 import weakref
 from dataclasses import replace
@@ -41,6 +42,7 @@ class ExecutionService:
         self.default_model, self.default_effort = default_model, default_effort
         self.servers, self.skill_paths = servers, skill_paths
         self.records = RunRecords(db)
+        self.files.results.protection_checks["execution"] = self.result_protected
         from .authority import Authority
 
         self.authority = Authority(db, controllers or {})
@@ -67,6 +69,87 @@ class ExecutionService:
         self.context = None
         self.submissions = asyncio.Lock()
         self.locks = weakref.WeakValueDictionary()
+
+    def result_protected(self, ident):
+        row = self.records.find(ident)
+        return row is None or row["state"] not in TERMINAL - {"unknown"}
+
+    async def register_tool_result(self, session, turn, call_id, payload, images):
+        ident = self.sessions.get(session)
+        if not ident:
+            raise PermissionError("Result requires an admitted execution")
+        row = self.records.get(ident)
+        if row["state"] in TERMINAL | {"cancelling"} or row["data"].get("turn_id") != turn:
+            raise PermissionError("Result belongs to an inactive execution")
+        receipt = await self.files.results.receive_tool(
+            ident,
+            call_id,
+            row["owner"],
+            row["data"].get("work_area") or "executions/" + ident,
+            payload,
+            images,
+        )
+        reference = receipt.get("reference")
+        if reference and row["data"].get("source") == "task" and row["data"].get("reference"):
+            self.files.results.hold(reference["id"], "task:" + row["data"]["reference"])
+        if self.sessions.get(session) != ident or self.records.get(ident)["state"] in TERMINAL | {
+            "cancelling"
+        }:
+            raise PermissionError("Execution stopped while retaining result")
+        if receipt.get("attachments"):
+            previous = self.records.get(ident)["data"].get("attachments", [])
+            references = {r["id"]: r for r in [*previous, *receipt["attachments"]]}
+            self.records.update(ident, attachments=list(references.values())[-4:])
+        self.records.event(ident, "result.retained", {"call_id": call_id, **receipt})
+        return receipt
+
+    async def retain_final_result(self, row, text, state):
+        from assistant_runtime.api.results import ResultAccessError
+
+        if row["data"].get("context_id"):
+            return {}  # Controlled publications retain their existing authorization/finalization boundary.
+        try:
+            reference = await self.files.results.put(
+                row["id"],
+                "final:" + str(row["data"].get("turn_id", "")),
+                row["owner"],
+                {"text": text},
+                complete=state == "completed",
+                attachments=row["data"].get("attachments", []),
+            )
+            if row["data"].get("source") == "task" and row["data"].get("reference"):
+                self.files.results.hold(reference["id"], "task:" + row["data"]["reference"])
+                self.files.results.grant(reference["id"], row["data"]["reference"])
+            return {"result_ref": reference}
+        except (OSError, ValueError, sqlite3.Error) as error:
+            return {
+                "result_delivery_error": error.code
+                if isinstance(error, ResultAccessError)
+                else "result_storage_unavailable"
+            }
+
+    async def register_tool_media(self, session, turn, call_id, images):
+        """Trusted adapter call; caller identity and paths come only from this execution."""
+        ident = self.sessions.get(session)
+        if not ident:
+            raise PermissionError("Tool media requires an admitted execution")
+        run = self.records.get(ident)
+        if run["state"] in TERMINAL | {"cancelling"} or run["data"].get("turn_id") != turn:
+            raise PermissionError("Tool media belongs to an inactive execution")
+        receipt = await self.files.tool_media.register(
+            ident, call_id, images, run["data"].get("work_area") or "executions/" + ident, owner=run["owner"]
+        )
+        # Saving received evidence may finish during cancellation, but it must never
+        # be delivered as the result of another/new execution.
+        if self.sessions.get(session) != ident or self.records.get(ident)["state"] in TERMINAL | {
+            "cancelling"
+        }:
+            raise PermissionError("Execution stopped while retaining tool media")
+        previous = self.records.get(ident)["data"].get("attachments", [])
+        references = {r["id"]: r for r in [*previous, *receipt["attachments"]]}
+        self.records.update(ident, attachments=list(references.values())[-4:])
+        self.records.event(ident, "tool.media", {"call_id": call_id, **receipt})
+        return receipt
 
     async def control(self, principal, action, arguments):
         from assistant_runtime.api.plugins import current_call
@@ -198,6 +281,10 @@ class ExecutionService:
             "effort": data["effort"],
             "result": data.get("result", ""),
             "result_truncated": data.get("result_truncated", False),
+            "result_ref": data.get("result_ref"),
+            "result_is_preview": data.get("result_is_preview", False),
+            "result_delivery_error": data.get("result_delivery_error"),
+            "attachments": data.get("attachments", []),
             "error": data.get("error"),
             "questions": data.get("questions", []),
             "question_id": data.get("question_id"),
@@ -324,6 +411,7 @@ class ExecutionService:
             row = self.records.create(
                 ident, self.owner(), fingerprint, {**payload, "servers": selection["mcp_servers"]}
             )
+            self.files.results.hold_attachments(inputs, "execution:" + ident)
             self.queue.put_nowait(ident)
             return self.view(row)
 
@@ -354,6 +442,7 @@ class ExecutionService:
                 area, inputs, descriptions = self.controlled.prepare_inputs(row)
             else:
                 area = self.files.area("executions/" + ident)
+                self.files.results.hold_attachments(row["data"].get("inputs", []), "execution:" + ident)
                 inputs, descriptions = self.files.inputs.materialize(row["data"].get("inputs", []), area)
             prompt = row["data"]["text"]
             if descriptions:
@@ -514,15 +603,25 @@ class ExecutionService:
                 ).fetchone()
             ):
                 state = "unknown"
+            delivery = await self.retain_final_result(row, result, state)
+            data.update(delivery)
+            preview = result
+            if delivery.get("result_ref") and len(result) > 6000:
+                preview = result[:3900] + "\n[…节选；完整结果可按引用读取…]\n" + result[-2000:]
+            data["result"] = preview
             self.records.update(
                 ident,
                 state if state in TERMINAL else "unknown",
-                result=result[:65536],
-                result_truncated=len(result) > 65536,
+                result=preview,
+                result_truncated=False,
+                result_is_preview=preview != result,
+                **delivery,
                 usage=run.get("ai_usage"),
                 error=run.get("error"),
                 questions=[],
             )
+            if state in TERMINAL - {"unknown"}:
+                self.files.results.release("execution:" + ident)
             self.admission.release(ident)
             if ident in self.finished:
                 self.finished[ident].set()
