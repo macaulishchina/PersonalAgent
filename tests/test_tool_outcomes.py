@@ -10,6 +10,91 @@ from assistant_runtime.mcp.contracts import validate
 
 
 class OutcomeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_media_owner_failure_preserves_code_and_recovery_through_ipc_and_mcp(self):
+        from assistant_runtime.plugins.media.errors import MediaError
+        from assistant_runtime.plugins.media.plugin import MediaPlugin
+        from assistant_runtime.plugins.media.tools import create_server
+        from assistant_runtime.mcp.client import LocalRuntimeClient
+        from assistant_runtime.platforms.ipc import serve
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        import json
+
+        async def invoke(request):
+            plugin = object.__new__(MediaPlugin)
+            plugin._request = AsyncMock(side_effect=MediaError("provider_file_identity_mismatch"))
+            return await plugin.request(request)
+
+        async def reply(reader, writer):
+            try:
+                payload = json.loads(await reader.readline())
+                try:
+                    await invoke(SimpleNamespace(action=payload["action"]))
+                except ToolFailure as error:
+                    value = {"ok": False, "error": str(error), "tool_outcome": error.outcome.public()}
+                writer.write((json.dumps(value) + "\n").encode())
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sock"
+            listener = await serve(path, reply)
+            try:
+                server = create_server(LocalRuntimeClient(path))
+                server.add_middleware(ToolOutcomes())
+                async with Client(server) as client:
+                    result = await client.call_tool(
+                        "inspect_media_share",
+                        {"share_url": "https://pan.quark.cn/s/abc123"},
+                        raise_on_error=False,
+                    )
+                    outcome = result.structured_content["tool_outcome"]
+                    self.assertEqual(outcome["code"], "provider_file_identity_mismatch")
+                    self.assertEqual(outcome["outcome"], "failed")
+                    self.assertFalse(outcome["retryable"])
+                    self.assertEqual(outcome["next_action"], "inspect_provider_response")
+                    self.assertNotEqual(outcome["next_action"], "inspect_operation")
+            finally:
+                listener.close()
+                await listener.wait_closed()
+
+    async def test_unexpected_read_failure_is_recoverable_but_write_remains_unknown(self):
+        server = FastMCP("sample")
+        server.add_middleware(ToolOutcomes())
+
+        @server.tool(annotations={"readOnlyHint": True, "destructiveHint": False})
+        def read_value() -> str:
+            raise RuntimeError("private-response-with-secret")
+
+        @server.tool()
+        def write_value() -> str:
+            raise RuntimeError("private-response-with-secret")
+
+        async with Client(server) as client:
+            for name in ("read_value", "write_value"):
+                result = await client.call_tool(name, {}, raise_on_error=False)
+                outcome = result.structured_content["tool_outcome"]
+                self.assertEqual(outcome["outcome"], "failed" if name == "read_value" else "unknown")
+                self.assertEqual(
+                    outcome["next_action"], "retry_read" if name == "read_value" else "inspect_operation"
+                )
+                self.assertNotIn("private-response", str(result))
+
+    async def test_owner_retry_classification_never_replays_uncertain_writes(self):
+        from assistant_runtime.plugins.media.errors import MediaError
+
+        for action, uncertain, retryable in (
+            ("inspect", False, True),
+            ("transfer", False, False),
+            ("inspect", True, False),
+        ):
+            outcome = MediaError("provider_network_error", uncertain=uncertain).tool_failure(action).outcome
+            self.assertEqual(outcome.retryable, retryable)
+            self.assertEqual(outcome.outcome, "failed" if retryable else "unknown")
+
     async def test_complex_first_party_inputs_publish_fields_and_reject_before_dispatch(self):
         from types import SimpleNamespace
         from assistant_runtime.core.events.tools import create_server as events

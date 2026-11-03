@@ -2,14 +2,18 @@
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.base import ToolResult
+import logging
 from assistant_runtime.api.tool_calls import ToolFailure, ToolOutcome
 from assistant_runtime.api.models import ModelCallError
 from .contracts import validate
+
+log = logging.getLogger(__name__)
 
 
 class ToolOutcomes(Middleware):
     async def on_call_tool(self, context, call_next):
         dispatched = False
+        read_only = False
         try:
             # Validate the published owner schema before invoking any handler. Do not
             # classify an arbitrary exception *inside* a handler as non-dispatch.
@@ -27,6 +31,8 @@ class ToolOutcomes(Middleware):
                         )
                     )
                 validate(context.message.arguments or {}, tool.parameters, "")
+                hints = tool.annotations
+                read_only = bool(hints and hints.readOnlyHint is True and hints.destructiveHint is False)
             dispatched = True
             return await call_next(context)
         except Exception as exc:
@@ -61,16 +67,35 @@ class ToolOutcomes(Middleware):
                         is_error=True,
                     )
                 current = current.__cause__ or current.__context__
+            log.warning(
+                "Tool handler error tool=%s class=%s read_only=%s",
+                context.message.name,
+                type(exc).__name__,
+                read_only,
+            )
+            message = (
+                "Read did not return a usable result; retry the read once or correct its inputs. No write operation was requested."
+                if read_only
+                else "Tool result could not be confirmed. Inspect its availability or operation receipt before repeating the call."
+            )
             return ToolResult(
-                content="Tool result could not be confirmed. Inspect its availability or operation receipt before repeating the call.",
+                content=message,
                 structured_content={
                     "tool_outcome": ToolOutcome(
-                        "tool_result_unconfirmed" if dispatched else "tool_unavailable",
+                        "tool_read_failed"
+                        if dispatched and read_only
+                        else "tool_result_unconfirmed"
+                        if dispatched
+                        else "tool_unavailable",
                         "return" if dispatched else "preparation",
                         "dispatched" if dispatched else "not_dispatched",
-                        "unknown" if dispatched else "failed",
-                        "Tool result could not be confirmed",
-                        next_action="inspect_operation" if dispatched else "inspect_definition",
+                        "unknown" if dispatched and not read_only else "failed",
+                        message,
+                        next_action="retry_read"
+                        if read_only
+                        else "inspect_operation"
+                        if dispatched
+                        else "inspect_definition",
                     ).public()
                 },
                 is_error=True,

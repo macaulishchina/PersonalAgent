@@ -48,6 +48,8 @@ class QuarkProtocolTest(unittest.IsolatedAsyncioTestCase):
             "file_type": 1,
             "share_fid_token": "private-file-token",
         }
+        self.share_rows = None
+        self.share_queries = []
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", self.handle)
         runner = web.AppRunner(app)
@@ -71,8 +73,17 @@ class QuarkProtocolTest(unittest.IsolatedAsyncioTestCase):
         if request.path == "/share/sharepage/token":
             return web.json_response({"code": 0, "data": {"stoken": "private-share-token"}})
         if request.path in {"/share/sharepage/detail", "/file/sort"}:
+            rows = [self.row]
+            if request.path == "/share/sharepage/detail":
+                self.share_queries.append(dict(request.query))
+                if self.share_rows is not None:
+                    rows = self.share_rows
             return web.json_response(
-                {"code": 0, "data": {"list": [self.row]}, "metadata": {"_total": 9 if self.incomplete else 1}}
+                {
+                    "code": 0,
+                    "data": {"list": rows},
+                    "metadata": {"_total": 9 if self.incomplete else len(rows)},
+                }
             )
         if request.path == "/file/info":
             fid = request.query["fid"]
@@ -176,6 +187,50 @@ class QuarkProtocolTest(unittest.IsolatedAsyncioTestCase):
             "file_id": "video",
             "folder_id": "destination",
         }
+
+    async def test_share_virtual_root_retains_original_parent_for_verified_copy(self):
+        args = {**self.source_args(), "parent_file_id": "root"}
+        result = await self.adapter.call("inspect", args)
+        self.assertEqual(result["items"][0]["parent_file_id"], "root")
+        self.assertEqual(self.share_queries[-1]["pdir_fid"], "0")
+        self.assertEqual(self.share_queries[-1]["pwd_id"], args["share_id"])
+        self.assertEqual(self.share_queries[-1]["stoken"], "private-share-token")
+        source = await self.adapter.call("source", args)
+        self.assertEqual(source["parent_file_id"], "root")
+        self.assertNotIn("private", json.dumps(source))
+        # The request handler verifies that copy uses original pdir=season and
+        # the share's file token, after rereading membership under that token.
+        receipt = await self.adapter.call("copy", args)
+        self.assertEqual(receipt["task_id"], "copy-task")
+        self.assertEqual(self.calls.count("/share/sharepage/save"), 1)
+        with self.assertRaisesRegex(MediaError, "source_file_not_found"):
+            await self.adapter.call("copy", {**args, "file_id": "outside-share"})
+        self.assertEqual(self.calls.count("/share/sharepage/save"), 1)
+
+    async def test_share_root_exception_does_not_relax_cloud_or_child_identity(self):
+        # Ordinary cloud root must still consist of actual children of cloud root.
+        with self.assertRaisesRegex(MediaError, "provider_file_identity_mismatch"):
+            await self.adapter.call("list", {"folder_id": "root"})
+        with self.assertRaisesRegex(MediaError, "provider_file_identity_mismatch"):
+            await self.adapter.call("inspect", {**self.source_args(), "parent_file_id": "other-folder"})
+        for rows in (
+            [self.row, dict(self.row)],
+            [{**self.row, "pdir_fid": "video"}],
+            [{k: v for k, v in self.row.items() if k != "pdir_fid"}],
+        ):
+            self.share_rows = rows
+            with (
+                self.subTest(rows=rows),
+                self.assertRaisesRegex(MediaError, "provider_file_identity_mismatch"),
+            ):
+                await self.adapter.call("inspect", {**self.source_args(), "parent_file_id": "root"})
+        self.assertNotIn("/share/sharepage/save", self.calls)
+
+    async def test_share_root_can_contain_items_from_distinct_original_parents(self):
+        self.share_rows = [self.row, {**self.row, "fid": "second", "pdir_fid": "another-original-parent"}]
+        result = await self.adapter.call("inspect", {**self.source_args(), "parent_file_id": "root"})
+        self.assertEqual([item["parent_file_id"] for item in result["items"]], ["root", "root"])
+        self.assertEqual([row["pdir_fid"] for row in self.share_rows], ["season", "another-original-parent"])
 
     async def test_recycle_record_roundtrip_and_lost_ack_never_replays(self):
         before = await self.adapter.call("file", {"file_id": "video", "folder_id": "season"})

@@ -110,7 +110,9 @@ class ExecutionTransport:
                 raise web.HTTPConflict()
             return web.json_response(result)
         except ResultAccessError as error:
-            return web.json_response({"error": error.code}, status=400)
+            return web.json_response(
+                {"error": error.code, "tool_outcome": error.tool_failure().outcome.public()}, status=400
+            )
 
     async def resources(self, request):
         worker = self.authenticate(request)

@@ -16,7 +16,9 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
     session = fixture.PiSkeletonTest.session
     completed = fixture.PiSkeletonTest.completed
 
-    async def configured(self, *, tools=None, limit=2, second=False, stable=False, approval="approve"):
+    async def configured(
+        self, *, tools=None, limit=2, second=False, stable=False, approval="approve", read_only=False
+    ):
         self.client.settings = replace(self.settings, max_loaded_tools=limit)
         script = self.root / "catalog.py"
         script.write_text(
@@ -28,7 +30,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
             "   if i == 28: raise RuntimeError('Tool mcp__catalog__action_28 not found')\n"
             "   return 'verified:'+str(i)\n"
             "  return action\n"
-            " m.tool(name='action_'+str(i),description='Catalog action '+str(i)+'\\nSCHEMA_SENTINEL '+('catalog operation '+str(i)+' ')*80)(make(i))\n"
+            f" m.tool(name='action_'+str(i),annotations={{'readOnlyHint':{read_only!r},'destructiveHint':False}},description='Catalog action '+str(i)+'\\nSCHEMA_SENTINEL '+('catalog operation '+str(i)+' ')*80)(make(i))\n"
             "m.run(transport='stdio',show_banner=False)\n"
         )
         config = {
@@ -232,6 +234,148 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         self.gateway.script_fn = script
         await self.run_prompt(ident)
         self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["28"])
+
+    async def test_external_read_only_hint_does_not_authorize_replay(self):
+        ident = await self.configured(read_only=True)
+
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call("load", "tool_search", {"query": "action_28", "limit": 1})
+            if step in (2, 3):
+                return sse_tool_call(str(step), "mcp__catalog__action_28", {})
+            self.assertIn("prior_result_unknown", str(body))
+            return sse_text_reply("done", "Inspect the external operation")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual((self.root / "calls.txt").read_text().splitlines(), ["28"])
+
+    async def internal_read(self, mode, limit=3):
+        from assistant_runtime.platforms.ipc import serve
+        from assistant_runtime.core.pi.mcp import server_config
+
+        path = self.root / (mode + "-" + str(limit) + ".sock")
+        attempts = []
+
+        async def reply(reader, writer):
+            try:
+                request = json.loads(await reader.readline())
+                if request["command"] == "plugin-tools":
+                    value = {
+                        "ok": True,
+                        "result": {
+                            "tools": [
+                                {
+                                    "name": "observe",
+                                    "description": "Observe synthetic data",
+                                    "input_schema": {
+                                        "type": "object",
+                                        "properties": {},
+                                        "additionalProperties": False,
+                                    },
+                                    "output_schema": {"type": "object"},
+                                    "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                                }
+                            ]
+                        },
+                    }
+                else:
+                    attempts.append(request)
+                    if mode in {"transient", "unknown"} and len(attempts) == 2:
+                        value = {"ok": True, "result": {"value": "READ_RECOVERED"}}
+                    elif mode in {"unknown", "unknown_exhaust"}:
+                        value = {"ok": False, "error": "private-transport-message"}
+                    else:
+                        value = {
+                            "ok": False,
+                            "error": "read failure",
+                            "tool_outcome": {
+                                "code": "provider_file_identity_mismatch"
+                                if mode == "permanent"
+                                else "provider_network_error",
+                                "stage": "return",
+                                "dispatch": "dispatched",
+                                "outcome": "unknown" if mode == "uncertain" else "failed",
+                                "message": "OWNER_SAFE_ERROR",
+                                "next_action": "inspect_provider_response"
+                                if mode == "permanent"
+                                else "retry_read",
+                                "retryable": mode != "permanent",
+                            },
+                        }
+                writer.write((json.dumps(value) + "\n").encode())
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        listener = await serve(path, reply)
+        self.addAsyncCleanup(listener.wait_closed)
+        self.addCleanup(listener.close)
+        self.client.settings = replace(self.settings, tool_read_attempt_limit=limit)
+        ident = await self.session(config={"mcp_servers": server_config(path, plugins=())})
+        return ident, attempts
+
+    async def test_internal_reads_recover_without_replaying_original_writes(self):
+        for mode in ("transient", "unknown"):
+            with self.subTest(mode=mode):
+                ident, attempts = await self.internal_read(mode)
+                start = len(self.gateway.requests)
+
+                def script(step, body):
+                    phase = step - start
+                    if phase == 1:
+                        return sse_tool_call("load", "tool_search", {"query": "observe", "limit": 1})
+                    if phase in (2, 3):
+                        if phase == 3:
+                            self.assertNotIn("prior_result_unknown", str(body))
+                        return sse_tool_call(str(phase), "mcp__extensions__observe", {})
+                    self.assertIn("READ_RECOVERED", str(body))
+                    return sse_text_reply("done", "Read recovered")
+
+                self.gateway.script_fn = script
+                await self.run_prompt(ident)
+                self.assertEqual(len(attempts), 2)
+
+    async def test_permanent_read_failure_is_not_sent_again_and_transient_attempts_are_bounded(self):
+        for mode, limit in (("permanent", 3), ("exhaust", 3), ("unknown_exhaust", 3), ("exhaust", 1)):
+            with self.subTest(mode=mode, limit=limit):
+                ident, attempts = await self.internal_read(mode, limit)
+                start = len(self.gateway.requests)
+
+                def script(step, body):
+                    phase = step - start
+                    if phase == 1:
+                        return sse_tool_call("load", "tool_search", {"query": "observe", "limit": 1})
+                    return sse_tool_call(str(phase), "mcp__extensions__observe", {})
+
+                self.gateway.script_fn = script
+                await self.client.request(
+                    "run.start",
+                    {"session_id": ident, "input": [{"type": "text", "text": "synthetic repeated read"}]},
+                )
+                run = await self.completed()
+                self.assertEqual(run["error"]["code"], "repeated_read_failure", run)
+                self.assertEqual(
+                    len(attempts), {"permanent": 1, "exhaust": limit, "unknown_exhaust": min(2, limit)}[mode]
+                )
+                if mode != "unknown_exhaust":
+                    self.assertIn("OWNER_SAFE_ERROR", run["error"]["message"])
+
+    async def test_explicit_owner_uncertainty_overrides_even_trusted_read_hint(self):
+        ident, attempts = await self.internal_read("uncertain")
+
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call("load", "tool_search", {"query": "observe", "limit": 1})
+            if step in (2, 3):
+                return sse_tool_call(str(step), "mcp__extensions__observe", {})
+            self.assertIn("prior_result_unknown", str(body))
+            return sse_text_reply("done", "Owner receipt requires inspection")
+
+        self.gateway.script_fn = script
+        await self.run_prompt(ident)
+        self.assertEqual(len(attempts), 1)
 
     async def test_internal_failure_crosses_ipc_with_field_and_corrected_call_executes_once(self):
         from assistant_runtime.platforms.ipc import serve

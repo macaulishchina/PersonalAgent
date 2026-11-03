@@ -229,7 +229,7 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
             observed = []
 
             def model(step, body):
-                phase = (step - 1) % 4
+                phase = (step - 1) % 5
                 if phase == 0:
                     return sse_tool_call(
                         "discover-" + str(step),
@@ -250,6 +250,16 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("TAIL_ERROR", value)
                     self.assertLess(len(value), 9000)
                     self.assertTrue(any(t["name"] == "read_result" for t in body["tools"]))
+                    return sse_tool_call(
+                        "read-wrong-path-" + str(step),
+                        "read_result",
+                        {"id": receipt["reference"]["id"], "path": "/missing-field"},
+                    )
+                if phase == 3:
+                    self.assertIn("result_path_missing", str(outputs[-1]))
+                    self.assertIn("correct_arguments", str(outputs[-1]))
+                    self.assertNotIn("tool_result_unconfirmed", str(outputs[-1]))
+                    receipt = observed[-1][0]
                     return sse_tool_call(
                         "read-" + str(step),
                         "read_result",
@@ -369,7 +379,7 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await full(runs[0]["data"]["result_ref"]), final)
                 self.assertTrue(runs[0]["data"]["result_is_preview"])
                 self.assertEqual(count.read_text(), "xxx")
-                self.assertEqual(len(gateway.requests), 12)
+                self.assertEqual(len(gateway.requests), 15)
                 self.assertEqual(len(observed), 3)
             finally:
                 host.stop_event.set()

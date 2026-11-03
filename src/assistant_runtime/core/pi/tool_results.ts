@@ -23,7 +23,10 @@ async function host(path: string, value: any) {
   );
   const result = await response.json();
   if (!response.ok)
-    throw new Error(result.error || "result_delivery_unavailable");
+    throw Object.assign(
+      new Error(result.error || "result_delivery_unavailable"),
+      { toolOutcome: result.tool_outcome },
+    );
   return result;
 }
 
@@ -101,12 +104,21 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
           id: { type: "string" },
           version: { type: "string" },
           format: { type: "string", enum: ["text", "json"] },
-          path: { type: "string" },
+          path: {
+            type: "string",
+            description:
+              "RFC6901 路径。正文默认 /text；检查结构用 format=json、path=空字符串，然后按实际返回的字段读取，例如 /structured。",
+          },
           offset: { type: "integer", minimum: 0 },
           length: { type: "integer", minimum: 1, maximum: 6000 },
         },
       },
       executionMode: "parallel",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
       async execute(_id: string, args: any) {
         try {
           const value = await host("/result-read", {
@@ -114,10 +126,21 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
             arguments: args,
           });
           return { content: [{ type: "text", text: JSON.stringify(value) }] };
-        } catch (error) {
+        } catch (error: any) {
+          const outcome = error?.toolOutcome;
           return {
             isError: true,
-            content: [{ type: "text", text: String(error) }],
+            content: [
+              {
+                type: "text",
+                text:
+                  outcome?.message ||
+                  "读取失败，请重试读取或核对引用；不会重新执行原工具。",
+              },
+            ],
+            ...(outcome
+              ? { structuredContent: { tool_outcome: outcome } }
+              : {}),
           };
         }
       },

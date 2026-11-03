@@ -119,6 +119,12 @@ class MediaPlugin:
         return "task:" + run["task_id"]
 
     async def request(self, request):
+        try:
+            return await self._request(request)
+        except MediaError as error:
+            raise error.tool_failure(request.action) from error
+
+    async def _request(self, request):
         if not self.accepting:
             raise RuntimeError("Media service is stopping")
         action, args = request.action, request.arguments

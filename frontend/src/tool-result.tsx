@@ -18,6 +18,9 @@ export type ToolSummary = {
   truncated?: boolean;
   cached?: boolean;
   error_code?: string;
+  error_message?: string;
+  next_action?: string;
+  retryable?: boolean;
   dispatch?: string;
   result_state?: string;
   stage?: string;
@@ -76,8 +79,12 @@ export function ToolResult({
     return (
       <details className="tool-result">
         <summary>查看原因</summary>
-        {errors[value.error_code || ""] ||
+        {value.error_message ||
+          errors[value.error_code || ""] ||
           "未取得有效结果，可查看助手的后续说明。"}
+        {value.error_code && (
+          <div className="tool-result-meta">错误：{value.error_code}</div>
+        )}
         {value.field && (
           <div className="tool-result-meta">字段：{value.field}</div>
         )}

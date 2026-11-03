@@ -6,6 +6,8 @@ timeout_seconds = 600
 compaction_timeout_seconds = 600
 # Long tool text is stored privately with a bounded preview and file reference.
 tool_result_max_chars = 6000
+# Maximum attempts for a trusted read in one turn, including the first; no automatic tool retry.
+tool_read_attempt_limit = 3
 # Maximum discovered MCP tools declared per model request; native tools are separate.
 max_loaded_tools = 12
 # Native account example: configure an account/provider/model, set main_model,

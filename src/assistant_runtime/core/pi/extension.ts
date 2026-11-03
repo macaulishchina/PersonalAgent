@@ -85,7 +85,10 @@ export default function (pi: any) {
   );
   // Pi assigns canonical names (including collision suffixes). Keep its original
   // registration identity; never reverse-guess it from the sanitized name.
-  const origins = new Map<string, { server: string; tool: string }>();
+  const origins = new Map<
+    string,
+    { server: string; tool: string; readOnly: boolean }
+  >();
   const origin = (name: string) => origins.get(name);
   const lifecycle = registerToolLifecycle(
     pi,
@@ -93,6 +96,7 @@ export default function (pi: any) {
     Number(process.env.ASSISTANT_INVALID_TOOL_CALL_LIMIT || 3),
     internal,
     origin,
+    Number(process.env.ASSISTANT_TOOL_READ_ATTEMPT_LIMIT || 3),
   );
   if (!process.env.ASSISTANT_CONTROL_TOKEN) {
     createMcpExtension()({
@@ -104,7 +108,13 @@ export default function (pi: any) {
             ? tool.label.slice(0, slash)
             : undefined;
         if (server)
-          origins.set(tool.name, { server, tool: tool.label.slice(slash + 1) });
+          origins.set(tool.name, {
+            server,
+            tool: tool.label.slice(slash + 1),
+            readOnly:
+              tool.annotations?.readOnlyHint === true &&
+              tool.annotations?.destructiveHint === false,
+          });
         pi.registerTool({
           ...tool,
           executionMode:
@@ -185,7 +195,8 @@ export default function (pi: any) {
                   while ((end = buffer.indexOf("\n")) !== -1) {
                     const event = JSON.parse(buffer.slice(0, end));
                     buffer = buffer.slice(end + 1);
-                    if (["dispatch", "response", "retry"].includes(event.type)) continue;
+                    if (["dispatch", "response", "retry"].includes(event.type))
+                      continue;
                     for (const key of ["partial", "message", "error"]) {
                       if (event[key])
                         Object.assign(event[key], {

@@ -656,3 +656,22 @@ claiming completion. Permanent deletion and implicit recovery destinations remai
 
 Windows Server checks have exercised this PA adapter with local protocol fixtures and actual Windows filesystem/process APIs. The Windows support declaration includes this adapter; enabling it still requires valid configuration and dependencies. External services and real accounts/devices are separate acceptance boundaries.
 PanSou/OpenList can run on an explicitly configured reachable host. The documented Linux Docker deployment is not a Windows Server container installation guide. Local media and staging paths use absolute Windows paths on the same selected volume; unsafe Windows names and reparse points are rejected by the shared directory layer.
+
+## Share-directory identity and public failures
+
+Quark share requests bind `pwd_id` to the returned `stoken`. The share root is a
+virtual view: root entries may retain nonzero original cloud parents. Inspect/source
+expose the requested virtual parent while preserving the original row internally.
+Ordinary cloud listings and non-root share listings still require exact parent identity;
+all pages validate file identifiers, parent identifiers, sizes and duplicate/self-parent
+entries. Copy rereads the selected file under the same share identity, obtains its file
+token, and uses the original parent in the save request. A caller cannot turn an arbitrary
+file ID or cloud parent into proof of share membership.
+
+At the public MediaRequest boundary, owner-known MediaError codes become ToolFailure
+with the code, safe explanation, outcome, recovery action and optional retryable flag.
+The worker and batch internals retain MediaError semantics; converting a public error
+does not release operation evidence or change authentication-wait handling. Known read
+failures are distinct from unknown writes. Auth/protocol/identity/share errors require
+correction; connectivity, availability and rate-limit errors may permit bounded rereads.
+No response bodies, cookies, stokens or file tokens enter these errors.

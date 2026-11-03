@@ -504,3 +504,18 @@ URL 不会被当作待保存图片。插件不应要求模型再调用一次截�
 模型正文预算的字符串）和 `upstream_complete`（布尔值）。有效摘要替代确定性节选，
 原内容仍完整保存；缺省或无效摘要回到节选，不阻止调用。此元数据不授予权限，
 不改变业务状态，不触发额外模型调用。
+
+### Known failures and read recovery
+
+Owners convert known business errors to public ToolFailure at their capability boundary.
+Preserve the stable error code, safe message, dispatch/outcome evidence and next_action
+through IPC/MCP; `retryable=True` is an explicit owner's transient-error classification,
+`False` requires correction, and omission leaves classification unknown. Do not inspect
+exception strings to claim that a write did not happen. Raw provider responses and secrets
+remain private. Internal business workers may retain their own exception types.
+
+Host-owned MCP read declarations can enable bounded, model-requested rereads. This is not
+a permission grant or a framework retry loop; third-party MCP annotations alone are not
+trusted. Explicit owner uncertainty overrides read hints. New read tools must cover both
+corrected-input recovery and attempts exhaustion; writes must retain lost-reply/no-replay
+tests. Tool UI projections show the safe owner explanation and exact error code.

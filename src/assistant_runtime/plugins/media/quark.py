@@ -216,10 +216,22 @@ class Quark:
             raise MediaError("provider_incomplete_listing")
         if len(rows) < min(50, max(0, total - (page - 1) * 50)):
             raise MediaError("provider_incomplete_listing")
+        seen = set()
         for row in rows:
-            file_record(row)
-            if row.get("pdir_fid") != ("0" if parent == "root" else parent):
+            record = file_record(row)
+            # The token-bound share root is virtual. A root entry may retain its
+            # original cloud parent; children and ordinary cloud pages are not virtual.
+            if (
+                not isinstance(row.get("pdir_fid"), str)
+                or record["file_id"] in seen
+                or row["pdir_fid"] == record["file_id"]
+                or (
+                    not (share and parent == "root")
+                    and row["pdir_fid"] != ("0" if parent == "root" else parent)
+                )
+            ):
                 raise MediaError("provider_file_identity_mismatch")
+            seen.add(record["file_id"])
         next_page = str(page + 1) if page * 50 < total else None
         return rows, next_page
 
@@ -443,10 +455,15 @@ class Quark:
                 rows, marker = await self.page(
                     args.get("parent_file_id", "root"), args.get("marker", ""), share=share
                 )
-                return {"items": [file_record(r) for r in rows], "marker": marker}
+                return {
+                    "items": [
+                        {**file_record(r), "parent_file_id": args.get("parent_file_id", "root")} for r in rows
+                    ],
+                    "marker": marker,
+                }
             row = await self.source(args, share)
             if action == "source":
-                return file_record(row)
+                return {**file_record(row), "parent_file_id": args.get("parent_file_id", "root")}
             token = row.get("share_fid_token")
             if not isinstance(token, str) or not token:
                 raise MediaError("source_transfer_token_missing")

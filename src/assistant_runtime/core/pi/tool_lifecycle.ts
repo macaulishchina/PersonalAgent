@@ -31,7 +31,10 @@ export function registerToolLifecycle(
   policy: any,
   maximum: number,
   internal: string[],
-  origin: (name: string) => { server: string; tool: string } | undefined,
+  origin: (
+    name: string,
+  ) => { server: string; tool: string; readOnly?: boolean } | undefined,
+  readMaximum = 3,
 ) {
   const secret = randomBytes(32);
   const version = (value: any) =>
@@ -40,6 +43,7 @@ export function registerToolLifecycle(
   const calls = new Map<string, any>();
   const rejected = new Map<string, any>();
   const uncertain = new Set<string>();
+  const readFailures = new Map<string, { outcome: any; attempts: number }>();
   let stopped = false;
   let truncated = false;
   const fingerprint = (name: string, args: any) =>
@@ -66,6 +70,7 @@ export function registerToolLifecycle(
     calls.clear();
     rejected.clear();
     uncertain.clear();
+    readFailures.clear();
     stopped = false;
     truncated = false;
   });
@@ -82,6 +87,10 @@ export function registerToolLifecycle(
         pi.getAllTools().find((t: any) => t.name === event.toolName)
           ?.parameters,
       ),
+      readOnly:
+        ["read", "read_result", "tool_search"].includes(event.toolName) ||
+        (internal.includes(origin(event.toolName)?.server) &&
+          origin(event.toolName)?.readOnly === true),
     });
   });
   pi.on("tool_call", (event: any) => {
@@ -120,6 +129,30 @@ export function registerToolLifecycle(
           "Tool is disabled by policy. No approval dialog is available; repeated calls cannot grant permission.",
         );
     }
+    const previousRead = entry?.readOnly
+      ? readFailures.get(entry.key)
+      : undefined;
+    const readLimit =
+      previousRead?.outcome.retryable === true
+        ? readMaximum
+        : previousRead?.outcome.retryable === false
+          ? 1
+          : Math.min(2, readMaximum);
+    if (!outcome && previousRead && previousRead.attempts >= readLimit) {
+      entry.readBlocked = true;
+      outcome = {
+        ...previousRead.outcome,
+        stage: "preparation",
+        dispatch: "not_dispatched",
+        outcome: "failed",
+        retryable: false,
+        message: `Read attempt limit reached; last error: ${previousRead.outcome.message}`,
+        next_action:
+          previousRead.outcome.retryable === false
+            ? previousRead.outcome.next_action
+            : "inspect_source",
+      };
+    }
     if (!outcome && entry && uncertain.has(entry.key))
       outcome = {
         code: "prior_result_unknown",
@@ -141,9 +174,10 @@ export function registerToolLifecycle(
   pi.on("tool_execution_end", (event: any, ctx: any) => {
     const entry = calls.get(event.toolCallId);
     const server = origin(event.toolName)?.server;
-    let outcome = internal.includes(server)
-      ? ownerOutcome(event.result)
-      : undefined;
+    let outcome =
+      internal.includes(server) || event.toolName === "read_result"
+        ? ownerOutcome(event.result)
+        : undefined;
     if (!outcome && event.durationMs === undefined) {
       outcome = entry?.refusal || {
         code: truncated
@@ -162,15 +196,41 @@ export function registerToolLifecycle(
     }
     if (!outcome)
       outcome = {
-        code: event.isError ? "tool_result_unconfirmed" : "tool_returned",
+        code: event.isError
+          ? entry?.readOnly
+            ? "tool_read_failed"
+            : "tool_result_unconfirmed"
+          : "tool_returned",
         stage: "return",
         dispatch: "dispatched",
-        outcome: event.isError ? "unknown" : "success",
+        outcome: event.isError
+          ? entry?.readOnly
+            ? "failed"
+            : "unknown"
+          : "success",
         message: event.isError
-          ? "The tool reported an error after dispatch; verify the operation before repeating it."
+          ? entry?.readOnly
+            ? "Read failed; retry the read once or correct its inputs. No write operation was requested."
+            : "The tool reported an error after dispatch; verify the operation before repeating it."
           : "Tool returned; business completion is defined by its receipt.",
-        next_action: event.isError ? "inspect_operation" : "use_result",
+        next_action: event.isError
+          ? entry?.readOnly
+            ? "retry_read"
+            : "inspect_operation"
+          : "use_result",
       };
+    if (
+      entry?.readOnly &&
+      outcome.outcome === "failed" &&
+      outcome.dispatch === "dispatched"
+    ) {
+      const attempts = (readFailures.get(entry.key)?.attempts || 0) + 1;
+      if (!readFailures.has(entry.key) && readFailures.size >= 256)
+        readFailures.delete(readFailures.keys().next().value);
+      readFailures.set(entry.key, { outcome, attempts });
+      outcome = { ...outcome, read_attempt: attempts };
+    } else if (entry?.readOnly && outcome.outcome === "success")
+      readFailures.delete(entry.key);
     if (
       entry &&
       outcome.outcome === "unknown" &&
@@ -187,7 +247,12 @@ export function registerToolLifecycle(
       outcome = { ...outcome, repeats };
       if (repeats >= maximum) {
         stopped = true;
-        outcome = { ...outcome, code: "repeated_invalid_call" };
+        outcome = {
+          ...outcome,
+          code: entry?.readBlocked
+            ? "repeated_read_failure"
+            : "repeated_invalid_call",
+        };
       }
     }
     const now = performance.now();
@@ -229,7 +294,11 @@ export function registerToolLifecycle(
     calls.delete(event.toolCallId);
     if (stopped) {
       ctx.ui.notify(
-        "__assistant_tool_stop__:Repeated unchanged invalid tool call; this turn has stopped without retrying the operation.",
+        "__assistant_tool_stop__:" +
+          JSON.stringify({
+            code: outcome.code,
+            message: outcome.message,
+          }),
         "warning",
       );
       ctx.abort();

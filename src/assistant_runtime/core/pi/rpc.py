@@ -132,6 +132,7 @@ class PiSessionWorker:
         env["ASSISTANT_MAX_LOADED_TOOLS"] = str(self.parent.settings.max_loaded_tools)
         env["ASSISTANT_TOOL_SCHEMA_BYTES"] = str(self.parent.settings.tool_schema_max_bytes)
         env["ASSISTANT_INVALID_TOOL_CALL_LIMIT"] = str(self.parent.settings.invalid_tool_call_limit)
+        env["ASSISTANT_TOOL_READ_ATTEMPT_LIMIT"] = str(self.parent.settings.tool_read_attempt_limit)
         env["ASSISTANT_INTERNAL_MCP_SERVERS"] = json.dumps(
             [
                 name
@@ -281,12 +282,23 @@ class PiSessionWorker:
             if method == "notify":
                 text = str(msg.get("message", ""))
                 if text.startswith("__assistant_tool_stop__:"):
-                    self.turn_error = text.split(":", 1)[1]
-                    self.tool_stop = True
+                    try:
+                        problem = json.loads(text.split(":", 1)[1])
+                    except ValueError:
+                        problem = None
+                    if (
+                        isinstance(problem, dict)
+                        and problem.get("code") in {"repeated_invalid_call", "repeated_read_failure"}
+                        and isinstance(problem.get("message"), str)
+                    ):
+                        self.tool_stop = {"code": problem["code"], "message": problem["message"][:1200]}
+                        self.turn_error = self.tool_stop["message"]
+                    else:
+                        log.warning("Invalid tool stop notification session=%s", self.execution_session_id)
                 if text.startswith("__assistant_tool_outcome__:"):
                     outcome = json.loads(text.split(":", 1)[1])
                     log.info(
-                        "Pi tool outcome session=%s call=%s code=%s dispatch=%s preparation_ms=%s execution_ms=%s repeats=%s",
+                        "Pi tool outcome session=%s call=%s code=%s dispatch=%s preparation_ms=%s execution_ms=%s repeats=%s read_attempt=%s retryable=%s",
                         self.execution_session_id,
                         outcome.get("call_id"),
                         outcome.get("code"),
@@ -294,6 +306,8 @@ class PiSessionWorker:
                         outcome.get("preparation_ms"),
                         outcome.get("duration_ms"),
                         outcome.get("repeats", 0),
+                        outcome.get("read_attempt"),
+                        outcome.get("retryable"),
                     )
                 if text.startswith("__assistant_discovery__:"):
                     discovery = json.loads(text.split(":", 1)[1])
@@ -648,10 +662,7 @@ class PiSessionWorker:
             turn_record["failure"] = dict(failure)
         turn_record["budget_id"] = self.meta.get("budget_id")
         if getattr(self, "tool_stop", False):
-            turn_record["error"] = {
-                "code": "repeated_invalid_call",
-                "message": "Repeated unchanged invalid tool calls; no retry was dispatched.",
-            }
+            turn_record["error"] = self.tool_stop
             self.tool_stop = False
         if self.compaction_error and status in {"completed", "failed"}:
             turn_record["status"] = "failed"

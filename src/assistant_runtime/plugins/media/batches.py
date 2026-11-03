@@ -205,7 +205,7 @@ class Batches:
                     try:
                         # Authorization was captured at submission. Future background
                         # execution expiry must not revoke this already accepted batch.
-                        result = await self.p.request(
+                        result = await self.p._request(
                             MediaRequest(
                                 data["action"],
                                 {
@@ -242,7 +242,7 @@ class Batches:
                     and operation["data"].get("batch_id") == ident
                     and entry["state"] not in {"completed", "failed", "cancelled"}
                 ):
-                    await self.p.request(MediaRequest("cancel", {"operation_id": entry["operation_id"]}))
+                    await self.p._request(MediaRequest("cancel", {"operation_id": entry["operation_id"]}))
                 entry["state"] = self.p.repo.get(entry["operation_id"])["state"]
         states = {e["state"] for e in data["items"]}
         if states == {"completed"}:

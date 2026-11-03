@@ -14,6 +14,7 @@ class ToolOutcome:
     field: str | None = None
     next_action: str | None = None
     receipt: dict[str, Any] | None = None
+    retryable: bool | None = None
 
     def public(self):
         return {key: value for key, value in asdict(self).items() if value is not None}

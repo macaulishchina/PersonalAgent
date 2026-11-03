@@ -315,3 +315,25 @@ HTTP 服务验证重试、逐次计量、取消、部分输出、文件工具结
 不自动重试设备或媒体操作；取消、迟到结果不能附到另一轮执行。
 `test_tool_media` 通过锁定 Pi＋本地合成 MCP 验证留存先于下一模型请求，
 并覆盖普通对话、独立执行、文件故障及来源元数据；不代表真实设备验收。
+
+## Trusted read recovery
+
+A bounded read recovery policy applies to Pi's native read/result-reader/discovery helpers
+and host-registered internal MCP tools explicitly declaring read-only and non-destructive
+behavior. External MCP hints do not grant this treatment. An explicit owner's unknown
+outcome always retains no-replay protection, including when annotations claim read-only.
+
+`model_api.tool_read_attempt_limit` (default 3, range 1..10) bounds actual attempts of the
+same read/arguments/definition/permission snapshot in one turn, including the first call.
+An owner-confirmed transient failure may be reread up to this limit; an unclassified read
+failure permits at most one reread; a known permanent failure is not sent again unchanged.
+The framework never starts these retries itself. Corrected arguments/version changes
+are distinct calls, successful reads allow normal later polling, and unchanged blocked
+calls still end the turn under the existing invalid-call threshold. Exhaustion reports
+`repeated_read_failure` with the original safe cause, not an unknown write outcome.
+Every model round remains within the existing work allowance and deadline.
+
+The result reader preserves ResultAccessError codes and corrective actions across its
+HTTP boundary. A missing JSON path requires corrected arguments; it never requires
+reexecuting the producing tool. First inspect the actual structure with format=json and
+an empty RFC6901 path, then read its fields or bounded text ranges.

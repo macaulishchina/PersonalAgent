@@ -119,6 +119,9 @@ class ModelSettings:
     invalid_tool_call_limit: int = field(
         default_factory=lambda: configuration_default(__file__, "invalid_tool_call_limit")
     )
+    tool_read_attempt_limit: int = field(
+        default_factory=lambda: configuration_default(__file__, "tool_read_attempt_limit")
+    )
     max_loaded_tools: int = field(default_factory=lambda: configuration_default(__file__, "max_loaded_tools"))
     max_output_tokens: int = field(
         default_factory=lambda: configuration_default(__file__, "max_output_tokens")
@@ -180,6 +183,7 @@ class ModelSettings:
             ("max_loaded_tools", 64),
             ("tool_schema_max_bytes", 1048576),
             ("invalid_tool_call_limit", 32),
+            ("tool_read_attempt_limit", 10),
             ("max_output_tokens", 16384),
             ("execution_max_output_tokens", 131072),
         ):

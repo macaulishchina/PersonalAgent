@@ -426,6 +426,14 @@
           }
         },
         "x-advanced": true
+      },
+      "tool_read_attempt_limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 3,
+        "title": "只读调用尝试上限",
+        "description": "同一轮内相同参数和定义的可信只读调用总尝试数，含首次。明确临时错误按此上限；未知读取错误最多重读一次，永久错误不原样重试。不自动发起重试，不适用于第三方 MCP 或未知写操作。"
       }
     }
   },
