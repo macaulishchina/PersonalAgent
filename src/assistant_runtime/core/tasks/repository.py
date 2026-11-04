@@ -41,6 +41,7 @@ class TaskRepository:
           next_at REAL NOT NULL DEFAULT 0, error TEXT, updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS job_finalizations_due ON job_finalizations(state,next_at);
         CREATE TABLE IF NOT EXISTS job_event_cursor (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS task_contexts (task_id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS job_run_history (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
           at REAL NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL);
@@ -79,8 +80,7 @@ class TaskRepository:
             raise ValueError("Task not found")
         return self.definition_row(row)
 
-    @staticmethod
-    def definition_row(row):
+    def definition_row(self, row):
         definition = dict(
             zip(
                 ("id", "state", "spec", "next_at", "created", "updated", "revision"),
@@ -89,6 +89,18 @@ class TaskRepository:
         )
         definition["category"] = category(definition["spec"])
         definition["spec"].setdefault("auto_archive", one_shot(definition["spec"]))
+        context = self.db.execute(
+            "SELECT data FROM task_contexts WHERE task_id=?", (definition["id"],)
+        ).fetchone()
+        if context:
+            captured = json.loads(context[0])
+            definition["context_info"] = {
+                key: captured[key] for key in ("snapshot_ref", "source_session", "checkpoint")
+            }
+            if captured["additional_input"]:
+                definition["context_info"]["additional_input"] = {
+                    key: captured["additional_input"][key] for key in ("id", "sha256", "bytes")
+                }
         return definition
 
     def definitions_by_ids(self, ids):

@@ -56,7 +56,7 @@ class Backend:
     async def open_conversation(self, ident):
         return Backend(ident)
 
-    async def submit(self, text, images=(), *, cancelled=lambda: False):
+    async def submit(self, text, images=(), *, cancelled=lambda: False, context_input_id=None):
         if cancelled():
             raise ValueError("Cancelled")
         assert not self.busy, "input must not steer a busy conversation"
@@ -86,12 +86,15 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.store = Store(self.root / "state.db")
+        from assistant_runtime.core.workfiles import WorkFiles
+
         self.host = SimpleNamespace(
             store=self.store,
             config=Config(root=self.root, plugins=[]),
             backend=Backend(),
             assistant=None,
             memory=None,
+            workfiles=WorkFiles(self.root, self.store.db),
         )
         self.registry = Conversations(self.host)
         self.context = Context()

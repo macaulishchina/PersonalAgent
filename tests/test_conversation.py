@@ -277,7 +277,9 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         ident = str(uuid.uuid4())
         results = await asyncio.gather(c.submit(ident, "只做一次", []), c.submit(ident, "只做一次", []))
         await asyncio.sleep(0.05)
-        self.host.backend.submit.assert_awaited_once_with("只做一次", images=[], cancelled=ANY)
+        self.host.backend.submit.assert_awaited_once_with(
+            "只做一次", images=[], cancelled=ANY, context_input_id=ident
+        )
         self.assertEqual(results[0]["message"]["id"], results[1]["message"]["id"])
         with self.assertRaises(ValueError):
             await c.submit(ident, "不同任务", [])

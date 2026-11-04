@@ -790,6 +790,7 @@ class Conversation:
                     notification_context + text,
                     images=images,
                     cancelled=lambda: request_id in self.cancel_pending,
+                    context_input_id=request_id,
                     **({"retry_of": retry_of} if retry_of else {}),
                     **({"expected_model": expected_model} if expected_model is not None else {}),
                 )

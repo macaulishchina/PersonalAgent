@@ -148,6 +148,8 @@ class PiSessionWorker:
         env["ASSISTANT_PI_POLICY"] = json.dumps(self.meta.get("policy") or {}, ensure_ascii=False)
         env["ASSISTANT_PI_ENABLE_USER_INPUT"] = "1" if self.meta.get("enable_user_input") else "0"
         env["ASSISTANT_PI_ENABLE_GOAL"] = "1" if self.meta.get("enable_goal") else "0"
+        if self.meta.get("runtime_context"):
+            env["ASSISTANT_TASK_RUNTIME"] = json.dumps(self.meta["runtime_context"], ensure_ascii=False)
         env["ASSISTANT_CONTROL_TOKEN"] = self.meta.get("control_token", "")
         env["ASSISTANT_CONTROL_SESSION"] = self.execution_session_id
         env["ASSISTANT_CONTROL_URL"] = self.parent.transport.url or ""
@@ -284,6 +286,9 @@ class PiSessionWorker:
             method = msg.get("method")
             if method == "notify":
                 text = str(msg.get("message", ""))
+                if text.startswith("__assistant_context_checkpoint__:"):
+                    self.context_boundary = json.loads(text.split(":", 1)[1])
+                    return
                 if text.startswith("__assistant_tool_stop__:"):
                     try:
                         problem = json.loads(text.split(":", 1)[1])
@@ -710,6 +715,32 @@ class PiSessionWorker:
             if turn_record.get("error", {}).get("code") == failure.get("code"):
                 turn_record["error"]["retry_allowed"] = turn_record["failure"]["retry_allowed"]
         self.meta["active_run"] = None
+        boundary = getattr(self, "context_boundary", None)
+        if turn_record["status"] == "completed":
+            self.meta["context_completed_seen"] = True
+        if turn_record["status"] == "completed" and boundary:
+            try:
+                with Path(self.meta["path"]).open("rb+") as session_stream:
+                    os.fsync(session_stream.fileno())
+            except OSError:
+                log.warning(
+                    "Context checkpoint persistence unavailable session=%s", self.execution_session_id
+                )
+                boundary = None
+        if turn_record["status"] == "completed" and boundary and boundary.get("leaf"):
+            lineage = self.meta.setdefault("context_lineage", [])
+            reference = self.meta.get("context_input_id")
+            if reference and reference not in lineage:
+                lineage.append(reference)
+            self.meta["context_checkpoint"] = {
+                "leaf": boundary["leaf"],
+                "id": uuid.uuid4().hex,
+                "inputs": list(lineage),
+                "coverage_known": bool(self.meta.get("context_coverage_known", False)),
+            }
+        elif self.meta.get("context_input_id"):
+            self.meta["context_coverage_known"] = False
+        self.context_boundary = None
         turns = self.meta.setdefault("runs", [])
         existing = next((t for t in turns if t["id"] == turn_id), None)
         if existing:
@@ -954,6 +985,9 @@ class PiClient:
                 "runs": [],
                 "goal": None,
                 "injected_items": [],
+                "context_coverage_known": True,
+                "context_tracking_version": 1,
+                "context_completed_seen": False,
                 "active_run": None,
                 "pending_operations": {},
                 "current_items": [],
@@ -966,6 +1000,7 @@ class PiClient:
                 "shell_env": cfg.get("shell_environment_policy.set", {}),
                 "allowed_tools": scope["allowed_tools"],
                 "stable_execution_prompt": bool(p.get("_stable_execution_prompt")),
+                "runtime_context": p.get("runtime_context"),
                 "controlled_context": cfg.get("controlled_context"),
                 "control_token": cfg.get("control_token", ""),
                 "skill_paths": scope["skill_paths"],
@@ -975,6 +1010,11 @@ class PiClient:
             self.workers[ident] = PiSessionWorker(self, ident, meta)
             return self._session_reply(meta)
         ident = p["session_id"]
+        if command in (Command.CHECKPOINT, Command.SNAPSHOT):
+            meta = self.workers[ident].meta if ident in self.workers else self._load_meta(ident)[0]
+            if not meta:
+                raise RpcError("Unknown execution session")
+            return await self._session_command(command, p, PiSessionWorker(self, ident, copy.deepcopy(meta)))
         if (
             command in {Command.READ, Command.RUNS, Command.OPERATIONS, Command.GOAL_GET}
             and ident not in self.workers
@@ -1083,6 +1123,7 @@ class PiClient:
 
     def _session_reply(self, meta, active=False):
         return {
+            **({"context_seed": meta["context_seed"]} if meta.get("context_seed") else {}),
             "session": {
                 "id": meta["id"],
                 "path": meta["path"],
@@ -1166,6 +1207,8 @@ class PiClient:
                 raise RpcError("Cannot convert a full-permission session into a controlled context")
             if "mcp_servers" in cfg:
                 meta["mcp_servers"] = cfg["mcp_servers"]
+            if "runtime_context" in p:
+                meta["runtime_context"] = p["runtime_context"]
             self._write_configuration(meta, p.get("instructions"))
             self._save_meta(ident)
             return self._session_reply(meta)
@@ -1179,6 +1222,67 @@ class PiClient:
             if w.process and w.process.returncode is None:
                 await w.close()
             return {}
+        if command in (Command.CHECKPOINT, Command.SNAPSHOT):
+            checkpoint = meta.get("context_checkpoint")
+            if command == Command.SNAPSHOT:
+                checkpoint = p.get("checkpoint")
+            if checkpoint is None:
+                if meta.get("context_completed_seen") or (
+                    meta.get("context_tracking_version") != 1
+                    and (meta.get("runs") or Path(meta["path"]).exists())
+                ):
+                    # Fresh first rounds (including cancelled ones) are provably
+                    # empty at the complete boundary. Legacy/failed persistence is not.
+                    raise RpcError("context_checkpoint_unavailable")
+                checkpoint = {
+                    "id": uuid.uuid5(uuid.NAMESPACE_OID, "pa-context-empty:" + ident).hex,
+                    "leaf": None,
+                    "inputs": [],
+                    "coverage_known": True,
+                }
+            if command == Command.CHECKPOINT:
+                return copy.deepcopy(checkpoint)
+            from .context import native_context
+
+            bundle = (
+                await native_context(
+                    self.pi_binary, action="export", path=meta["path"], leaf=checkpoint["leaf"]
+                )
+                if checkpoint.get("leaf")
+                else {"format": "pi-context-v1", "messages": [], "compacted": False}
+            )
+            from .context import result_references
+
+            return {
+                "checkpoint": checkpoint,
+                "content": bundle,
+                "compacted": bundle["compacted"],
+                "references": result_references(bundle),
+            }
+        if command == Command.SEED:
+            if active or meta.get("runs") or meta.get("context_seed") or Path(meta["path"]).exists():
+                raise RpcError("context_seed_requires_new_session")
+            from .context import native_context
+
+            if not self.settings.entry(meta["model"]).get("images") and any(
+                part.get("type") == "image"
+                for message in p["content"]["messages"]
+                for part in message.get("content", [])
+                if isinstance(part, dict)
+            ):
+                raise RpcError("context_model_unsupported_images")
+
+            await native_context(
+                self.pi_binary,
+                action="seed",
+                path=meta["path"],
+                cwd=meta["cwd"],
+                bundle=p["content"],
+                additional=p.get("additional", ""),
+            )
+            meta["context_seed"] = p["snapshot_ref"]
+            self._save_meta(ident)
+            return {"snapshot_ref": meta["context_seed"]}
         if command in (Command.GOAL_SET, Command.GOAL_GET):
             if command == Command.GOAL_SET:
                 meta["goal"] = {
@@ -1250,6 +1354,10 @@ class PiClient:
                 self.settings.require_route(p["expected_model"], model)
             run_id = uuid.uuid4().hex
             w.active_turn, w.turn_aborted, w.turn_error = run_id, False, None
+            w.context_boundary = None
+            meta["context_input_id"] = p.get("context_input_id")
+            if not meta.get("context_input_id"):
+                meta["context_coverage_known"] = False
             w.compaction_error = False
             w.model_failure = None
             w.turn_items, w.pending_msg, w.pending_tools = [], None, {}

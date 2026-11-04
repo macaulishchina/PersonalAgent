@@ -79,6 +79,10 @@ class TasksPlugin:
         self.settings = TaskSettings.parse(host.config.tasks)
         self.model_policy = ModelPolicy.parse(self.settings.model_policy)
         self.repo = TaskRepository(host.store.db)
+        from .contexts import TaskContexts
+
+        self.contexts = TaskContexts(self)
+        self.host.backend.task_contexts = self.contexts
         self.lifecycle = TaskLifecycle(self)
         self.feedback = TaskFeedback(self)
         self.delivering_results = set()
@@ -457,6 +461,7 @@ class TasksPlugin:
             "self_schedule",
             "self_completion",
             "tools",
+            "context",
         }
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("Unknown task specification fields")
@@ -480,6 +485,12 @@ class TasksPlugin:
             from assistant_runtime.core.pi.scope import names
 
             s["tools"] = names(s["tools"], "tools", 64)
+        if "context" in s:
+            from .tool_contracts import CONTEXT
+
+            validate_tool(s["context"], CONTEXT, "context")
+            if s["execution"].get("kind", "agent") != "agent":
+                raise ValueError("Task context requires agent execution")
         for key in ("long_term", "notify_voice", "notify_completion"):
             if type(s[key]) is not bool:
                 raise ValueError(key + " must be boolean")
@@ -630,20 +641,40 @@ class TasksPlugin:
     @admits_work(lambda request: request.action in {"create", "run", "continue", "upgrade_model"})
     async def request(self, request):
         from assistant_runtime.api.ai_usage import current_usage
+        from .contexts import pending_context
+
+        captured = None
+        preparing = None
+        if (
+            request.action == "create"
+            and not self.repo.db.execute(
+                "SELECT 1 FROM job_definitions WHERE request_id=?", (request.arguments.get("request_id"),)
+            ).fetchone()
+        ):
+            try:
+                captured = self.contexts.capture(request.arguments.get("spec", {}))
+                if captured:
+                    preparing = self.contexts.hold_preparing(captured)
+            except ValueError as error:
+                raise invalid_arguments(str(error), "spec.context") from None
+        context_token = pending_context.set(captured)
 
         token = None
         usage = getattr(self.host, "ai_usage", None)
-        if (
-            usage
-            and request.action == "create"
-            and request.arguments.get("spec", {}).get("execution", {}).get("kind", "agent") == "agent"
-        ):
-            token = current_usage.set(await usage.scope(request.caller_run))
         try:
+            if (
+                usage
+                and request.action == "create"
+                and request.arguments.get("spec", {}).get("execution", {}).get("kind", "agent") == "agent"
+            ):
+                token = current_usage.set(await usage.scope(request.caller_run))
             return await self._locked_request(request)
         finally:
             if token is not None:
                 current_usage.reset(token)
+            pending_context.reset(context_token)
+            if preparing:
+                self.contexts.release_preparing(preparing)
 
     async def _locked_request(self, request):
         if request.action in {"reschedule_self", "complete_self"}:
@@ -863,6 +894,9 @@ class TasksPlugin:
                     == ident
                 ):
                     self.feedback.bind(ident, feedback_context)
+                    from .contexts import pending_context
+
+                    self.contexts.bind(ident, pending_context.get())
                 if (
                     subscription(spec)
                     and self.repo.db.execute(

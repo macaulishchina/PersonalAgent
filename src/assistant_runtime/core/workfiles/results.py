@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import nullcontext
 
 from assistant_runtime.api.results import ResultAccessError
 from assistant_runtime.api.system import system
@@ -112,13 +113,30 @@ class ResultFiles:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO result_grants VALUES (?,?)", (ident, owner))
 
-    def hold(self, ident, reason):
-        with self.db:
+    def hold(self, ident, reason, *, commit=True):
+        with self.db if commit else nullcontext():
             self.db.execute("INSERT OR IGNORE INTO result_holds VALUES (?,?)", (ident, reason))
 
     def release(self, reason):
         with self.db:
             self.db.execute("DELETE FROM result_holds WHERE reason=?", (reason,))
+
+    def capture_context(self, references, executions, reason):
+        captured = []
+        for reference in references:
+            record = self.row(reference["id"], owner="operator")
+            allowed = record["execution_id"] in executions or any(
+                self.db.execute(
+                    "SELECT 1 FROM result_grants WHERE id=? AND owner=?", (record["id"], execution)
+                ).fetchone()
+                for execution in executions
+            )
+            if not allowed or record["version"] != reference["version"]:
+                raise ResultAccessError("result_forbidden")
+            self.content(record)
+            self.hold(record["id"], reason)
+            captured.append(record["id"])
+        return sorted(set(captured))
 
     @staticmethod
     def write(directory, ident, raw):

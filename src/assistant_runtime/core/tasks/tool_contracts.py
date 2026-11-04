@@ -26,6 +26,7 @@ ASSESSMENT = obj(
         "uncertainties": {"type": "array", "items": text(300), "maxItems": 4},
     }
 )
+CONTEXT = obj({"snapshot_ref": text(64), "additional_input": text(64)}, ["snapshot_ref"])
 EXECUTION = obj(
     {
         "kind": {"type": "string", "enum": ["agent", "reminder", "device_query"]},

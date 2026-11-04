@@ -84,7 +84,7 @@ class InputFiles:
             raise ValueError("Input storage cannot traverse symlinks")
         return path
 
-    def get(self, ident):
+    def get(self, ident, *, owner=None):
         self.path(ident)
         row = self.db.execute("SELECT * FROM input_files WHERE id=?", (ident,)).fetchone()
         if row is None:
@@ -93,14 +93,29 @@ class InputFiles:
             record = self.media.image_record(ident)
         else:
             record = dict(zip(("id", "owner", "name", "kind", "sha256", "bytes"), row))
+        who = caller() if owner is None else owner
         if (
-            caller() not in {"operator", record["owner"]}
+            who not in {"operator", record["owner"]}
             and not self.db.execute(
-                "SELECT 1 FROM input_grants WHERE id=? AND owner=?", (ident, caller())
+                "SELECT 1 FROM input_grants WHERE id=? AND owner=?", (ident, who)
             ).fetchone()
         ):
             raise ValueError("Input file is unavailable to this caller")
         return record
+
+    def text(self, record):
+        if record["kind"] != "file":
+            raise ValueError("Context background must be a UTF-8 text file")
+        raw = self.path(record["id"]).read_bytes()
+        if len(raw) != record["bytes"] or hashlib.sha256(raw).hexdigest() != record["sha256"]:
+            raise ValueError("Registered input file changed")
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeError:
+            raise ValueError("Context background must be UTF-8") from None
+        if "\x00" in text:
+            raise ValueError("Context background must be text")
+        return text
 
     def grant(self, references, owner):
         """Trusted owning module delegates already validated references, never a model operation."""

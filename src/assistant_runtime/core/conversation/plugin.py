@@ -28,6 +28,9 @@ class Conversations:
         self.opened = {self.main.session: self.main}
         self.opening = asyncio.Lock()
         self.context = None
+        from .snapshots import Snapshots
+
+        self.snapshots = Snapshots(self)
 
     async def start(self, context):
         self.context = context
@@ -85,6 +88,9 @@ class Conversations:
             "retry": {"session_id", "request_id", "turn_id"},
             "supplement": {"session_id", "request_id", "text"},
             "answer": {"session_id", "request_id", "question_id", "text"},
+            "snapshot": {"session_id", "request_id"},
+            "snapshot_receipt": {"session_id", "request_id"},
+            "snapshot_inputs": {"session_id", "snapshot_ref", "limit", "cursor"},
         }.get(action)
         if allowed is None or not isinstance(args, dict) or set(args) - allowed:
             raise ValueError("Invalid conversation operation")
@@ -111,6 +117,8 @@ class Conversations:
             return self.sessions.get(ident)
         ident = args.get("session_id")
         self.sessions.get(ident)
+        if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:
+            return await self.snapshots.request(action, args)
         store = self.main.store
         if "include_execution" in args and type(args["include_execution"]) is not bool:
             raise ValueError("include_execution must be boolean")

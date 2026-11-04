@@ -1,5 +1,10 @@
 # Public conversations
 
+Since 0.4.17, `snapshot`, `snapshot_receipt`, and `snapshot_inputs` expose immutable
+complete checkpoints and paged source-input coverage. Capture never waits for the
+active round or invokes a model; unproven legacy coverage is explicit. See the
+[task context snapshot contract](../../../../docs/guides/task-context-snapshots.md).
+
 Since 0.4.14, submit optionally accepts `expected_model={model, revision}` from the
 applied public model directory. It guards acceptance and final dispatch without pinning
 the session; old submissions keep existing defaults. Receipt/receipts optionally accept

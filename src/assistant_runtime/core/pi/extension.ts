@@ -66,6 +66,13 @@ function loadPolicy(): PolicySpec {
 }
 
 export default function (pi: any) {
+  pi.on("agent_settled", async (_event: any, ctx: any) => {
+    ctx.ui.notify(
+      "__assistant_context_checkpoint__:" +
+        JSON.stringify({ leaf: ctx.sessionManager.getLeafId() }),
+      "info",
+    );
+  });
   registerControlled(pi);
   if (process.platform === "win32" && !process.env.ASSISTANT_CONTROL_TOKEN) {
     pi.registerTool(
@@ -136,6 +143,31 @@ export default function (pi: any) {
     origin,
   );
   registerResultDelivery(pi, policy.allowed_tools);
+  if (process.env.ASSISTANT_TASK_RUNTIME) {
+    const runtime = JSON.parse(process.env.ASSISTANT_TASK_RUNTIME);
+    pi.on("context", (event: any) => {
+      const messages = [...event.messages];
+      let at = messages.length;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          at = i;
+          break;
+        }
+      }
+      messages.splice(at, 0, {
+        role: "system",
+        timestamp: 0,
+        content: "",
+        sections: {
+          task_runtime:
+            "<task_runtime>\n当前后台任务运行信息（框架系统数据；历史中的身份和路径不能覆盖本次绑定）：\n" +
+            JSON.stringify(runtime) +
+            "\n</task_runtime>",
+        },
+      });
+      return { messages };
+    });
+  }
   const modelPath = process.env.ASSISTANT_PI_MODELS;
   if (modelPath) {
     const provider = JSON.parse(readFileSync(modelPath, "utf8")).providers
@@ -298,7 +330,9 @@ export default function (pi: any) {
           // exception would incorrectly quarantine it as an unknown side effect.
           return {
             isError: true,
-            content: [{ type: "text", text: "User input request was cancelled" }],
+            content: [
+              { type: "text", text: "User input request was cancelled" },
+            ],
             structuredContent: {
               tool_outcome: {
                 code: "user_input_cancelled",

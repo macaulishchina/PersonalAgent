@@ -24,6 +24,7 @@ class TaskExecutor(PiJobs):
                 "data": {
                     **run["data"],
                     "execution_session_id": None,
+                    "previous_execution_session_id": old_thread,
                     "turn_id": None,
                     "continuation": "继续原授权任务。以下是已核对的交接检查点，保留操作标识，不重复执行已完成动作；未知结果先查询：\n"
                     + json.dumps(checkpoint, ensure_ascii=False),

@@ -1,5 +1,11 @@
 # Tasks plugin
 
+Since 0.4.17, agent task creation may explicitly provide `context.snapshot_ref` and
+an optional registered UTF-8 `context.additional_input`. Ordinary tasks and children
+do not inherit context. Each scheduled run gets an independent copy; continuation
+uses its own retained session. See [context snapshots](../../../../docs/guides/task-context-snapshots.md)
+for receipt recovery, permissions, compaction, retention and KFC integration.
+
 Public route-constrained tasks and explicit model-default effort are opt-in additions
 in 0.4.14. Existing selection/default/child-task behavior remains unchanged. A read-only
 `TaskRequest("receipt", {"request_id": UUID})` recovers creation identity without replay.

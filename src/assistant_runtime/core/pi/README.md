@@ -1,5 +1,12 @@
 # Pi execution adapter
 
+Optional task context snapshots use pinned SDK `buildSessionProjection` and fresh
+native sessions, rather than flattening history through `session.context`. The adapter
+records a settled leaf before publishing completion; source system/runtime instructions,
+private reasoning and provider response state are excluded from exports. Imported usage
+is not a target capacity measurement, so Pi re-estimates it and uses its existing
+compaction/usage/cancellation path. See [task context snapshots](../../../../docs/guides/task-context-snapshots.md).
+
 Pi is the only agent harness. The host uses the provider-neutral `api/execution.py` contract; this adapter owns native JSONL, processes, session files and normalized events. Main conversation and task execution use the same implementation. Native subscription accounts are model providers, not separate executors; no Codex execution path is retained.
 
 The conversation registry owns stable public session IDs. `PiBackend.open_conversation`

@@ -54,6 +54,7 @@ GROUPS = {
         "mcp",
         "pi_skeleton",
         "pi_waiting",
+        "context_snapshot",
         "pi_discovery",
         "pi_runtime",
         "execution_reset",

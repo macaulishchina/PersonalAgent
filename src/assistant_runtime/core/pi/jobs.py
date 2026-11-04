@@ -133,6 +133,27 @@ class PiJobs:
         }
         if spec.get("tools") is not None:
             params["config"]["allowed_tools"] = spec["tools"]
+        if spec.get("context"):
+            params["_stable_execution_prompt"] = True
+            identity = {
+                "task_id": run.get("task_id"),
+                "run_id": run["id"],
+                "execution": selection,
+                "long_term": bool(spec.get("long_term")),
+            }
+            params["runtime_context"] = {
+                **identity,
+                "scratch": str(directory / "scratch"),
+                "artifacts": str(directory / "artifacts"),
+                "workspace": spec["workspace"],
+            }
+            params["instructions"] = params["instructions"].replace(
+                json.dumps(identity, ensure_ascii=False), "见当前任务运行信息"
+            )
+            for name in ("scratch", "artifacts", "workspace"):
+                params["instructions"] = params["instructions"].replace(
+                    params["runtime_context"][name], "[当前任务运行信息中的 " + name + "]"
+                )
         existing = run["data"].get("execution_session_id")
         if existing:
             history = run["data"].get("model_upgrades", [])
@@ -184,6 +205,31 @@ class PiJobs:
             await self.client.request(
                 "goal.set", {"session_id": thread, "objective": spec["prompt"], "status": "active"}
             )
+        if spec.get("context"):
+            if existing and result.get("context_seed") != spec["context"]["snapshot_ref"]:
+                raise RuntimeError("snapshot_task_context_unavailable; no history was reimported")
+            if not existing:
+                try:
+                    if run["data"].get("context", {}).get("seeded"):
+                        previous = run["data"].get("previous_execution_session_id")
+                        if not previous:
+                            raise RuntimeError(
+                                "snapshot_task_context_unavailable; source history was not reimported"
+                            )
+                        transfer = await self.client.request("session.snapshot", {"session_id": previous})
+                        await self.client.request(
+                            "session.seed",
+                            {
+                                "session_id": thread,
+                                "snapshot_ref": spec["context"]["snapshot_ref"],
+                                "content": transfer["content"],
+                            },
+                        )
+                    else:
+                        await self.backend.task_contexts.seed(run, thread)
+                except BaseException:
+                    await self.client.request("session.close", {"session_id": thread})
+                    raise
         prompt = spec["prompt"]
         if run["data"].get("continuation"):
             prompt = "继续此任务，先核对已有结果，不重复已完成操作。\n" + run["data"]["continuation"]

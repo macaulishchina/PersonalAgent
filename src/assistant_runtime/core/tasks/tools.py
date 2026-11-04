@@ -4,7 +4,7 @@ from assistant_runtime.mcp.contracts import checked
 from fastmcp import FastMCP
 from typing import Annotated, Literal
 from pydantic import Field, WithJsonSchema
-from .tool_contracts import EXECUTION, TRIGGER, CHANGES, SELF_SCHEDULE, SELF_COMPLETION, CHECKPOINT
+from .tool_contracts import EXECUTION, TRIGGER, CHANGES, SELF_SCHEDULE, SELF_COMPLETION, CHECKPOINT, CONTEXT
 from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.api.annotations import READ, WRITE
 
@@ -50,6 +50,7 @@ def create_server(client, caller_run=None):
         prompt: str,
         trigger: Annotated[dict, WithJsonSchema(TRIGGER), checked(TRIGGER, "trigger")] | None = None,
         execution: Annotated[dict, WithJsonSchema(EXECUTION), checked(EXECUTION, "execution")] | None = None,
+        context: Annotated[dict, WithJsonSchema(CONTEXT), checked(CONTEXT, "context")] | None = None,
         long_term: bool = False,
         workspace: str | None = None,
         resources: Annotated[
@@ -95,6 +96,8 @@ def create_server(client, caller_run=None):
             spec["self_completion"] = self_completion
         if tools is not None:
             spec["tools"] = tools
+        if context is not None:
+            spec["context"] = context
         if self_schedule is not None:
             spec["self_schedule"] = self_schedule
         if workspace:

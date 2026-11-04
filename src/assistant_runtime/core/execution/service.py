@@ -223,6 +223,15 @@ class ExecutionService:
         call, scope = current_call.get(), current_usage.get()
         return call.work_id if call else scope.work_id if scope else "operator"
 
+    def capture_context_results(self, session, references, reason):
+        executions = {
+            row[0]
+            for row in self.records.db.execute(
+                "SELECT id FROM agent_runs WHERE json_extract(data,'$.session_id')=?", (session,)
+            )
+        }
+        return self.files.results.capture_context(references, executions, reason)
+
     def owned(self, ident):
         row = self.records.get(ident)
         if self.owner() != "operator" and row["owner"] != self.owner():

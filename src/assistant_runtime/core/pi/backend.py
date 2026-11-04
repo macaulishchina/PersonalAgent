@@ -305,7 +305,16 @@ class PiBackend:
             },
         )
 
-    async def submit(self, text, images=(), *, cancelled=lambda: False, retry_of=None, expected_model=None):
+    async def submit(
+        self,
+        text,
+        images=(),
+        *,
+        cancelled=lambda: False,
+        retry_of=None,
+        expected_model=None,
+        context_input_id=None,
+    ):
         if not self.foreground:
             raise RuntimeError("Conversation capability is not enabled")
         if not self.client.settings.enabled:
@@ -343,6 +352,7 @@ class PiBackend:
                         "session_id": self.execution_session_id,
                         "expected_run_id": self.active_turn,
                         "input": inputs,
+                        "context_input_id": context_input_id,
                     },
                 )
                 return "steered"
@@ -364,6 +374,7 @@ class PiBackend:
                         },
                         "input": inputs,
                         "model": self.config.main_model,
+                        "context_input_id": context_input_id,
                         "effort": self.config.main_reasoning_effort,
                         **({"expected_model": expected_model} if expected_model is not None else {}),
                         **({"retry_of": retry_of} if retry_of else {}),
