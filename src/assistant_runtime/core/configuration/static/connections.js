@@ -473,6 +473,15 @@ function renderProviderEditor(field, name) {
   );
 }
 
+let modelAvatarCatalog;
+function loadModelAvatars() {
+  modelAvatarCatalog ??= api("/api/model-avatars").catch((error) => {
+    modelAvatarCatalog = undefined;
+    throw error;
+  });
+  return modelAvatarCatalog;
+}
+
 function renderModelPresentation(path, initial = {}) {
   const box = node("section", undefined, "model-presentation");
   box.setAttribute("aria-label", "个性配置");
@@ -488,10 +497,7 @@ function renderModelPresentation(path, initial = {}) {
   const avatar = formInput(box, "public-model-avatar", "头像", {
     choices: [
       ["", "使用默认 / 继承连接"],
-      ...["generic", "openai", "anthropic", "google", "deepseek"].map((v) => [
-        "builtin:" + v,
-        v,
-      ]),
+      ...(value.avatar?.startsWith("builtin:") ? [[value.avatar, value.avatar.slice(8)]] : []),
     ],
   });
   if (value.avatar?.startsWith("asset:"))
@@ -500,27 +506,48 @@ function renderModelPresentation(path, initial = {}) {
   const preview = node("img");
   preview.width = preview.height = 48;
   preview.alt = "模型头像预览";
-  const builtin = node("span", "AI", "model-avatar-builtin");
-  box.append(preview, builtin);
+  box.append(preview);
+  const picker = node("details", undefined, "model-avatar-picker");
+  const heading = node("summary", "浏览内置头像");
+  picker.append(heading);
+  const search = formInput(picker, "avatar-search", "搜索头像");
+  search.type = "search";
+  search.placeholder = "提供商、名称或图案…";
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") event.preventDefault();
+  });
+  const choices = node("div", undefined, "model-avatar-choices");
+  const hint = node("p", "正在读取内置头像…", "hint");
+  picker.append(choices, hint);
+  box.append(picker);
+  let catalog = [];
+  function builtinUrl(name) {
+    const item = catalog.find((item) => item.name === name);
+    return `/api/model-avatar/builtin/${encodeURIComponent(name)}${item ? `?version=${item.version}` : ""}`;
+  }
+  function effectiveAvatar() {
+    if (value.avatar) return value.avatar;
+    if (path[1] === "entries") {
+      const entry = valueAt(["model_api", "entries"], {})[path[2]] || {};
+      const provider = valueAt(["model_api", "providers"], {})[entry.provider];
+      return provider?.presentation?.avatar || "builtin:generic";
+    }
+    return "builtin:generic";
+  }
   function show() {
-    const ref = value.avatar || "builtin:generic";
-    preview.hidden = !ref.startsWith("asset:");
-    builtin.hidden = !preview.hidden;
-    if (!preview.hidden) {
+    if (!value.avatar?.startsWith("asset:"))
+      for (const option of [...avatar.options])
+        if (option.value.startsWith("asset:")) option.remove();
+    const ref = effectiveAvatar();
+    if (ref.startsWith("asset:")) {
       const id = ref.slice(6);
       const staged = resourceEdits.get("model-avatar-" + id);
       preview.src = staged
         ? "data:image/png;base64," + staged.value
         : `/api/model-avatar/${id}?version=${id}`;
-    } else
-      builtin.textContent =
-        {
-          generic: "AI",
-          openai: "O",
-          anthropic: "A",
-          google: "G",
-          deepseek: "D",
-        }[ref.slice(8)] || "AI";
+    } else preview.src = builtinUrl(ref.slice(8));
+    for (const button of choices.querySelectorAll("button[data-avatar]"))
+      button.setAttribute("aria-pressed", String(value.avatar === button.dataset.avatar));
   }
   function save() {
     changed(
@@ -556,6 +583,66 @@ function renderModelPresentation(path, initial = {}) {
     else delete value.avatar;
     save();
   });
+  function filter() {
+    const query = search.value.trim().toLocaleLowerCase();
+    let count = 0;
+    for (const group of choices.children) {
+      let visible = 0;
+      for (const button of group.querySelectorAll("button[data-avatar]")) {
+        button.hidden = !button.dataset.search.includes(query);
+        if (!button.hidden) visible++;
+      }
+      group.hidden = !visible;
+      count += visible;
+    }
+    hint.textContent = count ? `${count} 个头像` : "没有匹配的头像";
+  }
+  search.addEventListener("input", filter);
+  loadModelAvatars().then((result) => {
+    if (!box.isConnected) return;
+    catalog = result.avatars;
+    const selected = value.avatar || "";
+    avatar.replaceChildren(new Option("使用默认 / 继承连接", ""));
+    for (const [groupId, label] of [["providers", "AI 提供商"], ["general", "通用头像"]]) {
+      const options = node("optgroup");
+      options.label = label;
+      const group = node("section", undefined, "model-avatar-group");
+      group.setAttribute("aria-label", label);
+      group.append(node("h4", label));
+      const grid = node("div", undefined, "model-avatar-grid");
+      for (const item of catalog.filter((item) => item.group === groupId)) {
+        const ref = "builtin:" + item.name;
+        options.append(new Option(item.label, ref));
+        const choice = button("", () => {
+          value.avatar = ref;
+          avatar.value = ref;
+          save();
+          picker.open = false;
+          heading.focus();
+        });
+        choice.type = "button";
+        choice.className = "model-avatar-choice";
+        choice.dataset.avatar = ref;
+        choice.dataset.search = `${item.label} ${item.name}`.toLocaleLowerCase();
+        choice.setAttribute("aria-label", item.label);
+        choice.title = item.label;
+        const icon = node("img");
+        icon.alt = "";
+        icon.loading = "lazy";
+        icon.src = builtinUrl(item.name);
+        choice.append(icon, node("span", item.label));
+        grid.append(choice);
+      }
+      group.append(grid);
+      choices.append(group);
+      avatar.append(options);
+    }
+    if (selected.startsWith("asset:")) avatar.add(new Option("自定义图片", selected));
+    avatar.value = selected;
+    heading.textContent = `浏览内置头像 · ${catalog.length} 款`;
+    filter();
+    show();
+  }).catch(() => { hint.textContent = "内置头像暂时无法读取，可继续使用自定义图片。"; });
   const upload = document.createElement("input");
   upload.type = "file";
   upload.accept = "image/png,image/jpeg,image/webp";

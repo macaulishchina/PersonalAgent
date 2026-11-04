@@ -187,7 +187,7 @@
                 "avatar": {
                   "type": "string",
                   "title": "头像",
-                  "pattern": "^(builtin:(generic|openai|anthropic|google|deepseek)|asset:[a-f0-9]{64})$"
+                  "pattern": "^(builtin:(openai|anthropic|google|meta|mistral|xai|cohere|perplexity|huggingface|microsoft|nvidia|amazon|groq|ai21|openrouter|deepseek|qwen|kimi|zhipu|minimax|doubao|baidu|tencent|stepfun|baichuan|iflytek|sensetime|yi|internlm|siliconflow|generic|robot|sparkles|star|sun|moon|leaf|flower|mountain|waves|cloud|flame|snowflake|gem|hexagon|orbit|planet|rocket|compass|lightbulb|book|code|terminal|chart|shield|gear|puzzle|music|camera|palette|coffee|cat|dog|rabbit|bird|fish|bug|heart|beaker|microscope|anchor)|asset:[a-f0-9]{64})$"
                 }
               }
             }
@@ -404,7 +404,7 @@
                 "avatar": {
                   "type": "string",
                   "title": "头像",
-                  "pattern": "^(builtin:(generic|openai|anthropic|google|deepseek)|asset:[a-f0-9]{64})$"
+                  "pattern": "^(builtin:(openai|anthropic|google|meta|mistral|xai|cohere|perplexity|huggingface|microsoft|nvidia|amazon|groq|ai21|openrouter|deepseek|qwen|kimi|zhipu|minimax|doubao|baidu|tencent|stepfun|baichuan|iflytek|sensetime|yi|internlm|siliconflow|generic|robot|sparkles|star|sun|moon|leaf|flower|mountain|waves|cloud|flame|snowflake|gem|hexagon|orbit|planet|rocket|compass|lightbulb|book|code|terminal|chart|shield|gear|puzzle|music|camera|palette|coffee|cat|dog|rabbit|bird|fish|bug|heart|beaker|microscope|anchor)|asset:[a-f0-9]{64})$"
                 }
               }
             }

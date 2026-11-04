@@ -170,11 +170,15 @@ class AvatarHTTPTest(ConfigurationFixture, unittest.IsolatedAsyncioTestCase):
             [
                 web.post("/api/login", console.login),
                 web.post("/api/model-avatar", console.model_avatar_upload),
+                web.get("/api/model-avatars", console.model_avatar_catalog),
+                web.get("/api/model-avatar/builtin/{name}", console.model_avatar_builtin),
                 web.get("/api/model-avatar/{asset_id}", console.model_avatar_read),
             ]
         )
         async with TestClient(TestServer(app)) as client:
             origin = str(client.make_url("/")).rstrip("/")
+            self.assertEqual((await client.get("/api/model-avatars")).status, 401)
+            self.assertEqual((await client.get("/api/model-avatar/builtin/openai")).status, 401)
             payload = {
                 "version": files.snapshot().version,
                 "data_base64": base64.b64encode(image_bytes()).decode(),
@@ -187,6 +191,16 @@ class AvatarHTTPTest(ConfigurationFixture, unittest.IsolatedAsyncioTestCase):
                 json={"token": (self.root / "admin").read_text().strip()},
                 headers={"Origin": origin},
             )
+            catalog = await (await client.get("/api/model-avatars")).json()
+            item = next(item for item in catalog["avatars"] if item["name"] == "openai")
+            url = "/api/model-avatar/builtin/openai?version=" + item["version"]
+            icon = await client.get(url)
+            self.assertEqual(icon.status, 200)
+            self.assertIn("image/svg+xml", icon.headers["Content-Type"])
+            self.assertEqual(
+                (await client.get(url, headers={"If-None-Match": icon.headers["ETag"]})).status, 304
+            )
+            self.assertEqual((await client.get("/api/model-avatar/builtin/openai?version=stale")).status, 400)
             self.assertEqual(
                 (
                     await client.post(

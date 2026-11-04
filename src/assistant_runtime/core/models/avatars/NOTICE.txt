@@ -1,0 +1,19 @@
+PA packaged avatar library
+
+Provider brands: Lobe Icons, MIT license, copyright LobeHub.
+Source: https://github.com/lobehub/lobe-icons
+Pinned commit: ea434b96e75813517b377825e01c0df61dee8836
+Per-asset source paths and hashes: catalog.json.
+Adaptation: SVG marks are placed on a rounded white tile for light/dark readability.
+Full license: LOBE_ICONS_LICENSE.txt.
+
+General avatars: Lucide React 1.56.0, ISC license, Lucide Icons and Contributors.
+Source: https://github.com/lucide-icons/lucide
+Adaptation: line glyphs are placed on deterministic colored rounded tiles.
+Full license (including upstream notices): LUCIDE_LICENSE.txt.
+
+30 provider icons, 40 general avatars, and generic (an alias of the robot artwork).
+Stable builtin names are configuration identifiers, not model execution identities.
+Offline runtime: no CDN, third-party request, model inference, or credential access.
+Maintenance: python scripts/update_builtin_avatars.py from the PA repository after
+reviewing the pinned source and the installed Lucide version. No runtime updater.

@@ -12,8 +12,13 @@ effort edits do not change the route revision. The configured route is not evide
 a gateway's underlying model. See [public model routes](../../../../docs/guides/model-routes.md).
 
 Optional provider/entry `presentation` tables contain `display_name`, `description`
-and `avatar`. Model appearance inherits its connection. `builtin:generic/openai/anthropic/google/deepseek`
-are controlled monograms; custom connections default to generic rather than guessed branding.
+and `avatar`. Model appearance inherits its connection. Since 0.4.15 the offline built-in
+library contains 30 provider brands and 40 simple general avatars plus the generic default.
+Existing `builtin:generic/openai/anthropic/google/deepseek` names remain valid; custom
+connections default to generic rather than guessed branding. `ModelRequest("avatars")`
+lists stable names/labels/groups/content versions. `ModelRequest("avatar_read",
+{"builtin": NAME, "version": VERSION})` returns packaged SVG bytes as base64; no model
+or network call is made. Source provenance and licenses ship beside the assets.
 The configuration editor can normalize uploaded PNG/JPEG/WebP into immutable PNG resources,
 committed with the referring configuration. Trusted plugins use `ModelRequest("avatar_read",
 {"asset_id": ID, "version": ID})` to read only currently applied catalog references.

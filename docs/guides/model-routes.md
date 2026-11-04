@@ -112,7 +112,9 @@ display_name = "公开模型名称"
 ```
 
 名称 1～80 字符、说明最多 400 字符。模型继承连接头像，默认 generic。
-内置 generic/openai/anthropic/google/deepseek 为受控字母图标，不根据兼容协议猜测品牌。
+0.4.15 起内置 30 个国内外提供商品牌图标、40 个通用简洁头像及 generic 默认头像，全部随包离线提供。
+原有 generic/openai/anthropic/google/deepseek 名称保持兼容；不根据兼容协议猜测品牌。
+配置页支持图墙预览、中文/英文搜索和键盘选择，模型未覆盖时展示连接的实际头像。
 配置页提供编辑、预览、上传、恢复默认。上传 PNG/JPEG/WebP 最大 2 MiB、1600 万像素；服务端仅取首帧、清除元数据，输出不超过 256×256/256 KiB 的 PNG。
 
 管理端 POST /api/model-avatar 使用管理员会话、同源校验、JSON {version,data_base64}，返回 avatar 引用和配置资源操作。
@@ -121,6 +123,23 @@ display_name = "公开模型名称"
 运行侧 `ModelRequest("avatar_read", {"asset_id": ID, "version": ID})` 仅允许已生效目录正在引用的资源，返回规范化 PNG 的 media_type/sha256/data_base64。
 ID 与版本均为规范化内容摘要，内容不可同版本覆盖。插件自行同源代理和缓存，浏览器无需 PA 管理 Cookie。
 未引用文件沿用配置恢复所需的保留方式，不提供任意路径、远程图片或可执行 HTML/SVG 读取。历史外观快照由接入方保存。
+
+内置资源单独复用公开读取入口（0.4.15 起）：
+
+```python
+directory = await context.invoke(ModelRequest("avatars"))
+item = next(item for item in directory["avatars"] if item["name"] == "deepseek")
+icon = await context.invoke(ModelRequest("avatar_read", {
+    "builtin": item["name"], "version": item["version"],
+}))
+# {asset_id: "builtin:deepseek", version, media_type: "image/svg+xml", sha256, data_base64}
+```
+
+目录包含 name/label/group/version/media_type，revision 为整个内置目录的摘要。
+内置 name 为配置值 builtin:NAME 的后半部分；版本只影响资源缓存，不影响执行路由。
+这类 SVG 是固定来源、经过检查的随包资源，不开放用户上传 SVG。未知名字、路径或过期版本明确拒绝。
+管理端同源鉴权 GET /api/model-avatars 与 GET /api/model-avatar/builtin/NAME?version=VERSION 提供目录/预览，支持 ETag。
+KFC 仍可通过运行侧读取后自行同源代理，无需 PA 管理 Cookie。品牌来源和许可见包内 avatars/NOTICE.txt；更新仅运行维护脚本，不在启动时下载。
 
 ## 错误、归属和容量
 

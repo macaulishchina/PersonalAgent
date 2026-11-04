@@ -6,8 +6,9 @@ from io import BytesIO
 from pathlib import Path
 import re
 import warnings
+from .builtin_avatars import names
 
-BUILTINS = ("generic", "openai", "anthropic", "google", "deepseek")
+BUILTINS = names()
 MAX_UPLOAD = 2 * 1024 * 1024
 MAX_IMAGE = 256 * 1024
 

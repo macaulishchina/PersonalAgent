@@ -19,6 +19,7 @@ GROUPS = {
     "models": {
         "model_routes",
         "model_presentation",
+        "builtin_avatars",
         "ai_usage",
         "models",
         "models_transport",

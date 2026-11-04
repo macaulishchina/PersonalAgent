@@ -2866,15 +2866,14 @@ dialog.wide-dialog {
   object-fit: contain;
   border-radius: 12px;
 }
-.model-avatar-builtin {
-  display: inline-grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--surface-raised, #e1e8e3);
-  font-weight: 600;
-}
-.model-avatar-builtin[hidden] {
-  display: none;
-}
+.model-avatar-picker > summary { cursor: pointer; font-weight: 600; }
+.model-avatar-picker[open] { padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.model-avatar-choices { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; }
+.model-avatar-group h4 { margin: 16px 0 8px; font-size: 13px; color: var(--muted); }
+.model-avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; padding: 3px; }
+.model-avatar-choice { display: grid; justify-items: center; align-content: start; gap: 6px; min-width: 0; padding: 10px 4px; border: 1px solid transparent; border-radius: 10px; background: var(--surface); cursor: pointer; }
+.model-avatar-choice img { width: 32px; height: 32px; border-radius: 8px; }
+.model-avatar-choice span { max-width: 100%; font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+.model-avatar-choice:hover { background: var(--accent-soft); }
+.model-avatar-choice[aria-pressed="true"] { border-color: var(--blue); background: var(--accent-soft); }
+.model-avatar-choice:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }

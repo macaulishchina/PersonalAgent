@@ -168,6 +168,8 @@ class Console:
                 web.post("/api/model-test", self.model_test),
                 web.post("/api/model-capabilities", self.model_capabilities),
                 web.post("/api/model-avatar", self.model_avatar_upload),
+                web.get("/api/model-avatars", self.model_avatar_catalog),
+                web.get("/api/model-avatar/builtin/{name}", self.model_avatar_builtin),
                 web.get("/api/model-avatar/{asset_id}", self.model_avatar_read),
                 web.post("/api/account-answer", self.account_answer),
                 web.post("/api/account-cancel", self.account_cancel),
@@ -528,6 +530,26 @@ class Console:
             }
 
         return web.json_response(await asyncio.to_thread(prepare))
+
+    async def model_avatar_catalog(self, request):
+        from assistant_runtime.core.models.builtin_avatars import catalog
+
+        return web.json_response(catalog())
+
+    async def model_avatar_builtin(self, request):
+        from assistant_runtime.core.models.builtin_avatars import read
+
+        raw, version = read(request.match_info["name"], request.query.get("version"))
+        headers = {
+            "ETag": '"' + version + '"',
+            "Cache-Control": "private, max-age=31536000, immutable"
+            if "version" in request.query
+            else "private, no-cache",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if request.headers.get("If-None-Match") == headers["ETag"]:
+            return web.Response(status=304, headers=headers)
+        return web.Response(body=raw, content_type="image/svg+xml", headers=headers)
 
     async def model_avatar_read(self, request):
         from assistant_runtime.core.models.presentation import read

@@ -1,0 +1,503 @@
+{
+  "source_commit": "ea434b96e75813517b377825e01c0df61dee8836",
+  "lucide_version": "1.56.0",
+  "avatars": [
+    {
+      "name": "openai",
+      "label": "OpenAI",
+      "group": "providers",
+      "source": "packages/static-svg/icons/openai.svg",
+      "sha256": "b6bd9514278c2f2adaa3be9aa6c60a8e30705cbb33e8366fee48b328e2bb7ca6"
+    },
+    {
+      "name": "anthropic",
+      "label": "Anthropic / Claude",
+      "group": "providers",
+      "source": "packages/static-svg/icons/anthropic.svg",
+      "sha256": "53db99aa2afafc10e89c08e7ffba4a8ad0c3880e2fb582bd08e7fc248290d802"
+    },
+    {
+      "name": "google",
+      "label": "Google / Gemini",
+      "group": "providers",
+      "source": "packages/static-svg/icons/gemini-color.svg",
+      "sha256": "b71e330970fb66e5fa6022e096b7201a66999cde97798a7800270c6fdc573f42"
+    },
+    {
+      "name": "meta",
+      "label": "Meta / Llama",
+      "group": "providers",
+      "source": "packages/static-svg/icons/meta-color.svg",
+      "sha256": "f9fc04004a144a6fc5a9be4af4264ea9d730139b17d8de989ea072c73b1ca5af"
+    },
+    {
+      "name": "mistral",
+      "label": "Mistral AI",
+      "group": "providers",
+      "source": "packages/static-svg/icons/mistral-color.svg",
+      "sha256": "c5f67af2d2df535214a6b0894e70ba1b5d8d17c3ed38bd0209d5d885cd76b810"
+    },
+    {
+      "name": "xai",
+      "label": "xAI / Grok",
+      "group": "providers",
+      "source": "packages/static-svg/icons/xai.svg",
+      "sha256": "a3735410d721f089736ae62419c1fa86b4629a81348a5b5097d172c9c8422fa5"
+    },
+    {
+      "name": "cohere",
+      "label": "Cohere",
+      "group": "providers",
+      "source": "packages/static-svg/icons/cohere-color.svg",
+      "sha256": "c9bf028ceb3bba059df61051b341489e111be9eb97afc320411bdb1a86e18468"
+    },
+    {
+      "name": "perplexity",
+      "label": "Perplexity",
+      "group": "providers",
+      "source": "packages/static-svg/icons/perplexity-color.svg",
+      "sha256": "eceb33105a0439df84555a7c4cf645d371dfa18914db40b539f98aee5afc310f"
+    },
+    {
+      "name": "huggingface",
+      "label": "Hugging Face",
+      "group": "providers",
+      "source": "packages/static-svg/icons/huggingface-color.svg",
+      "sha256": "abb29186f70b507062dfba38e57fa447cf01d8e376e9663e36d25eee722a71bc"
+    },
+    {
+      "name": "microsoft",
+      "label": "Microsoft / Copilot",
+      "group": "providers",
+      "source": "packages/static-svg/icons/copilot-color.svg",
+      "sha256": "78bac0781b592666fd3c7647fbe2c9b7eef7649cea0356212be1065d0c4b4d32"
+    },
+    {
+      "name": "nvidia",
+      "label": "NVIDIA",
+      "group": "providers",
+      "source": "packages/static-svg/icons/nvidia-color.svg",
+      "sha256": "da5ca6158d6365cca012b952601586e9f5ad9c6aee01f7e62d8c22b7446ba9cb"
+    },
+    {
+      "name": "amazon",
+      "label": "Amazon / AWS",
+      "group": "providers",
+      "source": "packages/static-svg/icons/aws-color.svg",
+      "sha256": "284740c63ba2eacb61848d12dbc86f6ba248a29e6841b30427f56ac1b6151a2d"
+    },
+    {
+      "name": "groq",
+      "label": "Groq",
+      "group": "providers",
+      "source": "packages/static-svg/icons/groq.svg",
+      "sha256": "caf9a7483bbfd9cee44d180e07c7f350cc54210d49c507a9bb8c78ce13b0a54a"
+    },
+    {
+      "name": "ai21",
+      "label": "AI21 Labs",
+      "group": "providers",
+      "source": "packages/static-svg/icons/ai21.svg",
+      "sha256": "51aaff558d5214962dd78225fc35057e4901c2dc43490ad7677d2e8e8e23b735"
+    },
+    {
+      "name": "openrouter",
+      "label": "OpenRouter",
+      "group": "providers",
+      "source": "packages/static-svg/icons/openrouter-color.svg",
+      "sha256": "0961f0cc8b88ec20725fad6666fa981f8a31466da2891d93bffbf5abc14d3237"
+    },
+    {
+      "name": "deepseek",
+      "label": "DeepSeek 深度求索",
+      "group": "providers",
+      "source": "packages/static-svg/icons/deepseek-color.svg",
+      "sha256": "b896b026147c0a20dddc30126a74ff9197e66458d5027820c29906916fe1bde9"
+    },
+    {
+      "name": "qwen",
+      "label": "阿里通义 / Qwen",
+      "group": "providers",
+      "source": "packages/static-svg/icons/qwen-color.svg",
+      "sha256": "b2293f6c593505abaab55c87194a1c8c0847461073f4bb098d1c518ef567ea4e"
+    },
+    {
+      "name": "kimi",
+      "label": "月之暗面 / Kimi",
+      "group": "providers",
+      "source": "packages/static-svg/icons/kimi-color.svg",
+      "sha256": "4ccba76d49ebfd8612f8cb80dae3c88ad37dc15c89cb3a1b64d4cc864295744e"
+    },
+    {
+      "name": "zhipu",
+      "label": "智谱 / GLM",
+      "group": "providers",
+      "source": "packages/static-svg/icons/zhipu-color.svg",
+      "sha256": "e78692b874e774b9405a8619e4b43e56147f273012596e529d66ecd0741ff579"
+    },
+    {
+      "name": "minimax",
+      "label": "MiniMax",
+      "group": "providers",
+      "source": "packages/static-svg/icons/minimax-color.svg",
+      "sha256": "6183144715cb7b35c9559d125b6c74f8dd766ae190fd28d151d4fdd9931541ff"
+    },
+    {
+      "name": "doubao",
+      "label": "字节豆包 / Doubao",
+      "group": "providers",
+      "source": "packages/static-svg/icons/doubao-color.svg",
+      "sha256": "013c0616571623faf192f535c9a3ab66aadbc64e34dc2e51768a3e6a1499a2a1"
+    },
+    {
+      "name": "baidu",
+      "label": "百度文心",
+      "group": "providers",
+      "source": "packages/static-svg/icons/baidu-color.svg",
+      "sha256": "b80e319a9855941c396bddac964e5ce7ba217cda4a975064da6a293826e7f7c4"
+    },
+    {
+      "name": "tencent",
+      "label": "腾讯混元 / Hunyuan",
+      "group": "providers",
+      "source": "packages/static-svg/icons/hunyuan-color.svg",
+      "sha256": "981b2aa8deb5a35da769cbcf1c67dc64f4d0eb66be5ff9493455690492c3048d"
+    },
+    {
+      "name": "stepfun",
+      "label": "阶跃星辰 / StepFun",
+      "group": "providers",
+      "source": "packages/static-svg/icons/stepfun-color.svg",
+      "sha256": "b58a3457a179a83248735cec998a59eca99ab10bc63efe6a7a9856cab6288b40"
+    },
+    {
+      "name": "baichuan",
+      "label": "百川智能",
+      "group": "providers",
+      "source": "packages/static-svg/icons/baichuan-color.svg",
+      "sha256": "999e9ab22fb4ad88ffb5c8feb4d05d25281abea56ea6fe498b9515a03c3e5dca"
+    },
+    {
+      "name": "iflytek",
+      "label": "讯飞星火",
+      "group": "providers",
+      "source": "packages/static-svg/icons/spark-color.svg",
+      "sha256": "f4faead81e5d90f6e6e759fc2249c098dceec1c4b6a6a84f2a65c7651f23916c"
+    },
+    {
+      "name": "sensetime",
+      "label": "商汤日日新",
+      "group": "providers",
+      "source": "packages/static-svg/icons/sensenova-color.svg",
+      "sha256": "800a065b901906e5a1a4eea48a8297442c60887aeeabffdde1c22e2d9180b6e3"
+    },
+    {
+      "name": "yi",
+      "label": "零一万物 / Yi",
+      "group": "providers",
+      "source": "packages/static-svg/icons/yi-color.svg",
+      "sha256": "3c43aabed7b4e2e2e5be875b397c4fd7c4adc49d69c31b67ead7ee460d3cce98"
+    },
+    {
+      "name": "internlm",
+      "label": "书生 / InternLM",
+      "group": "providers",
+      "source": "packages/static-svg/icons/internlm-color.svg",
+      "sha256": "2eaa44de7b9409fc0ce1d76422b581ab3d88a1c7ef6a7dbd1a63cda2cba0a54f"
+    },
+    {
+      "name": "siliconflow",
+      "label": "硅基流动 / SiliconFlow",
+      "group": "providers",
+      "source": "packages/static-svg/icons/siliconcloud-color.svg",
+      "sha256": "3ea7aa6abd0be19de2be3a5d616790ff9ed499b95dc70cde4c41e0e186a2b0cd"
+    },
+    {
+      "name": "generic",
+      "label": "默认助手",
+      "group": "general",
+      "source": "lucide:Bot",
+      "sha256": "948e1099e544ed8628a224fc5d506941facb16010cb629c14bdeb777ac2a15dc"
+    },
+    {
+      "name": "robot",
+      "label": "机器人",
+      "group": "general",
+      "source": "lucide:Bot",
+      "sha256": "948e1099e544ed8628a224fc5d506941facb16010cb629c14bdeb777ac2a15dc"
+    },
+    {
+      "name": "sparkles",
+      "label": "灵感",
+      "group": "general",
+      "source": "lucide:Sparkles",
+      "sha256": "ea577ff6bdc6b2fa6fe98a75ee35e3a722254183a91c360aad884ee95dae40b8"
+    },
+    {
+      "name": "star",
+      "label": "星星",
+      "group": "general",
+      "source": "lucide:Star",
+      "sha256": "128fd4fb81fe904b5152e0c5eeb7a1a36af5786f077392d1617542b4e08c443c"
+    },
+    {
+      "name": "sun",
+      "label": "太阳",
+      "group": "general",
+      "source": "lucide:Sun",
+      "sha256": "e6819b65a111f62cbf7d2568b93921da27a0ead52625dfe91e92814df1f2c36b"
+    },
+    {
+      "name": "moon",
+      "label": "月亮",
+      "group": "general",
+      "source": "lucide:Moon",
+      "sha256": "93cfe141104b398f4ac029c8326265576eeaeaf1095ef852e8423ae2b0db3592"
+    },
+    {
+      "name": "leaf",
+      "label": "绿叶",
+      "group": "general",
+      "source": "lucide:Leaf",
+      "sha256": "d0c3012b8bc434e1b17b40bbbeba20ace282870a4455871378428ada1339d9ea"
+    },
+    {
+      "name": "flower",
+      "label": "花朵",
+      "group": "general",
+      "source": "lucide:Flower2",
+      "sha256": "ce50e22b4eff740cf064e6b3328a08770a44e08669d4917f8b242e883bf59c53"
+    },
+    {
+      "name": "mountain",
+      "label": "山峰",
+      "group": "general",
+      "source": "lucide:Mountain",
+      "sha256": "04f49583b926374769bc217114feb044c14225714af8350144824f11b898d420"
+    },
+    {
+      "name": "waves",
+      "label": "海浪",
+      "group": "general",
+      "source": "lucide:Waves",
+      "sha256": "63d66d5bfd0089d95b2ff9daa869a130d87029f964673329dbef35d6bfd9939c"
+    },
+    {
+      "name": "cloud",
+      "label": "云朵",
+      "group": "general",
+      "source": "lucide:Cloud",
+      "sha256": "bbc10f446eeb69f93d9bf4f93c3cde70b8620aa86e2fe5ed2c57eb23ebdffd53"
+    },
+    {
+      "name": "flame",
+      "label": "火焰",
+      "group": "general",
+      "source": "lucide:Flame",
+      "sha256": "7ceac03717e2b803336aa08d84e94728df1215f53a596ff091f1ce584736d74f"
+    },
+    {
+      "name": "snowflake",
+      "label": "雪花",
+      "group": "general",
+      "source": "lucide:Snowflake",
+      "sha256": "f88197ebc73d4e277fc6f03799072ccbedb2203d943f9bf65493f45634d37c02"
+    },
+    {
+      "name": "gem",
+      "label": "宝石",
+      "group": "general",
+      "source": "lucide:Gem",
+      "sha256": "d8ae95170c3a100277cf24ae11abe48182faf411b2fb645bf2a2dae571681d08"
+    },
+    {
+      "name": "hexagon",
+      "label": "六边形",
+      "group": "general",
+      "source": "lucide:Hexagon",
+      "sha256": "683194e564e159817df23f540b761d116cb725d394e1d9686fcdfb31251975c2"
+    },
+    {
+      "name": "orbit",
+      "label": "轨道",
+      "group": "general",
+      "source": "lucide:Orbit",
+      "sha256": "1d7ba632602485b7b93eb10875ff2f3c87f2dbdb96aee28614bff5d796946f09"
+    },
+    {
+      "name": "planet",
+      "label": "行星",
+      "group": "general",
+      "source": "lucide:Globe",
+      "sha256": "262a65e02234b80062bcf4854cc1414fd6f2107db7c5d68a5d2725a58420a3f0"
+    },
+    {
+      "name": "rocket",
+      "label": "火箭",
+      "group": "general",
+      "source": "lucide:Rocket",
+      "sha256": "56e32e60830f9c6ef7e7ecf24962ba3785a56154a65ddd8a21f9554469015580"
+    },
+    {
+      "name": "compass",
+      "label": "指南针",
+      "group": "general",
+      "source": "lucide:Compass",
+      "sha256": "4538c817af4ea0bf34168ccd258a7a600997d3e988b33a654b002b4e8431e757"
+    },
+    {
+      "name": "lightbulb",
+      "label": "灯泡",
+      "group": "general",
+      "source": "lucide:Lightbulb",
+      "sha256": "5d14b7305289befac02c3d7e3d80665292db956b65ae93443300a81bea9fa8e9"
+    },
+    {
+      "name": "book",
+      "label": "书本",
+      "group": "general",
+      "source": "lucide:BookOpen",
+      "sha256": "6e1daca2c893c722a589067ce63e10b483d90e93c7dc247667446205b84271c3"
+    },
+    {
+      "name": "code",
+      "label": "代码",
+      "group": "general",
+      "source": "lucide:CodeXml",
+      "sha256": "73becb556692bc46f84585417568bb9aaa94636482fd8e17f51d2a6e23faea58"
+    },
+    {
+      "name": "terminal",
+      "label": "终端",
+      "group": "general",
+      "source": "lucide:SquareTerminal",
+      "sha256": "93eb2762d09efc9a87a3b6f36cea16163baf5c1c8842bfc1b7e6d969868a064c"
+    },
+    {
+      "name": "chart",
+      "label": "图表",
+      "group": "general",
+      "source": "lucide:ChartNoAxesCombined",
+      "sha256": "2720e632c23006b6757e06ab58b67ec6834fb30d5f7059abbf3b399bdf47ff19"
+    },
+    {
+      "name": "shield",
+      "label": "盾牌",
+      "group": "general",
+      "source": "lucide:Shield",
+      "sha256": "02ed6b02bf54933540665f09cd9a8681b74cf199c814986b9af249a052084e7f"
+    },
+    {
+      "name": "gear",
+      "label": "齿轮",
+      "group": "general",
+      "source": "lucide:Settings",
+      "sha256": "2bb658db82ff12aea453c7d43ea1276c0d61158ce6de79665c3eef5d9159a0f1"
+    },
+    {
+      "name": "puzzle",
+      "label": "拼图",
+      "group": "general",
+      "source": "lucide:Puzzle",
+      "sha256": "ad1a294bad1c9c66e446aa15b46132dd72ec36681ba91ccc1472e26f9b1cfbd2"
+    },
+    {
+      "name": "music",
+      "label": "音乐",
+      "group": "general",
+      "source": "lucide:Music",
+      "sha256": "62b325135f806388ba81eddd0218e83a6ad98aad021ce7dcc59a3f770325be6d"
+    },
+    {
+      "name": "camera",
+      "label": "相机",
+      "group": "general",
+      "source": "lucide:Camera",
+      "sha256": "f7e9902dd6f6c873a6b2f6c77327f2fe8c565e791d9aec1d514a110da46f27de"
+    },
+    {
+      "name": "palette",
+      "label": "调色盘",
+      "group": "general",
+      "source": "lucide:Palette",
+      "sha256": "dc6faf0fadd9e99067321ed0e44d8b78dd212140850d8808502c399b968abc51"
+    },
+    {
+      "name": "coffee",
+      "label": "咖啡",
+      "group": "general",
+      "source": "lucide:Coffee",
+      "sha256": "24de1103182db3e3e8b2634287442a54feba2f1a8e86c1bd64f034c83c3db05d"
+    },
+    {
+      "name": "cat",
+      "label": "小猫",
+      "group": "general",
+      "source": "lucide:Cat",
+      "sha256": "813c25fb70e6b22d7506426fb77609a75df4e2c1800c8ebe921c05cae22b1f74"
+    },
+    {
+      "name": "dog",
+      "label": "小狗",
+      "group": "general",
+      "source": "lucide:Dog",
+      "sha256": "2824817867ead80566253b2664820698529424f96ffad3f55819281f0ec97a5c"
+    },
+    {
+      "name": "rabbit",
+      "label": "兔子",
+      "group": "general",
+      "source": "lucide:Rabbit",
+      "sha256": "8583ea5ab34c5b6bf49fd84757e8689d8d2996191655f92dab301005e3d12eee"
+    },
+    {
+      "name": "bird",
+      "label": "小鸟",
+      "group": "general",
+      "source": "lucide:Bird",
+      "sha256": "61f4200bead8d3e515925f267af86ae8b866575b83b0392fd8e7bf6c4d1e88f7"
+    },
+    {
+      "name": "fish",
+      "label": "小鱼",
+      "group": "general",
+      "source": "lucide:Fish",
+      "sha256": "c7115707a875732763ad5b0706af49e6b2a330f404568d0827357d160678f61b"
+    },
+    {
+      "name": "bug",
+      "label": "甲虫",
+      "group": "general",
+      "source": "lucide:Bug",
+      "sha256": "f5bf86389ae8ecf1f0d2ccdf6718e3b9172a4132bb4e4483e68107d8c9a86ee4"
+    },
+    {
+      "name": "heart",
+      "label": "爱心",
+      "group": "general",
+      "source": "lucide:Heart",
+      "sha256": "62278b9a58925a697e97a93cbd96293b2d1000cb0fd7f73a9f5791edf3053f93"
+    },
+    {
+      "name": "beaker",
+      "label": "烧杯",
+      "group": "general",
+      "source": "lucide:Beaker",
+      "sha256": "5d26a217f14cf8b2b15c65d2ef3e1c01ff63a263b9f8949dbed40d70abf0b84d"
+    },
+    {
+      "name": "microscope",
+      "label": "显微镜",
+      "group": "general",
+      "source": "lucide:Microscope",
+      "sha256": "65cb69088fb24346bb738666a5122efba2c0029808c4469b8135a6708e333f1b"
+    },
+    {
+      "name": "anchor",
+      "label": "船锚",
+      "group": "general",
+      "source": "lucide:Anchor",
+      "sha256": "4a3eb6084642178b5fc7afbd82fb553ffd929038f54a4d7e62759ac21f1ecbf2"
+    }
+  ]
+}

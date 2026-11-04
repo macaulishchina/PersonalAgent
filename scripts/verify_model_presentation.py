@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import html
 from io import BytesIO
 from pathlib import Path
 import socket
@@ -55,6 +56,22 @@ async def main():
                 await expect(appearance).to_be_visible()
                 await appearance.get_by_label("公开名称", exact=True).fill("Synthetic Team")
                 await appearance.get_by_label("简短说明", exact=True).fill("Public metadata only")
+                await expect(appearance.get_by_text("浏览内置头像 · 71 款", exact=True)).to_be_visible()
+                await appearance.get_by_text("浏览内置头像 · 71 款", exact=True).click()
+                await expect(appearance.locator(".model-avatar-choice")).to_have_count(71)
+                await appearance.get_by_label("搜索头像", exact=True).fill("deepseek")
+                await appearance.get_by_role("button", name="DeepSeek 深度求索", exact=True).click()
+                await expect(appearance.get_by_label("头像", exact=True)).to_have_value("builtin:deepseek")
+                await expect(appearance.get_by_alt_text("模型头像预览")).to_have_js_property(
+                    "naturalWidth", 64
+                )
+                await appearance.get_by_text("浏览内置头像 · 71 款", exact=True).click()
+                await appearance.get_by_label("搜索头像", exact=True).fill("")
+                if args.artifacts:
+                    await appearance.screenshot(path=str(args.artifacts / "builtin-avatar-library.png"))
+                await appearance.get_by_label("搜索头像", exact=True).fill("小猫")
+                await appearance.get_by_role("button", name="小猫", exact=True).click()
+                await expect(appearance.get_by_label("头像", exact=True)).to_have_value("builtin:cat")
                 raw = BytesIO()
                 Image.new("RGB", (600, 400), "blue").save(raw, format="PNG")
                 await appearance.get_by_label("上传模型头像", exact=True).set_input_files(
@@ -119,10 +136,63 @@ async def main():
                     .get_by_label("公开名称", exact=True)
                     .fill("Synthetic Model")
                 )
+                await expect(page.locator('.model-presentation img[alt="模型头像预览"]')).to_have_js_property(
+                    "naturalWidth", 256
+                )
+                await (
+                    page.locator(".model-presentation")
+                    .get_by_text("浏览内置头像 · 71 款", exact=True)
+                    .click()
+                )
+                await page.locator(".model-presentation").get_by_label("搜索头像", exact=True).fill("机器人")
+                await (
+                    page.locator(".model-presentation")
+                    .get_by_role("button", name="机器人", exact=True)
+                    .click()
+                )
+                await expect(
+                    page.locator(".model-presentation").get_by_label("头像", exact=True)
+                ).to_have_value("builtin:robot")
+                for width in (375, 768, 1280):
+                    await page.set_viewport_size({"width": width, "height": 900})
+                    await page.locator(".model-avatar-picker").evaluate("picker => picker.open = true")
+                    bounds = await page.locator(".model-avatar-choices").evaluate(
+                        "el => ({width:el.clientWidth,scroll:el.scrollWidth})"
+                    )
+                    assert bounds["scroll"] <= bounds["width"], bounds
                 assert not errors, errors
+                if args.artifacts:
+                    directory = await (
+                        await page.request.get(f"http://127.0.0.1:{port}/api/model-avatars")
+                    ).json()
+                    sections = []
+                    for group, label in (("providers", "AI 提供商"), ("general", "通用头像")):
+                        cards = "".join(
+                            f'<div><img src="/api/model-avatar/builtin/{item["name"]}?version={item["version"]}"><span>{html.escape(item["label"])}</span></div>'
+                            for item in directory["avatars"]
+                            if item["group"] == group
+                        )
+                        sections.append(f"<h2>{label}</h2><section>{cards}</section>")
+                    body = (
+                        '<meta charset="utf-8"><style>body{font-family:Segoe UI,Microsoft YaHei,sans-serif;margin:32px;background:#f6f8f6;color:#24332d}h2{font-size:18px;margin:24px 0 16px}section{display:grid;grid-template-columns:repeat(10,1fr);gap:12px}section div{display:grid;justify-items:center;align-content:start;gap:8px;background:white;padding:14px 6px;border-radius:14px}img{width:48px;height:48px}span{font-size:11px;text-align:center}</style>'
+                        + "".join(sections)
+                    )
+                    sheet = page
+                    await sheet.set_viewport_size({"width": 1280, "height": 1100})
+                    await sheet.route(
+                        "**/avatar-preview.html",
+                        lambda route: route.fulfill(body=body, content_type="text/html"),
+                    )
+                    await sheet.goto(f"http://127.0.0.1:{port}/avatar-preview.html", wait_until="networkidle")
+                    assert await sheet.locator("img").evaluate_all(
+                        "imgs => imgs.length === 71 && imgs.every(img => img.complete && img.naturalWidth === 64)"
+                    )
+                    await sheet.screenshot(
+                        path=str(args.artifacts / "builtin-avatar-contact-sheet.png"), full_page=True
+                    )
                 await browser.close()
                 print(
-                    "PASS: appearance forms; upload normalized on server; no files before save; atomic resource save; authenticated PNG preview and ETag; restore/cancel; no model calls"
+                    "PASS: 30 brand + 40 general avatars; visual search/select; inherited preview; mobile layout; upload normalization and atomic save; authenticated PNG/ETag; restore/cancel; no model calls"
                 )
         finally:
             await console.close()

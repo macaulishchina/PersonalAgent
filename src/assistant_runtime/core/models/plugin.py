@@ -219,7 +219,19 @@ class ModelsPlugin:
             self.active.discard(task)
 
     async def handle(self, request):
+        if request.action == "avatars":
+            from .builtin_avatars import catalog
+
+            if request.arguments:
+                raise ValueError("Built-in avatar catalog takes no arguments")
+            return catalog()
         if request.action == "avatar_read":
+            if "builtin" in request.arguments:
+                from .builtin_avatars import encoded as builtin_encoded
+
+                if set(request.arguments) - {"builtin", "version"}:
+                    raise ValueError("Invalid built-in avatar arguments")
+                return builtin_encoded(request.arguments["builtin"], request.arguments.get("version"))
             from .presentation import references, encoded
 
             if set(request.arguments) != {"asset_id", "version"}:
