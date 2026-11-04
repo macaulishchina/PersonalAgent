@@ -488,7 +488,15 @@ function renderCapabilityPicker(initial, apply) {
 // One model identity and grouped picker for every declared model reference.
 function modelDisplayName(alias) {
   const entry = valueAt(["model_api", "entries"], {})[alias];
-  return `${alias} · ${entry?.provider || "未配置 Provider"}`;
+  const presentation = configuredPresentation("entries", alias);
+  const provider = configuredPresentation(
+    "providers",
+    entry?.provider || "未配置 Provider",
+  );
+  const identity = presentation.display_name === alias
+    ? alias
+    : `${presentation.display_name} (${alias})`;
+  return `${identity} · ${provider.display_name}`;
 }
 function modelReferencePicker(select, { auto = false } = {}) {
   const root = node("div", undefined, "model-reference"),
@@ -522,7 +530,7 @@ function modelReferencePicker(select, { auto = false } = {}) {
   }
   for (const [provider, models] of ordered) {
     const group = node("optgroup");
-    group.label = provider;
+    group.label = configuredPresentation("providers", provider).display_name;
     for (const item of models) {
       const option = node("option", modelDisplayName(item.alias));
       option.value = item.alias;
@@ -585,7 +593,13 @@ function modelReferencePicker(select, { auto = false } = {}) {
     if (parent) item.dataset.provider = parent;
     const copy = node("span", undefined, "model-reference-option-copy");
     copy.append(node("strong", label));
+    if (parent && label !== alias) copy.append(node("small", alias));
     if (model && model !== alias) copy.append(node("small", model));
+    if (parent) {
+      const presentation = configuredPresentation("entries", alias);
+      if (presentation.description) copy.title = presentation.description;
+      item.append(configuredAvatar(presentation.avatar, "model-reference-avatar"));
+    }
     item.append(
       copy,
       node("span", select.value === alias ? "✓" : "", "model-reference-check"),
@@ -602,7 +616,7 @@ function modelReferencePicker(select, { auto = false } = {}) {
         tree.append(leaf(item.alias, item.label));
     for (const [provider, models] of ordered) {
       const matches = models.filter((item) =>
-        `${provider} ${item.alias} ${item.model}`
+        `${modelDisplayName(item.alias)} ${item.model} ${provider} ${configuredPresentation("entries", item.alias).description}`
           .toLocaleLowerCase()
           .includes(query),
       );
@@ -615,7 +629,9 @@ function modelReferencePicker(select, { auto = false } = {}) {
       heading.tabIndex = -1;
       heading.setAttribute("role", "treeitem");
       heading.setAttribute("aria-level", "1");
-      heading.setAttribute("aria-label", provider);
+      const providerLabel = configuredPresentation("providers", provider).display_name;
+      heading.setAttribute("aria-label", providerLabel);
+      heading.title = provider;
       heading.setAttribute("aria-expanded", String(!collapsed.has(provider)));
       children.id =
         popup.id + "-group-" + ordered.findIndex(([name]) => name === provider);
@@ -628,7 +644,7 @@ function modelReferencePicker(select, { auto = false } = {}) {
           collapsed.has(provider) ? "›" : "⌄",
           "model-reference-caret",
         ),
-        node("strong", provider),
+        node("strong", providerLabel),
       );
       if (providers[provider]?.enabled === false)
         heading.append(node("small", "未启用", "model-reference-disabled"));
@@ -639,7 +655,12 @@ function modelReferencePicker(select, { auto = false } = {}) {
       children.setAttribute("aria-label", provider + " 的模型");
       children.hidden = collapsed.has(provider);
       for (const item of matches)
-        children.append(leaf(item.alias, item.alias, item.model, provider));
+        children.append(leaf(
+          item.alias,
+          configuredPresentation("entries", item.alias).display_name,
+          item.model,
+          provider,
+        ));
       heading.addEventListener("click", () => {
         if (collapsed.has(provider)) collapsed.delete(provider);
         else collapsed.add(provider);

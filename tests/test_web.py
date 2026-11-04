@@ -87,6 +87,79 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(self.base + "/api/results/example?" + query)
             self.assertEqual(response.status, 400, query)
 
+    async def test_applied_model_presentation_and_avatars_use_chat_auth(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from assistant_runtime.core.models.plugin import ModelsPlugin
+        from assistant_runtime.core.models.settings import ModelSettings
+        from assistant_runtime.core.models import presentation
+        from test_models import settings
+
+        owner = object.__new__(ModelsPlugin)
+        owner.host = SimpleNamespace(config=replace(self.host.config, main_model="test-model"))
+        raw = settings()
+        raw["providers"]["test"]["presentation"] = {
+            "display_name": "Public Team",
+            "avatar": "builtin:deepseek",
+        }
+        raw["entries"]["test-model"]["presentation"] = {
+            "display_name": "Public Model",
+            "description": "Helpful model",
+        }
+        owner.settings = ModelSettings.parse(raw)
+
+        async def invoke(request, **kwargs):
+            return await owner.handle(request)
+
+        self.host.runtime.invoke = AsyncMock(side_effect=invoke)
+        for path in ("models", "model-avatar/builtin/deepseek"):
+            response = await self.client.get(self.base + "/api/" + path)
+            self.assertEqual(response.status, 401)
+        self.host.runtime.invoke.assert_not_awaited()
+        await self.login()
+        response = await self.client.get(self.base + "/api/models")
+        self.assertEqual(response.status, 200)
+        catalog = await response.json()
+        self.assertEqual(catalog["default"]["route"]["model"], "test-model")
+        row = catalog["models"][0]
+        self.assertEqual(row["display_name"], "Public Model")
+        self.assertEqual(row["displayName"], "Public Model")
+        self.assertEqual(row["provider_display_name"], "Public Team")
+        self.assertEqual(row["avatar"], {"kind": "builtin", "name": "deepseek"})
+        self.assertNotIn("key_env", str(catalog))
+        response = await self.client.get(self.base + "/api/model-avatar/builtin/deepseek")
+        self.assertEqual(response.status, 200)
+        self.assertIn("image/svg+xml", response.headers["Content-Type"])
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        cached = await self.client.get(
+            self.base + "/api/model-avatar/builtin/deepseek",
+            headers={"If-None-Match": response.headers["ETag"]},
+        )
+        self.assertEqual(cached.status, 304)
+
+        stream = io.BytesIO()
+        Image.new("RGB", (10, 10), "green").save(stream, format="PNG")
+        image = presentation.normalize(stream.getvalue())
+        ident = presentation.digest(image)
+        folder = self.host.config.root / "config/model-avatars"
+        folder.mkdir(parents=True)
+        (folder / (ident + ".png")).write_bytes(image)
+        raw["entries"]["test-model"]["presentation"].update(
+            display_name="Updated Model", avatar="asset:" + ident
+        )
+        owner.settings = ModelSettings.parse(raw)
+        reloaded = await (await self.client.get(self.base + "/api/models")).json()
+        self.assertEqual(reloaded["models"][0]["display_name"], "Updated Model")
+        response = await self.client.get(self.base + f"/api/model-avatar/{ident}?version={ident}")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), image)
+        response = await self.client.get(self.base + f"/api/model-avatar/{ident}?version=stale")
+        self.assertEqual(response.status, 400)
+        del raw["entries"]["test-model"]["presentation"]["avatar"]
+        owner.settings = ModelSettings.parse(raw)
+        response = await self.client.get(self.base + f"/api/model-avatar/{ident}?version={ident}")
+        self.assertEqual(response.status, 400)
+
     async def test_auth_origin_and_restart_cookie(self):
         r = await self.client.get(self.base + "/api/messages")
         self.assertEqual(r.status, 401)

@@ -54,6 +54,10 @@ class ImageTest(unittest.TestCase):
         )
         row = after.public_catalog()[0]
         self.assertEqual(row["display_name"], "Helpful model")
+        self.assertEqual(row["displayName"], "Helpful model")
+        self.assertEqual(after.catalog()[0]["display_name"], "Helpful model")
+        self.assertEqual(after.catalog()[0]["displayName"], "Helpful model")
+        self.assertEqual(row["model"], "test-model")
         self.assertEqual(row["provider_display_name"], "Team")
         self.assertEqual(row["avatar"], {"kind": "builtin", "name": "openai"})
         for avatar in ("https://example.com/a.png", "file:///private", "../../secret", "builtin:unknown"):

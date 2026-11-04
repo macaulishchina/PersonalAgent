@@ -532,6 +532,11 @@ function renderModelCollection(panel, kind) {
       ),
     );
   for (const [name, value] of Object.entries(entries)) {
+    const presentation = configuredPresentation(kind, name);
+    const providerName = configuredPresentation(
+      "providers",
+      value.provider || "",
+    ).display_name;
     const card = node("section", undefined, "entity-card");
     card.dataset.entity = name;
     card.dataset.search = [
@@ -540,6 +545,9 @@ function renderModelCollection(panel, kind) {
       value.provider,
       value.account,
       value.preset,
+      presentation.display_name,
+      presentation.description,
+      providerName,
       ...(kind === "entries"
         ? Object.values(taskRecommendations())
             .filter((item) => item.model === name)
@@ -549,10 +557,14 @@ function renderModelCollection(panel, kind) {
       .filter(Boolean)
       .join(" ");
     const head = node("div", undefined, "entity-heading");
-    head.append(node("span", name.slice(0, 2).toUpperCase(), "entity-avatar"));
+    head.append(configuredAvatar(presentation.avatar));
     if (kind === "entries") {
       const identity = node("div", undefined, "entity-name-and-usage");
-      identity.append(node("h3", name));
+      const title = node("h3", presentation.display_name);
+      title.title = name;
+      identity.append(title);
+      if (presentation.display_name !== name)
+        identity.append(node("small", name, "entity-registered-name"));
       if (valueAt(["main_model"], "") === name)
         identity.append(node("span", "主对话", "badge configured"));
       for (const item of Object.values(taskRecommendations())) {
@@ -563,7 +575,11 @@ ${item.description}`;
         identity.append(badge);
       }
       head.append(identity);
-    } else head.append(node("h3", name));
+    } else {
+      const title = node("h3", presentation.display_name);
+      title.title = name;
+      head.append(title);
+    }
     if (kind === "providers")
       head.append(
         node(
@@ -587,9 +603,17 @@ ${item.description}`;
         "entity-description",
       ),
     );
+    if (presentation.description)
+      card
+        .querySelector(".entity-description")
+        .prepend(
+          node("span", presentation.description, "entity-public-description"),
+        );
     if (kind === "entries") {
       const chips = node("div", undefined, "entity-tags");
-      chips.append(node("span", value.provider || "未选择连接", "badge"));
+      const providerBadge = node("span", providerName || "未选择连接", "badge");
+      providerBadge.title = value.provider || "";
+      chips.append(providerBadge);
       if (value.images) chips.append(node("span", "图片", "badge"));
       card.append(chips);
     }

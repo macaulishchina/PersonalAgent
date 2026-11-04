@@ -412,12 +412,9 @@ class ModelSettings:
         return route
 
     def public_catalog(self):
-        from .presentation import public
-
         return [
             {
                 **row,
-                **public(self, row["model"]),
                 "route": self.route(row["model"]),
                 "unavailable_reason": None if row["available"] else "model_disabled",
                 "default_reasoning_effort": reasoning_effort(self.entries[row["model"]]),
@@ -426,11 +423,14 @@ class ModelSettings:
         ]
 
     def catalog(self):
+        from .presentation import public
+
         return [
             {
                 "id": k,
                 "model": k,
-                "displayName": k,
+                "displayName": m.get("presentation", {}).get("display_name", k),
+                **public(self, k),
                 "provider": m["provider"],
                 "available": self.enabled and self.providers[m["provider"]].get("enabled", False),
                 "images": m.get("images", False),

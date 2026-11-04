@@ -5,11 +5,15 @@ import asyncio
 import base64
 import json
 import re
+from io import BytesIO
 from pathlib import Path
 import tempfile
 
 from aiohttp import web
 from playwright.async_api import async_playwright, expect
+from PIL import Image
+from assistant_runtime.core.models.builtin_avatars import encoded
+from assistant_runtime.core.models.presentation import normalize, digest
 
 
 async def main():
@@ -50,6 +54,17 @@ async def main():
         )
 
     fixture_messages = []
+    image = BytesIO()
+    Image.new("RGB", (32, 32), "green").save(image, format="PNG")
+    avatar_png = normalize(image.getvalue())
+    avatar_id = digest(avatar_png)
+    public_model = dict(
+        model="model-a",
+        display_name="Public Model",
+        description="Public description",
+        avatar=dict(kind="image", asset_id=avatar_id, version=avatar_id),
+    )
+    avatar_missing = False
     state = dict(
         name="Personal Agent",
         voice="disabled",
@@ -148,6 +163,19 @@ async def main():
                     data = {"messages": fixture_messages, "state": state, "cursor": 0, "before": None}
                 elif path == "session":
                     data = state
+                elif path == "models":
+                    data = {"models": [public_model], "default": {"route": {"model": "model-a"}}}
+                elif path.startswith("model-avatar/"):
+                    if avatar_missing:
+                        await route.fulfill(status=404)
+                    elif "/builtin/" in path:
+                        icon = encoded(path.rsplit("/", 1)[1])
+                        await route.fulfill(
+                            content_type=icon["media_type"], body=base64.b64decode(icon["data_base64"])
+                        )
+                    else:
+                        await route.fulfill(content_type="image/png", body=avatar_png)
+                    return
                 elif path.startswith("uploads/"):
                     await route.fulfill(
                         content_type="image/png",
@@ -421,6 +449,38 @@ async def main():
             assert posts[-1][1] == dict(action="retry", turn_id="failed-turn", request_id=retry_id)
             assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             await page.screenshot(path=str(output / "model-failure-recovery.png"))
+            fixture_messages[:] = [
+                dict(
+                    id="personalized-reply",
+                    ordinal=10,
+                    role="assistant",
+                    source="web",
+                    kind="message",
+                    text="Personalized reply",
+                    status="complete",
+                    attachments=[],
+                    updated=1,
+                    turn_id="presentation-turn",
+                )
+            ]
+            state.update(task_running=False, active_request_id=None, active_turn_id=None, queue=[])
+            await page.reload()
+            speaker = page.locator(".message-group.assistant .speaker")
+            avatar = page.locator(".message-group.assistant .model-avatar img")
+            await expect(speaker).to_have_text("Public Model")
+            await expect(speaker).to_have_attribute("title", "Public description")
+            await expect(avatar).to_have_js_property("naturalWidth", 32)
+            public_model.update(display_name="Updated Model", avatar=dict(kind="builtin", name="deepseek"))
+            await page.reload()
+            await expect(speaker).to_have_text("Updated Model")
+            await expect(avatar).to_have_attribute("src", "/chat/api/model-avatar/builtin/deepseek")
+            await expect(avatar).to_have_js_property("naturalWidth", 64)
+            await page.screenshot(path=str(output / "model-presentation-reloaded.png"))
+            avatar_missing = True
+            await page.reload()
+            await expect(speaker).to_have_text("Updated Model")
+            await expect(avatar).to_have_count(0)
+            await expect(page.locator(".message-group.assistant .model-avatar svg")).to_be_visible()
             assert not errors, errors
             await browser.close()
     finally:
@@ -432,6 +492,7 @@ async def main():
                 "queue_display_drag_keyboard_edit_remove_conflict_recovery": "passed",
                 "desktop_mobile_layout": "passed",
                 "model_failure_details_retry_idempotent_request": "passed",
+                "model_presentation_reload_uploaded_builtin_and_missing_avatar": "passed",
                 "screenshots": str(output),
             },
             ensure_ascii=False,

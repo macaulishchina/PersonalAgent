@@ -482,6 +482,44 @@ function loadModelAvatars() {
   return modelAvatarCatalog;
 }
 
+function configuredPresentation(kind, name) {
+  const value = valueAt(["model_api", kind], {})[name] || {};
+  const own = value.presentation || {};
+  const provider =
+    kind === "entries"
+      ? valueAt(["model_api", "providers"], {})[value.provider]?.presentation ||
+        {}
+      : {};
+  return {
+    display_name: own.display_name || name,
+    description: own.description || "",
+    avatar: own.avatar || provider.avatar || "builtin:generic",
+  };
+}
+
+function configuredAvatar(ref, className = "entity-avatar") {
+  const image = node("img", undefined, className);
+  image.alt = "";
+  image.width = image.height = 28;
+  if (ref.startsWith("asset:")) {
+    const id = ref.slice(6);
+    const staged = resourceEdits.get("model-avatar-" + id);
+    image.src = staged
+      ? "data:image/png;base64," + staged.value
+      : `/api/model-avatar/${id}?version=${id}`;
+  } else {
+    image.src = `/api/model-avatar/builtin/${encodeURIComponent(ref.slice(8))}`;
+  }
+  image.addEventListener(
+    "error",
+    () => {
+      image.src = "/api/model-avatar/builtin/generic";
+    },
+    { once: true },
+  );
+  return image;
+}
+
 function renderModelPresentation(path, initial = {}) {
   const box = node("section", undefined, "model-presentation");
   box.setAttribute("aria-label", "个性配置");

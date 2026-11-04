@@ -2981,6 +2981,29 @@ dialog.wide-dialog {
 .model-avatar-choice[aria-pressed="true"] { border-color: var(--blue); background: var(--accent-soft); }
 .model-avatar-choice:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 
+img.entity-avatar,
+.model-reference-avatar {
+  object-fit: contain;
+  flex: 0 0 auto;
+  padding: 3px;
+  background: var(--surface);
+}
+.model-reference-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.entity-registered-name {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.entity-public-description {
+  display: block;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+
 @media (max-width: 600px) {
   .editor-drawer {
     --drawer-gutter: 14px;

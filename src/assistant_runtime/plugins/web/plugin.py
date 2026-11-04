@@ -3,6 +3,7 @@
 from .declaration import DECLARATION
 
 import asyncio
+import base64
 import ipaddress
 import json
 import socket
@@ -50,6 +51,9 @@ class WebPlugin:
                 web.post("/api/login", self.login),
                 web.post("/api/logout", self.logout),
                 web.get("/api/session", self.session),
+                web.get("/api/models", self.models),
+                web.get("/api/model-avatar/builtin/{name}", self.model_avatar),
+                web.get("/api/model-avatar/{asset_id}", self.model_avatar),
                 web.get("/api/messages", self.history),
                 web.post("/api/messages", self.send),
                 web.get("/api/events", self.events),
@@ -216,6 +220,33 @@ class WebPlugin:
 
     async def session(self, request):
         return web.json_response(self.conversation.state())
+
+    async def models(self, request):
+        from assistant_runtime.api.models import ModelRequest
+
+        return web.json_response(await self.api.invoke(ModelRequest("catalog")))
+
+    async def model_avatar(self, request):
+        from assistant_runtime.api.models import ModelRequest
+
+        if "name" in request.match_info:
+            args = {"builtin": request.match_info["name"]}
+            if "version" in request.query:
+                args["version"] = request.query["version"]
+        else:
+            args = {
+                "asset_id": request.match_info["asset_id"],
+                "version": request.query.get("version", ""),
+            }
+        result = await self.api.invoke(ModelRequest("avatar_read", args))
+        headers = {"ETag": '"' + result["sha256"] + '"'}
+        if request.headers.get("If-None-Match") == headers["ETag"]:
+            return web.Response(status=304, headers=headers)
+        return web.Response(
+            body=base64.b64decode(result["data_base64"], validate=True),
+            content_type=result["media_type"],
+            headers=headers,
+        )
 
     async def history(self, request):
         before = int(request.query["before"]) if request.query.get("before") else None

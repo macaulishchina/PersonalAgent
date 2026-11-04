@@ -28,7 +28,7 @@ async def main():
         root = Path(folder)
         entry = root / "config.toml"
         entry.write_text(
-            'root="."\nplugins=[]\n[model_api.providers.test]\npreset="deepseek"\nenabled=false\n[model_api.entries.model-a]\nprovider="test"\nmodel="synthetic"\nreasoning_efforts=["low"]\n',
+            'root="."\nplugins=[]\nmain_model="model-a"\n[model_api.providers.test]\npreset="deepseek"\nenabled=false\n[model_api.entries.model-a]\nprovider="test"\nmodel="synthetic"\nreasoning_efforts=["low"]\n',
             encoding="utf-8",
         )
         with socket.socket() as s:
@@ -126,6 +126,13 @@ async def main():
                 await expect(page.locator("#editor")).to_be_visible()
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
                 await page.wait_for_function("Boolean(snapshot?.fields)")
+                provider_card = page.locator('.entity-grid[data-kind="providers"] [data-entity="test"]')
+                await expect(
+                    provider_card.get_by_role("heading", name="Synthetic Team", exact=True)
+                ).to_be_visible()
+                await expect(provider_card.locator("img.entity-avatar")).to_have_js_property(
+                    "naturalWidth", 256
+                )
                 await page.evaluate("openEntity('providers','test')")
                 appearance = page.locator(".model-presentation")
                 await expect(appearance.get_by_label("公开名称", exact=True)).to_have_value("Synthetic Team")
@@ -202,6 +209,48 @@ async def main():
                     await expect(browse).to_have_attribute("aria-expanded", "false")
                     await expect(page.locator("#entry-dialog")).to_be_visible()
                 assert not errors, errors
+                await page.evaluate("finishEntity()")
+                payload = await page.evaluate(
+                    "() => ({version:snapshot.version,patches:[...edits.values()],resources:[...resourceEdits.values()]})"
+                )
+                await asyncio.to_thread(
+                    business.files.patch,
+                    payload["version"],
+                    payload["patches"],
+                    resource_changes=payload["resources"],
+                )
+                await page.reload(wait_until="domcontentloaded")
+                await expect(page.locator("#editor")).to_be_visible()
+                await page.get_by_role("button", name="模型与账号", exact=True).click()
+                await page.evaluate('modelTab="library"; render()')
+                model_card = page.locator('.entity-grid[data-kind="entries"] [data-entity="model-a"]')
+                await expect(
+                    model_card.get_by_role("heading", name="Synthetic Model", exact=True)
+                ).to_be_visible()
+                await expect(model_card.locator("img.entity-avatar")).to_have_attribute(
+                    "src", re.compile("/builtin/robot")
+                )
+                await expect(model_card.locator("img.entity-avatar")).to_have_js_property("naturalWidth", 64)
+                await expect(model_card).to_contain_text("model-a")
+                await expect(model_card).to_contain_text("Synthetic Team")
+                if args.artifacts:
+                    await model_card.screenshot(path=str(args.artifacts / "model-list-personalization.png"))
+                await page.evaluate('modelTab="usage"; render()')
+                model = page.get_by_label("主对话模型", exact=True)
+                await expect(model).to_have_value("model-a")
+                await expect(model.locator("option:checked")).to_contain_text(
+                    "Synthetic Model (model-a) · Synthetic Team"
+                )
+                await model.click()
+                picker = page.locator(".model-reference-popup:popover-open")
+                await picker.get_by_role("searchbox").fill("Synthetic Model")
+                choice = picker.get_by_role(
+                    "treeitem", name="Synthetic Model (model-a) · Synthetic Team", exact=True
+                )
+                await expect(choice.locator("img")).to_have_js_property("naturalWidth", 64)
+                await choice.click()
+                await expect(model).to_have_value("model-a")
+                assert not errors, errors
                 if args.artifacts:
                     directory = await (
                         await page.request.get(f"http://127.0.0.1:{port}/api/model-avatars")
@@ -233,7 +282,7 @@ async def main():
                     )
                 await browser.close()
                 print(
-                    "PASS: 71 built-in avatars; single visual picker; compact aligned groups at 375/768/1280/1440/1920; keyboard close; inherited preview; upload normalization and atomic save; authenticated PNG/ETag; restore/cancel; no model calls"
+                    "PASS: 71 built-in avatars; compact layout; keyboard close; upload normalization and atomic save; authenticated PNG/ETag; restore/cancel; saved names and avatars persist in connection/model lists and model picker after reload; alias unchanged; no model calls"
                 )
         finally:
             await console.close()
