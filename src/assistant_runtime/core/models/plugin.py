@@ -219,6 +219,27 @@ class ModelsPlugin:
             self.active.discard(task)
 
     async def handle(self, request):
+        if request.action == "avatar_read":
+            from .presentation import references, encoded
+
+            if set(request.arguments) != {"asset_id", "version"}:
+                raise ValueError("Avatar identity and version required")
+            ident = request.arguments["asset_id"]
+            if request.arguments["version"] != ident or ident not in references(
+                {"model_api": {"providers": self.settings.providers, "entries": self.settings.entries}}
+            ):
+                raise ValueError("Avatar is not referenced by the applied model catalog")
+            return await asyncio.to_thread(encoded, self.host.config.root, ident)
+        if request.action == "catalog":
+            model = self.host.config.main_model
+            return {
+                "models": self.settings.public_catalog(),
+                "default": {
+                    "route": self.settings.route(model) if model in self.settings.entries else None,
+                    "reasoning_effort": self.host.config.main_reasoning_effort,
+                    "effort_source": "main_conversation",
+                },
+            }
         if request.action in {"list", "status"}:
             return {**self.diagnostics(), "models": self.settings.catalog(), "memory": self.settings.memory}
         if request.action == "health":

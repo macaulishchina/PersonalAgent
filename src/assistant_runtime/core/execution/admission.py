@@ -90,6 +90,7 @@ class Admission:
         cancelled = asyncio.create_task(signal.wait())
         dispatched = False
         acquired = False
+        rejected = False
         try:
             await asyncio.wait((acquire, cancelled), return_when=asyncio.FIRST_COMPLETED)
             acquired = acquire.done() and not acquire.cancelled() and acquire.exception() is None
@@ -105,11 +106,24 @@ class Admission:
             result = await dispatch()
             service.records.update(ident, turn_id=result["run"]["id"])
             return {**result, "execution_id": ident}
-        except BaseException:
+        except BaseException as exc:
+            from assistant_runtime.api.models import CapabilityRequestError
+
+            if isinstance(exc, CapabilityRequestError):
+                rejected = True
+                if ident in self.leases:
+                    self.release(ident)
+                dispatched = False
             service.records.update(
                 ident,
                 "unknown" if dispatched else "interrupted",
-                error={"code": "dispatch_unconfirmed" if dispatched else "dispatch_interrupted"},
+                error={
+                    "code": exc.code
+                    if isinstance(exc, CapabilityRequestError)
+                    else "dispatch_unconfirmed"
+                    if dispatched
+                    else "dispatch_interrupted"
+                },
             )
             if dispatched:
                 try:
@@ -131,7 +145,7 @@ class Admission:
             # A permit may have arrived simultaneously with cancellation.
             if not acquired and acquire.done() and not acquire.cancelled() and acquire.exception() is None:
                 self.slots.release()
-            elif acquired and ident not in self.leases and not dispatched:
+            elif acquired and ident not in self.leases and not dispatched and not rejected:
                 self.slots.release()
 
     async def cancel(self, arguments, dispatch):

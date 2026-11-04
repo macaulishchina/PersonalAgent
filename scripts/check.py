@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 GROUPS = {
     "models": {
+        "model_routes",
+        "model_presentation",
         "ai_usage",
         "models",
         "models_transport",
@@ -44,6 +46,8 @@ GROUPS = {
         "wake_words",
     },
     "execution": {
+        "model_routes_native",
+        "route_admission",
         "integrations",
         "job_lifecycle",
         "mcp",

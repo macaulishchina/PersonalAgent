@@ -1,5 +1,10 @@
 # Tasks plugin
 
+Public route-constrained tasks and explicit model-default effort are opt-in additions
+in 0.4.14. Existing selection/default/child-task behavior remains unchanged. A read-only
+`TaskRequest("receipt", {"request_id": UUID})` recovers creation identity without replay.
+See [route/default/receipt examples](../../../../docs/guides/model-routes.md).
+
 Trusted local plugin for independent background work through the configured Pi executor and explicitly accepted API models.
 
 Task specs may restrict `tools` to an explicit list of registered tool names. Child tasks inherit the parent's list and may narrow it; expansion is rejected. A background caller may query public `execution_info` only for its own run identity, allowing a trusted integration to recover its business scope without reading PA private storage.

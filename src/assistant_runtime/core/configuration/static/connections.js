@@ -282,6 +282,7 @@ function apiConnectionFields(
     const provider = {
       enabled: enabled.checked,
       key_env: credential.reference,
+      ...(initial.presentation ? { presentation: initial.presentation } : {}),
     };
     if (presets[type.value]) provider.preset = type.value;
     else {
@@ -365,12 +366,17 @@ function renderProviderEditor(field, name) {
   const body = $("entry-body");
   body.replaceChildren();
   if (current.account) {
-    const account = valueAt(["model_api", "accounts"], {})[current.account] || {};
+    const account =
+      valueAt(["model_api", "accounts"], {})[current.account] || {};
     let auth;
     activeEditor.readConnection = () => {
       const value = currentValue(field);
       return {
-        provider: { account: value.account, enabled: value.enabled === true },
+        provider: {
+          account: value.account,
+          enabled: value.enabled === true,
+          ...(value.presentation ? { presentation: value.presentation } : {}),
+        },
         secret: auth?.read().secret,
       };
     };
@@ -381,9 +387,7 @@ function renderProviderEditor(field, name) {
     };
     const copy = structuredClone(field);
     copy.schema.properties = Object.fromEntries(
-      Object.entries(copy.schema.properties).filter(([k]) =>
-        k === "enabled",
-      ),
+      Object.entries(copy.schema.properties).filter(([k]) => k === "enabled"),
     );
     body.append(
       drawField(copy),
@@ -400,7 +404,11 @@ function renderProviderEditor(field, name) {
       auth = connectionCredentials(body, previous, {
         onChange() {
           const value = auth.read();
-          changed(["model_api", "accounts", current.account, "key_env"], "set", value.reference);
+          changed(
+            ["model_api", "accounts", current.account, "key_env"],
+            "set",
+            value.reference,
+          );
           stageConnectionSecret(previous, value.reference, value.secret);
           previous = value.reference;
           updateSaveBar();
@@ -418,6 +426,9 @@ function renderProviderEditor(field, name) {
     let previousSecret = providerKeyName(current);
     const editor = apiConnectionFields(body, current, {
       onChange(value) {
+        const presentation = currentValue(field).presentation;
+        if (presentation) value.provider.presentation = presentation;
+        else delete value.provider.presentation;
         changed(field.path, "set", value.provider);
         stageConnectionSecret(
           previousSecret,
@@ -428,10 +439,16 @@ function renderProviderEditor(field, name) {
         updateSaveBar();
       },
     });
-    activeEditor.readConnection = editor.read;
+    activeEditor.readConnection = () => {
+      const value = editor.read();
+      const presentation = currentValue(field).presentation;
+      if (presentation) value.provider.presentation = presentation;
+      else delete value.provider.presentation;
+      return value;
+    };
     activeEditor.validate = editor.valid;
     activeEditor.commit = () => {
-      const value = editor.read();
+      const value = activeEditor.readConnection();
       if (
         JSON.stringify(value.provider) !==
         JSON.stringify(valueAt(["model_api", "providers"], {})[name])
@@ -439,6 +456,7 @@ function renderProviderEditor(field, name) {
         changed(field.path, "set", value.provider);
     };
   }
+  body.append(renderModelPresentation(field.path, current.presentation || {}));
   const probe = providerTest(name);
   const panel = node("div", undefined, "provider-probe");
   panel.append(probe.button, probe.status);
@@ -453,4 +471,143 @@ function renderProviderEditor(field, name) {
     },
     { signal: editorInputController.signal },
   );
+}
+
+function renderModelPresentation(path, initial = {}) {
+  const box = node("section", undefined, "model-presentation");
+  box.setAttribute("aria-label", "个性配置");
+  box.append(node("h3", "个性配置"));
+  const value = structuredClone(initial);
+  const name = formInput(box, "public-model-name", "公开名称");
+  name.maxLength = 80;
+  name.value = value.display_name || "";
+  name.placeholder = "沿用登记名称";
+  const description = formInput(box, "public-model-description", "简短说明");
+  description.maxLength = 400;
+  description.value = value.description || "";
+  const avatar = formInput(box, "public-model-avatar", "头像", {
+    choices: [
+      ["", "使用默认 / 继承连接"],
+      ...["generic", "openai", "anthropic", "google", "deepseek"].map((v) => [
+        "builtin:" + v,
+        v,
+      ]),
+    ],
+  });
+  if (value.avatar?.startsWith("asset:"))
+    avatar.add(new Option("自定义图片", value.avatar));
+  avatar.value = value.avatar || "";
+  const preview = node("img");
+  preview.width = preview.height = 48;
+  preview.alt = "模型头像预览";
+  const builtin = node("span", "AI", "model-avatar-builtin");
+  box.append(preview, builtin);
+  function show() {
+    const ref = value.avatar || "builtin:generic";
+    preview.hidden = !ref.startsWith("asset:");
+    builtin.hidden = !preview.hidden;
+    if (!preview.hidden) {
+      const id = ref.slice(6);
+      const staged = resourceEdits.get("model-avatar-" + id);
+      preview.src = staged
+        ? "data:image/png;base64," + staged.value
+        : `/api/model-avatar/${id}?version=${id}`;
+    } else
+      builtin.textContent =
+        {
+          generic: "AI",
+          openai: "O",
+          anthropic: "A",
+          google: "G",
+          deepseek: "D",
+        }[ref.slice(8)] || "AI";
+  }
+  function save() {
+    changed(
+      [...path, "presentation"],
+      Object.keys(value).length ? "set" : "default",
+      value,
+    );
+    const referenced = new Set();
+    for (const group of ["providers", "entries"])
+      for (const item of Object.values(valueAt(["model_api", group], {}))) {
+        const ref = item.presentation?.avatar;
+        if (ref?.startsWith("asset:"))
+          referenced.add("model-avatar-" + ref.slice(6));
+      }
+    for (const id of resourceEdits.keys())
+      if (id.startsWith("model-avatar-") && !referenced.has(id))
+        resourceEdits.delete(id);
+    updateSaveBar();
+    show();
+  }
+  name.addEventListener("input", () => {
+    if (name.value.trim()) value.display_name = name.value.trim();
+    else delete value.display_name;
+    save();
+  });
+  description.addEventListener("input", () => {
+    if (description.value) value.description = description.value;
+    else delete value.description;
+    save();
+  });
+  avatar.addEventListener("change", () => {
+    if (avatar.value) value.avatar = avatar.value;
+    else delete value.avatar;
+    save();
+  });
+  const upload = document.createElement("input");
+  upload.type = "file";
+  upload.accept = "image/png,image/jpeg,image/webp";
+  upload.setAttribute("aria-label", "上传模型头像");
+  const status = node(
+    "p",
+    "PNG、JPEG 或 WebP，最大 2 MiB。上传后随配置保存生效。",
+    "hint",
+  );
+  upload.addEventListener("change", async () => {
+    const file = upload.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      status.textContent = "图片不能超过 2 MiB。";
+      return;
+    }
+    upload.disabled = true;
+    const version = snapshot.version;
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const result = await api("/api/model-avatar", {
+        version,
+        data_base64: data,
+      });
+      if (!box.isConnected || snapshot.version !== version) return;
+      resourceEdits.set(result.resource.id, result.resource);
+      value.avatar = result.avatar;
+      if (![...avatar.options].some((v) => v.value === value.avatar))
+        avatar.add(new Option("自定义图片", value.avatar));
+      avatar.value = value.avatar;
+      save();
+      status.textContent = "图片已校验，保存配置后生效。";
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      upload.disabled = false;
+    }
+  });
+  box.append(
+    upload,
+    button("恢复默认头像", () => {
+      delete value.avatar;
+      avatar.value = "";
+      save();
+    }),
+    status,
+  );
+  show();
+  return box;
 }

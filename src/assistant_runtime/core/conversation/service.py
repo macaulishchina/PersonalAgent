@@ -2,6 +2,7 @@
 
 from assistant_runtime.api.lifecycle import admits_work
 from assistant_runtime.api.conversation import ConversationCancelled
+from assistant_runtime.api.models import CapabilityRequestError
 
 import asyncio
 import base64
@@ -9,6 +10,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import logging
+import time
 import uuid
 
 from assistant_runtime.api import plugin_manifest
@@ -32,6 +34,7 @@ class Conversation:
         self.dispatch_lock = asyncio.Lock()
         self.cancel_pending = set()
         self.last_completion = None
+        self.last_completion_at = None
         self.source = "web"
         self.store = ConversationStore(host.store)
         self.media = MediaAttachments(host.config.state_dir, self.store.db)
@@ -408,7 +411,12 @@ class Conversation:
 
     async def task_done(self, turn_id, text, status):
         self.last_completion = (turn_id, status)
+        self.last_completion_at = time.time()
         with self.store.db:
+            for (ident,) in self.store.db.execute(
+                "SELECT id FROM conversation_queue WHERE session_id=? AND turn_id=?", (self.session, turn_id)
+            ).fetchall():
+                self.store.execution_update(ident, finished_at=time.time())
             self.store.db.execute(
                 "UPDATE conversation_queue SET state=? WHERE session_id=? AND turn_id=? AND state='running'",
                 (status, self.session, turn_id),
@@ -436,7 +444,15 @@ class Conversation:
 
     @admits_work()
     async def submit(
-        self, request_id, text, attachments, notification_id=None, *, source="web", retry_of=None
+        self,
+        request_id,
+        text,
+        attachments,
+        notification_id=None,
+        *,
+        source="web",
+        retry_of=None,
+        expected_model=None,
     ):
         if source not in {"web", "cli", "operator"}:
             raise ValueError("Unknown conversation entrance")
@@ -458,6 +474,11 @@ class Conversation:
         fingerprint_input = [self.session, source, text, attachments, notification_id]
         if retry_of:
             fingerprint_input.append(retry_of)
+        if expected_model is not None:
+            from assistant_runtime.api.models import expected_model as validate_expected
+
+            expected_model = validate_expected(expected_model)
+            fingerprint_input.append({"expected_model": expected_model})
         fingerprint = hashlib.sha256(json.dumps(fingerprint_input, ensure_ascii=False).encode()).hexdigest()
         async with self.submit_lock:
             db = self.store.db
@@ -468,6 +489,8 @@ class Conversation:
                 if existing[0] != fingerprint:
                     raise ValueError("发送标识已用于其他消息")
                 return {"message": self.store.get(existing[1]), "state": existing[2]}
+            if expected_model is not None:
+                self.backend.client.settings.require_route(expected_model, self.host.config.main_model)
             if retry_of:
                 previous = db.execute(
                     "SELECT id FROM conversation_queue WHERE session_id=? AND json_extract(payload,'$.retry_of')=?",
@@ -551,9 +574,17 @@ class Conversation:
                                 "media": media,
                                 "notification_context": notification_context,
                                 **({"retry_of": retry_of} if retry_of else {}),
+                                **({"expected_model": expected_model} if expected_model is not None else {}),
                             }
                         ),
                     ),
+                )
+                self.store.execution_update(
+                    request_id,
+                    request_id=request_id,
+                    accepted_at=time.time(),
+                    requested=expected_model,
+                    dispatch_state="not_dispatched",
                 )
                 for ident in attachments:
                     db.execute("UPDATE chat_uploads SET attached=1 WHERE id=?", (ident,))
@@ -697,6 +728,7 @@ class Conversation:
 
     def finish_pending(self, ident, status):
         with self.store.db:
+            self.store.execution_update(ident, finished_at=time.time())
             self.store.db.execute("UPDATE conversation_queue SET state=? WHERE id=?", (status, ident))
             self.store.db.execute("UPDATE chat_requests SET state=? WHERE id=?", (status, ident))
             message = self.store.db.execute(
@@ -740,7 +772,9 @@ class Conversation:
             return {"cancelled": await self.backend.cancel(row[1])}
         return {"cancelled": False, "state": row[0]}
 
-    async def dispatch(self, request_id, mid, text, media, notification_context="", retry_of=None):
+    async def dispatch(
+        self, request_id, mid, text, media, notification_context="", retry_of=None, expected_model=None
+    ):
         async with self.dispatch_lock:
             self.web_dispatching = True
             self.dispatch_message = mid
@@ -757,6 +791,7 @@ class Conversation:
                     images=images,
                     cancelled=lambda: request_id in self.cancel_pending,
                     **({"retry_of": retry_of} if retry_of else {}),
+                    **({"expected_model": expected_model} if expected_model is not None else {}),
                 )
                 turn_id = self.backend.active_turn or self.backend.last_turn
                 if request_id in self.cancel_pending and self.backend.busy:
@@ -774,9 +809,16 @@ class Conversation:
                     attachments=media,
                 )
                 with self.store.db:
+                    self.store.execution_update(
+                        request_id,
+                        **getattr(self.backend, "last_execution", {}),
+                        dispatch_state="dispatched",
+                        turn_id=turn_id,
+                    )
                     state = "running" if self.backend.busy else "completed"
                     if self.last_completion and self.last_completion[0] == turn_id:
                         state = self.last_completion[1]
+                        self.store.execution_update(request_id, finished_at=self.last_completion_at)
                     self.store.db.execute(
                         "UPDATE conversation_queue SET state=?,turn_id=? WHERE id=?",
                         (state, turn_id, request_id),
@@ -786,6 +828,15 @@ class Conversation:
                     )
             except ConversationCancelled:
                 self.finish_pending(request_id, "cancelled")
+            except CapabilityRequestError as exc:
+                self.finish_pending(request_id, "failed")
+                with self.store.db:
+                    self.store.execution_update(
+                        request_id,
+                        dispatch_state="not_dispatched",
+                        failure={"code": exc.code, "message": str(exc)},
+                        finished_at=time.time(),
+                    )
             except Exception as exc:
                 log.warning(
                     "conversation_submission_unconfirmed request=%s error=%s", request_id, type(exc).__name__
@@ -800,6 +851,7 @@ class Conversation:
                     attachments=media,
                 )
                 with self.store.db:
+                    self.store.execution_update(request_id, dispatch_state="unknown")
                     self.store.db.execute(
                         "UPDATE conversation_queue SET state='unknown' WHERE id=?", (request_id,)
                     )

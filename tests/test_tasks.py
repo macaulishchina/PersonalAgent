@@ -195,7 +195,9 @@ class TasksTest(unittest.IsolatedAsyncioTestCase):
         ]
         with self.store.db:
             self.store.db.execute("UPDATE job_definitions SET created=100")
-        with patch.object(self.plugin.repo, "definition", wraps=self.plugin.repo.definition) as decode:
+        with patch.object(
+            self.plugin.repo, "definition_row", wraps=self.plugin.repo.definition_row
+        ) as decode:
             page = await self.plugin.request(TaskRequest("list", {"view": "planned"}))
             self.assertEqual(len(page["tasks"]), 20)
             self.assertEqual(decode.call_count, 20)

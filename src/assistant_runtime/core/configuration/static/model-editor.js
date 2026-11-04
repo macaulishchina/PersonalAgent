@@ -173,7 +173,7 @@ function renderModelEditor(field) {
   );
   for (const name of ["max_output_tokens", "execution_max_output_tokens"])
     advanced.append(input(name));
-  root.replaceChildren(basic, summary, thinking, advanced);
+  root.replaceChildren(basic, renderModelPresentation(path, initial.presentation || {}), summary, thinking, advanced);
   // Generic controls commit and rebuild on input, before a later change event.
   // Reconcile dependent fields during capture so the rebuild sees one coherent draft.
   root.addEventListener(

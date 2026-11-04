@@ -29,6 +29,9 @@ class Resources:
 
         result.extend(integration_resources(self.root, data))
         result.extend(web_resources(self.root, data.get("web", {})))
+        from assistant_runtime.core.models.presentation import registered as model_resources
+
+        result.extend(model_resources(self.root, data))
         for name in data.get("instance_skills", []):
             if not re.fullmatch("[a-z][a-z0-9-]{0,63}", name):
                 raise ValueError("Invalid instance skill")
@@ -115,6 +118,11 @@ class Resources:
         return result
 
     def validate(self, resource, raw):
+        if resource.kind == "model_avatar":
+            from assistant_runtime.core.models.presentation import validate_image
+
+            validate_image(resource.id.removeprefix("model-avatar-"), raw)
+            return
         if raw is None:
             if resource.kind == "management":
                 raise ValueError("Management bootstrap cannot be removed")
@@ -194,7 +202,7 @@ class Resources:
                 "configured": raw is not None,
                 "sensitive": resource.sensitive,
             }
-            if raw is not None and not resource.sensitive and resource.kind != "asset":
+            if raw is not None and not resource.sensitive and resource.kind not in {"asset", "model_avatar"}:
                 item["value"] = raw.decode()
             if resource.kind == "dotenv":
                 from dotenv import dotenv_values
@@ -243,6 +251,8 @@ class Resources:
         return names
 
     def frozen_target(self, folder, resource):
+        if resource.kind == "model_avatar":
+            return folder / "resources/model-avatars" / resource.path.name
         if resource.kind in {"skill", "asset"}:
             return folder / "resources/skills" / resource.path.relative_to(self.root / "config/skills")
         return folder / "resources" / resource.id
@@ -268,6 +278,10 @@ class Resources:
             merge(data, tomllib.loads(raw.decode()))
         from assistant_runtime.plugins.web.configuration_resources import prepare_defaults
 
+        for ident, item in self.registered(contents).items():
+            if item.kind == "model_avatar" and ident not in values:
+                path = self.path(item)
+                values[ident] = path.read_bytes() if path.is_file() else None
         resource = self.registered(contents)["web_access"]
         value = prepare_defaults(
             values.get("web_access"),
@@ -281,6 +295,10 @@ class Resources:
             touched.add("web_access")
 
     def validate_candidate(self, config, contents, values):
+        from assistant_runtime.core.models.presentation import references, validate_image
+
+        for ident in references({"model_api": config.model_api}):
+            validate_image(ident, values.get("model-avatar-" + ident))
         from .validation import validate_ports
         from .settings import ManagementSettings
         import tempfile
@@ -307,6 +325,18 @@ class Resources:
         return []
 
     def prepare(self, resource, previous, operation):
+        if resource.kind == "model_avatar":
+            import base64
+            from assistant_runtime.core.models.presentation import validate_image
+
+            if resource.read_only:
+                raise ValueError("Resource is read-only")
+            value = operation.get("value")
+            if operation.get("op") != "set" or not isinstance(value, str) or len(value) > 350000:
+                raise ValueError("Invalid avatar resource operation")
+            raw = base64.b64decode(value, validate=True)
+            validate_image(resource.id.removeprefix("model-avatar-"), raw)
+            return raw
         if resource.read_only or resource.kind == "asset":
             raise ValueError("Resource is read-only")
         op = operation.get("op")

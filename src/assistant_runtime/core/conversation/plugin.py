@@ -74,9 +74,9 @@ class Conversations:
             "history": {"session_id", "before"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
-            "receipt": {"session_id", "request_id"},
-            "receipts": {"session_id", "request_ids"},
-            "submit": {"session_id", "request_id", "text", "attachments"},
+            "receipt": {"session_id", "request_id", "include_execution"},
+            "receipts": {"session_id", "request_ids", "include_execution"},
+            "submit": {"session_id", "request_id", "text", "attachments", "expected_model"},
             "queue": {"session_id"},
             "edit_queued": {"session_id", "request_id", "revision", "text"},
             "remove_queued": {"session_id", "request_id", "revision"},
@@ -112,6 +112,8 @@ class Conversations:
         ident = args.get("session_id")
         self.sessions.get(ident)
         store = self.main.store
+        if "include_execution" in args and type(args["include_execution"]) is not bool:
+            raise ValueError("include_execution must be boolean")
         if action == "receipts":
             ids = args.get("request_ids")
             if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(i, str) for i in ids):
@@ -125,7 +127,18 @@ class Conversations:
                 (ident, *ids),
             ).fetchall()
             found = dict(rows)
-            return {i: {"found": i in found, "state": found.get(i)} for i in ids}
+            return {
+                i: {
+                    "found": i in found,
+                    "state": found.get(i),
+                    **(
+                        {"execution": store.execution(i)}
+                        if args.get("include_execution") and i in found
+                        else {}
+                    ),
+                }
+                for i in ids
+            }
         if action == "receipt":
             row = store.db.execute(
                 "SELECT q.state,r.message_id FROM chat_requests r JOIN conversation_queue q ON q.id=r.id WHERE r.id=? AND r.session_id=?",
@@ -135,6 +148,11 @@ class Conversations:
                 "found": bool(row),
                 "state": row[0] if row else None,
                 "message": store.get(row[1]) if row else None,
+                **(
+                    {"execution": store.execution(args.get("request_id"))}
+                    if args.get("include_execution") and row
+                    else {}
+                ),
             }
         if action == "history":
             messages = store.history(ident, args.get("before"))
@@ -162,7 +180,11 @@ class Conversations:
             return chat.state()
         if action == "submit":
             return await chat.submit(
-                args.get("request_id"), args.get("text"), args.get("attachments", []), source="cli"
+                args.get("request_id"),
+                args.get("text"),
+                args.get("attachments", []),
+                source="cli",
+                **({"expected_model": args["expected_model"]} if "expected_model" in args else {}),
             )
         if action == "retry":
             if not isinstance(args.get("turn_id"), str) or not args["turn_id"]:

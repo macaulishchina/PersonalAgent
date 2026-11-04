@@ -4,6 +4,7 @@ from assistant_runtime.platforms.executables import pi_command, command_tools
 from assistant_runtime.api.system import system
 
 import asyncio
+import time
 import base64
 import copy
 import json
@@ -648,6 +649,8 @@ class PiSessionWorker:
             "items": list(self.turn_items),
             "itemsView": "full",
             "retry_of": self.meta.get("retry_of"),
+            **self.meta.get("active_execution_facts", {}),
+            "finished_at": time.time(),
         }
         if error:
             match = re.match(
@@ -902,7 +905,7 @@ class PiClient:
     async def _request(self, command, p):
         if command == Command.MODELS:
             return {
-                "data": [m for m in self.settings.catalog() if m["available"]],
+                "data": [m for m in self.settings.public_catalog() if m["available"]],
                 "next_cursor": None,
             }
         if command == Command.CONFIGURATION:
@@ -1206,6 +1209,18 @@ class PiClient:
                 if any(i.get("tool_outcome", {}).get("outcome") == "unknown" for i in prior.get("items", [])):
                     raise RpcError("Unknown tool outcome requires reconciliation")
             model, effort = p.get("model", meta["model"]), p.get("effort", meta["reasoning_effort"])
+            if p.get("expected_model") is not None:
+                from assistant_runtime.api.models import CapabilityRequestError
+
+                self.settings.require_route(p["expected_model"], model)
+                if (
+                    p.get("execution_context", {}).get("source") == "conversation"
+                    and self.admission
+                    and self.admission.service.default_model != model
+                ):
+                    raise CapabilityRequestError(
+                        "model_binding_changed", "The default conversation model has changed"
+                    )
             self._selection(model, effort)
             if any(
                 i.get("type") in {"image", "localImage"} for i in p.get("input", [])
@@ -1223,6 +1238,8 @@ class PiClient:
             actual = state.get("model") or {}
             if actual.get("id") != model or state.get("thinkingLevel") != THINKING_MAP[effort]:
                 raise RpcError("Pi resolved a different model or reasoning effort")
+            if p.get("expected_model") is not None:
+                self.settings.require_route(p["expected_model"], model)
             run_id = uuid.uuid4().hex
             w.active_turn, w.turn_aborted, w.turn_error = run_id, False, None
             w.compaction_error = False
@@ -1237,6 +1254,13 @@ class PiClient:
             else:
                 await self.usage.bind(meta["budget_id"], UsageScope(meta["budget_id"], "foreground"))
             self.last_work_id = meta["budget_id"]
+            started_at = time.time()
+            route = self.settings.route(model)
+            meta["active_execution_facts"] = {
+                "route": route,
+                "reasoning_effort": effort,
+                "started_at": started_at,
+            }
             meta["active_run"] = run_id
             meta["retry_of"] = retry_of
             meta["public_inputs"] = {}
@@ -1265,7 +1289,13 @@ class PiClient:
             except BaseException:
                 # Submission may have reached the engine. Leave the durable run unknown.
                 raise
-            return {"run": {"id": run_id}, "model": model, "reasoning_effort": effort}
+            return {
+                "run": {"id": run_id},
+                "model": model,
+                "reasoning_effort": effort,
+                "route": route,
+                "started_at": started_at,
+            }
         if command == Command.STEER:
             if not active or p.get("expected_run_id", w.active_turn) != w.active_turn:
                 raise RpcError("No matching active run")

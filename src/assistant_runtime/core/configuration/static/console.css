@@ -2854,3 +2854,27 @@ dialog.wide-dialog {
 }
 .result-storage-row input { flex: none; }
 .field-control:has([aria-label="结果保留方式"]) { display: grid; gap: 10px; }
+
+:root .model-presentation {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0;
+}
+.model-presentation img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border-radius: 12px;
+}
+.model-avatar-builtin {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--surface-raised, #e1e8e3);
+  font-weight: 600;
+}
+.model-avatar-builtin[hidden] {
+  display: none;
+}

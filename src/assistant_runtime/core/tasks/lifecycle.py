@@ -43,7 +43,7 @@ class TaskLifecycle:
             state = "not_dispatched"
         error = {
             "type": type(exc).__name__,
-            "code": getattr(getattr(exc, "outcome", None), "code", kind),
+            "code": getattr(exc, "code", getattr(getattr(exc, "outcome", None), "code", kind)),
             "stage": run["data"].get("dispatch", {}).get("stage", "unrecorded"),
             "dispatch": state,
         }

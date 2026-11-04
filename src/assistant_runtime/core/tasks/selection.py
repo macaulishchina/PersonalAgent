@@ -34,6 +34,9 @@ class ModelPolicy:
 
     async def refresh_missing(self, executor, saved, fixed, main):
         """Rebind a removed configuration before dispatch, never on provider failure."""
+        if saved.get("expected_model") is not None or saved.get("effort_mode") == "model_default":
+            await self.constrained(executor, saved, fixed, main, saved=True)
+            return saved
         catalog = await executor.models(refresh=True)
         available = {
             name: row
@@ -234,6 +237,8 @@ class ModelPolicy:
         return result
 
     async def resolve(self, executor, requested, fixed, main):
+        if requested.get("expected_model") is not None or requested.get("effort_mode") == "model_default":
+            return await self.constrained(executor, requested, fixed, main)
         requested = self.normalize(requested)
         ident = self.validate(requested, fixed)
         row = self.recommendations.get(ident, {})
@@ -283,6 +288,90 @@ class ModelPolicy:
             "selection": selection,
             **{k: requested[k] for k in ("model_source", "effort_source") if k in requested},
         }
+
+    async def constrained(self, executor, requested, fixed, main, *, saved=False):
+        from assistant_runtime.api.models import CapabilityRequestError, expected_model
+
+        requested = self.normalize(requested)
+        requested.setdefault("reason", "Use the explicitly selected model parameters")
+        self.validate(requested, fixed)
+        condition = requested.get("expected_model")
+        condition = expected_model(condition) if condition is not None else None
+        model = requested.get("model")
+        if condition:
+            if model not in (None, "auto", condition["model"]):
+                raise CapabilityRequestError("model_policy_conflict", "Model and expected route disagree")
+            model = condition["model"]
+        if model in (None, "auto"):
+            model = fixed["model"] if fixed["model"] != "auto" else main["model"]
+        recommendation = requested.get("recommendation")
+        if recommendation and self.recommendations[recommendation]["model"] != model:
+            raise CapabilityRequestError(
+                "model_policy_conflict", "Recommendation and selected route disagree"
+            )
+        if fixed["model"] not in ("auto", model):
+            raise CapabilityRequestError(
+                "model_policy_conflict", "The selected model conflicts with instance policy"
+            )
+        models = await executor.models(refresh=True)
+        entry = next((m for m in models if model in (m.get("id"), m.get("model"))), None)
+        if not entry or not entry.get("available", True):
+            raise CapabilityRequestError("model_unavailable", "The selected task model is unavailable")
+        route = entry.get("route")
+        if condition and (not route or route.get("revision") != condition["revision"]):
+            raise CapabilityRequestError("model_binding_changed", "The selected task route has changed")
+        default = requested.get("effort_mode") == "model_default"
+        if default and not saved and requested.get("reasoning_effort") is not None:
+            raise CapabilityRequestError(
+                "invalid_arguments", "Model default effort cannot be combined with an explicit effort"
+            )
+        effort = (
+            requested.get("reasoning_effort")
+            if saved
+            else entry.get("default_reasoning_effort", "auto")
+            if default
+            else requested.get("reasoning_effort")
+        )
+        if not default and not saved:
+            # Preserve existing task resolution, including the concrete-effort rule.
+            clean = {k: v for k, v in requested.items() if k not in {"expected_model", "effort_mode"}}
+            clean["model"] = model
+            selected = await self.resolve(executor, clean, fixed, main)
+            effort = selected["reasoning_effort"]
+        else:
+            selected = None
+        if fixed["reasoning_effort"] not in ("auto", effort):
+            raise CapabilityRequestError(
+                "model_policy_conflict", "The selected effort conflicts with instance policy"
+            )
+        if effort not in supported(entry):
+            raise CapabilityRequestError(
+                "reasoning_effort_unsupported", "The selected model does not support this effort"
+            )
+        resolved = await executor.select(model, effort)
+        if selected is None:
+            selected = {
+                "kind": "agent",
+                **resolved,
+                "reason": requested.get("reason") or "Use the selected model's configured default",
+                "selection": {
+                    "version": 2,
+                    "at": time.time(),
+                    "sources": {
+                        "model": "explicit",
+                        "reasoning_effort": "model_default" if default else "frozen",
+                    },
+                    "resolved": resolved,
+                },
+                **{k: requested[k] for k in ("model_source", "effort_source") if k in requested},
+            }
+        if condition:
+            selected["expected_model"] = condition
+        if default:
+            selected["effort_mode"] = "model_default"
+        if route:
+            selected["route"] = route
+        return selected
 
 
 def supported(model):

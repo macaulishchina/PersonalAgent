@@ -4,6 +4,20 @@ Models owns immutable account/provider/model configuration, bounded no-tool infe
 
 ## Configuration
 
+Trusted plugins can read `ModelRequest("catalog")` for the applied public model routes,
+main-conversation default and appearance metadata. An execution condition is exactly
+`{"model": REGISTERED_ALIAS, "revision": ROUTE_REVISION}` from that directory. It
+contains neither credentials nor endpoints; appearance, credential rotation and default
+effort edits do not change the route revision. The configured route is not evidence of
+a gateway's underlying model. See [public model routes](../../../../docs/guides/model-routes.md).
+
+Optional provider/entry `presentation` tables contain `display_name`, `description`
+and `avatar`. Model appearance inherits its connection. `builtin:generic/openai/anthropic/google/deepseek`
+are controlled monograms; custom connections default to generic rather than guessed branding.
+The configuration editor can normalize uploaded PNG/JPEG/WebP into immutable PNG resources,
+committed with the referring configuration. Trusted plugins use `ModelRequest("avatar_read",
+{"asset_id": ID, "version": ID})` to read only currently applied catalog references.
+
 `main_model` and `main_reasoning_effort` select a registered alias and supported effort. Task recommendations reference the same aliases. `model_api.memory` explicitly selects a structured-output model for upstream Mem0; an empty binding leaves extraction unavailable rather than launching another agent. Local embeddings, source validation, corrections and memory history keep their existing owners.
 
 Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets: `openai`, `claude`, `gemini`, `deepseek`. OpenCode Go presets: `opencode_go_responses`, `opencode_go_chat`, `opencode_go_anthropic`, `opencode_go_gemini`, using `OPENCODE_API_KEY`. Custom endpoints declare `protocol`, HTTPS `base_url` and `key_env`; supported protocols are `openai_responses`, `openai_chat`, `anthropic`, `gemini`. Presets cannot silently override their fixed endpoint. A local `enabled` switch does not change the supplier's data policy.

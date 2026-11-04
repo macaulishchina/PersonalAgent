@@ -77,6 +77,10 @@ class TaskRepository:
         ).fetchone()
         if not row:
             raise ValueError("Task not found")
+        return self.definition_row(row)
+
+    @staticmethod
+    def definition_row(row):
         definition = dict(
             zip(
                 ("id", "state", "spec", "next_at", "created", "updated", "revision"),
@@ -86,6 +90,19 @@ class TaskRepository:
         definition["category"] = category(definition["spec"])
         definition["spec"].setdefault("auto_archive", one_shot(definition["spec"]))
         return definition
+
+    def definitions_by_ids(self, ids):
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        return {
+            r[0]: self.definition_row(r)
+            for r in self.db.execute(
+                f"SELECT id,state,spec,next_at,created,updated,revision FROM job_definitions WHERE id IN ({marks})",
+                ids,
+            )
+        }
 
     def definitions(self):
         return [
@@ -194,8 +211,10 @@ class TaskRepository:
         ).fetchall()
         ids, before = self.page_result(rows, limit, scope)
         # Keep older visible work current without fetching its intervening pages.
-        updates = [self.definition(ident) for ident in known if ident not in removed and ident not in ids]
-        return [self.definition(ident) for ident in ids], before, removed, updates
+        update_ids = [ident for ident in known if ident not in removed and ident not in ids]
+        all_definitions = self.definitions_by_ids([*ids, *update_ids])
+        updates = [all_definitions[ident] for ident in update_ids]
+        return [all_definitions[ident] for ident in ids], before, removed, updates
 
     @staticmethod
     def known_ids(args):
@@ -230,34 +249,74 @@ class TaskRepository:
         if known:
             marks = ",".join("?" for _ in known)
             updates = [
-                self.run(row[0])
+                row[0]
                 for row in self.db.execute(
                     f"SELECT id FROM job_runs WHERE task_id=? AND id IN ({marks})", (ident, *known)
                 )
             ]
-        return [self.run(i) for i in ids], [self.run(row[0]) for row in active], before, updates
+        active_ids = [row[0] for row in active]
+        found = self.runs_by_ids([*ids, *active_ids, *updates])
+        return [found[i] for i in ids], [found[i] for i in active_ids], before, [found[i] for i in updates]
 
     def list_runs(self, definitions):
-        result = {}
-        for definition in definitions:
-            ident = definition["id"]
-            for condition in (
-                "1",
-                "state IN ('queued','dispatching','running','waiting_user','paused','unknown')",
-            ):
-                row = self.db.execute(
-                    f"SELECT id,state,created,json_extract(data,'$.progress') FROM job_runs WHERE task_id=? AND {condition} ORDER BY created DESC,id DESC LIMIT 1",
-                    (ident,),
-                ).fetchone()
-                if row:
-                    result[row[0]] = {
-                        "id": row[0],
-                        "task_id": ident,
-                        "state": row[1],
-                        "created": row[2],
-                        "data": {"progress": (row[3] or "")[:240]},
-                    }
-        return list(result.values())
+        ids = list(dict.fromkeys(d["id"] for d in definitions))
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        rows = self.db.execute(
+            f"SELECT id,task_id,state,created,progress FROM ("
+            f"SELECT id,task_id,state,created,substr(coalesce(json_extract(data,'$.progress'),''),1,240) AS progress,"
+            f"row_number() OVER (PARTITION BY task_id ORDER BY created DESC,id DESC) AS latest,"
+            f"row_number() OVER (PARTITION BY task_id,CASE WHEN state IN ('queued','dispatching','running','waiting_user','paused','unknown') THEN 1 ELSE 0 END ORDER BY created DESC,id DESC) AS active "
+            f"FROM job_runs WHERE task_id IN ({marks})) WHERE latest=1 OR "
+            f"(active=1 AND state IN ('queued','dispatching','running','waiting_user','paused','unknown'))",
+            ids,
+        ).fetchall()
+        by_task = {}
+        for row in rows:
+            by_task.setdefault(row[1], []).append(
+                {
+                    "id": row[0],
+                    "task_id": row[1],
+                    "state": row[2],
+                    "created": row[3],
+                    "data": {"progress": row[4]},
+                }
+            )
+        return [
+            run
+            for ident in ids
+            for run in sorted(by_task.get(ident, []), key=lambda r: (r["created"], r["id"]), reverse=True)
+        ]
+
+    def runs_by_ids(self, ids):
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        rows = self.db.execute(
+            f"SELECT id,task_id,occurrence,state,data,created,updated,revision,delivered FROM job_runs WHERE id IN ({marks})",
+            ids,
+        ).fetchall()
+        return {
+            r[0]: dict(
+                zip(
+                    (
+                        "id",
+                        "task_id",
+                        "occurrence",
+                        "state",
+                        "data",
+                        "created",
+                        "updated",
+                        "revision",
+                        "delivered",
+                    ),
+                    (*r[:4], json.loads(r[4]), *r[5:]),
+                )
+            )
+            for r in rows
+        }
 
     def run(self, ident):
         row = self.db.execute(

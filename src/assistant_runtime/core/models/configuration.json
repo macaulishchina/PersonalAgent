@@ -167,6 +167,29 @@
                   ]
                 }
               }
+            },
+            "presentation": {
+              "type": "object",
+              "title": "个性配置",
+              "additionalProperties": false,
+              "properties": {
+                "display_name": {
+                  "type": "string",
+                  "title": "公开名称",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": {
+                  "type": "string",
+                  "title": "说明",
+                  "maxLength": 400
+                },
+                "avatar": {
+                  "type": "string",
+                  "title": "头像",
+                  "pattern": "^(builtin:(generic|openai|anthropic|google|deepseek)|asset:[a-f0-9]{64})$"
+                }
+              }
             }
           },
           "additionalProperties": false
@@ -361,6 +384,29 @@
               "description": "模型支持的最大输出 token 数；实际调用还受运行预算限制。",
               "minimum": 1,
               "maximum": 10000000
+            },
+            "presentation": {
+              "type": "object",
+              "title": "个性配置",
+              "additionalProperties": false,
+              "properties": {
+                "display_name": {
+                  "type": "string",
+                  "title": "公开名称",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": {
+                  "type": "string",
+                  "title": "说明",
+                  "maxLength": 400
+                },
+                "avatar": {
+                  "type": "string",
+                  "title": "头像",
+                  "pattern": "^(builtin:(generic|openai|anthropic|google|deepseek)|asset:[a-f0-9]{64})$"
+                }
+              }
             }
           },
           "additionalProperties": false

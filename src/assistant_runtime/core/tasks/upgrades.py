@@ -45,6 +45,12 @@ class ModelUpgrades:
         if caller and args["run_id"] != caller:
             raise ValueError("A background task may request only its own model upgrade")
         run = self.repo.run(args["run_id"])
+        if run["data"]["spec"]["execution"].get("expected_model") is not None:
+            from assistant_runtime.api.models import CapabilityRequestError
+
+            raise CapabilityRequestError(
+                "model_policy_conflict", "A route-constrained task cannot change models"
+            )
         history = run["data"].get("model_upgrades", [])
         for prior in history:
             if prior["request_id"] == args["request_id"]:

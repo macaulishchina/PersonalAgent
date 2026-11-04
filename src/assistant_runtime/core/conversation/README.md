@@ -1,5 +1,11 @@
 # Public conversations
 
+Since 0.4.14, submit optionally accepts `expected_model={model, revision}` from the
+applied public model directory. It guards acceptance and final dispatch without pinning
+the session; old submissions keep existing defaults. Receipt/receipts optionally accept
+`include_execution=true` for durable route, effort and execution linkage. Omitted fields
+preserve the old response shape. See [public model routes](../../../../docs/guides/model-routes.md).
+
 `conversation` is a core plugin requiring `workfiles` and `execution`. It owns durable
 logical sessions, entrance bindings, ordered input, messages, media references and result
 delivery. Optional assistant presentation lives in `core/speech`; slim never imports it.

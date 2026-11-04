@@ -425,16 +425,20 @@ class TasksPlugin:
         self.repo.update_run(ident, state, **data)
         return True
 
-    async def validate_spec(self, value, caller=None, *, preserved_execution=None):
+    async def validate_spec(self, value, caller=None, *, preserved_execution=None, frozen_execution=None):
+        from assistant_runtime.api.models import CapabilityRequestError
+
         try:
-            return await self._validate_spec(value, caller, preserved_execution=preserved_execution)
-        except ToolFailure:
+            return await self._validate_spec(
+                value, caller, preserved_execution=preserved_execution, frozen_execution=frozen_execution
+            )
+        except (ToolFailure, CapabilityRequestError):
             raise
         except (ValueError, KeyError) as exc:
             # Validation completes before any definition/run is created or changed.
             raise invalid_arguments(str(exc), "spec") from None
 
-    async def _validate_spec(self, value, caller=None, *, preserved_execution=None):
+    async def _validate_spec(self, value, caller=None, *, preserved_execution=None, frozen_execution=None):
         allowed = {
             "title",
             "prompt",
@@ -562,7 +566,9 @@ class TasksPlugin:
             return s
         if not isinstance(requested, dict):
             validate_tool(requested, EXECUTION, "execution")
-        validate_tool({k: v for k, v in requested.items() if k != "selection"}, EXECUTION, "execution")
+        validate_tool(
+            {k: v for k, v in requested.items() if k not in {"selection", "route"}}, EXECUTION, "execution"
+        )
         if requested.get("kind", "agent") not in {"agent", "reminder", "device_query"}:
             raise ValueError("Unknown execution kind")
         if requested.get("kind") == "device_query":
@@ -574,7 +580,15 @@ class TasksPlugin:
         else:
             declared = assessment(requested.get("assessment"))
             prior = evidence(self, declared, caller, s["workspace"])
-            s["execution"] = await select_execution(self, requested, s["title"] + "\n" + s["prompt"], prior)
+            if frozen_execution is not None:
+                s["execution"] = await self.model_policy.constrained(
+                    self.executor, requested, self.settings.execution, self.model_defaults(), saved=True
+                )
+                s["execution"]["selection"] = frozen_execution.get("selection", s["execution"]["selection"])
+            else:
+                s["execution"] = await select_execution(
+                    self, requested, s["title"] + "\n" + s["prompt"], prior
+                )
             s["execution"]["assessment"] = declared
             s["execution"]["selection"]["prior_execution"] = prior
             if caller and self.repo.run(caller)["state"] not in {"running", "waiting_user"}:
@@ -707,6 +721,28 @@ class TasksPlugin:
                     models, self.model_defaults(), self.settings.execution
                 ),
             }
+        if a == "receipt":
+            if set(args) - {"request_id", "spec", "feedback_owner"}:
+                raise ValueError("Invalid creation receipt query")
+            ident = str(args["request_id"])
+            uuid.UUID(ident)
+            row = self.repo.db.execute(
+                "SELECT id,fingerprint FROM job_definitions WHERE request_id=?", (ident,)
+            ).fetchone()
+            if row is None:
+                return {"found": False, "request_id": ident}
+            result = {"found": True, "request_id": ident, "task_id": row[0]}
+            if "spec" in args:
+                payload = (
+                    args["spec"]
+                    if args.get("feedback_owner", "background") == "background"
+                    else [args["spec"], args["feedback_owner"]]
+                )
+                fingerprint = hashlib.sha256(
+                    json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
+                ).hexdigest()
+                result["matches"] = fingerprint == row[1]
+            return result
         if a == "list":
             definitions, before, removed, updates = self.repo.definition_page(args)
             return {
@@ -723,11 +759,8 @@ class TasksPlugin:
             if caller and set(ids) != {caller}:
                 raise ValueError("Background execution may inspect only its own identity")
             result = {}
-            for ident in set(ids):
-                try:
-                    run = self.repo.run(ident)
-                except ValueError:
-                    continue
+            for run in self.repo.runs_by_ids(ids).values():
+                ident = run["id"]
                 result[ident] = {
                     "task_id": run["task_id"],
                     "state": "stopping" if run["data"].get("stop_requested") else run["state"],
@@ -1033,6 +1066,17 @@ class TasksPlugin:
             spec = await self.validate_spec(
                 combined,
                 preserved_execution=d["spec"]["execution"] if "execution" not in args["changes"] else None,
+                frozen_execution=d["spec"]["execution"]
+                if d["spec"]["execution"].get("effort_mode") == "model_default"
+                and "execution" in original_changes
+                and not {
+                    "model",
+                    "reasoning_effort",
+                    "effort_mode",
+                    "expected_model",
+                    "recommendation",
+                }.intersection(original_changes["execution"])
+                else None,
             )
             if "execution" not in args["changes"] and all(
                 spec["execution"].get(k) == d["spec"]["execution"].get(k)
@@ -1215,6 +1259,10 @@ class TasksPlugin:
             raise
         except Exception as exc:
             # A provider request may have executed before its reply was lost.
+            from assistant_runtime.api.models import CapabilityRequestError
+
+            if isinstance(exc, CapabilityRequestError):
+                self.lifecycle.mark(ident, "model_validation", "not_dispatched")
             current = self.repo.run(ident)
             state = self.lifecycle.failure(ident, exc)
             if current["state"] not in {"canceled", "paused"} or state == "unknown":

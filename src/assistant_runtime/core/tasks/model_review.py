@@ -77,6 +77,8 @@ class ModelReview:
 
     def enqueue(self, run):
         p = self.plugin
+        if run["data"]["spec"]["execution"].get("effort_mode") == "model_default":
+            return  # Human/default calls never cause a second paid model judgment.
         if run["data"].get("model_review"):
             return
         if p.model_policy.review_mode == "active":

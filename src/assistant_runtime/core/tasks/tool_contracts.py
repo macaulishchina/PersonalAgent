@@ -31,6 +31,11 @@ EXECUTION = obj(
         "kind": {"type": "string", "enum": ["agent", "reminder", "device_query"]},
         "model": nullable(text(160)),
         "reasoning_effort": nullable(text(160)),
+        "effort_mode": {"enum": ["model_default"]},
+        "expected_model": obj(
+            {"model": text(64), "revision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+            ["model", "revision"],
+        ),
         "recommendation": nullable(text(64)),
         "reason": {
             **nullable(text(400)),

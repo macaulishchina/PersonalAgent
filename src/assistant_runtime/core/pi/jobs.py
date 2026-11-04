@@ -214,6 +214,11 @@ class PiJobs:
                 "model": selection["model"],
                 "effort": selection["reasoning_effort"],
                 **(
+                    {"expected_model": selection["expected_model"]}
+                    if selection.get("expected_model") is not None
+                    else {}
+                ),
+                **(
                     {"retry_of": run["data"]["model_retry_target"]}
                     if run["data"].get("model_retry_target")
                     else {}
@@ -227,6 +232,11 @@ class PiJobs:
             None,
             turn_id=turn["run"]["id"],
             execution_id=turn.get("execution_id"),
+            execution_facts={
+                "route": turn.get("route"),
+                "reasoning_effort": turn.get("reasoning_effort"),
+                "started_at": turn.get("started_at"),
+            },
             dispatch={"stage": "run_started", "state": "dispatched"},
         )
 

@@ -27,6 +27,7 @@ class ConversationStore:
             );
             CREATE TABLE IF NOT EXISTS chat_context (message_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS conversation_uploads (id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conversation_execution (request_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS conversation_queue (
                 ordinal INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
                 session_id TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL,
@@ -53,6 +54,19 @@ class ConversationStore:
     @staticmethod
     def queue_revision(payload):
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    def execution(self, ident):
+        row = self.db.execute(
+            "SELECT data FROM conversation_execution WHERE request_id=?", (ident,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def execution_update(self, ident, **changes):
+        data = {**(self.execution(ident) or {}), **changes}
+        self.db.execute(
+            "INSERT INTO conversation_execution VALUES(?,?) ON CONFLICT(request_id) DO UPDATE SET data=excluded.data",
+            (ident, json.dumps(data)),
+        )
 
     def queue(self, session):
         requests = []

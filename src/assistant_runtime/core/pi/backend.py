@@ -66,6 +66,7 @@ class PiBackend:
         self.resumed_turns = []
         self.resolved_model = None
         self.resolved_reasoning_effort = None
+        self.last_execution = {}
         self.active_turn = self.active_task = None
         self.progress = ""
         from assistant_runtime.core.pi.turns import Turns
@@ -304,7 +305,7 @@ class PiBackend:
             },
         )
 
-    async def submit(self, text, images=(), *, cancelled=lambda: False, retry_of=None):
+    async def submit(self, text, images=(), *, cancelled=lambda: False, retry_of=None, expected_model=None):
         if not self.foreground:
             raise RuntimeError("Conversation capability is not enabled")
         if not self.client.settings.enabled:
@@ -346,6 +347,8 @@ class PiBackend:
                 )
                 return "steered"
             ident = uuid.uuid4().hex
+            if expected_model is not None:
+                self.client.settings.require_route(expected_model, self.config.main_model)
             self.active_task = ident
             self.progress = "已经收到，正在处理。"
             self.store.executions.create_task(ident, text, self.session_id)
@@ -362,16 +365,29 @@ class PiBackend:
                         "input": inputs,
                         "model": self.config.main_model,
                         "effort": self.config.main_reasoning_effort,
+                        **({"expected_model": expected_model} if expected_model is not None else {}),
                         **({"retry_of": retry_of} if retry_of else {}),
                     },
                 )
                 turn = result["run"]["id"]
+                self.last_execution = {
+                    "execution_id": result.get("execution_id"),
+                    "route": result.get("route"),
+                    "reasoning_effort": result.get("reasoning_effort"),
+                    "started_at": result.get("started_at"),
+                }
                 if result.get("execution_id"):
                     self.store.executions.bind(ident, result["execution_id"])
                 if self.active_task == ident:
                     self.active_turn = turn
                     self.store.executions.update_task(ident, "running", turn)
             except BaseException as exc:
+                from assistant_runtime.api.models import CapabilityRequestError
+
+                if isinstance(exc, CapabilityRequestError):
+                    self.store.executions.update_task(ident, "failed")
+                    self.active_task = self.active_turn = None
+                    raise
                 interrupted = False
                 if self.client.admission:
                     admission = self.client.admission.service

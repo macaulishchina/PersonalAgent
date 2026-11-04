@@ -10,6 +10,7 @@ import json
 import re
 from copy import deepcopy
 from .capabilities import resolve, output_bound
+from .presentation import validate as validate_presentation
 from urllib.parse import urlsplit
 
 PROTOCOLS = {"openai_responses", "openai_chat", "anthropic", "gemini", "pi"}
@@ -152,12 +153,12 @@ class ModelSettings:
                 raise ValueError("Provider must be a table")
             preset = provider.get("preset")
             if "account" in provider:
-                keys(provider, {"account", "enabled"})
+                keys(provider, {"account", "enabled", "presentation"})
                 provider["protocol"] = "pi"
             if preset is not None:
                 if preset not in PRESETS:
                     raise ValueError("Unknown provider preset")
-                keys(provider, {"preset", "key_env", "enabled"})
+                keys(provider, {"preset", "key_env", "enabled", "presentation"})
                 providers[ident] = {
                     **deepcopy(PRESETS[preset]),
                     **{k: v for k, v in provider.items() if k != "preset"},
@@ -232,14 +233,25 @@ class ModelSettings:
                         "ChatGPT subscription requires explicit output_limit='model'; request caps unsupported"
                     )
         for ident, p in obj.providers.items():
+            if "presentation" in p:
+                validate_presentation(p["presentation"])
             if p.get("protocol") == "pi":
-                keys(p, {"protocol", "account", "enabled"})
+                keys(p, {"protocol", "account", "enabled", "presentation"})
                 if p.get("account") not in obj.accounts or type(p.get("enabled", False)) is not bool:
                     raise ValueError("Invalid native account binding")
                 continue
             keys(
                 p,
-                {"protocol", "base_url", "key_env", "enabled", "auth_scheme", "session_header", "catalog"},
+                {
+                    "protocol",
+                    "base_url",
+                    "key_env",
+                    "enabled",
+                    "auth_scheme",
+                    "session_header",
+                    "catalog",
+                    "presentation",
+                },
             )
             if p.get("auth_scheme", "native") not in {"native", "bearer"}:
                 raise ValueError("Unsupported provider authentication scheme")
@@ -289,8 +301,11 @@ class ModelSettings:
                     "context_window",
                     "output_limit",
                     "capabilities",
+                    "presentation",
                 },
             )
+            if "presentation" in m:
+                validate_presentation(m["presentation"])
             if m.get("provider") not in obj.providers:
                 raise ValueError("Unknown provider for " + ident)
             if not isinstance(m.get("model"), str) or not 1 <= len(m["model"]) <= 200:
@@ -356,6 +371,59 @@ class ModelSettings:
 
     def fingerprint(self):
         return hashlib.sha256(json.dumps(self.__dict__, sort_keys=True).encode()).hexdigest()
+
+    def route(self, model):
+        from assistant_runtime.api.models import CapabilityRequestError
+
+        if model not in self.entries:
+            raise CapabilityRequestError("model_unavailable", "The registered model is unavailable")
+        entry = self.entries[model]
+        provider_id = entry["provider"]
+        provider = self.providers[provider_id]
+        account = self.accounts.get(provider.get("account"), {})
+        # Never hash credentials, credential references, presentation or defaults.
+        identity = {
+            "provider": provider_id,
+            "model": entry["model"],
+            **{k: provider[k] for k in ("protocol", "base_url", "account") if k in provider},
+            "native": {k: account[k] for k in ("provider", "auth") if k in account},
+        }
+        revision = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        return {
+            "model": model,
+            "provider_id": provider_id,
+            "upstream_model": entry["model"],
+            "revision": revision,
+        }
+
+    def require_route(self, condition, model=None):
+        from assistant_runtime.api.models import CapabilityRequestError, expected_model
+
+        condition = expected_model(condition)
+        if model is not None and condition["model"] != model:
+            raise CapabilityRequestError(
+                "model_binding_changed", "The selected model no longer matches the request"
+            )
+        route = self.route(condition["model"])
+        if route["revision"] != condition["revision"]:
+            raise CapabilityRequestError("model_binding_changed", "The registered model route has changed")
+        if not self.enabled or not self.providers[route["provider_id"]].get("enabled", False):
+            raise CapabilityRequestError("model_unavailable", "The selected model route is disabled")
+        return route
+
+    def public_catalog(self):
+        from .presentation import public
+
+        return [
+            {
+                **row,
+                **public(self, row["model"]),
+                "route": self.route(row["model"]),
+                "unavailable_reason": None if row["available"] else "model_disabled",
+                "default_reasoning_effort": reasoning_effort(self.entries[row["model"]]),
+            }
+            for row in self.catalog()
+        ]
 
     def catalog(self):
         return [

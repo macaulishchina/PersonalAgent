@@ -122,17 +122,17 @@ class Console:
             response = web.json_response(
                 {"error": "配置或文件操作失败；请检查字段、依赖及本地配置"}, status=400
             )
+        response.headers.setdefault("Cache-Control", "no-store")
         response.headers.update(
             {
-                "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+                "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
             }
         )
         return response
 
     async def start(self):
-        app = web.Application(middlewares=[self.guard], client_max_size=2 * 1024 * 1024)
+        app = web.Application(middlewares=[self.guard], client_max_size=3 * 1024 * 1024)
         app.add_routes(
             [
                 web.get("/", self.chat_gateway.forward),
@@ -167,6 +167,8 @@ class Console:
                 web.post("/api/provider-query", self.provider_query),
                 web.post("/api/model-test", self.model_test),
                 web.post("/api/model-capabilities", self.model_capabilities),
+                web.post("/api/model-avatar", self.model_avatar_upload),
+                web.get("/api/model-avatar/{asset_id}", self.model_avatar_read),
                 web.post("/api/account-answer", self.account_answer),
                 web.post("/api/account-cancel", self.account_cancel),
                 web.get("/api/repair", self.repair_read),
@@ -495,6 +497,61 @@ class Console:
             return web.json_response(await self.provider_queries.describe(await request.json()))
         except ProbeInput as exc:
             return web.json_response({"error": str(exc), "field": exc.field}, status=400)
+
+    async def model_avatar_upload(self, request):
+        import base64
+        from assistant_runtime.core.models.presentation import normalize, digest, MAX_UPLOAD
+
+        data = await request.json()
+
+        def prepare():
+            with self.files.locked():
+                if data.get("version") != self.files.snapshot().version:
+                    raise Conflict()
+            value = data.get("data_base64")
+            if (
+                set(data) != {"version", "data_base64"}
+                or not isinstance(value, str)
+                or len(value) > (MAX_UPLOAD + 2) // 3 * 4
+            ):
+                raise ValueError("Invalid avatar upload")
+            raw = normalize(base64.b64decode(value, validate=True))
+            ident = digest(raw)
+            return {
+                "avatar": "asset:" + ident,
+                "resource": {
+                    "id": "model-avatar-" + ident,
+                    "op": "set",
+                    "value": base64.b64encode(raw).decode(),
+                },
+                "media_type": "image/png",
+            }
+
+        return web.json_response(await asyncio.to_thread(prepare))
+
+    async def model_avatar_read(self, request):
+        from assistant_runtime.core.models.presentation import read
+
+        ident = request.match_info["asset_id"]
+        if request.query.get("version") != ident:
+            raise ValueError("Avatar version required")
+
+        def capture():
+            with self.files.locked():
+                snapshot = self.files.snapshot()
+                if "model-avatar-" + ident not in snapshot.resources:
+                    raise ValueError("Avatar is not referenced by saved configuration")
+                return read(self.business.settings.root, ident)
+
+        raw = await asyncio.to_thread(capture)
+        headers = {
+            "ETag": '"' + ident + '"',
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if request.headers.get("If-None-Match") == headers["ETag"]:
+            return web.Response(status=304, headers=headers)
+        return web.Response(body=raw, content_type="image/png", headers=headers)
 
     async def account_inventory(self, request):
         return web.json_response(await asyncio.to_thread(self.accounts.public))

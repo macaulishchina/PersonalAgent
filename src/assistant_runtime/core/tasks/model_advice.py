@@ -29,6 +29,10 @@ async def select_execution(plugin, requested, objective, prior=None):
 
 async def _select_execution(plugin, requested, objective, prior=None):
     requested = plugin.model_policy.normalize(requested)
+    if requested.get("expected_model") is not None or requested.get("effort_mode") == "model_default":
+        return await plugin.model_policy.resolve(
+            plugin.executor, requested, plugin.settings.execution, plugin.model_defaults()
+        )
     if plugin.model_policy.review_mode == "active":
         return await select_active(plugin, requested, objective, prior)
     return await plugin.model_policy.resolve(

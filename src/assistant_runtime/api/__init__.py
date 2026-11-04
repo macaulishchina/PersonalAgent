@@ -6,6 +6,7 @@ from .results import ResultReference, ResultAccessError
 from .control import ExecutionControl
 from .runs import ExecutionRequest
 from .conversation import ConversationRequest
+from .models import CapabilityRequestError
 from .backends import BackendSpec, PlatformInfo
 from .plugins import CallIdentity, PluginContext, PluginDefinition, Tool
 from .tool_calls import ToolOutcome, ToolFailure
@@ -29,6 +30,7 @@ __all__ = [
     "ExecutionRequest",
     "ExecutionControl",
     "ConversationRequest",
+    "CapabilityRequestError",
     "FileRequest",
     "ResultReference",
     "ResultAccessError",
