@@ -24,6 +24,14 @@ renders Markdown once, and keeps raw JSON inspection inside tool details. Consec
 entries remain open during execution and default closed when the turn settles; manual reopening
 survives later updates. Final answers, media and failure notices remain visible outside that fold.
 
+Web media presentation is scoped to the recorded reply turn. Tool and answer references
+share one gallery after the reply text, deduplicated by registered ID; while running,
+received media remains visible. An intervening task notification does not steal the
+foreground gallery. Late media, failure and history reload use the same projection.
+Original tool attachments, message text, files and permissions are unchanged; the UI
+does not copy evidence onto final messages or guess associations from phrases such as
+“见附件”. User uploads and task-report media retain their own presentation and ownership.
+
 Creation receipts are durable and isolated by the authenticated caller. The optional
 `policy` object accepts an explicit `tools` allowlist, additional `instructions`, and
 `capture_memory` (default true). Policy restrictions apply to fresh and resumed turns;

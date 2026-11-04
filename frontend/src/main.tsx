@@ -43,6 +43,7 @@ import {
   isExecutionStep,
   replySections,
   replySettled,
+  replyMedia,
   type MessageOrigin,
 } from "./message-presentation";
 import { TaskReport, ReportCollection } from "./task-report";
@@ -443,8 +444,10 @@ function ConversationGroup({
   onRetry,
   retryDisabled,
   settled,
+  media,
 }: {
   group: MessageGroup;
+  media: Attachment[];
   onRetry: (turn: string, requestId: string) => Promise<void>;
   retryDisabled: boolean;
   settled: boolean;
@@ -455,6 +458,7 @@ function ConversationGroup({
   onOpenTask: (id: string) => void;
 }) {
   const user = group.role === "user";
+  const sharedMedia = !user && !group.messages.some(isReport);
   const [resolvedTask, setResolvedTask] = useState<string | null>(null);
   const latest = isReport(group.messages[0])
     ? group.messages.at(-1)!
@@ -477,7 +481,7 @@ function ConversationGroup({
       message={m}
       onRetry={onRetry}
       retryDisabled={retryDisabled}
-      showMedia={showMedia}
+      showMedia={showMedia && !sharedMedia}
       onOpen={onOpen}
       onOpenTask={onOpenTask}
       onResolvedTask={setResolvedTask}
@@ -568,13 +572,6 @@ function ConversationGroup({
           const steps = section.messages.filter(isExecutionStep);
           if (!section.process || !steps.length)
             return section.messages.map((m) => entry(m));
-          const attachments = [
-            ...new Map(
-              section.messages
-                .flatMap((m) => m.attachments)
-                .map((ref) => [ref.id, ref]),
-            ).values(),
-          ];
           const attention = steps.filter(
             (m) =>
               ["failed", "unknown", "interrupted"].includes(m.status) ||
@@ -589,10 +586,12 @@ function ConversationGroup({
               >
                 {section.messages.map((m) => entry(m, false))}
               </ExecutionProcess>
-              <MessageMedia attachments={attachments} onOpen={onOpen} />
             </React.Fragment>
           );
         })
+      )}
+      {sharedMedia && (
+        <MessageMedia attachments={media} onOpen={onOpen} label="回复媒体" />
       )}
     </section>
   );
@@ -694,6 +693,8 @@ function App() {
   const latestUser = displayedMessages
     .filter((message) => message.role === "user")
     .at(-1);
+  const groups = groupMessages(displayedMessages);
+  const galleries = replyMedia<Attachment>(groups);
   const pendingDispatch = latestUser?.status === "sending";
   const foregroundBusy =
     sending ||
@@ -1172,10 +1173,11 @@ function App() {
                 <p>文字、图片和后台任务，共享同一段对话。</p>
               </div>
             )}
-            {groupMessages(displayedMessages).map((group) => (
+            {groups.map((group) => (
               <ConversationGroup
                 key={group.id}
                 group={group}
+                media={galleries.get(group.id) || []}
                 settled={replySettled(
                   group.messages,
                   state.active_turn_id,

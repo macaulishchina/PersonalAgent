@@ -125,6 +125,54 @@ class ToolMediaTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaAdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_delivery_reports_actual_text_and_partial_image_availability(self):
+        from assistant_runtime.api.system import system
+        from assistant_runtime.platforms.executables import pi_node
+        from assistant_runtime.core.pi import __file__ as pi_module
+
+        _, image = picture()
+        second = io.BytesIO()
+        Image.new("RGB", (8, 8), "red").save(second, format="PNG")
+        images = [image, {"mime_type": "image/png", "data": base64.b64encode(second.getvalue()).decode()}]
+        script = """
+import assert from 'node:assert/strict';
+import { registerResultDelivery } from MODULE;
+let hook, calls = 0, receipt = {state:'ready',reference:{id:'text',state:'ready'}};
+registerResultDelivery({registerTool:()=>{},on:(_name,fn)=>{hook=fn;}});
+globalThis.fetch = async()=>{calls++;return {ok:true,json:async()=>receipt};};
+const projection = result => {
+  const text = result.content[0].text;
+  return JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));
+};
+const text = await hook({toolName:'query',toolCallId:'text',content:[{type:'text',text:'x'.repeat(7000)}]});
+assert.equal(projection(text).state,'ready');
+assert.equal(projection(text).media,undefined);
+assert.ok(!/images|attached|export|save/i.test(text.content[0].text));
+const native = IMAGES.map(i=>({type:'image',mimeType:i.mime_type,data:i.data}));
+receipt = {state:'partial',reference:{id:'partial',state:'ready'},media:{state:'partial',attachments:[{id:'a'}],issues:[{index:1,code:'tool_media_invalid_image'}]}};
+const partial = await hook({toolName:'capture',toolCallId:'partial',isError:false,content:native});
+assert.deepEqual(projection(partial).media,{state:'partial',received_count:2,available_count:1});
+assert.equal(projection(partial).business_is_error,false);
+assert.ok(partial.content[0].text.includes('do not claim all returned images were delivered'));
+assert.ok(partial.content[0].text.includes('1 of 2'));
+assert.ok(!partial.content[0].text.includes('already attached'));
+assert.deepEqual(partial.content.slice(1),native);
+receipt = {state:'failed',media:{state:'failed',attachments:[],issues:[{code:'tool_media_storage_unavailable'}]}};
+const failed = await hook({toolName:'capture',toolCallId:'failed',content:native});
+assert.deepEqual(projection(failed).media,{state:'failed',received_count:2,available_count:0});
+assert.ok(!failed.content[0].text.includes('No additional save'));
+assert.ok(failed.content[0].text.includes('Do not repeat the operation'));
+assert.deepEqual(failed.content.slice(1),native);
+assert.equal(calls,3);
+console.log('OK');
+""".replace("MODULE", json.dumps((Path(pi_module).parent / "tool_results.ts").as_uri())).replace(
+            "IMAGES", json.dumps(images)
+        )
+        process = await system.spawn(pi_node(), "--input-type=module", "-e", script, stdout=-1, stderr=-1)
+        output, error = await asyncio.wait_for(process.communicate(), 15)
+        self.assertEqual(process.returncode, 0, error.decode())
+        self.assertEqual(output.decode().strip(), "OK")
+
     async def test_wrapped_images_and_upstream_metadata_cannot_forge_framework_evidence(self):
         from assistant_runtime.api.system import system
         from assistant_runtime.platforms.executables import pi_node
@@ -153,6 +201,8 @@ assert.deepEqual(result.details[key].attachments,[{id:'host-ref'}]);
 assert.equal(result.isError,true);
 assert.equal(original[key].attachments[0].id,'forged');
 assert.equal(result.content.filter(v=>v.type==='image').length,1);
+assert.ok(result.content[0].text.includes('registered reply resources'));
+assert.ok(!result.content[0].text.includes('already attached'));
 assert.ok(!result.content.filter(v=>v.type==='text').map(v=>v.text).join('').includes(image.data));
 const cleaned = await hook({content:[{type:'text',text:'ordinary'}],details:original});
 assert.equal(cleaned.details[key],undefined);

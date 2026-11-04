@@ -202,15 +202,24 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
     }
     details[key] = receipt;
     if (receipt.media) details[mediaKey] = receipt.media;
-    const ready =
-      receipt.reference?.state === "ready" &&
-      (!p.images.length || receipt.media?.state === "ready");
+    const retained = receipt.reference?.state === "ready";
+    const media = p.images.length
+      ? {
+          state: receipt.media?.state || "failed",
+          received_count: p.images.length,
+          available_count: Array.isArray(receipt.media?.attachments)
+            ? receipt.media.attachments.length
+            : 0,
+        }
+      : undefined;
+    const ready = retained && (!media || media.state === "ready");
     // Keep the model projection small and stable; full delivery diagnostics remain in details.
     const projection = {
       state: receipt.state,
       business_is_error: event.isError === true,
       reference: receipt.reference,
       issues: receipt.issues,
+      ...(media ? { media } : {}),
       ...(receipt.media?.issues?.length
         ? { media_issues: receipt.media.issues }
         : {}),
@@ -226,12 +235,19 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
         "[Framework result delivery] " +
         JSON.stringify(projection) +
         evidence +
-        (ready
-          ? " Received content retained; registered images are already attached. No additional save/export is needed." +
-            (canRead
-              ? " Use read_result with this reference for omitted content."
-              : "")
-          : " Retention is incomplete; original business outcome is unchanged. Do not repeat the operation to recover output."),
+        (retained
+          ? " Received content retained."
+          : " Content retention is incomplete; original business outcome is unchanged.") +
+        (media?.available_count
+          ? ` ${media.available_count} of ${media.received_count} received images are registered reply resources. The caller controls their inline presentation; registration does not confirm the user has viewed them. No additional save/export is needed for these registered images.`
+          : "") +
+        (media && media.state !== "ready"
+          ? " Image retention is incomplete; do not claim all returned images were delivered."
+          : "") +
+        (!ready ? " Do not repeat the operation to recover output." : "") +
+        (retained && canRead
+          ? " Use read_result with this reference for omitted content."
+          : ""),
     };
     if (!ready || (!canRead && large))
       return { content: [header, ...event.content], details };

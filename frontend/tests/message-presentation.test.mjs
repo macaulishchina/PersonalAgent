@@ -4,6 +4,7 @@ import {
   groupMessages,
   messageChannel,
   needsAttention,
+  replyMedia,
 } from "../src/message-presentation.ts";
 
 const report = (id, overrides = {}) => ({
@@ -332,4 +333,111 @@ test("process sections follow recorded phase, preserve final replies and do not 
     ]).map((s) => s.process),
     [false, false],
   );
+});
+
+test("reply media follows its answer across process and notification groups without changing evidence", () => {
+  const message = (id, extra = {}) => ({
+    id,
+    role: "assistant",
+    kind: "detail",
+    source: "task",
+    turn_id: "turn",
+    updated: 100,
+    text: "调用工具\ncapture",
+    presentation: { phase: "tool" },
+    attachments: [],
+    ...extra,
+  });
+  const image = { id: "image", name: "画面.jpg", type: "image/jpeg" };
+  const video = { id: "video", name: "录像.mp4", type: "video/mp4" };
+  const rows = [
+    message("capture", { attachments: [image] }),
+    report("notification", {
+      updated: 101,
+      attachments: [{ id: "report-image" }],
+    }),
+    message("capture-video", { updated: 102, attachments: [video] }),
+    message("answer", {
+      updated: 103,
+      kind: "message",
+      text: "已取得画面。",
+      presentation: { phase: "final" },
+      attachments: [image],
+    }),
+    message("other-turn", {
+      updated: 104,
+      turn_id: "other",
+      attachments: [image],
+    }),
+  ];
+  const original = JSON.stringify(rows);
+  const groups = groupMessages(rows);
+  const galleries = replyMedia(groups);
+  const answer = groups.find((g) => g.messages.some((m) => m.id === "answer"));
+  const first = groups.find((g) => g.messages.some((m) => m.id === "capture"));
+  assert.deepEqual(galleries.get(answer.id), [image, video]);
+  assert.equal((galleries.get(first.id) || []).length, 0);
+  assert.deepEqual(galleries.get("other-turn"), [image]);
+  assert.ok(
+    ![...galleries.values()].flat().some((a) => a.id === "report-image"),
+  );
+  assert.equal(JSON.stringify(rows), original);
+});
+
+test("media remains visible while running or after failure, and late media joins the same reply", () => {
+  const tool = {
+    id: "tool",
+    role: "assistant",
+    source: "task",
+    kind: "detail",
+    turn_id: "turn",
+    updated: 1,
+    text: "调用工具\ncapture",
+    attachments: [{ id: "a" }],
+  };
+  assert.deepEqual(replyMedia(groupMessages([tool])).get("tool"), [
+    { id: "a" },
+  ]);
+  const failed = {
+    ...tool,
+    id: "failed",
+    kind: "message",
+    updated: 2,
+    text: "后续请求失败，已取得的图片保留。",
+    attachments: [],
+  };
+  const rows = [tool, failed];
+  assert.deepEqual(replyMedia(groupMessages(rows)).get("tool"), [{ id: "a" }]);
+  tool.attachments.push({ id: "late" });
+  assert.deepEqual(replyMedia(groupMessages(rows)).get("tool"), [
+    { id: "a" },
+    { id: "late" },
+  ]);
+  assert.deepEqual(
+    replyMedia(groupMessages(JSON.parse(JSON.stringify(rows)))),
+    replyMedia(groupMessages(rows)),
+  );
+});
+
+test("user media and messages without a turn identity never transfer into another reply", () => {
+  const row = (id, role) => ({
+    id,
+    role,
+    kind: "message",
+    source: "web",
+    text: "图片",
+    updated: 1,
+    attachments: [{ id }],
+  });
+  const galleries = replyMedia(
+    groupMessages([
+      row("input", "user"),
+      row("reply", "assistant"),
+      row("input2", "user"),
+      row("reply2", "assistant"),
+    ]),
+  );
+  assert.deepEqual([...galleries.keys()], ["reply", "reply2"]);
+  assert.deepEqual(galleries.get("reply"), [{ id: "reply" }]);
+  assert.deepEqual(galleries.get("reply2"), [{ id: "reply2" }]);
 });

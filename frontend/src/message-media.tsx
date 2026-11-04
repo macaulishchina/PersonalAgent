@@ -52,13 +52,19 @@ export function ImagePreview({
 export function MessageMedia({
   attachments,
   onOpen,
+  label,
 }: {
   attachments: Attachment[];
   onOpen: (url: string) => void;
+  label?: string;
 }) {
   if (!attachments.length) return null;
   return (
-    <div className="message-media">
+    <div
+      className="message-media"
+      role={label ? "group" : undefined}
+      aria-label={label}
+    >
       {attachments.map((a) =>
         a.type === "video/mp4" ? (
           <figure className="message-video" key={a.id}>
@@ -82,7 +88,11 @@ export function MessageMedia({
             aria-label={"查看图片 " + a.name}
             onClick={() => onOpen(chatPath("api/uploads/" + a.id))}
           >
-            <img src={chatPath("api/uploads/" + a.id)} alt={a.name} loading="lazy" />
+            <img
+              src={chatPath("api/uploads/" + a.id)}
+              alt={a.name}
+              loading="lazy"
+            />
           </button>
         ),
       )}

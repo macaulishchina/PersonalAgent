@@ -52,6 +52,58 @@ export function replySections<T extends MessageOrigin>(messages: T[]) {
   return sections;
 }
 
+/** Media belongs to the reply turn; tool records retain their original evidence. */
+export function replyMedia<A extends { id: string }>(
+  groups: {
+    id: string;
+    role: string;
+    messages: (Omit<MessageOrigin, "attachments"> & {
+      attachments?: readonly A[];
+    })[];
+  }[],
+) {
+  const replies = new Map<
+    string,
+    { group: string; answered: boolean; references: Map<string, A> }
+  >();
+  for (const group of groups) {
+    if (group.role !== "assistant") continue;
+    for (const message of group.messages) {
+      if (isReport(message)) continue;
+      const key = message.turn_id
+        ? "turn:" + message.turn_id
+        : "group:" + group.id;
+      let reply = replies.get(key);
+      if (!reply) {
+        reply = { group: group.id, answered: false, references: new Map() };
+        replies.set(key, reply);
+      }
+      if (
+        message.kind === "message" &&
+        message.presentation?.phase !== "commentary" &&
+        (message.text?.trim() || message.attachments?.length)
+      ) {
+        reply.group = group.id;
+        reply.answered = true;
+      } else if (message.attachments?.length && !reply.answered)
+        reply.group = group.id;
+      for (const reference of message.attachments || [])
+        if (!reply.references.has(reference.id))
+          reply.references.set(reference.id, reference);
+    }
+  }
+  const galleries = new Map<string, A[]>();
+  for (const reply of replies.values()) {
+    const previous = galleries.get(reply.group) || [];
+    galleries.set(reply.group, [
+      ...new Map(
+        [...previous, ...reply.references.values()].map((ref) => [ref.id, ref]),
+      ).values(),
+    ]);
+  }
+  return galleries;
+}
+
 export function replySettled(
   messages: MessageOrigin[],
   activeTurn: string | null | undefined,
