@@ -988,10 +988,13 @@ class TasksPlugin:
                                 "unknown",
                                 stop_requested=None,
                                 turn_active=False,
+                                questions=[],
                                 progress="本地停止已确认；外部操作结果仍需核对，保留保护。",
                             )
                         else:
-                            self.repo.update_run(run["id"], target, stop_requested=None, turn_active=False)
+                            self.repo.update_run(
+                                run["id"], target, stop_requested=None, turn_active=False, questions=[]
+                            )
                 except Exception as exc:
                     self.lifecycle.failure(run["id"], exc, kind="stop_unconfirmed")
                     self.repo.update_run(

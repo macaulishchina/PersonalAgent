@@ -281,7 +281,7 @@ export default function (pi: any) {
       execute: async (
         _id: string,
         params: any,
-        _signal: any,
+        signal: any,
         _onUpdate: any,
         ctx: any,
       ) => {
@@ -291,9 +291,25 @@ export default function (pi: any) {
             kind: "input.requested",
             data: { questions: params.questions, tool_call_id: _id },
           }),
+          { signal },
         );
         if (!reply) {
-          throw new Error("User input request was cancelled");
+          // This owner knows the local wait ended without an answer. A generic
+          // exception would incorrectly quarantine it as an unknown side effect.
+          return {
+            isError: true,
+            content: [{ type: "text", text: "User input request was cancelled" }],
+            structuredContent: {
+              tool_outcome: {
+                code: "user_input_cancelled",
+                stage: "return",
+                dispatch: "dispatched",
+                outcome: "failed",
+                message: "User input request was cancelled",
+                next_action: "ask_user",
+              },
+            },
+          };
         }
         return {
           content: [{ type: "text", text: reply }],

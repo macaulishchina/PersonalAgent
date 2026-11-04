@@ -301,6 +301,7 @@ class PiJobs:
                 handle = self.handles.setdefault(ident, {})
                 handle["result"] = "\n".join(filter(None, (handle.get("result", ""), text)))
         elif method == "run.completed":
+            self.questions.pop(ident, None)
             status = p["run"]["status"]
             state = {"completed": "completed", "interrupted": "canceled", "failed": "failed"}.get(
                 status, "unknown"
@@ -314,6 +315,7 @@ class PiJobs:
                 ai_usage=p["run"].get("ai_usage"),
                 model_failure=model_failure(p["run"].get("error")) if state == "failed" else None,
                 turn_active=False,
+                questions=[],
                 result=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 progress=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 result_ref=p.get("result_ref"),

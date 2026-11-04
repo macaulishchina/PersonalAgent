@@ -53,6 +53,7 @@ GROUPS = {
         "job_lifecycle",
         "mcp",
         "pi_skeleton",
+        "pi_waiting",
         "pi_discovery",
         "pi_runtime",
         "execution_reset",

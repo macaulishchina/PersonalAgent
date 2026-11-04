@@ -175,7 +175,8 @@ export function registerToolLifecycle(
     const entry = calls.get(event.toolCallId);
     const server = origin(event.toolName)?.server;
     let outcome =
-      internal.includes(server) || event.toolName === "read_result"
+      internal.includes(server) ||
+      ["read_result", "request_user_input"].includes(event.toolName)
         ? ownerOutcome(event.result)
         : undefined;
     if (!outcome && event.durationMs === undefined) {

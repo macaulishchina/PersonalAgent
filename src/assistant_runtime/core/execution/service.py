@@ -586,6 +586,7 @@ class ExecutionService:
                 {"id": event["id"], "error": {"code": -32601, "message": "Unsupported execution request"}}
             )
         elif kind == "run.completed":
+            self.questions.pop(ident, None)
             run = data["run"]
             final_messages = [
                 i
@@ -626,6 +627,7 @@ class ExecutionService:
                 usage=run.get("ai_usage"),
                 error=run.get("error"),
                 questions=[],
+                question_id=None,
             )
             if state in TERMINAL - {"unknown"}:
                 self.files.results.release("execution:" + ident)

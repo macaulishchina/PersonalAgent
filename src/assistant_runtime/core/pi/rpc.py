@@ -643,6 +643,11 @@ class PiSessionWorker:
 
     async def _finalize_turn(self, turn_id, status, error=None):
         self.compacting = False
+        # Pi's dialog settles on abort; discard the host correlation too, so a
+        # late answer cannot address an ended turn or a later turn's question.
+        for ident, (worker, _, _) in list(self.parent.ui_requests.items()):
+            if worker is self:
+                self.parent.ui_requests.pop(ident, None)
         turn_record = {
             "id": turn_id,
             "status": status,
@@ -842,7 +847,10 @@ class PiClient:
         track(self, session, turn, ident, role, text, tool_call_id)
 
     async def respond(self, ident, result):
-        worker, ui_id, _ = self.ui_requests.pop(ident)
+        entry = self.ui_requests.pop(ident, None)
+        if entry is None:
+            raise RpcError("Input request is no longer active")
+        worker, ui_id, _ = entry
         await worker.send_line(
             {"type": "extension_ui_response", "id": ui_id, "value": json.dumps(result, ensure_ascii=False)}
         )
