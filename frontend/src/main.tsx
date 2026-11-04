@@ -85,6 +85,7 @@ type State = {
   questions?: { id: string; question: string }[];
   queue?: QueuedRequest[];
   retrying?: { attempt: number } | null;
+  context_compacting?: boolean;
 };
 const initial: State = {
   name: "个人助理",
@@ -695,7 +696,11 @@ function App() {
     .at(-1);
   const pendingDispatch = latestUser?.status === "sending";
   const foregroundBusy =
-    sending || pendingDispatch || state.web_dispatching || state.task_running;
+    sending ||
+    pendingDispatch ||
+    state.web_dispatching ||
+    state.task_running ||
+    state.context_compacting;
   const streamingReply = messages.some(
     (message) =>
       message.role === "assistant" &&
@@ -710,13 +715,15 @@ function App() {
       ? "连接已断开，正在重新连接…"
       : sending
         ? "正在发送…"
-        : pendingDispatch || state.web_dispatching
-          ? "正在准备回复…"
-          : streamingReply
-            ? ""
-            : state.retrying
-              ? "模型服务暂时不可用，正在重试…"
-              : "正在处理…";
+        : state.context_compacting
+          ? "正在整理上下文…"
+          : pendingDispatch || state.web_dispatching
+            ? "正在准备回复…"
+            : streamingReply
+              ? ""
+              : state.retrying
+                ? "模型服务暂时不可用，正在重试…"
+                : "正在处理…";
   const merge = useCallback(
     (items: Message[]) =>
       setMessages((prev) => {

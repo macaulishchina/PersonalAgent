@@ -496,7 +496,6 @@ class ExecutionService:
                     "effort": row["data"]["effort"],
                     "input": [{"type": "text", "text": prompt}, *inputs],
                 },
-                timeout=60,
             )
             self.records.update(ident, turn_id=started["run"]["id"])
             if self.records.get(ident)["state"] == "cancelling":

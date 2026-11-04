@@ -220,7 +220,6 @@ class PiJobs:
                 ),
                 "input": [{"type": "text", "text": prompt}],
             },
-            timeout=60,
         )
         self.handles[run["id"]]["turn_id"] = turn["run"]["id"]
         self.notify(

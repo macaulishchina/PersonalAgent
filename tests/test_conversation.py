@@ -282,6 +282,16 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await c.submit(ident, "不同任务", [])
 
+    async def test_compaction_snapshot_is_current_and_does_not_create_chat_messages(self):
+        c = self.host.conversation
+        self.assertFalse(c.state()["context_compacting"])
+        self.host.backend.context_compacting = True
+        self.assertTrue(c.state()["context_compacting"])
+        self.assertTrue(c.state()["context_compacting"])  # A fresh page reads the same active state.
+        self.host.backend.context_compacting = False
+        self.assertFalse(c.state()["context_compacting"])
+        self.assertEqual(c.store.history(c.session), [])
+
     async def test_tool_summary_uses_existing_timeline_without_dispatch_or_history_backfill(self):
         c = self.host.conversation
         item = {
@@ -319,6 +329,22 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.05)
         again = await c.submit(ident, "创建文件", [])
         self.assertEqual(again["state"], "unknown")
+        self.host.backend.submit.assert_awaited_once()
+        failure = c.store.get(f"submission:{c.session}:{ident}")
+        self.assertEqual(failure["status"], "complete")
+        self.assertEqual(failure["presentation"]["turn_status"], "unknown")
+        self.assertIn("接单超时", failure["text"])
+        self.assertIn(failure["id"], [m["id"] for m in c.store.history(c.session)])
+
+    async def test_dispatch_failure_is_retained_without_leaking_exception_body(self):
+        self.host.backend.submit.side_effect = RuntimeError("private credential detail")
+        c = self.host.conversation
+        ident = str(uuid.uuid4())
+        await c.submit(ident, "查看状态", [])
+        await asyncio.sleep(0.05)
+        failure = c.store.get(f"submission:{c.session}:{ident}")
+        self.assertIn("RuntimeError", failure["text"])
+        self.assertNotIn("private credential", failure["text"])
         self.host.backend.submit.assert_awaited_once()
 
     async def test_voice_deltas_and_final_correction_share_one_item(self):

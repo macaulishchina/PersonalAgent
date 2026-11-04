@@ -22,6 +22,7 @@ from assistant_runtime.core.pi.mcp import to_pi_mcp_json
 
 log = logging.getLogger(__name__)
 MAX_FRAME_BYTES = 64 * 1024 * 1024
+CONTROL_TIMEOUT_SECONDS = 30
 EXTENSION_PATH = str(Path(__file__).with_name("extension.ts"))
 THINKING_MAP = {
     "auto": "off",
@@ -228,7 +229,7 @@ class PiSessionWorker:
         self.process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
         await self.process.stdin.drain()
 
-    async def command(self, cmd, timeout=30):
+    async def command(self, cmd, timeout=CONTROL_TIMEOUT_SECONDS):
         await self.start()
         self.counter += 1
         req_id = f"cmd-{self.counter}"
@@ -257,6 +258,7 @@ class PiSessionWorker:
                 exc_info=True,
             )
         finally:
+            self.compacting = False
             for fut in list(self.pending.values()):
                 if not fut.done():
                     fut.set_exception(RpcError("Pi session connection closed"))
@@ -639,6 +641,7 @@ class PiSessionWorker:
         return None
 
     async def _finalize_turn(self, turn_id, status, error=None):
+        self.compacting = False
         turn_record = {
             "id": turn_id,
             "status": status,
@@ -733,6 +736,7 @@ class PiSessionWorker:
 
     async def close(self):
         # A full host event queue must not prevent process/pipes from settling.
+        self.compacting = False
         for task in self.readers:
             task.cancel()
         await asyncio.gather(*self.readers, return_exceptions=True)
@@ -855,12 +859,20 @@ class PiClient:
             worker, ui_id, _ = entry
             await worker.send_line({"type": "extension_ui_response", "id": ui_id, "cancelled": True})
 
-    async def request(self, command, arguments, timeout=30):
+    async def request(self, command, arguments, timeout=None):
         if asyncio.current_task() not in self.configuration_tasks:
             await self.configuration_ready.wait()
         command = Command(command)
         if not self.started:
             raise RpcError("Executor is not started")
+        if timeout is None:
+            # Pi acknowledges prompt only after preflight, which can compact the session.
+            # Keep control RPCs short without truncating the configured model deadline.
+            timeout = (
+                self.settings.outer_timeout_seconds + CONTROL_TIMEOUT_SECONDS
+                if command == Command.START
+                else CONTROL_TIMEOUT_SECONDS
+            )
         async with asyncio.timeout(timeout):
 
             def dispatch():
@@ -1246,7 +1258,10 @@ class PiClient:
                 }
             )
             try:
-                await w.command({"type": "prompt", "message": text, **({"images": images} if images else {})})
+                await w.command(
+                    {"type": "prompt", "message": text, **({"images": images} if images else {})},
+                    timeout=self.settings.outer_timeout_seconds,
+                )
             except BaseException:
                 # Submission may have reached the engine. Leave the durable run unknown.
                 raise

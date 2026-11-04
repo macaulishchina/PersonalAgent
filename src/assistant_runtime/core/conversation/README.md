@@ -62,6 +62,10 @@ Web stays bound to `web`; CLI bindings use `cli:<operator>`. A client's live sel
 is local to that client. Model sessions are adapter-owned views of one shared Pi client,
 with separate locks, callbacks, context, questions and MCP refresh state. Pi owns context
 compression. Stable application identity and retained history survive worker replacement.
+`state.context_compacting` reflects the adapter's current session state. The Web shows
+“正在整理上下文…” in the existing response indicator, including preflight and reconnect;
+it does not create a chat message or infer progress from elapsed time. Completion,
+cancellation and worker disconnection clear the transient state.
 
 Task feedback captures source session and binding before dispatch. Text reports remain
 deliverable after the initiating turn finishes; voice retains its stricter live binding

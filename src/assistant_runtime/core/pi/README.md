@@ -18,6 +18,13 @@ Install the pinned runtime with `python -m assistant_runtime.app.cli install-pi`
 
 New state never imports Codex context. The current plugin consolidation preserves existing Pi data; do not reset it at cutover. New Pi sessions survive clean restart; unconfirmed execution never automatically replays. Each session is closed through plugin ownership.
 
+Pi acknowledges `prompt` after preflight, which may include context compaction.
+Run submission therefore uses the configured model/compaction transport deadline,
+with an outer cleanup margin, rather than the 30-second control-command deadline.
+Foreground, tasks and standalone executions use this adapter default; an explicit
+caller deadline still applies. Timeout does not authorize replay. Conversation
+submission failures are retained as visible messages rather than transient notices only.
+
 Tests: `.venv/bin/python scripts/check.py --group execution --group models --group tasks`. Real subprocess tests use a local synthetic Responses endpoint and cover actual tool writes, MCP execution, selection, clarification, cancellation and restart. They do not establish real-provider parity.
 
 On Windows, the native Pi Bash/PowerShell tool definitions use a platform-owned

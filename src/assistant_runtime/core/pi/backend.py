@@ -92,6 +92,11 @@ class PiBackend:
     def busy(self):
         return self.active_task is not None
 
+    @property
+    def context_compacting(self):
+        worker = self.client.workers.get(self.execution_session_id)
+        return bool(worker and worker.compacting)
+
     async def start(self):
         import secrets
 
@@ -359,7 +364,6 @@ class PiBackend:
                         "effort": self.config.main_reasoning_effort,
                         **({"retry_of": retry_of} if retry_of else {}),
                     },
-                    timeout=60,
                 )
                 turn = result["run"]["id"]
                 if result.get("execution_id"):

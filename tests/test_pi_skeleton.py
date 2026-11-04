@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pi_gateway import FakeResponsesGateway, sse_tool_call, sse_text_reply
 from assistant_runtime.app.config import Config
@@ -451,15 +451,59 @@ class PiSkeletonTest(unittest.IsolatedAsyncioTestCase):
     async def test_compaction_failure_is_explicit_but_never_overwrites_unknown_execution(self):
         ident = await self.session()
         worker = self.client.workers[ident]
+        backend = PiBackend.__new__(PiBackend)
+        backend.client, backend.execution_session_id = self.client, ident
+        worker.compacting = True
+        self.assertTrue(backend.context_compacting)
         await worker._handle_message({"type": "compaction_end", "errorMessage": "private upstream detail"})
+        self.assertFalse(backend.context_compacting)
         await worker._finalize_turn("summary-failed", "completed")
         result = await self.completed()
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["code"], "context_compaction_failed")
         self.assertNotIn("private upstream", str(result))
         worker.compaction_error = True
+        worker.compacting = True
         await worker._finalize_turn("disconnected", "unknown")
+        self.assertFalse(backend.context_compacting)
         self.assertEqual((await self.completed())["status"], "unknown")
+        worker.compacting = True
+        await worker.close()
+        self.assertFalse(backend.context_compacting)
+
+    async def test_prompt_ack_deadlines_accommodate_compaction_but_explicit_deadline_is_honored(self):
+        from dataclasses import replace
+        from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS, MAX_OPERATION_SECONDS
+
+        self.client.settings = replace(self.settings, timeout_seconds=10, compaction_timeout_seconds=90)
+        ident = await self.session()
+        worker = self.client.workers[ident]
+        command = AsyncMock(wraps=worker.command)
+        real_timeout = asyncio.timeout
+        with (
+            patch.object(worker, "command", command),
+            patch("assistant_runtime.core.pi.rpc.asyncio.timeout", wraps=real_timeout) as deadlines,
+        ):
+            await self.client.request(
+                "run.start", {"session_id": ident, "input": [{"type": "text", "text": "synthetic"}]}
+            )
+        self.assertEqual(
+            deadlines.call_args_list[0].args[0],
+            self.client.settings.outer_timeout_seconds + 30,
+        )
+        maximum = replace(self.client.settings, compaction_timeout_seconds=MAX_OPERATION_SECONDS)
+        self.assertLessEqual(maximum.outer_timeout_seconds + 30, LOCAL_TRANSPORT_SECONDS)
+        prompt = next(call for call in command.await_args_list if call.args[0]["type"] == "prompt")
+        self.assertEqual(prompt.kwargs["timeout"], self.client.settings.outer_timeout_seconds)
+        self.assertEqual((await self.completed())["status"], "completed")
+        self.assertEqual(len(self.gateway.requests), 1)
+
+        async def pending(command, arguments):
+            await asyncio.Event().wait()
+
+        with patch.object(self.client, "_request", pending):
+            with self.assertRaises(TimeoutError):
+                await self.client.request("run.start", {"session_id": ident}, timeout=0.02)
 
     async def test_large_tool_result_is_saved_and_bounded_without_reexecution(self):
         self.gateway.script_fn = lambda step, body: (

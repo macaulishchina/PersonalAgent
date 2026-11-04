@@ -8,6 +8,7 @@ import base64
 from dataclasses import asdict
 import hashlib
 import json
+import logging
 import uuid
 
 from assistant_runtime.api import plugin_manifest
@@ -16,6 +17,8 @@ from assistant_runtime.core.conversation.store import ConversationStore
 from assistant_runtime.core.workfiles.media import MediaAttachments, MAX_BYTES
 from assistant_runtime.core.conversation.feedback import Feedback
 from assistant_runtime.core.conversation.task_replies import TaskReplies
+
+log = logging.getLogger(__name__)
 
 
 class Conversation:
@@ -127,6 +130,7 @@ class Conversation:
                 getattr(self.backend.client, "settings", None), "enabled", True
             ),
             "task_running": self.backend.busy,
+            "context_compacting": bool(getattr(self.backend, "context_compacting", False)),
             "retrying": self.retrying,
             "quiet": False,
             "backend_ready": self.backend.client.started,
@@ -782,7 +786,10 @@ class Conversation:
                     )
             except ConversationCancelled:
                 self.finish_pending(request_id, "cancelled")
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    "conversation_submission_unconfirmed request=%s error=%s", request_id, type(exc).__name__
+                )
                 self.store.put(
                     mid,
                     self.session,
@@ -799,10 +806,16 @@ class Conversation:
                     self.store.db.execute(
                         "UPDATE chat_requests SET state='unknown' WHERE id=?", (request_id,)
                     )
-                self.store.emit(
+                self.store.put(
+                    f"submission:{self.session}:{request_id}",
                     self.session,
-                    "notice",
-                    {"text": "消息提交未能确认。请先核对任务状态，系统不会自动重复执行。"},
+                    text="等待执行器确认接单超时；执行状态待核对，系统没有自动重发消息。"
+                    if isinstance(exc, TimeoutError)
+                    else "消息提交未能确认（"
+                    + type(exc).__name__
+                    + "）。请先核对执行状态，系统不会自动重复执行。",
+                    status="complete",
+                    presentation={"phase": "final", "body": "complete", "turn_status": "unknown"},
                 )
             finally:
                 self.cancel_pending.discard(request_id)
