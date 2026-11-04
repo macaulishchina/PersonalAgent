@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import html
+import re
 from io import BytesIO
 from pathlib import Path
 import socket
@@ -56,22 +57,30 @@ async def main():
                 await expect(appearance).to_be_visible()
                 await appearance.get_by_label("公开名称", exact=True).fill("Synthetic Team")
                 await appearance.get_by_label("简短说明", exact=True).fill("Public metadata only")
-                await expect(appearance.get_by_text("浏览内置头像 · 71 款", exact=True)).to_be_visible()
-                await appearance.get_by_text("浏览内置头像 · 71 款", exact=True).click()
+                browse = appearance.get_by_role("button", name="选择内置头像", exact=True)
+                await expect(browse).to_be_visible()
+                await expect(browse.locator(".model-avatar-count")).to_have_text("71")
+                await expect(appearance.locator("select")).to_have_count(0)
+                await browse.click()
                 await expect(appearance.locator(".model-avatar-choice")).to_have_count(71)
                 await appearance.get_by_label("搜索头像", exact=True).fill("deepseek")
                 await appearance.get_by_role("button", name="DeepSeek 深度求索", exact=True).click()
-                await expect(appearance.get_by_label("头像", exact=True)).to_have_value("builtin:deepseek")
+                await expect(appearance.get_by_alt_text("模型头像预览")).to_have_attribute(
+                    "src", re.compile(r"/builtin/deepseek\?")
+                )
+                await expect(browse).to_have_attribute("aria-expanded", "false")
                 await expect(appearance.get_by_alt_text("模型头像预览")).to_have_js_property(
                     "naturalWidth", 64
                 )
-                await appearance.get_by_text("浏览内置头像 · 71 款", exact=True).click()
+                await browse.click()
                 await appearance.get_by_label("搜索头像", exact=True).fill("")
                 if args.artifacts:
                     await appearance.screenshot(path=str(args.artifacts / "builtin-avatar-library.png"))
                 await appearance.get_by_label("搜索头像", exact=True).fill("小猫")
                 await appearance.get_by_role("button", name="小猫", exact=True).click()
-                await expect(appearance.get_by_label("头像", exact=True)).to_have_value("builtin:cat")
+                await expect(appearance.get_by_alt_text("模型头像预览")).to_have_attribute(
+                    "src", re.compile(r"/builtin/cat\?")
+                )
                 raw = BytesIO()
                 Image.new("RGB", (600, 400), "blue").save(raw, format="PNG")
                 await appearance.get_by_label("上传模型头像", exact=True).set_input_files(
@@ -141,7 +150,7 @@ async def main():
                 )
                 await (
                     page.locator(".model-presentation")
-                    .get_by_text("浏览内置头像 · 71 款", exact=True)
+                    .get_by_role("button", name="选择内置头像", exact=True)
                     .click()
                 )
                 await page.locator(".model-presentation").get_by_label("搜索头像", exact=True).fill("机器人")
@@ -151,15 +160,47 @@ async def main():
                     .click()
                 )
                 await expect(
-                    page.locator(".model-presentation").get_by_label("头像", exact=True)
-                ).to_have_value("builtin:robot")
-                for width in (375, 768, 1280):
+                    page.locator(".model-presentation").get_by_alt_text("模型头像预览")
+                ).to_have_attribute("src", re.compile(r"/builtin/robot\?"))
+                for width in (375, 768, 1280, 1440, 1920):
                     await page.set_viewport_size({"width": width, "height": 900})
-                    await page.locator(".model-avatar-picker").evaluate("picker => picker.open = true")
+                    body_bounds = await page.locator("#entry-body").evaluate(
+                        "el => ({width:el.clientWidth,scroll:el.scrollWidth})"
+                    )
+                    assert body_bounds["scroll"] <= body_bounds["width"], body_bounds
+                    appearance = page.locator(".model-presentation")
+                    bounds = await appearance.evaluate(
+                        "el => ({width:el.clientWidth,scroll:el.scrollWidth,border:getComputedStyle(el).borderTopWidth})"
+                    )
+                    assert bounds["scroll"] <= bounds["width"] and bounds["border"] != "0px", bounds
+                    if width >= 1280:
+                        panel = await appearance.bounding_box()
+                        parameters = await page.locator(".model-parameters").bounding_box()
+                        thinking = await page.locator(".model-thinking").bounding_box()
+                        assert (
+                            abs(panel["x"] - parameters["x"]) < 1
+                            and abs(panel["width"] - parameters["width"]) < 1
+                        )
+                        assert abs(panel["x"] - thinking["x"]) < 1 and panel["height"] < 300, panel
+                    if args.artifacts:
+                        await page.locator("#entry-body").evaluate("el => el.scrollTop = 0")
+                        await page.locator("#entry-dialog").screenshot(
+                            path=str(args.artifacts / f"model-editor-{width}.png")
+                        )
+                        if width == 1280:
+                            await appearance.screenshot(
+                                path=str(args.artifacts / "model-personalization.png")
+                            )
+                    browse = appearance.get_by_role("button", name="选择内置头像", exact=True)
+                    await browse.click()
+                    await appearance.get_by_label("搜索头像", exact=True).fill("")
                     bounds = await page.locator(".model-avatar-choices").evaluate(
                         "el => ({width:el.clientWidth,scroll:el.scrollWidth})"
                     )
                     assert bounds["scroll"] <= bounds["width"], bounds
+                    await appearance.get_by_label("搜索头像", exact=True).press("Escape")
+                    await expect(browse).to_have_attribute("aria-expanded", "false")
+                    await expect(page.locator("#entry-dialog")).to_be_visible()
                 assert not errors, errors
                 if args.artifacts:
                     directory = await (
@@ -192,7 +233,7 @@ async def main():
                     )
                 await browser.close()
                 print(
-                    "PASS: 30 brand + 40 general avatars; visual search/select; inherited preview; mobile layout; upload normalization and atomic save; authenticated PNG/ETag; restore/cancel; no model calls"
+                    "PASS: 71 built-in avatars; single visual picker; compact aligned groups at 375/768/1280/1440/1920; keyboard close; inherited preview; upload normalization and atomic save; authenticated PNG/ETag; restore/cancel; no model calls"
                 )
         finally:
             await console.close()

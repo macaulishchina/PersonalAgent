@@ -2855,21 +2855,124 @@ dialog.wide-dialog {
 .result-storage-row input { flex: none; }
 .field-control:has([aria-label="结果保留方式"]) { display: grid; gap: 10px; }
 
-:root .model-presentation {
-  display: grid;
-  gap: 10px;
-  padding: 16px 0;
+.editor-drawer :is(.model-presentation, .model-parameters, .model-thinking, .model-budget) {
+  margin: 16px var(--drawer-gutter);
+  min-width: 0;
 }
-.model-presentation img {
+.model-presentation {
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.model-presentation > h3 {
+  margin: 0 0 16px;
+}
+.model-presentation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.model-presentation-fields > .wizard-field,
+.model-avatar-picker > .wizard-field {
+  min-width: 0;
+  margin: 0;
+}
+.model-presentation-fields input {
+  width: 100%;
+  min-width: 0;
+}
+.model-avatar-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.model-avatar-row > img {
   width: 48px;
   height: 48px;
   object-fit: contain;
   border-radius: 12px;
+  border: 1px solid var(--line);
+  padding: 6px;
+  background: var(--surface);
 }
-.model-avatar-picker > summary { cursor: pointer; font-weight: 600; }
-.model-avatar-picker[open] { padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.model-avatar-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  line-height: 1.4;
+}
+.model-avatar-label,
+.model-avatar-origin {
+  color: var(--muted);
+  font-size: 12px;
+}
+.model-avatar-name {
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.model-avatar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.model-avatar-actions > button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.model-avatar-browse::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin: -3px 2px 0 3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+.model-avatar-browse[aria-expanded="true"]::after {
+  transform: translateY(3px) rotate(225deg);
+}
+.model-avatar-count {
+  border-radius: 4px;
+  padding: 0 4px;
+  background: var(--accent-soft);
+  color: var(--blue);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.model-avatar-count:empty {
+  display: none;
+}
+.model-avatar-picker {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8faf7;
+}
+.model-avatar-picker > .wizard-field {
+  margin-bottom: 10px;
+}
+.model-avatar-picker > .hint {
+  margin: 8px 0 0;
+}
+.model-avatar-status {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
 .model-avatar-choices { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; }
 .model-avatar-group h4 { margin: 16px 0 8px; font-size: 13px; color: var(--muted); }
+.model-avatar-group:first-child h4 { margin-top: 0; }
 .model-avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; padding: 3px; }
 .model-avatar-choice { display: grid; justify-items: center; align-content: start; gap: 6px; min-width: 0; padding: 10px 4px; border: 1px solid transparent; border-radius: 10px; background: var(--surface); cursor: pointer; }
 .model-avatar-choice img { width: 32px; height: 32px; border-radius: 8px; }
@@ -2877,3 +2980,40 @@ dialog.wide-dialog {
 .model-avatar-choice:hover { background: var(--accent-soft); }
 .model-avatar-choice[aria-pressed="true"] { border-color: var(--blue); background: var(--accent-soft); }
 .model-avatar-choice:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+@media (max-width: 600px) {
+  .editor-drawer {
+    --drawer-gutter: 14px;
+  }
+  .model-presentation {
+    padding: 16px;
+  }
+  .model-presentation-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .model-avatar-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .model-avatar-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .editor-drawer :is(.model-basic, .model-parameters, .model-thinking) .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 14px 16px;
+  }
+  .model-parameters {
+    padding: 16px;
+  }
+  .model-parameters > .model-parameter-inputs {
+    margin: 16px -16px -16px;
+  }
+  .model-thinking > h3 {
+    margin: 16px;
+  }
+  .model-avatar-picker {
+    padding: 12px;
+  }
+}

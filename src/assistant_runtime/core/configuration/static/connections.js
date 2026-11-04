@@ -487,29 +487,47 @@ function renderModelPresentation(path, initial = {}) {
   box.setAttribute("aria-label", "个性配置");
   box.append(node("h3", "个性配置"));
   const value = structuredClone(initial);
-  const name = formInput(box, "public-model-name", "公开名称");
+  const fields = node("div", undefined, "model-presentation-fields");
+  const name = formInput(fields, "public-model-name", "公开名称");
   name.maxLength = 80;
   name.value = value.display_name || "";
   name.placeholder = "沿用登记名称";
-  const description = formInput(box, "public-model-description", "简短说明");
+  const description = formInput(fields, "public-model-description", "简短说明");
   description.maxLength = 400;
   description.value = value.description || "";
-  const avatar = formInput(box, "public-model-avatar", "头像", {
-    choices: [
-      ["", "使用默认 / 继承连接"],
-      ...(value.avatar?.startsWith("builtin:") ? [[value.avatar, value.avatar.slice(8)]] : []),
-    ],
-  });
-  if (value.avatar?.startsWith("asset:"))
-    avatar.add(new Option("自定义图片", value.avatar));
-  avatar.value = value.avatar || "";
+  const avatarRow = node("div", undefined, "model-avatar-row");
   const preview = node("img");
   preview.width = preview.height = 48;
   preview.alt = "模型头像预览";
-  box.append(preview);
-  const picker = node("details", undefined, "model-avatar-picker");
-  const heading = node("summary", "浏览内置头像");
-  picker.append(heading);
+  const avatarCopy = node("div", undefined, "model-avatar-copy");
+  const avatarName = node("strong", "默认头像", "model-avatar-name");
+  const avatarOrigin = node("span", "", "model-avatar-origin");
+  avatarCopy.append(
+    node("span", "头像", "model-avatar-label"),
+    avatarName,
+    avatarOrigin,
+  );
+  const actions = node("div", undefined, "model-avatar-actions");
+  avatarRow.append(preview, avatarCopy, actions);
+  const picker = node("div", undefined, "model-avatar-picker");
+  picker.id = "model-avatar-library";
+  picker.hidden = true;
+  picker.setAttribute("role", "region");
+  picker.setAttribute("aria-label", "内置头像");
+  const browse = button(
+    "选择内置头像",
+    () => {
+      picker.hidden = !picker.hidden;
+      browse.setAttribute("aria-expanded", String(!picker.hidden));
+      if (!picker.hidden) search.focus();
+    },
+    "secondary model-avatar-browse",
+  );
+  browse.setAttribute("aria-expanded", "false");
+  browse.setAttribute("aria-controls", picker.id);
+  const total = node("span", "", "model-avatar-count");
+  total.setAttribute("aria-hidden", "true");
+  browse.append(total);
   const search = formInput(picker, "avatar-search", "搜索头像");
   search.type = "search";
   search.placeholder = "提供商、名称或图案…";
@@ -519,7 +537,6 @@ function renderModelPresentation(path, initial = {}) {
   const choices = node("div", undefined, "model-avatar-choices");
   const hint = node("p", "正在读取内置头像…", "hint");
   picker.append(choices, hint);
-  box.append(picker);
   let catalog = [];
   function builtinUrl(name) {
     const item = catalog.find((item) => item.name === name);
@@ -535,10 +552,14 @@ function renderModelPresentation(path, initial = {}) {
     return "builtin:generic";
   }
   function show() {
-    if (!value.avatar?.startsWith("asset:"))
-      for (const option of [...avatar.options])
-        if (option.value.startsWith("asset:")) option.remove();
     const ref = effectiveAvatar();
+    avatarName.textContent = ref.startsWith("asset:")
+      ? "自定义图片"
+      : catalog.find((item) => item.name === ref.slice(8))?.label || "默认头像";
+    avatarOrigin.textContent =
+      !value.avatar && path[1] === "entries" ? "继承连接" : "";
+    avatarOrigin.hidden = !avatarOrigin.textContent;
+    reset.disabled = !value.avatar;
     if (ref.startsWith("asset:")) {
       const id = ref.slice(6);
       const staged = resourceEdits.get("model-avatar-" + id);
@@ -547,7 +568,10 @@ function renderModelPresentation(path, initial = {}) {
         : `/api/model-avatar/${id}?version=${id}`;
     } else preview.src = builtinUrl(ref.slice(8));
     for (const button of choices.querySelectorAll("button[data-avatar]"))
-      button.setAttribute("aria-pressed", String(value.avatar === button.dataset.avatar));
+      button.setAttribute(
+        "aria-pressed",
+        String(ref === button.dataset.avatar),
+      );
   }
   function save() {
     changed(
@@ -578,11 +602,6 @@ function renderModelPresentation(path, initial = {}) {
     else delete value.description;
     save();
   });
-  avatar.addEventListener("change", () => {
-    if (avatar.value) value.avatar = avatar.value;
-    else delete value.avatar;
-    save();
-  });
   function filter() {
     const query = search.value.trim().toLocaleLowerCase();
     let count = 0;
@@ -598,60 +617,61 @@ function renderModelPresentation(path, initial = {}) {
     hint.textContent = count ? `${count} 个头像` : "没有匹配的头像";
   }
   search.addEventListener("input", filter);
-  loadModelAvatars().then((result) => {
-    if (!box.isConnected) return;
-    catalog = result.avatars;
-    const selected = value.avatar || "";
-    avatar.replaceChildren(new Option("使用默认 / 继承连接", ""));
-    for (const [groupId, label] of [["providers", "AI 提供商"], ["general", "通用头像"]]) {
-      const options = node("optgroup");
-      options.label = label;
-      const group = node("section", undefined, "model-avatar-group");
-      group.setAttribute("aria-label", label);
-      group.append(node("h4", label));
-      const grid = node("div", undefined, "model-avatar-grid");
-      for (const item of catalog.filter((item) => item.group === groupId)) {
-        const ref = "builtin:" + item.name;
-        options.append(new Option(item.label, ref));
-        const choice = button("", () => {
-          value.avatar = ref;
-          avatar.value = ref;
-          save();
-          picker.open = false;
-          heading.focus();
-        });
-        choice.type = "button";
-        choice.className = "model-avatar-choice";
-        choice.dataset.avatar = ref;
-        choice.dataset.search = `${item.label} ${item.name}`.toLocaleLowerCase();
-        choice.setAttribute("aria-label", item.label);
-        choice.title = item.label;
-        const icon = node("img");
-        icon.alt = "";
-        icon.loading = "lazy";
-        icon.src = builtinUrl(item.name);
-        choice.append(icon, node("span", item.label));
-        grid.append(choice);
+  loadModelAvatars()
+    .then((result) => {
+      if (!box.isConnected) return;
+      catalog = result.avatars;
+      for (const [groupId, label] of [
+        ["providers", "AI 提供商"],
+        ["general", "通用头像"],
+      ]) {
+        const group = node("section", undefined, "model-avatar-group");
+        group.setAttribute("aria-label", label);
+        group.append(node("h4", label));
+        const grid = node("div", undefined, "model-avatar-grid");
+        for (const item of catalog.filter((item) => item.group === groupId)) {
+          const ref = "builtin:" + item.name;
+          const choice = button("", () => {
+            value.avatar = ref;
+            status.textContent = uploadHint;
+            save();
+            picker.hidden = true;
+            browse.setAttribute("aria-expanded", "false");
+            browse.focus();
+          });
+          choice.type = "button";
+          choice.className = "model-avatar-choice";
+          choice.dataset.avatar = ref;
+          choice.dataset.search =
+            `${item.label} ${item.name}`.toLocaleLowerCase();
+          choice.setAttribute("aria-label", item.label);
+          choice.title = item.label;
+          const icon = node("img");
+          icon.alt = "";
+          icon.loading = "lazy";
+          icon.src = builtinUrl(item.name);
+          choice.append(icon, node("span", item.label));
+          grid.append(choice);
+        }
+        group.append(grid);
+        choices.append(group);
       }
-      group.append(grid);
-      choices.append(group);
-      avatar.append(options);
-    }
-    if (selected.startsWith("asset:")) avatar.add(new Option("自定义图片", selected));
-    avatar.value = selected;
-    heading.textContent = `浏览内置头像 · ${catalog.length} 款`;
-    filter();
-    show();
-  }).catch(() => { hint.textContent = "内置头像暂时无法读取，可继续使用自定义图片。"; });
+      total.textContent = String(catalog.length);
+      filter();
+      show();
+    })
+    .catch(() => {
+      hint.textContent = "内置头像暂时无法读取，可继续使用自定义图片。";
+    });
   const upload = document.createElement("input");
   upload.type = "file";
+  upload.hidden = true;
   upload.accept = "image/png,image/jpeg,image/webp";
   upload.setAttribute("aria-label", "上传模型头像");
-  const status = node(
-    "p",
-    "PNG、JPEG 或 WebP，最大 2 MiB。上传后随配置保存生效。",
-    "hint",
-  );
+  const uploadButton = button("上传图片", () => upload.click());
+  const uploadHint = "PNG、JPEG 或 WebP，最大 2 MiB。保存配置后生效。";
+  const status = node("p", uploadHint, "hint model-avatar-status");
+  status.setAttribute("role", "status");
   upload.addEventListener("change", async () => {
     const file = upload.files[0];
     if (!file) return;
@@ -660,6 +680,7 @@ function renderModelPresentation(path, initial = {}) {
       return;
     }
     upload.disabled = true;
+    uploadButton.disabled = true;
     const version = snapshot.version;
     try {
       const data = await new Promise((resolve, reject) => {
@@ -675,26 +696,36 @@ function renderModelPresentation(path, initial = {}) {
       if (!box.isConnected || snapshot.version !== version) return;
       resourceEdits.set(result.resource.id, result.resource);
       value.avatar = result.avatar;
-      if (![...avatar.options].some((v) => v.value === value.avatar))
-        avatar.add(new Option("自定义图片", value.avatar));
-      avatar.value = value.avatar;
       save();
       status.textContent = "图片已校验，保存配置后生效。";
     } catch (error) {
       status.textContent = error.message;
     } finally {
       upload.disabled = false;
+      uploadButton.disabled = false;
+      upload.value = "";
     }
   });
-  box.append(
-    upload,
-    button("恢复默认头像", () => {
+  const reset = button(
+    "恢复默认",
+    () => {
       delete value.avatar;
-      avatar.value = "";
+      status.textContent = uploadHint;
       save();
-    }),
-    status,
+    },
+    "text-button",
   );
+  reset.setAttribute("aria-label", "恢复默认头像");
+  actions.append(browse, uploadButton, reset);
+  picker.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    picker.hidden = true;
+    browse.setAttribute("aria-expanded", "false");
+    browse.focus();
+  });
+  box.append(fields, avatarRow, picker, upload, status);
   show();
   return box;
 }
