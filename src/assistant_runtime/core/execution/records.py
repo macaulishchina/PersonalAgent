@@ -159,8 +159,10 @@ class RunRecords:
             ).fetchall()
         ]
 
-    def recover(self):
+    def recover(self, preserved=()):
         for row in self.active():
+            if row["id"] in preserved:
+                continue
             self.update(
                 row["id"],
                 "interrupted" if row["state"] == "queued" else "unknown",

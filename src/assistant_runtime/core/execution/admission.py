@@ -33,6 +33,10 @@ class Admission:
             return operations.begin(ident, kind, native_id, **details)
         operations.settle(ident, kind, native_id, state, **details)
 
+    def can_suspend(self, session, call):
+        ident = self.service.sessions.get(session)
+        return bool(ident and self.service.records.operations.only_pending_input(ident, call))
+
     def inputs_consumed(self, session, turn, model_request, identities):
         ident = self.service.sessions.get(session)
         if ident is None:
@@ -53,7 +57,7 @@ class Admission:
             return True
         return False
 
-    async def start(self, arguments, dispatch):
+    async def start(self, arguments, dispatch, *, resume=False):
         service = self.service
         if service.stopping:
             raise RuntimeError("Execution service is stopping")
@@ -61,11 +65,18 @@ class Admission:
         prior = service.sessions.get(session)
         if prior in self.waiting or prior in self.leases or prior in self.dispatching:
             raise RuntimeError("Execution session already has an active attempt")
-        if prior and prior in self.external and service.records.get(prior)["state"] not in TERMINAL:
+        if resume and (not prior or service.records.get(prior)["state"] != "waiting_user"):
+            raise RuntimeError("Only a pending question can resume its execution")
+        if (
+            prior
+            and prior in self.external
+            and not resume
+            and service.records.get(prior)["state"] not in TERMINAL
+        ):
             raise RuntimeError("Execution session already has an active attempt")
         if len(self.waiting) >= service.queue.maxsize:
             raise RuntimeError("Execution queue is full")
-        if prior and prior not in self.external:
+        if prior and (resume or prior not in self.external):
             ident = prior
         else:
             if prior:

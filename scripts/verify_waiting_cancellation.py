@@ -22,7 +22,7 @@ from assistant_runtime.core.models.credentials import credential
 from assistant_runtime.core.models.settings import ModelSettings
 
 
-async def verify(source, models, output):
+async def verify(source, models, output, *, restart_waiting=False):
     original = ModelSettings.parse(source.model_api)
     selected = set([*models, source.main_model])
     for model in selected:
@@ -64,7 +64,7 @@ async def verify(source, models, output):
         main_model=source.main_model,
         main_reasoning_effort="auto",
         model_api=registry,
-        ai_usage={"max_requests": 8},
+        ai_usage={"max_requests": 3 if restart_waiting else 8},
         execution={"concurrency": 4},
         tasks={"concurrency": 2, "model_policy": {"review_mode": "off"}},
     )
@@ -109,6 +109,33 @@ async def verify(source, models, output):
                     )
                 )
             runs = [await wait(task, {"waiting_user"}) for task in tasks]
+            restored_waiting = None
+            if restart_waiting:
+                previous = runs
+                before = [
+                    await host.ai_usage.service.snapshot(run["data"]["ai_usage"]["work_id"]) for run in runs
+                ]
+                host.stop_event.set()
+                await asyncio.wait_for(running, 30)
+                host = AssistantService(config)
+                running = asyncio.create_task(host.run())
+                await asyncio.wait_for(host.runtime.ready.wait(), 30)
+                invoke = host.runtime.invoke
+                runs = [await wait(task, {"waiting_user"}) for task in tasks]
+                after = [
+                    await host.ai_usage.service.snapshot(run["data"]["ai_usage"]["work_id"]) for run in runs
+                ]
+                for old, new, usage_before, usage_after in zip(previous, runs, before, after):
+                    assert old["id"] == new["id"]
+                    for key in ("turn_id", "execution_id", "question_id"):
+                        assert old["data"][key] == new["data"][key]
+                    assert new["data"]["recovery"]["restored"]
+                    assert usage_before["requests"] == usage_after["requests"]
+                restored_waiting = {
+                    "model_calls": 0,
+                    "identities_preserved": True,
+                    "questions": [run["data"]["question_id"] for run in runs],
+                }
             # The ordinary foreground remains usable while both task questions wait.
             chat = await invoke(ConversationRequest("create", {"title": "Synthetic independent foreground"}))
             request = str(uuid.uuid4())
@@ -134,11 +161,10 @@ async def verify(source, models, output):
                     await asyncio.sleep(0.05)
             await wait(tasks[0], {"waiting_user"})
             await wait(tasks[1], {"waiting_user"})
-            await invoke(
-                TaskRequest(
-                    "supplement", {"run_id": runs[1]["id"], "text": "Confirmed synthetic material. Continue."}
-                )
-            )
+            answer_args = {"run_id": runs[1]["id"], "text": "Confirmed synthetic material. Continue."}
+            if restart_waiting:
+                answer_args.update(question_id=runs[1]["data"]["question_id"], message_id=str(uuid.uuid4()))
+            await invoke(TaskRequest("supplement", answer_args))
             answered = await wait(tasks[1], {"completed"})
             if "PA_WAIT_ANSWERED" not in answered["data"].get("result", ""):
                 raise RuntimeError("Answered task returned unexpected result")
@@ -165,7 +191,16 @@ async def verify(source, models, output):
                 "foreground": receipt["state"],
                 "questions_and_capacity_released": True,
                 "repeat_cancel": repeated["state"],
+                "waiting_restart": restored_waiting,
             }
+            if restart_waiting:
+                summary["usage"] = await host.ai_usage.service.call("query", {"group_by": "model"})
+                summary["limits"] = {
+                    "requests_per_work": 3,
+                    "output_tokens_per_request": 1024,
+                    "timeout_seconds": 90,
+                    "request_retries": 0,
+                }
         finally:
             host.stop_event.set()
             await asyncio.wait_for(running, 30)
@@ -190,12 +225,19 @@ def main():
     parser.add_argument("--models", required=True, nargs=2)
     parser.add_argument("--output", required=True, type=Path, help="New evidence directory; must not exist")
     parser.add_argument("--confirm-paid", action="store_true")
+    parser.add_argument(
+        "--restart-waiting",
+        action="store_true",
+        help="Restore both pending questions before answering/canceling; max 3 requests per work",
+    )
     args = parser.parse_args()
     if not args.confirm_paid:
         parser.error("Real supplier calls require --confirm-paid")
     args.output.mkdir(parents=True, exist_ok=False)
     try:
-        result = asyncio.run(verify(Config.load(args.config), args.models, args.output))
+        result = asyncio.run(
+            verify(Config.load(args.config), args.models, args.output, restart_waiting=args.restart_waiting)
+        )
     except Exception as exc:
         result = {"state": "failed", "error": type(exc).__name__}
     (args.output / "summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

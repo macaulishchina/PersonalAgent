@@ -156,7 +156,7 @@ class TasksPlugin:
                     state, text = await self.executor.reconcile(run)
                 except Exception:
                     state, text = "unknown", "无法核对上次执行结果，未自动重做"
-                self.provider_update(run["id"], state, progress=text, turn_active=False)
+                self.provider_update(run["id"], state, progress=text, turn_active=state == "waiting_user")
         interruption = self.host.config.state_dir / "configuration/unclean.json"
         if interruption.exists():
             # No dispatch occurred for these rows. Do not replay them after an orphan cleanup.
@@ -944,6 +944,13 @@ class TasksPlugin:
         if a in {"supplement", "cancel_run", "pause_run", "continue"}:
             run = self.repo.run(args["run_id"])
             if a == "supplement":
+                if "message_id" in args or "question_id" in args:
+                    if "message_id" not in args or "question_id" not in args:
+                        raise ValueError("A task answer requires both message_id and question_id")
+                    receipt = await self.executor.answer(
+                        run, self.input_text(args), args["message_id"], args["question_id"]
+                    )
+                    return {**self.repo.run(run["id"]), "input_receipt": receipt}
                 if run["state"] not in {"running", "waiting_user"}:
                     raise ValueError("Execution is not running; use continue for a stopped task")
                 await self.executor.supplement(run, self.input_text(args))

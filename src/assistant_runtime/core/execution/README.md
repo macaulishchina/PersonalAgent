@@ -82,6 +82,13 @@ creation cannot enqueue or launch new work after the ownership has ended.
 Restart marks queued work interrupted and in-flight work unknown; neither is automatically
 submitted again. Terminal results cannot be overwritten by late provider events.
 
+The task entrance has one evidence-based exception: a proven pending clarification
+checkpoint remains waiting across restart without inference. No old unknown record is
+reopened. Task waits release active execution capacity; explicit answers reacquire it
+and use the same durable message receipts, turn and work allowance. Missing/corrupt
+checkpoints or another unresolved operation still become unknown. Direct execution and
+conversation interruptions retain the rules above.
+
 Usage admission stays in `ai_usage` and Pi transport. A child submitted from a bound call
 inherits its parent's work allowance; it does not receive a fresh budget. There is no added
 daily request quota.

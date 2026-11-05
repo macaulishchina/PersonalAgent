@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import weakref
+import uuid
 from assistant_runtime.api.tool_calls import invalid_arguments
 
 from assistant_runtime.core.execution.instructions import INSTRUCTIONS
@@ -302,12 +303,17 @@ class PiJobs:
             question = self.questions.get(ident)
             if question and question["id"] == p.get("question_id"):
                 self.questions.pop(ident, None)
-                self.notify(ident, "running", questions=[])
+                self.notify(ident, "running", questions=[], question_id=None, recovery=None)
         if "id" in event:
             if method == "input.requested":
                 self.questions[ident] = event
                 self.notify(
-                    ident, "waiting_user", questions=p.get("questions", []), progress="等待你补充信息"
+                    ident,
+                    "waiting_user",
+                    questions=p.get("questions", []),
+                    question_id=event["id"],
+                    recovery=p.get("recovery"),
+                    progress="等待你补充信息",
                 )
             else:
                 await self.client.send(
@@ -362,6 +368,8 @@ class PiJobs:
                 model_failure=model_failure(p["run"].get("error")) if state == "failed" else None,
                 turn_active=False,
                 questions=[],
+                question_id=None,
+                recovery=None,
                 result=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 progress=p.get("result", self.handles.get(ident, {}).get("result", "")),
                 result_ref=p.get("result_ref"),
@@ -439,12 +447,15 @@ class PiJobs:
 
     async def supplement(self, run, text):
         ident = run["id"]
-        question = self.questions.pop(ident, None)
+        question = self.questions.get(ident)
         if question:
+            if getattr(self.backend, "executions", None):
+                return await self.answer(run, text, str(uuid.uuid4()), question["id"])
             await self.client.respond(
                 question["id"],
                 {"answers": {q["id"]: {"answers": [text]} for q in question["data"].get("questions", [])}},
             )
+            self.questions.pop(ident, None)
             self.notify(ident, "running", questions=[])
         elif not run["data"].get("turn_active", True):
             self.notify(ident, "queued", continuation=text, questions=[])
@@ -457,6 +468,35 @@ class PiJobs:
                     "input": [{"type": "text", "text": text}],
                 },
             )
+
+    async def answer(self, run, text, message_id, question_id):
+        service = self.backend.executions
+        if not run["data"].get("execution_id"):
+            from assistant_runtime.api.models import CapabilityRequestError
+
+            raise CapabilityRequestError("question_expired", "Task has no pending execution question")
+        receipt = await service.answer_task(
+            run["data"]["execution_id"],
+            run["id"],
+            message_id=message_id,
+            question_id=question_id,
+            text=text,
+        )
+        if receipt["state"] == "unknown":
+            self.notify(
+                run["id"],
+                "unknown",
+                question_id=None,
+                questions=[],
+                turn_active=False,
+                recovery={
+                    "state": "unknown",
+                    "code": "waiting_answer_unconfirmed",
+                    "actions": ["reconcile_run"],
+                    "safe_to_retry": False,
+                },
+            )
+        return receipt
 
     async def stop(self, run, pause=False, *, recorded=False):
         async with self.locks.setdefault(run["id"], asyncio.Lock()):
@@ -566,6 +606,44 @@ class PiJobs:
         thread = run["data"].get("execution_session_id")
         if not thread:
             return "unknown", "派发结果不确定，未自动重做"
+        execution = getattr(self.backend, "executions", None)
+        execution_id = execution.sessions.get(thread) if execution else None
+        question = execution.questions.get(execution_id) if execution else None
+        if question and question["data"].get("run_id") == run["data"].get("turn_id"):
+            self.threads[thread] = run["id"]
+            self.handles[run["id"]] = {
+                "execution_session_id": thread,
+                "turn_id": run["data"]["turn_id"],
+                "execution_id": execution_id,
+            }
+            self.questions[run["id"]] = question
+            self.notify(
+                run["id"],
+                None,
+                questions=question["data"]["questions"],
+                question_id=question["id"],
+                recovery=question["data"]["recovery"],
+                execution_id=execution_id,
+            )
+            return "waiting_user", "已恢复等待；回答后继续原任务，恢复过程未调用模型。"
+        if run["state"] == "waiting_user" or run["data"].get("questions"):
+            evidence = (
+                execution.records.get(run["data"]["execution_id"])["data"]
+                if execution and run["data"].get("execution_id")
+                else {}
+            )
+            self.notify(
+                run["id"],
+                None,
+                recovery=evidence.get("recovery")
+                or {
+                    "state": "unknown",
+                    "code": "waiting_checkpoint_unavailable",
+                    "question_id": run["data"].get("question_id"),
+                    "actions": ["reconcile_run"],
+                    "safe_to_retry": False,
+                },
+            )
         result = await self.client.request("session.read", {"session_id": thread, "include_runs": True})
         turns = result["session"].get("runs", [])
         turn = next((t for t in turns if t["id"] == run["data"].get("turn_id")), None)

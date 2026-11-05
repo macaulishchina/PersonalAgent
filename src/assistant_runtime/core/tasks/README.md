@@ -137,6 +137,48 @@ pa tasks resolve_run '{"run_id":"RUN_ID","revision":LATEST_REVISION,"confirmed":
 版本检查、明确确认并填写至少十字依据；确认本地工作已停止后记为 `canceled`，
 不会声称业务成功，不恢复或重新执行。恢复操作不暴露为模型 MCP 工具。
 
+### 等待澄清后的重启
+
+从 0.4.22 起，新产生的 Agent 任务提问可保留可验证的等待检查点。只有一个未完成的
+`request_user_input`、其他已观察操作均已确认结束、原生历史完整落盘时才具备恢复资格。
+正常停止和意外退出都按证据判断；恢复本身不启动模型、不重做历史工具。
+普通运行中断、多个未完成工具、旧版没有检查点的等待，以及已开始但未确认的答案派发，
+继续保留 `unknown`，不能通过修改状态或补发请求绕过。
+
+任务查询的 `runs[].data.question_id` 是不透明问题身份，重启后保持不变；
+`data.recovery`（也由 `trace.recovery` 返回）说明恢复结果、`code` 和 `actions`。
+`trace.waiting` 仍只表示名额／资源排队。恢复时只读取检查点，用户明确回答后才
+沿用原 task/run/execution/turn、模型／深度和共享额度继续；等待期间不占模型执行名额。
+模型停用、绑定变化或资源失效不会自动换模型或重新抓取背景。
+
+KFC／插件应使用稳定 UUID 提交答案，以免旧答案误答新问题或响应丢失后重复派发：
+
+```python
+answered = await context.invoke(TaskRequest("supplement", {
+    "run_id": run["id"],
+    "question_id": run["data"]["question_id"],
+    "message_id": answer_uuid,  # 保存并在响应丢失时复用同一个 UUID
+    "text": "明确回答",
+}))
+receipt = answered["input_receipt"]
+```
+
+相同 UUID、相同内容返回原回执，包含 `accepted`／`consumed`／`not_consumed`／`unknown`；
+相同 UUID 改变问题或正文冲突。已消费回执关联实际模型请求；`accepted` 不等于已消费。
+响应丢失时重发相同参数仅查回执，不重复推理；未知回执不得改 UUID 盲目重试。
+旧 `supplement(run_id, text)` 调用保持可用，但不提供调用者稳定身份的去重和旧问题校验，
+集成应采用上述两个可选字段。它们必须一起提供，不强制旧插件升级。
+
+公开错误包括 `question_expired`、`waiting_model_unavailable`、
+`waiting_checkpoint_unavailable`／`waiting_checkpoint_corrupt`／`waiting_checkpoint_storage_error`、
+`waiting_resource_unavailable`、`waiting_boundary_incomplete` 和 `waiting_answer_unconfirmed`。
+模型变更在接受答案前拒绝，等待问题仍可取消；重启时不能证明检查点完整则转为未知。
+未知执行先 `reconcile_run`；仅在确认本地工作停止并核对操作证据后人工 `resolve_run`。
+如需另建任务，须显式创建并保留旧记录；PA 不自动重派。
+
+此能力仅针对 Agent 任务的工具提问；长期目标因预算或状态受阻产生的 `waiting_user`
+不是提问检查点。独立 `ExecutionRequest` 和前台会话的中断语义保持原契约。
+
 首次结构化异常（阶段、错误码、类型、调用栈位置）、后续停止、状态变化、核对
 和人工依据写入追加式 `job_run_history`，不再以唯一的 `progress` 充当错误证据。
 不保存异常局部变量或任意传输正文；可信 `ToolFailure` 保留其安全说明。

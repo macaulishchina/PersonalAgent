@@ -6,6 +6,16 @@ import uuid
 
 
 class OperationRecords:
+    def only_pending_input(self, execution, call):
+        return (
+            self.db.execute(
+                "SELECT 1 FROM execution_operations WHERE execution_id=? AND state IN ('observed','unknown') "
+                "AND NOT (kind='tool' AND native_id=? AND state='observed') LIMIT 1",
+                (execution, call),
+            ).fetchone()
+            is None
+        )
+
     def __init__(self, records):
         self.records, self.db = records, records.db
         self.host_start_id = str(uuid.uuid4())

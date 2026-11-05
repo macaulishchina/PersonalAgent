@@ -6,6 +6,7 @@ import uuid
 from dataclasses import asdict
 
 from assistant_runtime.api.plugins import current_call
+from assistant_runtime.api.models import CapabilityRequestError
 from .records import TERMINAL
 
 
@@ -27,7 +28,9 @@ async def deliver(service, request, row):
     if kind == "answer" and (
         row["state"] != "waiting_user" or not question or question["id"] != args.get("question_id")
     ):
-        raise ValueError("Question is no longer pending")
+        raise CapabilityRequestError("question_expired", "Question is no longer pending")
+    if kind == "answer" and hasattr(service.client, "validate_answer"):
+        service.client.validate_answer(question["id"])
     if kind == "supplement" and row["state"] not in TERMINAL and row["state"] != "running":
         raise ValueError("Only a running execution accepts supplementary input")
     call = current_call.get()
@@ -73,7 +76,7 @@ async def deliver(service, request, row):
             await service.client.respond(question["id"], payload)
             if service.questions.get(row["id"]) is question:
                 service.questions.pop(row["id"], None)
-                service.records.update(row["id"], "running", questions=[], question_id=None)
+                service.records.update(row["id"], "running", questions=[], question_id=None, recovery=None)
         else:
             await service.client.request(
                 "run.steer",

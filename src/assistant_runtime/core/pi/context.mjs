@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 const sdk = await import(
   pathToFileURL(join(process.argv[2], "dist/index.js")).href
 );
@@ -151,4 +152,42 @@ if (p.action === "export") {
     closeSync(fd);
   }
   process.stdout.write(JSON.stringify({ seeded: true }));
+} else if (p.action === "waiting_checkpoint" || p.action === "waiting_answer") {
+  if (statSync(p.path).size > 1024 * 1024 * 1024)
+    throw new Error("context_history_too_large");
+  const raw = readFileSync(p.path);
+  // Do not let the SDK's tolerant reader turn a torn tail into a complete wait.
+  const records = raw.toString("utf8").trimEnd().split("\n").map(JSON.parse);
+  const parsed = sdk.parseSessionEntries(raw.toString("utf8"));
+  const entries = parsed.slice(1);
+  const leaf = entries.at(-1)?.id;
+  const messages = sdk.buildSessionProjection(entries, leaf).messages;
+  const index = messages.findLastIndex((m) => m.role === "assistant");
+  const calls = (messages[index]?.content || []).filter((b) => b.type === "toolCall");
+  const results = messages.slice(index + 1).filter((m) => m.role === "toolResult");
+  const pending = calls.filter((c) => !results.some((r) => r.toolCallId === c.id));
+  const digest = createHash("sha256").update(raw).digest("hex");
+  if (
+    records[0]?.type !== "session" || records[0]?.version !== sdk.CURRENT_SESSION_VERSION ||
+    parsed.length !== records.length || raw.at(-1) !== 10 ||
+    pending.length !== 1 || pending[0].id !== p.call_id ||
+    pending[0].name !== "request_user_input" ||
+    messages.slice(index + 1).some((m) => m.role !== "toolResult")
+  ) {
+    process.stdout.write(JSON.stringify({ available: false, code: "waiting_boundary_incomplete" }));
+  } else if (p.action === "waiting_checkpoint") {
+    const fd = openSync(p.path, "r+");
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    process.stdout.write(JSON.stringify({ available: true, leaf, digest, size: raw.length,
+      questions: pending[0].arguments.questions }));
+  } else {
+    if (digest !== p.digest || leaf !== p.leaf) throw new Error("waiting_checkpoint_changed");
+    const manager = sdk.SessionManager.open(p.path);
+    manager.appendMessage({ role: "toolResult", toolCallId: p.call_id,
+      toolName: "request_user_input", content: [{ type: "text", text: p.text }],
+      isError: false, timestamp: Date.now() });
+    const fd = openSync(p.path, "r+");
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    process.stdout.write(JSON.stringify({ appended: true }));
+  }
 } else throw new Error("context_operation_unsupported");

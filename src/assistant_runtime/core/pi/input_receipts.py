@@ -9,7 +9,10 @@ def content_digest(value):
 
 def track(client, session, turn, ident, role, text, tool_call_id=None):
     worker = client._worker(session)
-    if worker.active_turn != turn:
+    from .waiting import pending
+
+    checkpoint = pending(worker)
+    if worker.active_turn != turn and not (checkpoint and checkpoint["turn_id"] == turn):
         raise ValueError("Input belongs to another execution turn")
     pending = worker.meta.setdefault("public_inputs", {})
     if len(pending) >= 64:

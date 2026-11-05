@@ -32,6 +32,16 @@ Install the pinned runtime with `python -m assistant_runtime.app.cli install-pi`
 
 New state never imports Codex context. The current plugin consolidation preserves existing Pi data; do not reset it at cutover. New Pi sessions survive clean restart; unconfirmed execution never automatically replays. Each session is closed through plugin ownership.
 
+Eligible task clarification waits persist a native leaf/digest/size checkpoint before the
+question is published. Restoration reads it without starting Pi or inference. A single
+pending input with no other unresolved operation can resume after an explicit answer:
+the pinned SDK appends its matching tool result, then the normal metered RPC prompt
+continues the same PA turn. A durable answering intent precedes either live response or
+restored dispatch; interrupted/uncertain answers never replay. Other incomplete tools,
+changed history/bindings and legacy waits cannot be guessed into a resumable checkpoint.
+Protocol representation stays in this adapter; tasks owns user actions and execution
+owns canonical input receipts/admission. See [task recovery](../tasks/README.md#等待澄清后的重启).
+
 Pi acknowledges `prompt` after preflight, which may include context compaction.
 Run submission therefore uses the configured model/compaction transport deadline,
 with an outer cleanup margin, rather than the 30-second control-command deadline.

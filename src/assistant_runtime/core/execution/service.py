@@ -205,12 +205,54 @@ class ExecutionService:
 
     async def start(self, context):
         self.context = context
-        self.records.recover()
+        self.client.admission = self.admission
+        preserved = set()
+        restore = getattr(self.client, "restore_wait", None)
+        for row in self.records.active():
+            data = row["data"]
+            if data.get("source") != "task" or not restore or row["state"] == "cancelling":
+                continue
+            question = None
+            try:
+                question = restore(data["session_id"], data["turn_id"])
+                call = question["data"]["tool_call_id"]
+                if not self.records.operations.only_pending_input(row["id"], call):
+                    from assistant_runtime.api.models import CapabilityRequestError
+
+                    raise CapabilityRequestError(
+                        "waiting_boundary_incomplete", "Other execution operations are unresolved"
+                    )
+            except Exception as exc:
+                if question:
+                    self.client.ui_requests.pop(question["id"], None)
+                if row["state"] == "waiting_user" or data.get("questions"):
+                    self.records.update(
+                        row["id"],
+                        recovery={
+                            "state": "unknown",
+                            "code": getattr(exc, "code", "waiting_checkpoint_storage_error"),
+                            "actions": ["reconcile_run"],
+                            "safe_to_retry": False,
+                        },
+                    )
+                continue
+            self.records.update(
+                row["id"],
+                "waiting_user",
+                questions=question["data"]["questions"],
+                question_id=question["id"],
+                recovery=question["data"]["recovery"],
+            )
+            self.sessions[data["session_id"]] = row["id"]
+            self.questions[row["id"]] = question
+            self.admission.external.add(row["id"])
+            self.files.retain(data.get("work_area") or "executions/" + row["id"])
+            preserved.add(row["id"])
+        self.records.recover(preserved)
         self.contexts.recover()
         for ident, raw in self.records.db.execute("SELECT id,data FROM agent_runs WHERE state='unknown'"):
             data = json.loads(raw)
             self.files.retain(data.get("work_area") or "executions/" + ident)
-        self.client.admission = self.admission
         context.register(ExecutionRequest, self.request)
         context.own(self.close)
         context.spawn(self.controlled.watch(), "controlled-authorizations")
@@ -297,6 +339,7 @@ class ExecutionService:
             "error": data.get("error"),
             "questions": data.get("questions", []),
             "question_id": data.get("question_id"),
+            "recovery": data.get("recovery"),
             "usage": data.get("usage"),
             "inputs": [{k: v for k, v in item.items() if k != "owner"} for item in data.get("inputs", [])],
             "tools": data.get("tools"),
@@ -350,6 +393,35 @@ class ExecutionService:
             from .inputs import deliver
 
             return await deliver(self, request, row)
+
+    async def answer_task(self, execution_id, reference, *, message_id, question_id, text):
+        """TaskRequest already checked task authority; keep the actual caller on its receipt."""
+        try:
+            message_id = str(uuid.UUID(message_id))
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError("Execution input requires a stable UUID message_id") from None
+        prior = self.records.messages.get(message_id)
+        if prior:
+            execution_id = prior["execution_id"]
+        async with self.locks.setdefault(execution_id, asyncio.Lock()):
+            row = self.records.get(execution_id)
+            if row["data"].get("source") != "task" or row["data"].get("reference") != reference:
+                raise PermissionError("Answer does not belong to this task execution")
+            from .inputs import deliver
+
+            return await deliver(
+                self,
+                ExecutionRequest(
+                    "answer",
+                    {
+                        "id": execution_id,
+                        "message_id": message_id,
+                        "question_id": question_id,
+                        "text": text,
+                    },
+                ),
+                row,
+            )
 
     @admits_work()
     async def submit(self, args, *, controlled=None):
@@ -579,7 +651,7 @@ class ExecutionService:
             question = self.questions.get(ident)
             if question and question["id"] == data.get("question_id"):
                 self.questions.pop(ident, None)
-                self.records.update(ident, "running", questions=[], question_id=None)
+                self.records.update(ident, "running", questions=[], question_id=None, recovery=None)
         elif kind == "input.requested":
             if row["state"] == "cancelling":
                 await self.client.send(
@@ -588,8 +660,14 @@ class ExecutionService:
                 return True
             self.questions[ident] = event
             self.records.update(
-                ident, "waiting_user", questions=data.get("questions", []), question_id=event["id"]
+                ident,
+                "waiting_user",
+                questions=data.get("questions", []),
+                question_id=event["id"],
+                recovery=data.get("recovery"),
             )
+            if (data.get("recovery") or {}).get("state") == "waiting_user":
+                self.admission.release(ident)
         elif "id" in event and not external:
             await self.client.send(
                 {"id": event["id"], "error": {"code": -32601, "message": "Unsupported execution request"}}
@@ -680,6 +758,11 @@ class ExecutionService:
         self.stopping = True
         self.admission.interrupt()
         for row in self.records.active():
+            if (
+                row["state"] == "waiting_user"
+                and (row["data"].get("recovery") or {}).get("state") == "waiting_user"
+            ):
+                continue
             self.records.update(
                 row["id"],
                 "interrupted" if row["state"] == "queued" else "unknown",

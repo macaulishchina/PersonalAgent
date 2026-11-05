@@ -268,7 +268,10 @@ class PiSessionWorker:
             if self.active_turn:
                 turn_id = self.active_turn
                 self.active_turn = None
-                await self._finalize_turn(turn_id, "unknown")
+                from .waiting import pending
+
+                if not pending(self):
+                    await self._finalize_turn(turn_id, "unknown")
 
     async def _handle_message(self, msg):
         mtype = msg.get("type")
@@ -381,7 +384,12 @@ class PiSessionWorker:
                     **(rpc_payload.get("data") or {}),
                 }
                 req_id = self.parent.register_ui_request(self, ui_id, rpc_method)
-                await self.parent.events.put({"id": req_id, "kind": rpc_method, "data": rpc_params})
+                event = {"id": req_id, "kind": rpc_method, "data": rpc_params}
+                if rpc_method == "input.requested":
+                    from .waiting import capture
+
+                    await capture(self, event)
+                await self.parent.events.put(event)
             return
 
         if mtype == "compaction_end":
@@ -869,8 +877,26 @@ class PiClient:
 
     def register_ui_request(self, worker, ui_id, method):
         self.counter += 1
-        self.ui_requests[self.counter] = (worker, ui_id, method)
-        return self.counter
+        ident = uuid.uuid4().hex if method == "input.requested" else self.counter
+        self.ui_requests[ident] = (worker, ui_id, method)
+        return ident
+
+    def restore_wait(self, session, turn):
+        from .waiting import restore
+
+        return restore(self, session, turn)
+
+    def validate_answer(self, ident):
+        from .waiting import pending, validate
+
+        entry = self.ui_requests.get(ident)
+        if not entry:
+            from assistant_runtime.api.models import CapabilityRequestError
+
+            raise CapabilityRequestError("question_expired", "Input request is no longer active")
+        worker, ui_id, _ = entry
+        if pending(worker) or ui_id is None:
+            validate(self, worker, ident)
 
     def track_input(self, session, turn, ident, role, text, tool_call_id=None):
         from .input_receipts import track
@@ -878,13 +904,37 @@ class PiClient:
         track(self, session, turn, ident, role, text, tool_call_id)
 
     async def respond(self, ident, result):
-        entry = self.ui_requests.pop(ident, None)
+        entry = self.ui_requests.get(ident)
         if entry is None:
             raise RpcError("Input request is no longer active")
         worker, ui_id, _ = entry
-        await worker.send_line(
-            {"type": "extension_ui_response", "id": ui_id, "value": json.dumps(result, ensure_ascii=False)}
-        )
+        from .waiting import pending, resume
+
+        self.validate_answer(ident)
+        checkpoint = pending(worker)
+        turn_id = worker.active_turn or (checkpoint or {}).get("turn_id")
+        if checkpoint:
+            checkpoint["state"] = "answering"
+            self._save_meta(worker.execution_session_id)
+        self.ui_requests.pop(ident, None)
+
+        async def dispatch():
+            if ui_id is not None and worker.process and worker.process.returncode is None:
+                await worker.send_line(
+                    {
+                        "type": "extension_ui_response",
+                        "id": ui_id,
+                        "value": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+            else:
+                await resume(self, worker, checkpoint, result)
+            return {"run": {"id": turn_id}}
+
+        if checkpoint and self.admission:
+            await self.admission.start({"session_id": worker.execution_session_id}, dispatch, resume=True)
+        else:
+            await dispatch()
         if self.admission:
             await self.events.put(
                 {
@@ -1334,6 +1384,7 @@ class PiClient:
                         "model_binding_changed", "The default conversation model has changed"
                     )
             self._selection(model, effort)
+            meta["recover_user_input"] = p.get("execution_context", {}).get("source") == "task"
             if any(
                 i.get("type") in {"image", "localImage"} for i in p.get("input", [])
             ) and not self.settings.entry(model).get("images"):
@@ -1419,12 +1470,27 @@ class PiClient:
             await w.command({"type": "steer", "message": text, **({"images": images} if images else {})})
             return {}
         if command == Command.CANCEL:
-            if p.get("run_id") and w.active_turn and p["run_id"] != w.active_turn:
+            expected = w.active_turn or meta.get("active_run")
+            if p.get("run_id") and expected and p["run_id"] != expected:
                 raise RpcError("Cancellation belongs to another run")
             if not active:
+                from .waiting import pending
+
+                checkpoint = pending(w)
+                if checkpoint and set(meta.get("pending_operations", {})) == {checkpoint["call_id"]}:
+                    checkpoint["state"] = "canceled"
+                    meta["pending_operations"].pop(checkpoint["call_id"])
+                    if self.admission:
+                        self.admission.operation(ident, "tool", checkpoint["call_id"], "failed")
+                    w.turn_items = copy.deepcopy(meta.get("current_items", []))
+                    await w._finalize_turn(checkpoint["turn_id"], "interrupted")
+                    return {"state": "stopped"}
                 if meta.get("active_run") or meta.get("pending_operations"):
                     raise RpcError("Execution outcome unknown; cancellation cannot be confirmed")
                 return {}
+            if meta.get("input_checkpoint"):
+                meta["input_checkpoint"]["state"] = "canceled"
+                self._save_meta(ident)
             await w.command({"type": "clear_queue"}, timeout=5)
             await w.command({"type": "abort_bash"}, timeout=5)
             await w.command({"type": "abort"}, timeout=10)
