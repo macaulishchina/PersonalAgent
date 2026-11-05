@@ -7,6 +7,13 @@ private reasoning and provider response state are excluded from exports. Importe
 is not a target capacity measurement, so Pi re-estimates it and uses its existing
 compaction/usage/cancellation path. See [task context snapshots](../../../../docs/guides/task-context-snapshots.md).
 
+Custom Responses connections omit zero-length assistant text blocks only from the
+detached provider-input view. Some bridges emit such an item after tool calls; replaying
+it can create an empty assistant message between calls and their tool outputs. Actual
+text, tool IDs/results, reasoning state and saved/event history remain unchanged. This
+applies to ordinary conversations as well as imported task history; other protocols and
+native account routes retain Pi's existing serialization.
+
 Pi is the only agent harness. The host uses the provider-neutral `api/execution.py` contract; this adapter owns native JSONL, processes, session files and normalized events. Main conversation and task execution use the same implementation. Native subscription accounts are model providers, not separate executors; no Codex execution path is retained.
 
 The conversation registry owns stable public session IDs. `PiBackend.open_conversation`

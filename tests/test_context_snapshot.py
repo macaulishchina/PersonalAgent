@@ -5,11 +5,12 @@ import asyncio
 import base64
 import unittest
 import uuid
+import sys
 
 import test_pi_skeleton as fixtures
 import test_pi_waiting as waiting_fixtures
 from assistant_runtime.api import ConversationRequest, FileRequest
-from pi_gateway import sse_text_reply, sse_tool_call
+from pi_gateway import sse_text_reply, sse_tool_call, sse_tool_batch
 
 
 class NativeContextTest(unittest.IsolatedAsyncioTestCase):
@@ -17,6 +18,260 @@ class NativeContextTest(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = fixtures.PiSkeletonTest.asyncTearDown
     session = fixtures.PiSkeletonTest.session
     completed = fixtures.PiSkeletonTest.completed
+
+    async def test_foreign_tool_history_then_parallel_tools_keeps_wire_pairing(self):
+        material = self.root / "material.txt"
+        material.write_text("SYNTHETIC-MATERIAL", encoding="utf-8")
+        rejected = []
+        model_steps = {}
+
+        def script(step, body):
+            calls, results = [], []
+            pending = set()
+            interrupted = False
+            for item in body.get("input", []):
+                if item.get("type") == "function_call":
+                    calls.append(item["call_id"])
+                    pending.add(item["call_id"])
+                elif item.get("type") == "function_call_output":
+                    results.append(item["call_id"])
+                    pending.discard(item["call_id"])
+                elif pending:
+                    interrupted = True
+            if sorted(calls) != sorted(results) or interrupted:
+                rejected.append({"model": body["model"], "calls": calls, "results": results})
+                return 400, {"error": {"message": "Unpaired tool messages", "type": "invalid_request_error"}}
+            model = body["model"]
+            model_steps[model] = model_steps.get(model, 0) + 1
+            round = model_steps[model]
+            if round in (1, 2):
+                offset = (round - 1) * 2 + (0 if model == "model-a" else 4)
+                return sse_tool_batch(
+                    [
+                        (
+                            f"mcp__extensions__kfc_workbench:{offset + i}",
+                            "read",
+                            {
+                                "path": str(
+                                    material if model == "model-a" or i == 0 else self.root / "missing.txt"
+                                )
+                            },
+                        )
+                        for i in range(2)
+                    ],
+                    trailing_text="" if model == "model-b" else None,
+                )
+            return sse_text_reply(f"done-{model}", "PAIRED")
+
+        self.gateway.script_fn = script
+        source = await self.session()
+        await self.client.request(
+            "run.start", {"session_id": source, "input": [{"type": "text", "text": "Source tools"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed")
+        checkpoint = await self.client.request("session.checkpoint", {"session_id": source})
+        frozen = await self.client.request(
+            "session.snapshot", {"session_id": source, "checkpoint": checkpoint}
+        )
+        target = await self.session(model="model-b")
+        await self.client.request(
+            "session.seed",
+            {"session_id": target, "snapshot_ref": "parallel-history", "content": frozen["content"]},
+        )
+        await self.client.request(
+            "run.start", {"session_id": target, "input": [{"type": "text", "text": "New parallel tools"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed", rejected)
+        self.assertEqual(rejected, [])
+        self.assertEqual(model_steps, {"model-a": 3, "model-b": 3})
+        from pathlib import Path
+
+        saved = [
+            json.loads(line).get("message", {})
+            for line in Path(self.client.workers[target].meta["path"])
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertTrue(any(m.get("role") == "toolResult" and m.get("isError") for m in saved))
+        self.assertTrue(
+            any(
+                b.get("type") == "text" and b.get("text") == ""
+                for m in saved
+                if m.get("role") == "assistant"
+                for b in m.get("content", [])
+            )
+        )
+
+    async def test_mixed_mcp_reply_with_plain_same_cross_snapshot_and_restart(self):
+        server = self.root / "synthetic_mcp.py"
+        log = self.root / "mcp-calls.jsonl"
+        server.write_text(
+            "from fastmcp import FastMCP\nimport json\nfrom pathlib import Path\n"
+            "m=FastMCP('synthetic')\n"
+            "@m.tool(annotations={'readOnlyHint':True,'destructiveHint':False})\n"
+            "def kfc_workbench(action:str)->str:\n"
+            f" with Path({str(log)!r}).open('a',encoding='utf-8') as f: f.write(json.dumps(action)+'\\n')\n"
+            " return json.dumps({'action':action,'fact':'SYNTHETIC'})\n"
+            "if __name__=='__main__': m.run(transport='stdio',show_banner=False)\n",
+            encoding="utf-8",
+        )
+        mcp = {"extensions": {"command": sys.executable, "args": [str(server)], "enabled": True}}
+        requests = []
+        phase = {"step": 0, "base": 0}
+        rejected = []
+
+        def script(step, body):
+            pending = set()
+            for item in body.get("input", []):
+                kind = item.get("type")
+                if kind == "function_call":
+                    pending.add(item["call_id"])
+                elif kind == "function_call_output":
+                    if item["call_id"] not in pending or "No result provided" in json.dumps(item["output"]):
+                        rejected.append("orphan or fabricated result")
+                    pending.discard(item["call_id"])
+                elif (
+                    pending
+                    and kind == "message"
+                    and not any(part.get("text") for part in item.get("content", []))
+                ):
+                    rejected.append("empty assistant message interrupted tool results")
+            if pending or rejected:
+                return 400, {"error": {"message": "Unpaired or interrupted tool results"}}
+            requests.append(body)
+            phase["step"] += 1
+            index = phase["step"]
+            if index == 1:
+                return sse_tool_call(
+                    f"discover-{phase['base']}",
+                    "tool_search",
+                    {"query": "extensions kfc_workbench", "limit": 1},
+                )
+            if index in (2, 3):
+                return sse_tool_batch(
+                    [
+                        (
+                            f"mcp__extensions__kfc_workbench:{phase['base'] + index * 2 + i}",
+                            "mcp__extensions__kfc_workbench",
+                            {"action": action},
+                        )
+                        for i, action in enumerate(("catalog", "history"))
+                    ],
+                    trailing_text="" if index == 2 else "I will inspect both results, then finish.",
+                )
+            return sse_text_reply("finished", "DONE")
+
+        self.gateway.script_fn = script
+        source = await self.session(config={"model_reasoning_effort": "low", "mcp_servers": mcp})
+        from pathlib import Path
+
+        settings_path = Path(self.client.workers[source].meta["agent_dir"]) / "settings.json"
+        settings = json.loads(settings_path.read_text())
+        settings["compaction"]["keepRecentTokens"] = 100
+        settings_path.write_text(json.dumps(settings))
+        await self.client.request(
+            "run.start", {"session_id": source, "input": [{"type": "text", "text": "Plain MCP turn"}]}
+        )
+        self.assertEqual((await self.completed())["status"], "completed", rejected)
+        checkpoint = await self.client.request("session.checkpoint", {"session_id": source})
+        snapshot = await self.client.request(
+            "session.snapshot", {"session_id": source, "checkpoint": checkpoint}
+        )
+        original = json.dumps(snapshot["content"], sort_keys=True)
+        for model in ("model-a", "model-b"):
+            with self.subTest(model=model):
+                phase["step"] = 0
+                phase["base"] += 20
+                target = await self.session(
+                    model=model, config={"model_reasoning_effort": "low", "mcp_servers": mcp}
+                )
+                await self.client.request(
+                    "session.seed",
+                    {"session_id": target, "snapshot_ref": "mcp-history", "content": snapshot["content"]},
+                )
+                route = self.settings.route(model)
+                await self.client.request(
+                    "run.start",
+                    {
+                        "session_id": target,
+                        "model": model,
+                        "expected_model": {k: route[k] for k in ("model", "revision")},
+                        "input": [{"type": "text", "text": "New mixed MCP turn"}],
+                    },
+                )
+                completed = await self.completed()
+                self.assertEqual(completed["status"], "completed", rejected)
+                self.assertEqual(completed["route"], route)
+                await self.client.request("session.close", {"session_id": target})
+                await self.client.request("session.resume", {"session_id": target})
+                await self.client.request(
+                    "run.start",
+                    {
+                        "session_id": target,
+                        "input": [{"type": "text", "text": "Continue without repeating tools"}],
+                    },
+                )
+                self.assertEqual((await self.completed())["status"], "completed", rejected)
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(log.read_text(encoding="utf-8").splitlines()), 12)
+        self.assertEqual(len(requests), 14)
+        self.assertEqual(json.dumps(snapshot["content"], sort_keys=True), original)
+        self.assertEqual(await self.client.request("session.checkpoint", {"session_id": source}), checkpoint)
+        self.assertIn("I will inspect both results, then finish.", original)
+        self.assertTrue(
+            any(
+                b.get("type") == "text" and b.get("text") == ""
+                for m in snapshot["content"]["messages"]
+                if m.get("role") == "assistant"
+                for b in m.get("content", [])
+            )
+        )
+
+        # Compact only the source copy, then import the SDK's compressed projection.
+        await self.client.request(
+            "run.start",
+            {
+                "session_id": source,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "Second source turn before compaction. " + "SYNTHETIC-BACKGROUND " * 100,
+                    }
+                ],
+            },
+        )
+        self.assertEqual((await self.completed())["status"], "completed", rejected)
+        await self.client.workers[source].command({"type": "compact"})
+        await self.client.request(
+            "run.start",
+            {
+                "session_id": source,
+                "input": [{"type": "text", "text": "Complete a checkpoint after compaction"}],
+            },
+        )
+        self.assertEqual((await self.completed())["status"], "completed", rejected)
+        new_checkpoint = await self.client.request("session.checkpoint", {"session_id": source})
+        compressed = await self.client.request(
+            "session.snapshot", {"session_id": source, "checkpoint": new_checkpoint}
+        )
+        self.assertTrue(compressed["content"]["compacted"])
+        phase.update(step=0, base=60)
+        target = await self.session(
+            model="model-b", config={"model_reasoning_effort": "low", "mcp_servers": mcp}
+        )
+        await self.client.request(
+            "session.seed",
+            {"session_id": target, "snapshot_ref": "compacted-mcp-history", "content": compressed["content"]},
+        )
+        await self.client.request(
+            "run.start",
+            {"session_id": target, "input": [{"type": "text", "text": "New calls after compressed history"}]},
+        )
+        self.assertEqual((await self.completed())["status"], "completed", rejected)
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(log.read_text(encoding="utf-8").splitlines()), 16)
+        self.assertEqual(len(requests), 21)
+        self.assertEqual(json.dumps(snapshot["content"], sort_keys=True), original)
 
     async def test_tool_history_is_not_reexecuted_in_independent_task(self):
         marker = self.root / "history.txt"
@@ -173,6 +428,42 @@ class PublicSnapshotTest(unittest.IsolatedAsyncioTestCase):
         if context is not None:
             spec["context"] = context
         return await self.call("create", request_id=str(uuid.uuid4()), spec=spec)
+
+    async def test_public_snapshot_task_does_not_replay_empty_assistant_between_tools(self):
+        material = self.root / "protocol-material.txt"
+        material.write_text("SYNTHETIC-PROTOCOL", encoding="utf-8")
+        rejected = []
+
+        def script(step, body):
+            for item in body.get("input", []):
+                if (
+                    item.get("type") == "message"
+                    and item.get("role") == "assistant"
+                    and not any(part.get("text") for part in item.get("content", []))
+                ):
+                    rejected.append("empty assistant replay")
+            if rejected:
+                return 400, {"error": {"message": "Tool calls interrupted by empty assistant"}}
+            if step in (1, 3):
+                offset = 0 if step == 1 else 4
+                return sse_tool_batch(
+                    [(f"workbench:{offset + i}", "read", {"path": str(material)}) for i in range(2)],
+                    trailing_text="",
+                )
+            return sse_text_reply(f"done-{step}", "DONE")
+
+        self.gateway.script_fn = script
+        chat = await self.conversation("create", title="Mixed source")
+        await self.submit(chat, "Read the synthetic material")
+        snapshot = await self.snapshot(chat)
+        task = await self.task({"snapshot_ref": snapshot["snapshot_ref"]}, tools=["read"])
+        run = await self.wait(task, {"completed", "failed"})
+        self.assertEqual(run["state"], "completed", rejected)
+        self.assertTrue(run["data"]["context"]["seeded"])
+        self.assertEqual(run["data"]["execution_facts"]["route"]["model"], "model-b")
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(self.gateway.requests), 4)
+        self.assertEqual(material.read_text(encoding="utf-8"), "SYNTHETIC-PROTOCOL")
 
     async def test_public_receipt_coverage_frozen_task_and_restart(self):
         chat, source_request = await self.source()

@@ -144,7 +144,7 @@ def sse_tool_call(call_id, name, args_dict):
     ]
 
 
-def sse_tool_batch(calls):
+def sse_tool_batch(calls, *, trailing_text=None):
     """One native model response containing several function calls."""
     responses = [sse_tool_call(*call) for call in calls]
     events = [responses[0][0]]
@@ -152,6 +152,10 @@ def sse_tool_batch(calls):
         events.extend({**event, "output_index": index} for event in response[1:-1])
     final = responses[-1][-1]
     final["response"]["output"] = [response[-1]["response"]["output"][0] for response in responses]
+    if trailing_text is not None:
+        text = sse_text_reply("after-tools", trailing_text)
+        events.extend({**event, "output_index": len(calls)} for event in text[1:-1])
+        final["response"]["output"].extend(text[-1]["response"]["output"])
     return [*events, final]
 
 

@@ -211,9 +211,23 @@ async function runAttempt(id, args, signal, evidence) {
         }
       : selectedModel;
   const context = structuredClone(args.context);
-  // Restore native model identity only for this alias's history; Pi owns cross-provider conversion.
+  // Prepare a detached input view; Pi owns cross-provider conversion.
   for (const message of context.messages) {
+    if (
+      spec.protocol === "openai_responses" &&
+      message.role === "assistant" &&
+      Array.isArray(message.content)
+    ) {
+      // Some Responses bridges emit an empty text item after tool calls. Replaying
+      // it creates a separate empty assistant message before the tool outputs.
+      // Omit only zero-length text in this detached input view; preserve actual
+      // text, call IDs, results and persisted/event ordering.
+      message.content = message.content.filter(
+        (block) => block.type !== "text" || block.text !== "",
+      );
+    }
     if (message.role === "assistant" && message.model === args.alias) {
+      // Restore native identity only for this alias's own history.
       Object.assign(message, {
         provider: model.provider,
         model: model.id,
