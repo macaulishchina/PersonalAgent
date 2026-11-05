@@ -123,7 +123,7 @@ The durable outcome remains unknown even if subsequent cleanup stops the process
 MCP definitions are discovered through Pi's native tool search, with the same bounded
 loadout as conversation and tasks. `tools` is still the exact business-call ceiling;
 the host adds the discovery infrastructure without allowing additional business tools.
-See [Pi discovery](../pi/README.md#native-tool-discovery-and-bounded-declarations).
+See [Pi discovery](../pi/README.md#统一工具调用边界).
 
 ## Durable input receipts (API 2)
 

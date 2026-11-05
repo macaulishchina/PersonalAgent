@@ -4,7 +4,13 @@
 
 ## 开发环境
 
-部署安装默认使用 `--no-editable`；开发环境可省略它，并启用所需依赖组。确认不在运行中的生产环境同步依赖。
+安装脚本固定使用 `--no-editable`；给脚本加 `--extra dev` 只会安装开发工具，不会切换为 editable。需要源码开发环境时，在仓库根目录直接执行下面的命令，使用 uv 默认的 editable 安装，并保留所需依赖组：
+
+```sh
+uv sync --locked --python 3.12 --extra slim --extra dev --no-default-groups --inexact
+```
+
+需要聊天网页时将 `--extra slim` 换成 `--extra standard`，前端资源的构建方式见下表。不要向正在运行的生产环境同步依赖。
 
 使用安装脚本维护开发环境时显式加 `--extra dev`，后续会记住选择；检查安装流程用 `python scripts/check.py --test test_install_script`，预览用 `python scripts/install.py --dry-run`。脚本预览不执行前端构建或同步应用环境。
 

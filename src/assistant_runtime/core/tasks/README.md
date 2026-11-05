@@ -15,7 +15,7 @@ Trusted local plugin for independent background work through the configured Pi e
 
 Task specs may restrict `tools` to an explicit list of registered tool names. Child tasks inherit the parent's list and may narrow it; expansion is rejected. A background caller may query public `execution_info` only for its own run identity, allowing a trusted integration to recover its business scope without reading PA private storage.
 Enable `notifications` and `tasks` in the instance `plugins` list and install the `tasks` extra in the existing `.venv`.
-Requires execution, workfiles, notifications and the configured brain capability; conversation is optional. Does not activate the microphone.
+Requires execution, Pi, workfiles and notifications; conversation is optional. Does not activate the microphone.
 
 Requested media belongs to the producing run. Provider callbacks accumulate up to
 four deduplicated registered references; the workfiles media owner validates and

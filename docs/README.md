@@ -19,6 +19,8 @@ Windows 和 Windows Server 默认使用 slim；Linux 默认 standard。两类平
 - [模块索引](reference/modules.md)：模型、任务、MCP、用量、设备及扩展插件的详细说明。
 - [摄像头网关](guides/cameras.md)：Linux 上部署 go2rtc、接入和检查摄像头。
 - [配置文件参考](../config.example/README.md)：配置片段、路径和凭据规则。
+- [模型路由与插件接入](guides/model-routes.md)：目录、选型、回执和模型外观的公共接口。
+- [任务上下文快照](guides/task-context-snapshots.md)：显式固定历史、创建独立任务及失败恢复。
 
 ## 开发与维护
 

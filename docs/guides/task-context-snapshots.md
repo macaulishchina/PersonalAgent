@@ -4,12 +4,14 @@
 
 ## 最小接入
 
+以下 `context` 是宿主注入的公共 `PluginContext`；通过 `context.invoke` 调用已声明的能力，不访问宿主 runtime。
+
 ```python
 from assistant_runtime.api import ConversationRequest, FileRequest
 from assistant_runtime.api.contracts import TaskRequest
 import base64
 
-snapshot = await context.runtime.invoke(ConversationRequest("snapshot", {
+snapshot = await context.invoke(ConversationRequest("snapshot", {
     "session_id": source_session,
     "request_id": snapshot_uuid,  # 调用前持久保存，响应丢失时复用
 }))
@@ -17,7 +19,7 @@ if snapshot["state"] != "ready":
     # 查询同一 UUID 的 snapshot_receipt，不创建另一个快照冒充成功。
     ...
 
-coverage = await context.runtime.invoke(ConversationRequest("snapshot_inputs", {
+coverage = await context.invoke(ConversationRequest("snapshot_inputs", {
     "session_id": source_session,
     "snapshot_ref": snapshot["snapshot_ref"],
     "limit": 100,
@@ -28,12 +30,12 @@ text = """前文是源会话历史，AI 的判断和操作属于原模型，并�
 你现在独立执行下面的新任务，旧待办不会自动成为本次要求。
 [本次补齐背景]
 ……"""
-background = await context.runtime.invoke(FileRequest("put", {
+background = await context.invoke(FileRequest("put", {
     "name": "task-context.txt", "kind": "file",
     "data": base64.b64encode(text.encode("utf-8")).decode("ascii"),
 }))
 # 持久保存 background["id"]，同一次任务创建重试不能换文件 ID。
-task = await context.runtime.invoke(TaskRequest("create", {
+task = await context.invoke(TaskRequest("create", {
     "request_id": task_uuid,  # 与 snapshot_uuid 分开，调用前持久保存
     "spec": {
         "title": "独立核查", "prompt": "本次要求，仍有 4,000 字符上限",
@@ -64,10 +66,10 @@ task = await context.runtime.invoke(TaskRequest("create", {
 ## 幂等、状态和恢复
 
 ```python
-receipt = await context.runtime.invoke(ConversationRequest("snapshot_receipt", {
+receipt = await context.invoke(ConversationRequest("snapshot_receipt", {
     "session_id": source_session, "request_id": snapshot_uuid,
 }))
-task_receipt = await context.runtime.invoke(TaskRequest("receipt", {
+task_receipt = await context.invoke(TaskRequest("receipt", {
     "request_id": task_uuid,
     # "spec": original_spec,  # 可核对 matches
 }))
