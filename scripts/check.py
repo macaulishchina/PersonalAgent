@@ -60,6 +60,8 @@ GROUPS = {
         "pi_runtime",
         "execution_reset",
         "execution_service",
+        "resource_capacity",
+        "shared_capacity",
         "execution_cache",
         "execution_receipts",
         "execution_authority",

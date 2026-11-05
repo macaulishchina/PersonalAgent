@@ -45,3 +45,5 @@
 另见[0.4.8 的会话与任务工具记录](release-0.4.8.md)。
 
 `0.4.25` 统一会话、任务、独立辅助推理的宿主级并发池，默认16、最大64；正式模型请求复用已取得的执行名额，可信嵌套推理串行复用父名额。删除模型和后台任务各自的并发设置及执行／模型队列长度配置，等待队列不设长度上限。公共 capacity 只返回统一计数，不再返回 queue_limit、model_request_limit 或 tasks.limit。升级前从配置片段中移除 execution.queue_size、model_api.concurrency、model_api.queue_size、tasks.concurrency；保留 execution.concurrency。无持久数据格式迁移、不重放未知执行，API 2／数据格式1不变。
+
+`0.4.26` 将辅助推理和模型测试的容量等待计入既有总超时，过期请求不再取得名额后继续派发。仅启用 models／Pi 而未启用 execution 时，宿主在配置事务成功后更新同一共享池；预览或失败不改变容量，降低上限不撤销已取得的名额。不增加旧配置兼容分支，仍须按 0.4.25 的说明手动移除四个旧字段。API 2／数据格式 1 不变。

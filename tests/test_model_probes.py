@@ -50,6 +50,29 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
             "accounts": {},
         }
 
+    async def test_probe_deadline_includes_capacity_wait(self):
+        pool = self.plugin.capacity
+        pool.resize(1)
+        await pool.acquire()
+        arguments = self.arguments()
+        try:
+            timeout = asyncio.timeout
+            with patch(
+                "assistant_runtime.core.models.probe.asyncio.timeout",
+                side_effect=lambda seconds: timeout(0.05 if seconds == 30 else seconds),
+            ):
+                pending = asyncio.create_task(self.plugin.test_model(arguments))
+                try:
+                    result = await asyncio.wait_for(asyncio.shield(pending), 0.5)
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+            self.assertEqual(result["code"], "timeout")
+            self.assertEqual(self.requests, [])
+            self.assertEqual(pool.inference_waiting, 0)
+        finally:
+            pool.release()
+
     async def test_draft_probe_all_protocols_does_not_save_or_grant_acceptance(self):
         before = (self.root / ".env").read_bytes()
         for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):

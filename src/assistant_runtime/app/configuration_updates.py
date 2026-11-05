@@ -355,6 +355,12 @@ class ConfigurationRuntime:
         candidate = Config.load(path)
         if candidate.root != self.host.config.root:
             raise ValueError("Cannot change instance identity online")
+        capacity = getattr(self.host, "execution_capacity", None)
+        capacity_limit = None
+        if capacity is not None and "execution" not in self.host.config.enabled_plugins:
+            from assistant_runtime.core.execution.declaration import settings
+
+            capacity_limit = settings(candidate.execution)["concurrency"]
         plan = self.plan(candidate, resources)
         if preview or plan["restart"]:
             return {**plan, "phase": "pending_restart" if plan["restart"] else "ready"}
@@ -392,6 +398,10 @@ class ConfigurationRuntime:
                         if name in plan["owners"]
                     ]
                 )
+            # Models/Pi can own the host pool without enabling ExecutionPlugin.
+            # Validate above; resize only after all prepared module updates commit.
+            if capacity_limit is not None:
+                capacity.resize(capacity_limit)
             self.host.config = candidate
             os.environ["PERSONAL_AGENT_RESOURCE_MANIFEST"] = str(folder / "resources.json")
             os.environ["PERSONAL_AGENT_CONFIGURATION_VERSION"] = revision

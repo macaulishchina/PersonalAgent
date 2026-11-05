@@ -302,8 +302,8 @@ class ModelsPlugin:
         self.pending += 1
         started = time.monotonic()
         try:
-            async with self.capacity.inference():
-                async with asyncio.timeout(self.settings.timeout_seconds):
+            async with asyncio.timeout(self.settings.timeout_seconds):
+                async with self.capacity.inference():
                     if await self.caller(request.caller_run) != caller:
                         raise ValueError("Model caller execution version changed")
                     # Recheck after admission wait to avoid duplicate paid requests.
