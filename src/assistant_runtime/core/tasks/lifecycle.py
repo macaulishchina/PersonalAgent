@@ -85,8 +85,6 @@ class TaskLifecycle:
         reason = (
             {"kind": "resource", "blockers": conflicts, "next_action": "reconcile_blocking_run"}
             if conflicts
-            else {"kind": "capacity", "next_action": "wait"}
-            if len(busy) >= self.plugin.settings.concurrency
             else None
         )
         if run["data"].get("waiting") != reason:

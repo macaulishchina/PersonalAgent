@@ -106,8 +106,8 @@ class ModelProbes:
                 self.db.execute(
                     "INSERT INTO model_probes VALUES (?,?,?)", (ident, fingerprint, json.dumps(result))
                 )
-            async with asyncio.timeout(TIMEOUT):
-                async with self.owner.semaphore:
+            async with self.owner.capacity.inference():
+                async with asyncio.timeout(TIMEOUT):
                     await client.start()
                     bound = await client.output_bound(payload)
                     reply = await metered_complete(

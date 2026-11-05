@@ -12,13 +12,6 @@
         "title": "时区",
         "default": "Asia/Shanghai"
       },
-      "concurrency": {
-        "type": "integer",
-        "title": "并发数量",
-        "default": 2,
-        "minimum": 1,
-        "maximum": 8
-      },
       "misfire_seconds": {
         "type": "integer",
         "title": "计划迟到容忍（秒）",

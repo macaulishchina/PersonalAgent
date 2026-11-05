@@ -58,7 +58,6 @@ async def verify(config, main_model, task_model, *, effort="low", max_requests=1
             ai_usage={"max_requests": max_requests, "work_limits": {"max_seconds": 120}},
             tasks={
                 "execution": {"model": task_model, "reasoning_effort": effort},
-                "concurrency": 4,
                 "max_goal_rounds": 1,
                 "model_policy": {
                     "max_upgrades": 0,

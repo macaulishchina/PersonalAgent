@@ -102,12 +102,15 @@ class AssistantService:
 
     async def _connection(self, reader, writer):
         from assistant_runtime.api.ai_usage import current_usage
+        from assistant_runtime.api.capacity import current_capacity_lease
 
         token = current_usage.set(None)
+        lease_token = current_capacity_lease.set(None)
         try:
             await AssistantService._connection_body(self, reader, writer)
         finally:
             current_usage.reset(token)
+            current_capacity_lease.reset(lease_token)
             if not writer.is_closing():
                 writer.close()
                 try:
@@ -256,6 +259,12 @@ class AssistantService:
                         execution_version=worker.active_turn,
                     )
                 )
+                from assistant_runtime.api.capacity import current_capacity_lease
+
+                execution = getattr(self.backend, "executions", None)
+                if execution is not None:
+                    ident = execution.sessions.get(d["execution_session"])
+                    current_capacity_lease.set(execution.admission.slots.leases.get(ident))
                 from assistant_runtime.api.conversation import current_conversation
 
                 conversation = self.backend.conversations.get(d["execution_session"])

@@ -288,7 +288,6 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 model_api=configuration(gateway.base_url),
                 main_model="model-a",
                 main_reasoning_effort="low",
-                tasks={"concurrency": 4},
                 notifications={"channels": ["chat"], "voice_enabled": False},
             )
             host = AssistantService(cfg)

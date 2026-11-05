@@ -8,9 +8,9 @@ from .records import TERMINAL
 
 
 class Admission:
-    def __init__(self, service):
+    def __init__(self, service, capacity=None):
         self.service = service
-        self.slots = Capacity(service.concurrency)
+        self.slots = capacity if capacity is not None else Capacity(service.concurrency)
         self.waiting = {}
         self.leases = set()
         self.external = set()
@@ -48,7 +48,7 @@ class Admission:
     def release(self, ident):
         if ident in self.leases:
             self.leases.remove(ident)
-            self.slots.release()
+            self.slots.release_reservation(ident)
 
     def cancel_waiting(self, ident):
         signal = self.waiting.get(ident)
@@ -74,8 +74,6 @@ class Admission:
             and service.records.get(prior)["state"] not in TERMINAL
         ):
             raise RuntimeError("Execution session already has an active attempt")
-        if len(self.waiting) >= service.queue.maxsize:
-            raise RuntimeError("Execution queue is full")
         if prior and (resume or prior not in self.external):
             ident = prior
         else:
@@ -101,7 +99,7 @@ class Admission:
         cancelled = asyncio.create_task(signal.wait())
         dispatched = False
         acquired = False
-        rejected = False
+        reserved = False
         try:
             await asyncio.wait((acquire, cancelled), return_when=asyncio.FIRST_COMPLETED)
             acquired = acquire.done() and not acquire.cancelled() and acquire.exception() is None
@@ -110,6 +108,8 @@ class Admission:
             if not acquired:
                 raise RuntimeError("Execution admission was interrupted")
             self.leases.add(ident)
+            self.slots.reserve(ident)
+            reserved = True
             self.waiting.pop(ident, None)
             service.records.update(ident, "dispatching")
             dispatched = True
@@ -121,7 +121,6 @@ class Admission:
             from assistant_runtime.api.models import CapabilityRequestError
 
             if isinstance(exc, CapabilityRequestError):
-                rejected = True
                 if ident in self.leases:
                     self.release(ident)
                 dispatched = False
@@ -156,7 +155,7 @@ class Admission:
             # A permit may have arrived simultaneously with cancellation.
             if not acquired and acquire.done() and not acquire.cancelled() and acquire.exception() is None:
                 self.slots.release()
-            elif acquired and ident not in self.leases and not dispatched and not rejected:
+            elif acquired and not reserved:
                 self.slots.release()
 
     async def cancel(self, arguments, dispatch):

@@ -16,6 +16,9 @@ def build(host):
         foreground="conversation" in host.config.enabled_plugins,
     )
     host.backend = plugin.backend
+    from assistant_runtime.core.execution.resources import capacity_for
+
+    plugin.backend.client.capacity = capacity_for(host)
     host.brain_plugin = plugin
     return plugin
 

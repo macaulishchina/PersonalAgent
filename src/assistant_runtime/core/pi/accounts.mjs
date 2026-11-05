@@ -605,10 +605,6 @@ for await (const line of lines) {
     answer?.(request.value);
     continue;
   }
-  if (active.size >= 16) {
-    await emit({ id: request.id, error: "native_queue_full" });
-    continue;
-  }
   const controller = new AbortController();
   active.set(request.id, controller);
   void command(

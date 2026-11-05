@@ -2,16 +2,34 @@
 
 The `execution` core plugin provides `ExecutionRequest` through the existing runtime.
 It uses the same Pi client and metered transport as the current conversation and tasks.
-It owns individual execution receipts and a bounded queue; it does not schedule recurring
+It owns individual execution receipts and an unbounded waiting queue; it does not schedule recurring
 work, deliver notifications or implement an agent loop.
 
 Enable `execution` explicitly in `plugins`. Optional settings:
 
 ```toml
 [execution]
-concurrency = 4
-queue_size = 64
+concurrency = 16
 ```
+
+`concurrency` accepts 1..64. It bounds active execution attempts across conversations,
+tasks, direct calls and auxiliary inference. Session registration persists metadata without starting a
+process and is not capped by an unrelated idle-session count. A larger configured
+maximum is not a hardware recommendation: Pi process memory, context sizes and
+upstream provider quotas still matter.
+
+`ExecutionRequest("capacity", {})` is a read-only, instance-wide count summary:
+`limit`, `occupied` (including quarantined leases), `queued`,
+`waiting_user`, `unknown` and `quarantined`.
+Native model transport reuses the admitted execution slot. Independent inference uses
+the same host-owned pool; trusted nested inference borrows its parent slot serially
+instead of waiting for a second slot. Cancelling a parent retains the slot until an
+in-flight borrowed call settles. There is no separate model or background concurrency
+setting. Waiting is limited by process memory and caller deadlines, not a queue-length
+configuration. Per-conversation order, resource locks and usage policy still apply.
+
+It returns no execution identities or content. Unknown historical outcomes need
+not occupy a current lease; `quarantined` identifies the subset that still does.
 
 The application now assembles only the declared plugins. `init --preset slim` enables
 this capability with models, Pi, usage, workfiles, conversation and CLI; no personal
@@ -93,7 +111,7 @@ Usage admission stays in `ai_usage` and Pi transport. A child submitted from a b
 inherits its parent's work allowance; it does not receive a fresh budget. There is no added
 daily request quota.
 
-Tests cover duplicate submissions, queue saturation, ownership, shared budgets, cancellation
+Tests cover duplicate submissions, unbounded waiting, ownership, shared budgets, cancellation
 races, question identity and recovery. A real Pi subprocess with a synthetic local model
 covers CLI transport, clarification, actual file creation, artifacts, usage, cancelling a
 running shell command and persisted receipts. No real provider credentials are used.

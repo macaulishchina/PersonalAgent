@@ -231,3 +231,9 @@ max_delay_seconds = 30
 模型测试继续使用 30 秒总期限，成功只证明此次文字推理，未验证图片或工具。
 安全的供应商错误说明与请求标识保留在失败回执中；原始响应和凭据不回显。
 人工恢复与边界见 [Pi 请求错误与恢复](../pi/README.md#模型请求错误与恢复)。
+
+Auxiliary inference shares `execution.concurrency` (default 16, range 1..64) with
+conversations and background execution. There is no private model concurrency or
+queue-length setting. Queued calls recheck ownership and durable receipts before
+paid dispatch. Trusted nested calls borrow and serialize on the parent execution
+slot, avoiding deadlock when the global setting is one.

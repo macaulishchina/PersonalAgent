@@ -434,7 +434,7 @@ function renderModels() {
   } else {
     const panel = surface(
       "模型运行策略",
-      "按需调整执行容量；超时、输出限制和部署参数默认收起。",
+      "超时、上下文和输出限制按需调整；执行并发在公共执行中统一设置。",
     );
     const limits = advancedGroup("model-runtime-limits");
     limits.firstChild.textContent = "超时、上下文与输出限制";
@@ -447,9 +447,7 @@ function renderModels() {
         f.path.length > 1,
     )) {
       const displayed = prettyField(field);
-      if (["concurrency", "queue_size"].includes(field.path[1]))
-        panel.append(drawField(displayed));
-      else limits.append(drawField(displayed));
+      limits.append(drawField(displayed));
     }
     panel.append(limits);
     $("documents").append(panel);

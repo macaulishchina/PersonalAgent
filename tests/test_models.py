@@ -26,8 +26,6 @@ from assistant_runtime.core.models.tools import create_server
 def settings(**changes):
     return {
         "enabled": True,
-        "concurrency": 1,
-        "queue_size": 1,
         "providers": {"test": {"preset": "deepseek", "enabled": True}},
         "entries": {
             "test-model": {
@@ -384,7 +382,9 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
             complete=AsyncMock(return_value={"text": '{"value": 7}', "usage": {"output_tokens": 5}}),
         )
         self.host = SimpleNamespace(
-            config=SimpleNamespace(root=root, model_api=settings()), store=self.store, runtime=self.runtime
+            config=SimpleNamespace(root=root, model_api=settings(), execution={"concurrency": 1}),
+            store=self.store,
+            runtime=self.runtime,
         )
         attach_usage(self.host, self.runtime)
         self.plugin = ModelsPlugin(self.host, self.client)
@@ -447,7 +447,7 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
         restarted = ModelsPlugin(self.host, self.client)
         self.assertEqual((await restarted.request(request))["state"], "unknown")
 
-    async def test_bounded_queue_shutdown_cancels_without_retry(self):
+    async def test_unbounded_queue_shutdown_cancels_without_retry(self):
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def complete(payload, **kwargs):
@@ -460,11 +460,12 @@ class ModelsTest(unittest.IsolatedAsyncioTestCase):
         await entered.wait()
         second = asyncio.create_task(self.plugin.request(self.request()))
         await asyncio.sleep(0)
-        with self.assertRaisesRegex(RuntimeError, "queue full"):
-            await self.plugin.request(self.request())
+        third = asyncio.create_task(self.plugin.request(self.request()))
+        await asyncio.sleep(0)
         await self.runtime.close()
         self.assertTrue(first.cancelled())
         self.assertTrue(second.cancelled())
+        self.assertTrue(third.cancelled())
         self.assertEqual(self.plugin.pending, 0)
         self.assertEqual(self.store.db.execute("SELECT state FROM model_calls").fetchone()[0], "unknown")
         self.client.close.assert_awaited_once()

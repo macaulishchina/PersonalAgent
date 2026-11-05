@@ -15,14 +15,13 @@ class ExecutionPlugin:
 
         incoming = settings(config.execution)
         service = self.service
-        previous = (service.concurrency, service.queue.maxsize, service.default_model, service.default_effort)
+        previous = (service.concurrency, service.default_model, service.default_effort)
         previous_skills = service.skill_paths
         previous_controllers = service.authority.controllers
 
-        def update(concurrency, queue_size, model, effort):
+        def update(concurrency, model, effort):
             service.concurrency = concurrency
             service.admission.slots.resize(concurrency)
-            service.queue._maxsize = queue_size
             service.default_model, service.default_effort = model, effort
 
         async def commit():
@@ -30,7 +29,6 @@ class ExecutionPlugin:
             service.skill_paths = getattr(config, "_prepared_skill_paths", previous_skills)
             update(
                 incoming["concurrency"],
-                incoming["queue_size"],
                 config.main_model,
                 config.main_reasoning_effort,
             )
@@ -43,6 +41,8 @@ class ExecutionPlugin:
         return ConfigurationUpdate(commit, rollback)
 
     async def start(self, context):
+        from .resources import capacity_for
+
         host = self.host
         self.service = ExecutionService(
             host.backend.client,
@@ -54,6 +54,7 @@ class ExecutionPlugin:
             default_effort=host.config.main_reasoning_effort,
             servers=self.servers,
             intake=getattr(host, "intake", None),
+            capacity=capacity_for(host),
             **settings(host.config.execution),
         )
         host.backend.executions = self.service

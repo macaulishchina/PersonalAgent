@@ -513,14 +513,6 @@ class Conversation:
                     or not await self.backend.control_checkpoint(retry_of, stopped=True)
                 ):
                     raise ValueError("当前失败记录已过期或存在未确认操作，无法直接重试")
-            maximum = self.host.config.execution.get("queue_size", 64)
-            if (
-                db.execute(
-                    "SELECT count(*) FROM conversation_queue WHERE state IN ('queued','sending')"
-                ).fetchone()[0]
-                >= maximum
-            ):
-                raise ValueError("Conversation queue is full")
             notification_context = ""
             if notification_id is not None:
                 if not isinstance(notification_id, str) or not getattr(self.host, "notifications", None):

@@ -204,7 +204,7 @@ class ConversationNativeTest(unittest.IsolatedAsyncioTestCase):
                 main_model="model-a",
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
-                execution={"concurrency": 1, "queue_size": 8},
+                execution={"concurrency": 1},
             )
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)

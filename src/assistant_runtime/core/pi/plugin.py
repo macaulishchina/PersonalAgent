@@ -50,7 +50,6 @@ class PiPlugin:
         from assistant_runtime.core.models.settings import ModelSettings
         import secrets
         from assistant_runtime.core.pi.accounts import NativeAccounts
-        import asyncio
 
         backend, client = self.backend, self.backend.client
 
@@ -67,7 +66,6 @@ class PiPlugin:
         previous = (
             client.settings,
             client.accounts,
-            client.transport.slots,
             client.cwd,
             dict(client.environment),
             backend.config,
@@ -94,7 +92,6 @@ class PiPlugin:
                 await worker.close()
             client.settings, client.accounts, client.cwd = settings, accounts, config.workspace
             client.skill_paths = skill_paths
-            client.transport.slots = asyncio.Semaphore(settings.concurrency)
             if key:
                 client.environment["PA_EXECUTION_TOKEN"] = key
             else:
@@ -118,7 +115,6 @@ class PiPlugin:
             (
                 client.settings,
                 client.accounts,
-                client.transport.slots,
                 client.cwd,
                 client.environment,
                 backend.config,

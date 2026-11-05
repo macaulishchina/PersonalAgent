@@ -752,6 +752,11 @@ class TasksPlugin:
                     models, self.model_defaults(), self.settings.execution
                 ),
             }
+        if a == "capacity":
+            if args:
+                raise ValueError("Capacity takes no arguments")
+            counts = dict(self.repo.db.execute("SELECT state,COUNT(*) FROM job_runs GROUP BY state"))
+            return {"states": counts}
         if a == "receipt":
             if set(args) - {"request_id", "spec", "feedback_owner"}:
                 raise ValueError("Invalid creation receipt query")
@@ -1380,7 +1385,7 @@ class TasksPlugin:
                     if not r["data"].get("completion_delivered"):
                         if (
                             r["id"] not in self.delivering_results
-                            and len(self.delivering_results) < self.settings.concurrency
+                            and len(self.delivering_results) < self.result_delivery_limit()
                         ):
                             self.delivering_results.add(r["id"])
                             self.context.spawn(self.deliver_result(r), "task-result:" + r["id"])
@@ -1420,6 +1425,16 @@ class TasksPlugin:
                     )
             self.archive_finished({r["task_id"] for r in runs if r["state"] in TERMINAL})
             await asyncio.sleep(0.5)
+
+    def result_delivery_limit(self):
+        # Result I/O remains bounded even when there is no task-specific cap.
+        execution = getattr(self.host.backend, "executions", None)
+        if execution is not None:
+            return execution.concurrency
+        # Standalone task adapters have no shared execution service.
+        from assistant_runtime.core.execution.declaration import settings
+
+        return settings(self.host.config.execution)["concurrency"]
 
     @staticmethod
     def result_payload(r):
@@ -1597,13 +1612,10 @@ class TasksPlugin:
         from assistant_runtime.api.configuration import ConfigurationPending
         from assistant_runtime.core.configuration.updates import attributes
 
-        from dataclasses import replace
-
         settings = TaskSettings.parse(config.tasks)
-        capacity_only = replace(self.settings, concurrency=settings.concurrency) == settings
 
         def ready():
-            return capacity_only or not (
+            return not (
                 self.launching
                 or self.delivering_results
                 or any(
@@ -1660,7 +1672,6 @@ class TasksPlugin:
         ).fetchone()
         return {
             "ready": self.started,
-            "concurrency": self.settings.concurrency,
             "execution": self.settings.execution,
             "notification_error": self.notification_error,
             "finalizations_pending": pending,

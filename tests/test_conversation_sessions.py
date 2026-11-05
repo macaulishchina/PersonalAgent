@@ -450,14 +450,12 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "another conversation"):
             await other.submit(str(uuid.uuid4()), "wrong image", [ident])
 
-    async def test_queue_bound_and_recovery_never_replay(self):
-        self.host.config.execution = {"queue_size": 1}
+    async def test_unbounded_queue_and_recovery_never_replay(self):
         session = (await self.call("create"))["id"]
         await self.send(session, "running")
         await self.started(session)
         await self.send(session, "waiting")
-        with self.assertRaisesRegex(ValueError, "queue is full"):
-            await self.send(session, "overflow")
+        await self.send(session, "another waiting")
         await self.context.close()
         self.host.backend = Backend()
         self.registry = Conversations(self.host)
@@ -467,7 +465,7 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
         states = [
             r[0] for r in self.store.db.execute("SELECT state FROM conversation_queue ORDER BY ordinal")
         ]
-        self.assertEqual(states, ["unknown", "interrupted"])
+        self.assertEqual(states, ["unknown", "interrupted", "interrupted"])
         self.assertNotIn(session, self.registry.opened)
 
     async def test_task_result_stays_in_original_session_after_turn_and_switch(self):

@@ -828,6 +828,9 @@ class PiClient:
         self.cwd = cwd
         self.skill_paths = tuple(Path(p).resolve() for p in skill_paths)
         self.settings = settings
+        from assistant_runtime.api.capacity import Capacity
+
+        self.capacity = Capacity(16)
         self.admission = None
         self.environment = environment or {}
         self.runtime_dir = Path(runtime_dir)
@@ -1004,8 +1007,9 @@ class PiClient:
                 "Interactive MCP OAuth is not implemented by this adapter; configure credentials and verify"
             )
         if command == Command.CREATE:
-            if len(self.workers) >= 16:
-                raise RpcError("Execution session capacity exhausted")
+            # Registration persists metadata only. Processes/model dispatch start
+            # after shared execution admission; queued sessions must not exhaust
+            # an unrelated count of idle/registered sessions.
             ident = uuid.uuid4().hex
             folder = self.runtime_dir / ident
             folder.mkdir(mode=0o700)

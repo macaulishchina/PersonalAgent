@@ -47,7 +47,7 @@ class ConfigurationTest(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "tasks.toml").write_text(
-            "# Operator-owned task settings\n[tasks]\nconcurrency=3\n", encoding="utf-8"
+            "# Operator-owned task settings\n[tasks]\ntimezone='Asia/Shanghai'\n", encoding="utf-8"
         )
         self.service = ConfigurationService(ManagementSettings(self.root, self.entry))
 

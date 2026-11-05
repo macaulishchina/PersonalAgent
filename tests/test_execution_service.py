@@ -113,7 +113,6 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             default_effort="low",
             servers=lambda: {},
             concurrency=1,
-            queue_size=1,
         )
         self.runtime = Runtime(self.store)
         self.runtime.add(SimpleNamespace(manifest=Manifest("execution"), start=self.service.start))
@@ -168,7 +167,7 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             any(e["kind"] == "tool.media" for e in self.service.records.events("media-run")["items"])
         )
 
-    async def test_duplicate_conflict_queue_bound_and_queued_cancel(self):
+    async def test_duplicate_conflict_unbounded_queue_and_queued_cancel(self):
         first, args = await self.submit()
         await self.client.starting.wait()
         duplicate = await self.service.submit(args)
@@ -176,8 +175,8 @@ class ExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "different content"):
             await self.service.submit({**args, "text": "changed"})
         queued, _ = await self.submit()
-        with self.assertRaisesRegex(RuntimeError, "queue is full"):
-            await self.submit()
+        another, _ = await self.submit()
+        self.assertEqual(another["state"], "queued")
         result = await self.service.request(ExecutionRequest("cancel", {"id": queued["id"]}))
         self.assertEqual(result["state"], "cancelled")
         self.assertEqual(len([c for c in self.client.calls if c[0] == "run.start"]), 1)

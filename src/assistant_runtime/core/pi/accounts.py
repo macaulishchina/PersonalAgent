@@ -132,8 +132,6 @@ class AccountWorker:
                 queue.put_nowait({"error": "native_connection_lost"})
 
     async def events(self, action, arguments=None, *, on_attempt=None):
-        if len(self.pending) >= 16:
-            raise RuntimeError("Native account queue full")
         ident = uuid.uuid4().hex
         queue = asyncio.Queue(maxsize=128)
         self.pending[ident] = queue

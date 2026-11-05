@@ -12,20 +12,6 @@
         "title": "启用",
         "default": false
       },
-      "concurrency": {
-        "type": "integer",
-        "title": "并发数量",
-        "default": 4,
-        "minimum": 1,
-        "maximum": 16
-      },
-      "queue_size": {
-        "type": "integer",
-        "title": "队列容量",
-        "default": 16,
-        "minimum": 1,
-        "maximum": 64
-      },
       "timeout_seconds": {
         "type": "integer",
         "title": "请求超时（秒）",
@@ -505,14 +491,6 @@
       "memory": {
         "title": "记忆使用的模型",
         "order": 4
-      },
-      "concurrency": {
-        "advanced": true,
-        "order": 20
-      },
-      "queue_size": {
-        "advanced": true,
-        "order": 20
       },
       "timeout_seconds": {
         "advanced": true,

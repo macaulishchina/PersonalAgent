@@ -29,7 +29,9 @@ class ModelsPlugin:
         self.settings = ModelSettings.parse(host.config.model_api)
         self.db = host.store.db
         self.client, self.context, self.error = client, None, None
-        self.semaphore = asyncio.Semaphore(self.settings.concurrency)
+        from assistant_runtime.core.execution.resources import capacity_for
+
+        self.capacity = capacity_for(host)
         self.pending = 0
         self.active = set()
         self.stopping = False
@@ -91,7 +93,7 @@ class ModelsPlugin:
         if self.pending or self.active:
             raise ConfigurationPending()
         settings = ModelSettings.parse(config.model_api)
-        previous = self.settings, self.client, self.semaphore, self.error
+        previous = self.settings, self.client, self.error
         client = None
         if settings.enabled:
             client = ModelClient(
@@ -108,7 +110,6 @@ class ModelsPlugin:
             if self.pending or self.active:
                 raise ConfigurationPending()
             self.settings, self.client = settings, client
-            self.semaphore = asyncio.Semaphore(settings.concurrency)
             self.error = None
             if client and self.context:
                 self.context.own(client.close)
@@ -117,7 +118,7 @@ class ModelsPlugin:
                 self.context.set_health("ready")
 
         async def rollback():
-            self.settings, self.client, self.semaphore, self.error = previous
+            self.settings, self.client, self.error = previous
             if self.context:
                 self.context.runtime.timeouts[ModelRequest] = previous[0].timeout_seconds + 30
                 self.context.set_health("degraded" if self.error else "ready", self.error)
@@ -298,13 +299,11 @@ class ModelsPlugin:
             return prior
         if not self.client or self.error:
             raise RuntimeError("Model service unavailable")
-        if self.pending >= self.settings.concurrency + self.settings.queue_size:
-            raise RuntimeError("Model request queue full")
         self.pending += 1
         started = time.monotonic()
         try:
-            async with asyncio.timeout(self.settings.timeout_seconds):
-                async with self.semaphore:
+            async with self.capacity.inference():
+                async with asyncio.timeout(self.settings.timeout_seconds):
                     if await self.caller(request.caller_run) != caller:
                         raise ValueError("Model caller execution version changed")
                     # Recheck after admission wait to avoid duplicate paid requests.

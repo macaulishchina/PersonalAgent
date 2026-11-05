@@ -2,7 +2,6 @@
 [tasks]
 max_goal_rounds = 8
 timezone = "Asia/Shanghai"
-concurrency = 4
 misfire_seconds = 300
 
 [tasks.execution]

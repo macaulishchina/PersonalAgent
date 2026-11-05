@@ -98,7 +98,7 @@ class TaskWaitingTest(unittest.IsolatedAsyncioTestCase):
             main_reasoning_effort="auto",
             model_api=pi_fixtures.configuration(self.gateway.base_url),
             execution={"concurrency": 4},
-            tasks={"concurrency": 2, "model_policy": {"review_mode": "off"}},
+            tasks={"model_policy": {"review_mode": "off"}},
         )
         await self.start()
 

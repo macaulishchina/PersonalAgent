@@ -105,8 +105,6 @@ def url(value, *, local=False):
 @dataclass(frozen=True)
 class ModelSettings:
     enabled: bool = field(default_factory=lambda: configuration_default(__file__, "enabled"))
-    concurrency: int = field(default_factory=lambda: configuration_default(__file__, "concurrency"))
-    queue_size: int = field(default_factory=lambda: configuration_default(__file__, "queue_size"))
     timeout_seconds: int = field(default_factory=lambda: configuration_default(__file__, "timeout_seconds"))
     compaction_timeout_seconds: int = field(
         default_factory=lambda: configuration_default(__file__, "compaction_timeout_seconds")
@@ -176,8 +174,6 @@ class ModelSettings:
         if type(obj.enabled) is not bool:
             raise ValueError("models.enabled must be boolean")
         for key, maximum in (
-            ("concurrency", 16),
-            ("queue_size", 64),
             ("timeout_seconds", MAX_OPERATION_SECONDS),
             ("compaction_timeout_seconds", MAX_OPERATION_SECONDS),
             ("tool_result_max_chars", 50000),

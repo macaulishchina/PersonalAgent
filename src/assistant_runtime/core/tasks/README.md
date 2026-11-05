@@ -1,5 +1,14 @@
 # Tasks plugin
 
+Tasks share `execution.concurrency` with conversations and auxiliary inference;
+there is no task-specific concurrency or queue-length setting. Background work may
+occupy every global slot; foreground work joins the same admission queue. Resource
+mutexes, per-conversation ordering and unknown-operation quarantine remain intact.
+Result delivery I/O remains bounded independently of execution admission.
+
+`TaskRequest("capacity", {})` returns aggregate run `states` only for trusted
+operator/plugin monitoring. It exposes no task identities or content.
+
 Since 0.4.17, agent task creation may explicitly provide `context.snapshot_ref` and
 an optional registered UTF-8 `context.additional_input`. Ordinary tasks and children
 do not inherit context. Each scheduled run gets an independent copy; continuation
@@ -38,7 +47,6 @@ existing registered references without rerunning tasks or capturing another imag
 
 ```toml
 [tasks]
-concurrency = 4
 
 [tasks.model_policy]
 review_mode = "shadow" # off / shadow / active；decisions 可不启用

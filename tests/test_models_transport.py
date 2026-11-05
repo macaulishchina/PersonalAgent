@@ -38,7 +38,6 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_continuous_output_still_has_total_deadline_without_retry(self):
         import time
-        from dataclasses import replace
 
         # Load the real SDK before measuring a streaming deadline. Cold module
         # import latency must not turn this into a pre-dispatch timeout test.
@@ -200,18 +199,18 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         self.mode = "sse"
         self.assertEqual((await self.client.complete(self.payload()))["text"], "合成结果")
 
-    async def test_real_http_overload_is_bounded_and_management_stays_responsive(self):
+    async def test_shared_http_concurrency_and_unbounded_queue_keep_management_responsive(self):
         self.mode = "slow"
         with tempfile.TemporaryDirectory() as folder:
             store = Store(Path(folder) / "models.sqlite3")
             runtime = Runtime(store)
             host = SimpleNamespace(
-                config=SimpleNamespace(root=Path(folder), model_api=settings(concurrency=2, queue_size=2)),
+                config=SimpleNamespace(root=Path(folder), model_api=settings(), execution={"concurrency": 2}),
                 store=store,
                 runtime=runtime,
             )
             # A separate pooled client is owned by the real plugin runtime.
-            limited = replace(self.client.settings, concurrency=2)
+            limited = self.client.settings
             client = ModelClient(limited, accounts=NativeAccounts(self.root, limited))
             attach_usage(host, runtime)
             plugin = ModelsPlugin(host, client)
@@ -224,21 +223,19 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
                     {"request_id": str(uuid.uuid4()), "model": "test-model", "text": "Synthetic load"},
                 )
 
-            jobs = [asyncio.create_task(runtime.invoke(request())) for _ in range(4)]
+            jobs = [asyncio.create_task(runtime.invoke(request())) for _ in range(5)]
             try:
                 async with asyncio.timeout(8):
-                    while self.inflight != 2 or plugin.pending != 4:
+                    while self.inflight != 2 or plugin.pending != 5:
                         await asyncio.sleep(0.005)
-                with self.assertRaisesRegex(RuntimeError, "queue full"):
-                    await runtime.invoke(request())
                 async with asyncio.timeout(0.5):
-                    self.assertEqual((await runtime.invoke(ModelRequest("status", {})))["pending"], 4)
+                    self.assertEqual((await runtime.invoke(ModelRequest("status", {})))["pending"], 5)
                 self.assertEqual(len(self.requests), 2)
                 self.gate.set()
                 answers = await asyncio.gather(*jobs)
-                self.assertEqual([a["state"] for a in answers], ["completed"] * 4)
+                self.assertEqual([a["state"] for a in answers], ["completed"] * 5)
                 self.assertEqual(self.peak, 2)
-                self.assertEqual(len(self.requests), 4)
+                self.assertEqual(len(self.requests), 5)
                 self.assertEqual(plugin.pending, 0)
             finally:
                 self.gate.set()

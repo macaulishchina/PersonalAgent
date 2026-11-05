@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import unittest
 from aiohttp import web
 from assistant_runtime.core.pi.transport import ExecutionTransport
+from assistant_runtime.api.capacity import Capacity
 
 
 class ControlledTransportTest(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +23,8 @@ class ControlledTransportTest(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(
             environment={"PA_EXECUTION_TOKEN": "private"},
             workers={"session": worker},
-            settings=SimpleNamespace(concurrency=1, queue_size=2),
+            capacity=Capacity(1),
+            admission=None,
         )
         transport = ExecutionTransport(client)
         request = SimpleNamespace(
@@ -33,11 +35,11 @@ class ControlledTransportTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertIs(transport.authenticate(request), worker)
-        await transport.slots.acquire()
+        await client.capacity.acquire()
         pending = asyncio.create_task(transport.forward(request))
         await asyncio.sleep(0)
         worker.meta.update(active_run="b", budget_id="b", control_token="round-b")
-        transport.slots.release()
+        client.capacity.release()
         with self.assertRaises(web.HTTPForbidden):
             await pending
         self.assertEqual(transport.pending, 0)
@@ -59,7 +61,7 @@ class ToolMediaTransportTest(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(
             environment={"PA_EXECUTION_TOKEN": "private"},
             workers={"session": worker},
-            settings=SimpleNamespace(concurrency=1, queue_size=2),
+            capacity=Capacity(1),
             admission=SimpleNamespace(service=service),
         )
         transport = ExecutionTransport(client)

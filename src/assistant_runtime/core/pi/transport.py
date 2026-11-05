@@ -1,7 +1,5 @@
 """Authenticated Pi transport; accounting and policy belong to ai_usage."""
 
-import asyncio
-
 from aiohttp import web
 
 
@@ -11,7 +9,6 @@ class ExecutionTransport:
         self.runner = None
         self.url = None
         self.pending = 0
-        self.slots = asyncio.Semaphore(client.settings.concurrency)
 
     async def start(self):
         app = web.Application(client_max_size=96 * 1024 * 1024)
@@ -138,15 +135,21 @@ class ExecutionTransport:
 
     async def forward(self, request):
         worker = self.authenticate(request)
-        if self.pending >= self.client.settings.queue_size + self.client.settings.concurrency:
-            raise web.HTTPServiceUnavailable()
         self.pending += 1
+        from assistant_runtime.api.capacity import current_capacity_lease
+
+        capacity = self.client.capacity
+        admission = self.client.admission
+        ident = admission.service.sessions.get(worker.execution_session_id) if admission else None
+        lease = admission.slots.leases.get(ident) if admission else None
+        token = current_capacity_lease.set(lease)
         try:
-            async with self.slots:
+            async with capacity.inference():
                 if self.authenticate(request) is not worker:
                     raise web.HTTPForbidden()
                 return await self._native(request, worker)
         finally:
+            current_capacity_lease.reset(token)
             self.pending -= 1
 
     async def close(self):

@@ -55,8 +55,8 @@ false memory capture excludes this session from automatic global transcript capt
 
 Request IDs are globally deduplicated; reuse with different contents or another session
 is rejected. Ordinary submissions persist before acknowledgment and never steer active
-work. A session has one drain worker and at most one active turn. Waiting input is bounded
-by `execution.queue_size`; native dispatch shares execution admission and AI usage limits
+work. A session has one drain worker and at most one active turn. Waiting input is not length-bounded, and depends
+only on available storage and caller lifetimes; native dispatch shares execution admission and AI usage limits
 with direct execution and tasks. Supplement/answer/cancel validate the current request;
 answers additionally validate the question identity. Explicit inputs remain in history.
 

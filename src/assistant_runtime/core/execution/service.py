@@ -29,15 +29,13 @@ class ExecutionService:
         default_effort,
         servers,
         skill_paths=(),
-        concurrency=4,
-        queue_size=64,
+        concurrency=16,
+        capacity=None,
         intake=None,
         controllers=None,
     ):
-        if type(concurrency) is not int or not 1 <= concurrency <= 8:
-            raise ValueError("Execution concurrency must be 1..8")
-        if type(queue_size) is not int or not 1 <= queue_size <= 1024:
-            raise ValueError("Execution queue size must be 1..1024")
+        if type(concurrency) is not int or not 1 <= concurrency <= 64:
+            raise ValueError("Execution concurrency must be 1..64")
         self.client, self.files, self.usage = client, files, usage
         self.default_model, self.default_effort = default_model, default_effort
         self.servers, self.skill_paths = servers, skill_paths
@@ -58,11 +56,12 @@ class ExecutionService:
         from .publications import Publications
 
         self.publications = Publications(self)
-        self.queue = asyncio.Queue(maxsize=queue_size)
+        self.queue = asyncio.Queue()
         self.concurrency = concurrency
         from .admission import Admission
 
-        self.admission = Admission(self)
+        self.admission = Admission(self, capacity)
+        self.client.capacity = self.admission.slots
         self.intake = intake
         self.stopping = False
         self.sessions, self.questions, self.finished = {}, {}, {}
@@ -257,7 +256,7 @@ class ExecutionService:
         context.own(self.close)
         context.spawn(self.controlled.watch(), "controlled-authorizations")
         # Worker count is bounded by the supported maximum; admission owns the live limit.
-        for number in range(8):
+        for number in range(64):
             context.spawn(self.worker(), f"execution-{number}")
 
     @staticmethod
@@ -352,6 +351,12 @@ class ExecutionService:
 
     async def request(self, request, *, _controlled=False):
         args = request.arguments
+        if request.action == "capacity":
+            if args:
+                raise ValueError("Capacity takes no arguments")
+            from .capacity import capacity
+
+            return capacity(self)
         if request.action == "submit":
             return await self.submit(args)
         allowed = {
@@ -482,8 +487,6 @@ class ExecutionService:
                 raise ValueError("Execution model does not support images")
             if self.stopping:
                 raise RuntimeError("Execution service is stopping")
-            if self.queue.full():
-                raise RuntimeError("Execution queue is full")
             parent = current_usage.get()
             scope = replace(parent, caller=ident) if parent else UsageScope(ident, ident)
             await self.usage.bind(ident, scope)

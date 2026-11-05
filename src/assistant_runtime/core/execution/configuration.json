@@ -10,16 +10,10 @@
       "concurrency": {
         "type": "integer",
         "title": "并发执行数量",
-        "default": 4,
+        "default": 16,
         "minimum": 1,
-        "maximum": 8
-      },
-      "queue_size": {
-        "type": "integer",
-        "title": "排队容量",
-        "default": 64,
-        "minimum": 1,
-        "maximum": 1024
+        "maximum": 64,
+        "description": "所有会话、后台任务和辅助推理共用同一执行名额池，等待队列不设长度上限。上限 64，适宜值取决于本机内存和模型服务限额。"
       },
       "controllers": {
         "type": "object",
