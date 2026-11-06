@@ -373,3 +373,5 @@ The result reader preserves ResultAccessError codes and corrective actions acros
 HTTP boundary. A missing JSON path requires corrected arguments; it never requires
 reexecuting the producing tool. First inspect the actual structure with format=json and
 an empty RFC6901 path, then read its fields or bounded text ranges.
+
+Diagnostic levels, retention and safe native-error evidence are documented in [diagnostics](../../../../docs/guides/diagnostics.md). Provider payloads and output deltas are not recorded even at DEBUG.

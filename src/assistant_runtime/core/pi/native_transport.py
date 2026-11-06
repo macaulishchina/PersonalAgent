@@ -198,6 +198,15 @@ async def forward(transport, request, worker):
             problem["category"],
             timeout,
             time.monotonic() - started,
+            exc_info=True,
+            extra={
+                "diagnostic": {
+                    "model": alias,
+                    "session_id": getattr(worker, "execution_session_id", None),
+                    "turn_id": getattr(worker, "active_turn", None),
+                    "category": problem["category"],
+                }
+            },
         )
         await response.write(
             (

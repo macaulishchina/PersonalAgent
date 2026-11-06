@@ -43,7 +43,7 @@ def check(config, *, native=True):
 
         selection = ModelPolicy.parse(policy.model_policy)
         policy.validate_bindings(settings.entries)
-        return {"recommendations": list(selection.recommendations), "concurrency": policy.concurrency}
+        return {"recommendations": list(selection.recommendations)}
 
     def memory():
         if config.memory_enabled:

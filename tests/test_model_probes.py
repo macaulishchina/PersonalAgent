@@ -127,7 +127,11 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
                 before = len(self.requests)
                 reply = await self.plugin.test_model(self.arguments(protocol))
                 self.assertEqual(reply["code"], "model_http_429", reply)
-                self.assertNotIn("private-synthetic-key", json.dumps(reply))
+                self.assertNotIn("draft-private-key", json.dumps(reply))
+                self.assertNotIn(
+                    "draft-private-key",
+                    json.dumps(self.store.db.execute("SELECT * FROM model_probes").fetchall()),
+                )
                 self.assertEqual(len(self.requests) - before, 3)
                 self.assertEqual(reply["failure"]["attempt_count"], 3)
 

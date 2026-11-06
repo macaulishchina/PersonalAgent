@@ -201,6 +201,9 @@ async function runAttempt(id, args, signal, evidence) {
   const timings = {};
   const elapsed = () => Math.round(performance.now() - started);
   const { model: selectedModel, effort } = modelFor(args);
+  const diagnostic = (name, fields = {}) => emit({ id, event: {type:"diagnostic", name,
+    model:args.alias, session_id:args.session_id, effort:args.effort, ...fields} });
+  await diagnostic("model.request.started");
   // Pi's legacy Anthropic adapter adds thinking tokens to maxTokens. Constrain
   // its shared ceiling first so it fits the budget instead of enlarging our cap.
   const model =
@@ -354,10 +357,18 @@ async function runAttempt(id, args, signal, evidence) {
       return payload;
     },
     onProviderStreamEvent: (data) => {
-      observeError(data?.error || data?.response?.error, evidence, argsKey);
+      // Keep metadata only; never retain or log provider payloads/deltas.
+      if (typeof data?.type === "string" && /^[a-z_.]{1,96}$/.test(data.type))
+        evidence.last_event = data.type;
+      if (["response.completed","response.failed","response.incomplete","error"].includes(data?.type))
+        evidence.terminal_event = data.type;
+      if (typeof data?.response?.id === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(data.response.id))
+        evidence.response_id = data.response.id;
+      observeError(data?.error || data?.response?.error || (data?.type === "error" ? data : undefined), evidence, argsKey);
     },
     onResponse: async (response) => {
       timings.response_headers_ms = elapsed();
+      await diagnostic("model.response.headers", {status:response.status, elapsed_ms:elapsed()});
       await emit({
         id,
         event: {
@@ -386,7 +397,9 @@ async function runAttempt(id, args, signal, evidence) {
           part.thinking?.length,
       );
       evidence.terminal = !signal.aborted;
+      evidence.sdk_terminal = event.type;
       const problem = failure(event.error, evidence, argsKey);
+      await diagnostic("model.request.failed", {failure:problem,elapsed_ms:elapsed(),transport_timings:event.transport_timings});
       event.error.errorMessage = problem.message;
       event.error.failure = problem;
       event.http_status = problem.status;
@@ -396,6 +409,7 @@ async function runAttempt(id, args, signal, evidence) {
       if (Buffer.byteLength(JSON.stringify(event)) > 8 * 1024 * 1024)
         throw new Error("native_response_exceeds_bound");
       evidence.terminal = true;
+      await diagnostic("model.request.completed", {elapsed_ms:elapsed(),response_id:evidence.response_id,terminal_event:evidence.terminal_event,transport_timings:event.transport_timings});
       for (const bufferedEvent of buffered)
         await emit({ id, event: bufferedEvent });
       return { terminal: event };
@@ -477,6 +491,7 @@ async function run(id, args, signal) {
     gate,
     signal,
     policy: args.retry || { max_retries: 0 },
+    secret: () => argsKey,
     attempt: (evidence) => runAttempt(id, args, signal, evidence),
     emit: (event) => emit({ id, event }),
   });

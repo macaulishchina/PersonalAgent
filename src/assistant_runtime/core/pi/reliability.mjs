@@ -20,6 +20,11 @@ export function observeError(error, evidence, secret) {
     safe(String(error.code || error.type || error.status || ""), secret) ||
     undefined;
   evidence.provider_message = safe(error.message, secret);
+  evidence.error_type = safe(error.name, secret);
+  if (error.cause && typeof error.cause === "object") {
+    evidence.cause_code = safe(error.cause.code, secret);
+    evidence.cause_message = safe(error.cause.message, secret);
+  }
 }
 
 export function observeFetch(nativeFetch, secret) {
@@ -30,6 +35,11 @@ export function observeFetch(nativeFetch, secret) {
     try {
       response = await nativeFetch(input, { ...init, redirect: "error" });
     } catch (error) {
+      if (evidence) {
+        evidence.error_type = safe(error.name, secret());
+        evidence.cause_code = safe(error.cause?.code, secret());
+        evidence.cause_message = safe(error.cause?.message, secret());
+      }
       const code = error.cause?.code || error.code;
       if (
         evidence &&
@@ -86,6 +96,7 @@ export function failure(message, evidence, secret) {
   const status = evidence.status;
   const code = evidence.provider_code || "";
   const combined = `${code} ${evidence.provider_message || ""}`;
+  const nativeError = safe(raw, secret);
   let category = "unknown";
   if (
     /insufficient_quota|quota_exceeded|credit|balance|billing|spend_limit|usage_limit|quota.*exhaust|payment/i.test(
@@ -126,12 +137,21 @@ export function failure(message, evidence, secret) {
     category,
     message:
       evidence.provider_message ||
+      (raw !== "native_request_failed" ? nativeError : undefined) ||
       (category === "transient"
         ? "模型连接暂时失败，未收到完整回复。"
         : evidence.submission === "not_submitted" &&
             /^native_[a-z_]+$/.test(raw)
           ? raw
-          : "模型请求未完成，供应商未提供可安全展示的错误说明。"),
+          : "模型请求未完成，未记录更具体的错误原因。"),
+    native_error: nativeError,
+    ...(evidence.sdk_terminal ? { sdk_terminal: evidence.sdk_terminal } : {}),
+    ...(evidence.error_type ? { error_type: evidence.error_type } : {}),
+    ...(evidence.cause_code ? { cause_code: evidence.cause_code } : {}),
+    ...(evidence.cause_message ? { cause_message: evidence.cause_message } : {}),
+    ...(evidence.last_event ? { last_event: evidence.last_event } : {}),
+    ...(evidence.terminal_event ? { terminal_event: evidence.terminal_event } : {}),
+    ...(evidence.response_id ? { response_id: evidence.response_id } : {}),
     ...(status ? { status } : {}),
     ...(code ? { provider_code: code } : {}),
     ...(evidence.transport_code
@@ -159,6 +179,7 @@ export async function reliableRequest({
   emit,
   signal,
   policy = {},
+  secret,
 }) {
   let number = 0,
     unknown = 0,
@@ -188,7 +209,11 @@ export async function reliableRequest({
           result = await attemptContext.run(evidence, () => attempt(evidence));
         } catch (error) {
           if (signal.aborted) throw error;
-          const problem = failure({ errorMessage: error.message }, evidence);
+          const key = typeof secret === "function" ? secret() : secret;
+          evidence.error_type = safe(error.name, key);
+          evidence.cause_code = safe(error.cause?.code, key);
+          evidence.cause_message = safe(error.cause?.message, key);
+          const problem = failure({ errorMessage: error.message }, evidence, key);
           problem.retry_allowed = false;
           result = {
             failure: problem,

@@ -13,6 +13,7 @@ import uuid
 from assistant_runtime.api import ConversationRequest
 from assistant_runtime.app.config import Config
 from assistant_runtime.app.store import Store
+from assistant_runtime.core.workfiles import WorkFiles
 from assistant_runtime.core.conversation.plugin import Conversations
 from assistant_runtime.core.memory.service import MemoryPlugin
 from test_conversation_sessions import Backend, Context
@@ -26,6 +27,7 @@ class ConversationMemoryTest(unittest.IsolatedAsyncioTestCase):
         self.store = Store(self.root / "state.db")
         self.host = SimpleNamespace(
             store=self.store,
+            workfiles=WorkFiles(self.root, self.store.db),
             config=Config(root=self.root, plugins=[]),
             backend=Backend(),
             assistant=None,

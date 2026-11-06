@@ -112,6 +112,59 @@ class ReliabilityTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(caught.exception.failure["output_started"])
         self.assertEqual(caught.exception.failure["stop_reason"], "partial_output")
 
+    async def test_diagnostic_lifecycle_has_metadata_not_content(self):
+        with self.assertLogs("assistant_runtime.core.pi.accounts", level="DEBUG") as captured:
+            result = await self.infer()
+        self.assertEqual(result["text"], "OK")
+        self.assertEqual(len(self.gateway.requests), 1)
+        records = {r.msg: getattr(r, "diagnostic", {}) for r in captured.records}
+        self.assertIn("model.request.started", records)
+        self.assertIn("model.response.headers", records)
+        self.assertIn("model.request.completed", records)
+        self.assertEqual(records["model.request.completed"]["terminal_event"], "response.completed")
+        import json
+
+        self.assertNotIn("synthetic-key", json.dumps(records))
+        self.assertNotIn('"input"', json.dumps(records))
+
+    async def test_partial_stream_preserves_original_error_and_event(self):
+        self.gateway.script_fn = lambda n, b: sse_text_reply("diagnostic-partial", "partial")[:-1]
+        with self.assertRaises(ModelCallError) as caught:
+            await self.infer()
+        problem = caught.exception.failure
+        self.assertEqual(len(self.gateway.requests), 1)
+        self.assertEqual(problem["response_id"], "resp_diagnostic-partial")
+        self.assertIn("terminal response event", problem["native_error"])
+        self.assertEqual(problem["stop_reason"], "partial_output")
+        self.assertEqual(problem["status"], 200)
+        self.assertNotIn("供应商未提供", problem["message"])
+
+    async def test_sse_error_root_fields_preserved_and_redacted(self):
+        def script(n, body):
+            return [
+                *sse_text_reply("before-error", "partial")[:-1],
+                {
+                    "type": "error",
+                    "code": "gateway_stream_error",
+                    "message": "upstream failed synthetic-key Bearer private-token-value",
+                },
+            ]
+
+        self.gateway.script_fn = script
+        with self.assertRaises(ModelCallError) as caught:
+            await self.infer()
+        problem = caught.exception.failure
+        self.assertEqual(len(self.gateway.requests), 1)
+        # The SDK consumes root SSE error events before provider callbacks.
+        # Retain its original diagnostic rather than inventing an observed event.
+        self.assertEqual(problem["sdk_terminal"], "error")
+        self.assertIn("upstream failed", problem["native_error"])
+        self.assertIn("upstream failed", problem["message"])
+        import json
+
+        self.assertNotIn("synthetic-key", json.dumps(problem))
+        self.assertNotIn("private-token-value", json.dumps(problem))
+
     async def test_next_attempt_must_pass_usage_gate(self):
         self.usage.settings = replace(self.usage.settings, max_requests=1)
         self.usage.ledger.settings = self.usage.settings

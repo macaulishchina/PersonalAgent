@@ -1,0 +1,9 @@
+# Diagnostic logging
+
+The application supports `PERSONAL_AGENT_LOG_LEVEL` (DEBUG, INFO, WARNING, ERROR, CRITICAL; default INFO), `PERSONAL_AGENT_LOG_DIRECTORY`, `PERSONAL_AGENT_LOG_MAX_BYTES` (default 10485760), and `PERSONAL_AGENT_LOG_BACKUPS` (default 5). Apply startup environment changes by restarting the owned instance. Maintenance CLI commands use sanitized stderr; the `run` command writes `business.jsonl` when a directory is configured. An embedding management entry can call `app.diagnostics.configure("manager")` for its own file. Do not share rotating output files between unrelated processes.
+
+JSON lines carry schema_version, UTC timestamp, level, process, service, logger, event and bounded diagnostic fields. Unexpected exceptions retain sanitized cause chains and frame locations without locals or source excerpts. Rotation is per file; existing legacy stdout logs are not automatically removed. Logging I/O failure must not authorize retry or alter execution state.
+
+The Pi adapter records request lifecycle and transport timings without prompts, context, provider payloads or output deltas. Failures retain `native_error`, available cause/transport details, response ID, last observed provider event and terminal event; `sdk_terminal` is separate. Provider SDKs may consume top-level error events before callbacks, so absent callback evidence must not be fabricated. Redaction applies at every level, including DEBUG. Worker stderr is drained with bounded, sanitized error-only logging.
+
+No retry/dispatch/selection behavior changes: partial or uncertain execution remains protected from automatic regeneration. Historical evidence previously discarded cannot be reconstructed. Local synthetic SSE checks are diagnostics acceptance, not supplier capability or availability certification.

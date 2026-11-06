@@ -6,6 +6,7 @@ import asyncio
 import base64
 from assistant_runtime.api.system import system
 import json
+import logging
 import os
 import sys
 import time
@@ -238,6 +239,8 @@ class BusinessProcess:
         return folder / self.settings.entry.name
 
     async def start(self, snapshot=None):
+        stage = "configuration"
+        logging.getLogger(__name__).info("business.starting")
         async with self.operation:
             if self.process and self.process.returncode is None:
                 raise ValueError("Business process is already running")
@@ -275,6 +278,8 @@ class BusinessProcess:
                 if marker.exists():
                     atomic(self.state / "unclean.json", b'{"reason":"previous_owner_unconfirmed"}')
                 atomic(marker, json.dumps({"version": revision}).encode())
+                stage = "process_start"
+                logging.getLogger(__name__).debug("business.configuration_validated")
                 self.process = await system.spawn(
                     *system.supervised_command(
                         self.settings.shutdown_seconds,
@@ -293,6 +298,7 @@ class BusinessProcess:
                     start_new_session=True,
                     env=env,
                 )
+                stage = "readiness"
                 deadline = time.monotonic() + self.settings.startup_seconds
                 while time.monotonic() < deadline:
                     if self.process.returncode is not None:
@@ -315,6 +321,10 @@ class BusinessProcess:
                                 "degraded"
                                 if any(p.get("state") != "ready" for p in health.values())
                                 else "running"
+                            )
+                            logging.getLogger(__name__).info(
+                                "business.ready",
+                                extra={"diagnostic": {"state": self.outcome, "pid": self.process.pid}},
                             )
                             self.loaded, self.loaded_snapshot = revision, snapshot
                             atomic(
@@ -358,6 +368,9 @@ class BusinessProcess:
                     await asyncio.sleep(0.2)
                 raise TimeoutError("Business startup readiness timed out")
             except Exception as exc:
+                logging.getLogger(__name__).exception(
+                    "business.start_failed", extra={"diagnostic": {"stage": stage}}
+                )
                 self.error = (
                     type(exc).__name__ + ": configuration or startup failed; inspect local diagnostics"
                 )

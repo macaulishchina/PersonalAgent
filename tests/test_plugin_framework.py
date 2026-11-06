@@ -290,7 +290,7 @@ asyncio.run(main())
         root = Path(__file__).resolve().parents[1] / "src/assistant_runtime"
         for layer in ("kernel", "api"):
             for path in (root / layer).glob("*.py"):
-                tree = ast.parse(path.read_text())
+                tree = ast.parse(path.read_text(encoding="utf-8"))
                 for node in ast.walk(tree):
                     names = (
                         [n.name for n in node.names]

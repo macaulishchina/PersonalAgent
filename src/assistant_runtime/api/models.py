@@ -12,6 +12,15 @@ class ModelFailure(TypedDict, total=False):
     category: str
     message: str
     status: int
+    native_error: str
+    error_type: str
+    cause_code: str
+    cause_message: str
+    transport_code: str
+    last_event: str
+    terminal_event: str
+    sdk_terminal: str
+    response_id: str
     provider_code: str
     request_id: str
     phase: str

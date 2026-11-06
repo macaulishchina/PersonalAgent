@@ -184,7 +184,7 @@ class SaveFlowTest(unittest.IsolatedAsyncioTestCase):
         pid = self.business.process.pid
         first = self.business.files.snapshot()
         saved = await self.flow.save(
-            first.version, [patch(["main_model"], "two"), patch(["model_api", "concurrency"], 2)], []
+            first.version, [patch(["main_model"], "two"), patch(["execution", "concurrency"], 2)], []
         )
         await self.settle()
         self.assertEqual(self.business.process.pid, pid)

@@ -102,7 +102,12 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                 status=429,
             )
         if self.mode == "reject":
-            return web.Response(status=429, text="private-synthetic-key must never reach diagnostics")
+            key = (
+                request.headers.get("Authorization", "").removeprefix("Bearer ")
+                or request.headers.get("x-api-key")
+                or request.headers.get("x-goog-api-key")
+            )
+            return web.Response(status=429, text=f"{key} must never reach diagnostics")
         if self.mode == "slow":
             await self.gate.wait()
         if self.mode == "redirect":

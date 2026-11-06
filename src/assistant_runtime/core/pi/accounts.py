@@ -3,6 +3,8 @@
 from assistant_runtime.api.system import system
 
 import asyncio
+import logging
+import re
 import json
 import os
 from pathlib import Path
@@ -67,7 +69,9 @@ class AccountWorker:
         self.root, self.folder, self.spec = Path(root), Path(folder), spec
         self.binary = binary
         self.credential_value = credential_value
-        self.process = self.reader = None
+        self.process = self.reader = self.stderr_reader = None
+        self.closing = False
+        self._diagnostic_secret = credential_value
         self.initialized = False
         self.pending = {}
         self.lock = asyncio.Lock()
@@ -92,11 +96,12 @@ class AccountWorker:
                 str(package),
                 stdin=-1,
                 stdout=-1,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
                 env=environment,
                 limit=8 * 1024 * 1024,
             )
             self.reader = asyncio.create_task(self._read())
+            self.stderr_reader = asyncio.create_task(self._read_stderr())
             args = {"folder": str(self.folder), "spec": self.spec}
             if self.spec.get("key_env"):
                 args["key"] = (
@@ -104,8 +109,30 @@ class AccountWorker:
                     if self.credential_value is not None
                     else credential(self.root, self.spec["key_env"])
                 )
+            self._diagnostic_secret = args.get("key")
             await self.call("init", args)
             self.initialized = True
+
+    async def _read_stderr(self):
+        """Drain diagnostics without blocking the worker or recording arbitrary output."""
+        count = 0
+        while raw := await self.process.stderr.readline():
+            count += 1
+            if count > 32:
+                if count == 33:
+                    logging.getLogger(__name__).warning("model.worker.stderr_bounded")
+                continue
+            line = raw.decode("utf-8", errors="replace").strip()
+            # Do not log source excerpts or payloads written by external libraries.
+            if not re.match(r"^(?:[A-Za-z]*(?:Error|Exception):|\s*at )", line):
+                continue
+            if self._diagnostic_secret:
+                line = line.replace(self._diagnostic_secret, "[redacted]")
+            line = re.sub(r"(?i)Bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}", "[redacted]", line)
+            line = re.sub(r"https?://[^\s]+", "[endpoint]", line)
+            logging.getLogger(__name__).warning(
+                "model.worker.stderr", extra={"diagnostic": {"reason": line[:600]}}
+            )
 
     async def send(self, data):
         self.process.stdin.write((json.dumps(data) + "\n").encode())
@@ -117,14 +144,46 @@ class AccountWorker:
                 if len(raw) > 8 * 1024 * 1024:
                     raise ValueError("Native account frame exceeds bound")
                 data = json.loads(raw)
+                event = data.get("event", {})
+                if event.get("type") == "diagnostic":
+                    name = event.get("name", "model.diagnostic")
+                    # Emit only internally defined bounded metadata fields.
+                    allowed = {
+                        "model",
+                        "session_id",
+                        "effort",
+                        "status",
+                        "elapsed_ms",
+                        "response_id",
+                        "terminal_event",
+                        "failure",
+                        "transport_timings",
+                    }
+                    fields = {k: v for k, v in event.items() if k in allowed}
+                    logging.getLogger(__name__).log(
+                        logging.WARNING
+                        if name.endswith("failed")
+                        else logging.INFO
+                        if name.endswith(("started", "completed"))
+                        else logging.DEBUG,
+                        name,
+                        extra={"diagnostic": fields},
+                    )
+                    continue
                 queue = self.pending.get(data.get("id"))
                 if queue is not None:
                     queue.put_nowait(data)
                 await asyncio.sleep(0)
         except (ValueError, asyncio.QueueFull):
+            logging.getLogger(__name__).exception("model.worker.protocol_failed")
             if self.process.returncode is None:
                 self.process.terminate()
         finally:
+            logging.getLogger(__name__).log(
+                logging.DEBUG if self.closing else logging.WARNING,
+                "model.worker.stdout_closed",
+                extra={"diagnostic": {"expected": self.closing, "return_code": self.process.returncode}},
+            )
             for queue in self.pending.values():
                 # A stalled consumer cannot block cleanup or another caller.
                 if queue.full():
@@ -184,6 +243,7 @@ class AccountWorker:
                     return item["result"]
 
     async def close(self):
+        self.closing = True
         if self.process:
             if self.process.returncode is None:
                 self.process.terminate()
@@ -192,7 +252,7 @@ class AccountWorker:
                 except TimeoutError:
                     self.process.kill()
                     await self.process.wait()
-            await asyncio.gather(self.reader, return_exceptions=True)
+            await asyncio.gather(*(t for t in (self.reader, self.stderr_reader) if t), return_exceptions=True)
 
 
 class NativeAccounts:

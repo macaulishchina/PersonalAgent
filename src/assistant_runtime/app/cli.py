@@ -6,7 +6,6 @@ from assistant_runtime.platforms.ipc import connect
 import argparse
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 import sys
@@ -297,7 +296,14 @@ def main():
     accounts.add_argument("--account")
     args = parser.parse_args()
     args.command = args.command or "chat"
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from .diagnostics import configure
+
+    # The process supervisor consumes its ownership marker before invoking the CLI.
+    # The run command itself is the stable business-process identity.
+    configure(
+        "business" if args.command == "run" else "cli",
+        directory=os.environ.get("PERSONAL_AGENT_LOG_DIRECTORY") if args.command == "run" else "",
+    )
     try:
         from .instance_selection import resolve, select
 
