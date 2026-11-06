@@ -477,7 +477,7 @@ function ConversationGroup({
       : messageChannel(latest);
   const displayedModel =
     !user && ["text", "voice"].includes(channel) ? model : undefined;
-  const speaker = user ? "你" : displayedModel?.display_name || name;
+  const speaker = user ? "你" : name;
   const date = new Date(latest.updated * 1000);
   const text = group.messages
     .filter((m) => !messageDetail(m))
@@ -507,12 +507,7 @@ function ConversationGroup({
     >
       <div className="message-meta">
         {!user && <ModelAvatar model={displayedModel} />}
-        <span
-          className="speaker"
-          title={displayedModel?.description || undefined}
-        >
-          {speaker}
-        </span>
+        <span className="speaker">{speaker}</span>
         {!user && (
           <span
             className="source-badge"
@@ -629,9 +624,7 @@ function ResponseActivity({
     >
       <div className="message-meta">
         <ModelAvatar model={model} />
-        <span className="speaker" title={model?.description || undefined}>
-          {model?.display_name || name}
-        </span>
+        <span className="speaker">{name}</span>
       </div>
       <div
         className="response-progress"

@@ -467,20 +467,29 @@ async def main():
             await page.reload()
             speaker = page.locator(".message-group.assistant .speaker")
             avatar = page.locator(".message-group.assistant .model-avatar img")
-            await expect(speaker).to_have_text("Public Model")
-            await expect(speaker).to_have_attribute("title", "Public description")
+            await expect(speaker).to_have_text(state["name"])
+            await expect(speaker).not_to_have_attribute("title", "Public description")
+            await expect(page.locator(".message-group.assistant")).to_have_attribute(
+                "aria-label", state["name"] + "的消息"
+            )
             await expect(avatar).to_have_js_property("naturalWidth", 32)
             public_model.update(display_name="Updated Model", avatar=dict(kind="builtin", name="deepseek"))
             await page.reload()
-            await expect(speaker).to_have_text("Updated Model")
+            await expect(speaker).to_have_text(state["name"])
             await expect(avatar).to_have_attribute("src", "/chat/api/model-avatar/builtin/deepseek")
             await expect(avatar).to_have_js_property("naturalWidth", 64)
             await page.screenshot(path=str(output / "model-presentation-reloaded.png"))
             avatar_missing = True
             await page.reload()
-            await expect(speaker).to_have_text("Updated Model")
+            await expect(speaker).to_have_text(state["name"])
             await expect(avatar).to_have_count(0)
             await expect(page.locator(".message-group.assistant .model-avatar svg")).to_be_visible()
+            state.update(name="嘟嘟", task_running=True, active_request_id="speaker-check")
+            await page.reload()
+            await expect(page.locator(".message-group.assistant .speaker")).to_have_text(["嘟嘟", "嘟嘟"])
+            await expect(page.locator(".response-activity .speaker")).to_have_text("嘟嘟")
+            await expect(page.get_by_text("Updated Model", exact=True)).to_have_count(0)
+            await expect(page.get_by_text("Public description", exact=True)).to_have_count(0)
             assert not errors, errors
             await browser.close()
     finally:
@@ -492,7 +501,8 @@ async def main():
                 "queue_display_drag_keyboard_edit_remove_conflict_recovery": "passed",
                 "desktop_mobile_layout": "passed",
                 "model_failure_details_retry_idempotent_request": "passed",
-                "model_presentation_reload_uploaded_builtin_and_missing_avatar": "passed",
+                "assistant_name_stable_across_model_reload_and_response_activity": "passed",
+                "model_avatar_reload_uploaded_builtin_and_missing_avatar": "passed",
                 "screenshots": str(output),
             },
             ensure_ascii=False,

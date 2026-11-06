@@ -41,9 +41,25 @@ class ReleasePreflightTest(unittest.TestCase):
             with patch("scripts.check_pi_release.credential", return_value="secret"):
                 result = check(config, native=False)
             self.assertEqual(result["state"], "passed")
+            checks = {row["check"]: row for row in result["checks"]}
+            self.assertEqual(checks["execution_capacity"]["detail"], {"concurrency": 16})
+            self.assertNotIn("concurrency", checks["task_recommendations"]["detail"])
             self.assertEqual(list(root.iterdir()), [])
             self.assertEqual(result["real_provider_acceptance"], "separate_required")
             self.assertEqual(result["production_cutover"], "not_performed")
+
+    def test_shared_capacity_is_validated_without_private_task_limit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = self.config(Path(folder))
+            with patch("scripts.check_pi_release.credential", return_value="secret"):
+                config.execution = {"concurrency": 7}
+                checks = {row["check"]: row for row in check(config, native=False)["checks"]}
+                self.assertEqual(checks["execution_capacity"]["detail"], {"concurrency": 7})
+                config.execution = {"concurrency": 65}
+                failures = {
+                    row["check"] for row in check(config, native=False)["checks"] if row["state"] == "failed"
+                }
+                self.assertEqual(failures, {"execution_capacity"})
 
     def test_missing_credential_and_invalid_main_or_task_do_not_leak_secret_errors(self):
         with tempfile.TemporaryDirectory() as folder:

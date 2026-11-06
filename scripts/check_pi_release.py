@@ -45,6 +45,11 @@ def check(config, *, native=True):
         policy.validate_bindings(settings.entries)
         return {"recommendations": list(selection.recommendations)}
 
+    def capacity():
+        from assistant_runtime.core.execution.declaration import settings
+
+        return {"concurrency": settings(config.execution)["concurrency"]}
+
     def memory():
         if config.memory_enabled:
             if "memory" not in config.plugins or not settings.memory:
@@ -103,6 +108,7 @@ def check(config, *, native=True):
         return "1.4.0"
 
     record("execution_binding", execution)
+    record("execution_capacity", capacity)
     record("task_recommendations", tasks)
     record("memory_binding", memory)
     record("usage_policy", lambda: {"max_requests": UsageSettings.parse(config.ai_usage).max_requests})

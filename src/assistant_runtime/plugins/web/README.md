@@ -11,8 +11,9 @@ The extension owns all chat routes/authentication and UI assets. The app supplie
 Frontend production assets are built with base=/chat/. All API, SSE and attachment URLs use the same prefix. The gateway does not retry submissions or buffer SSE. Provider execution/usage/request deduplication remain owned by existing conversation/execution services.
 
 On reload, chat reads the applied public model catalog through `ModelRequest("catalog")`.
-The main conversation uses its configured public name, description and avatar; uploaded
-and built-in avatars are served through authenticated chat routes backed by
+Chat message headers and response activity always use the configured assistant name,
+including historical messages, independent of model names or descriptions. Model
+avatars remain available; uploaded and built-in avatars use authenticated routes backed by
 `ModelRequest("avatar_read")`. Missing images fall back to the default icon. Model IDs
 and route revisions remain the execution identity; task reports and notifications keep
 their existing source labels. Configuration lists and reference pickers use the same
