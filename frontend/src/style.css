@@ -228,21 +228,6 @@ p {
   font-size: 11px;
   opacity: 0.7;
 }
-.model-avatar {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  justify-content: center;
-  border-radius: 8px;
-  background: var(--bubble);
-  color: var(--accent);
-}
-.model-avatar img {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-  border-radius: 6px;
-}
 .speaker {
   color: var(--accent);
   font-weight: 600;

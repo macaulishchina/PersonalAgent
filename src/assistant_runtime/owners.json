@@ -26,5 +26,6 @@
   "keyword": "assistant_runtime.plugins.keyword",
   "v4l2": "assistant_runtime.plugins.v4l2",
   "voice_disabled": "assistant_runtime.plugins.speech",
-  "gesture": "assistant_runtime.plugins.gesture"
+  "gesture": "assistant_runtime.plugins.gesture",
+  "ai_passport": "assistant_runtime.plugins.ai_passport"
 }

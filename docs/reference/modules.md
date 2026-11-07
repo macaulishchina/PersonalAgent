@@ -43,6 +43,7 @@
 | [adb_tv](../../src/assistant_runtime/plugins/adb_tv/README.md) | ADB 电视操作 |
 | [reyee](../../src/assistant_runtime/plugins/reyee/README.md) | 路由器设备接入 |
 | [hid_buttons](../../src/assistant_runtime/plugins/hid_buttons/README.md) | HID 按钮输入 |
+| [ai_passport](../../src/assistant_runtime/plugins/ai_passport/README.md) | AI Passport 插件占位与独立 PPDemo 固件；PA 接入默认停用、尚未实现 |
 
 聊天网页和语音占位的使用边界见[安装组合](installation.md#slim-与-standard)。实际插件清单及认证使用 `pa plugins` 查询，本文不另维护版本表。
 

@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/FoloToy/ai-passport",
+  "commit": "488beda41309f052d81f08d0016d65a3fd85eb7e",
+  "esp_idf": "5.5.3",
+  "target": "esp32c3",
+  "reference_paths": [
+    "CMakeLists.txt",
+    "sdkconfig.defaults",
+    "partitions.csv",
+    "components/bsp",
+    "docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md"
+  ],
+  "adapted_files": [
+    "sdkconfig.defaults",
+    "partitions.csv"
+  ],
+  "license": "MIT",
+  "license_file": "LICENSE.folotoy",
+  "imported_paths": [
+    "components/bsp"
+  ],
+  "application": "Independent PPDemo; no upstream demo menu"
+}

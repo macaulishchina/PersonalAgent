@@ -48,6 +48,7 @@ pa = "assistant_runtime.app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["assistant_runtime.plugins.ai_passport.firmware*"]
 
 [tool.setuptools.dynamic]
 version = {file = "src/assistant_runtime/VERSION"}
@@ -68,7 +69,11 @@ version = {file = "src/assistant_runtime/VERSION"}
 "assistant_runtime.platforms" = ["*.mjs"]
 "assistant_runtime.plugins" = ["*.plugin.json"]
 "assistant_runtime.plugins.keyword" = ["FUNASR_LICENSE.txt"]
+"assistant_runtime.plugins.ai_passport" = ["README.md", "docs/*.md"]
 "assistant_runtime.plugins.web" = ["static/*", "static/assets/*"]
+
+[tool.setuptools.exclude-package-data]
+"assistant_runtime.plugins.ai_passport" = ["firmware/*", "firmware/**/*"]
 
 [tool.ruff]
 line-length = 110

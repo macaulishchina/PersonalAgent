@@ -47,11 +47,6 @@ import {
   type MessageOrigin,
 } from "./message-presentation";
 import { TaskReport, ReportCollection } from "./task-report";
-import {
-  ModelAvatar,
-  type ModelCatalog,
-  type ModelPresentation,
-} from "./model-presentation";
 
 type Message = MessageOrigin & {
   id: string;
@@ -450,7 +445,6 @@ function ConversationGroup({
   retryDisabled,
   settled,
   media,
-  model,
 }: {
   group: MessageGroup;
   media: Attachment[];
@@ -458,7 +452,6 @@ function ConversationGroup({
   retryDisabled: boolean;
   settled: boolean;
   name: string;
-  model?: ModelPresentation;
   copied: string;
   onCopy: (id: string, text: string) => Promise<void>;
   onOpen: (url: string) => void;
@@ -475,8 +468,6 @@ function ConversationGroup({
     : !latest.report_group?.kind && (resolvedTask || reportTask(latest))
       ? "report"
       : messageChannel(latest);
-  const displayedModel =
-    !user && ["text", "voice"].includes(channel) ? model : undefined;
   const speaker = user ? "你" : name;
   const date = new Date(latest.updated * 1000);
   const text = group.messages
@@ -506,7 +497,6 @@ function ConversationGroup({
       data-speaker={group.role}
     >
       <div className="message-meta">
-        {!user && <ModelAvatar model={displayedModel} />}
         <span className="speaker">{speaker}</span>
         {!user && (
           <span
@@ -610,12 +600,10 @@ function ResponseActivity({
   name,
   label,
   disconnected,
-  model,
 }: {
   name: string;
   label: string;
   disconnected: boolean;
-  model?: ModelPresentation;
 }) {
   return (
     <section
@@ -623,7 +611,6 @@ function ResponseActivity({
       aria-label="助手响应状态"
     >
       <div className="message-meta">
-        <ModelAvatar model={model} />
         <span className="speaker">{name}</span>
       </div>
       <div
@@ -647,10 +634,6 @@ function ResponseActivity({
   );
 }
 function App() {
-  const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({});
-  const mainModel = modelCatalog.models?.find(
-    (model) => model.model === modelCatalog.default?.route?.model,
-  );
   const [activePanel, setActivePanel] = useState<PanelSection | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [notificationContext, setNotificationContext] = useState<{
@@ -768,15 +751,6 @@ function App() {
       setState(d.state);
       setMessages(d.messages);
       setBefore(d.before);
-      void api("models")
-        .then((catalog) => {
-          if (!stopped.current && own === generation.current)
-            setModelCatalog(catalog);
-        })
-        .catch(() => {
-          if (!stopped.current && own === generation.current)
-            setModelCatalog({});
-        });
       cursor.current = d.cursor;
       events.current?.close();
       const stream = new EventSource(
@@ -1217,7 +1191,6 @@ function App() {
                   group.turn_id !== latestUser?.turn_id
                 }
                 name={state.name}
-                model={mainModel}
                 copied={copied}
                 onCopy={copy}
                 onOpen={setZoom}
@@ -1230,7 +1203,6 @@ function App() {
             {responseLabel && (
               <ResponseActivity
                 name={state.name}
-                model={mainModel}
                 label={responseLabel}
                 disconnected={!online}
               />

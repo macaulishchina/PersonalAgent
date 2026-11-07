@@ -5,15 +5,11 @@ import asyncio
 import base64
 import json
 import re
-from io import BytesIO
 from pathlib import Path
 import tempfile
 
 from aiohttp import web
 from playwright.async_api import async_playwright, expect
-from PIL import Image
-from assistant_runtime.core.models.builtin_avatars import encoded
-from assistant_runtime.core.models.presentation import normalize, digest
 
 
 async def main():
@@ -54,17 +50,7 @@ async def main():
         )
 
     fixture_messages = []
-    image = BytesIO()
-    Image.new("RGB", (32, 32), "green").save(image, format="PNG")
-    avatar_png = normalize(image.getvalue())
-    avatar_id = digest(avatar_png)
-    public_model = dict(
-        model="model-a",
-        display_name="Public Model",
-        description="Public description",
-        avatar=dict(kind="image", asset_id=avatar_id, version=avatar_id),
-    )
-    avatar_missing = False
+    model_requests = []
     state = dict(
         name="Personal Agent",
         voice="disabled",
@@ -163,18 +149,9 @@ async def main():
                     data = {"messages": fixture_messages, "state": state, "cursor": 0, "before": None}
                 elif path == "session":
                     data = state
-                elif path == "models":
-                    data = {"models": [public_model], "default": {"route": {"model": "model-a"}}}
-                elif path.startswith("model-avatar/"):
-                    if avatar_missing:
-                        await route.fulfill(status=404)
-                    elif "/builtin/" in path:
-                        icon = encoded(path.rsplit("/", 1)[1])
-                        await route.fulfill(
-                            content_type=icon["media_type"], body=base64.b64decode(icon["data_base64"])
-                        )
-                    else:
-                        await route.fulfill(content_type="image/png", body=avatar_png)
+                elif path == "models" or path.startswith("model-avatar/"):
+                    model_requests.append(path)
+                    await route.fulfill(status=503, json={"error": "Model presentation unavailable"})
                     return
                 elif path.startswith("uploads/"):
                     await route.fulfill(
@@ -466,30 +443,52 @@ async def main():
             state.update(task_running=False, active_request_id=None, active_turn_id=None, queue=[])
             await page.reload()
             speaker = page.locator(".message-group.assistant .speaker")
-            avatar = page.locator(".message-group.assistant .model-avatar img")
             await expect(speaker).to_have_text(state["name"])
-            await expect(speaker).not_to_have_attribute("title", "Public description")
             await expect(page.locator(".message-group.assistant")).to_have_attribute(
                 "aria-label", state["name"] + "的消息"
             )
-            await expect(avatar).to_have_js_property("naturalWidth", 32)
-            public_model.update(display_name="Updated Model", avatar=dict(kind="builtin", name="deepseek"))
-            await page.reload()
-            await expect(speaker).to_have_text(state["name"])
-            await expect(avatar).to_have_attribute("src", "/chat/api/model-avatar/builtin/deepseek")
-            await expect(avatar).to_have_js_property("naturalWidth", 64)
-            await page.screenshot(path=str(output / "model-presentation-reloaded.png"))
-            avatar_missing = True
-            await page.reload()
-            await expect(speaker).to_have_text(state["name"])
-            await expect(avatar).to_have_count(0)
-            await expect(page.locator(".message-group.assistant .model-avatar svg")).to_be_visible()
             state.update(name="嘟嘟", task_running=True, active_request_id="speaker-check")
             await page.reload()
             await expect(page.locator(".message-group.assistant .speaker")).to_have_text(["嘟嘟", "嘟嘟"])
             await expect(page.locator(".response-activity .speaker")).to_have_text("嘟嘟")
-            await expect(page.get_by_text("Updated Model", exact=True)).to_have_count(0)
-            await expect(page.get_by_text("Public description", exact=True)).to_have_count(0)
+            await expect(page.locator(".response-activity .message-meta svg")).to_have_count(0)
+            state.update(task_running=False, active_request_id=None)
+            for ordinal, kind in [(11, "task"), (12, "notification")]:
+                fixture_messages.append(
+                    {
+                        **fixture_messages[0],
+                        "id": "header-" + kind,
+                        "ordinal": ordinal,
+                        "kind": kind,
+                        "text": "Synthetic " + kind,
+                        "turn_id": kind,
+                        **(
+                            {
+                                "report_group": {
+                                    "id": "attention",
+                                    "kind": "attention",
+                                    "title": "Needs attention",
+                                    "run_id": None,
+                                    "task_id": None,
+                                    "important": True,
+                                }
+                            }
+                            if kind == "notification"
+                            else {}
+                        ),
+                    }
+                )
+            await page.reload()
+            await expect(page.locator(".message-group.assistant .speaker")).to_have_text(["嘟嘟"] * 3)
+            await expect(page.locator(".message-meta .source-badge")).to_have_text(
+                ["文字", "任务报告", "需要关注"]
+            )
+            for header in await page.locator(".message-group.assistant .message-meta").all():
+                await expect(header.locator("svg:not(.copy svg)")).to_have_count(1)
+                await expect(header.locator("img")).to_have_count(0)
+            await expect(page.locator(".model-avatar")).to_have_count(0)
+            assert not model_requests, model_requests
+            await page.screenshot(path=str(output / "assistant-headers.png"))
             assert not errors, errors
             await browser.close()
     finally:
@@ -501,8 +500,7 @@ async def main():
                 "queue_display_drag_keyboard_edit_remove_conflict_recovery": "passed",
                 "desktop_mobile_layout": "passed",
                 "model_failure_details_retry_idempotent_request": "passed",
-                "assistant_name_stable_across_model_reload_and_response_activity": "passed",
-                "model_avatar_reload_uploaded_builtin_and_missing_avatar": "passed",
+                "assistant_name_and_channel_headers_without_model_avatars_or_requests": "passed",
                 "screenshots": str(output),
             },
             ensure_ascii=False,

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "AI Passport（开发骨架）",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "description": "仅提供插件与固件工程骨架，尚无设备连接或业务配置。通过实例 plugins 列表启停；启用不代表设备可用。",
+    "properties": {},
+    "additionalProperties": false
+  }
+}
