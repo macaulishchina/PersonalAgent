@@ -90,6 +90,8 @@ GROUPS = {
     "events": {"events", "event_sources", "event_reporting"},
     "decisions": {"decisions", "decisions_transport", "decision_service", "voice_decision_control"},
     "tasks": {
+        "operation_outcomes",
+        "business_pi",
         "notifications",
         "notification_groups",
         "task_feedback",
@@ -102,6 +104,7 @@ GROUPS = {
         "task_self_schedule",
     },
     "media": {
+        "media_directories",
         "media",
         "media_providers",
         "media_downloads",

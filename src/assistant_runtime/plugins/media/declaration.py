@@ -24,6 +24,7 @@ DECLARATION = PluginDefinition(
         NotificationLink,
     ),
     provides=(MediaRequest,),
+    operation_request=MediaRequest,
     config_key="media",
     validate=MediaSettings.parse,
     skills=(Path(__file__).parent / "skills" / "media-acquisition",),

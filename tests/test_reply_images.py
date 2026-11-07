@@ -297,6 +297,9 @@ class ReplyImageHttpTest(unittest.IsolatedAsyncioTestCase):
         self.host.workfiles = WorkFiles(self.host.config.state_dir, self.host.store.db)
         owner.host = self.host
         owner.repo = TaskRepository(self.host.store.db)
+        from assistant_runtime.core.tasks.business import BusinessResults
+
+        owner.business = BusinessResults(owner)
         from assistant_runtime.core.tasks.feedback import TaskFeedback
 
         owner.feedback = TaskFeedback(owner)

@@ -1,7 +1,7 @@
 """Media tools are a facade; credentials and retries stay in the owning plugin."""
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastmcp import FastMCP
 from fastmcp.tools.base import ToolResult
@@ -255,8 +255,13 @@ def create_server(client, caller_run=None):
         name: str | None = None,
         version: str | None = None,
         parent_file_id: str | None = None,
+        object_type: Literal["file", "directory"] = "file",
     ) -> dict:
         """Persist ONE authorized video acquisition; returns an operation_id immediately. No overwrite.
+
+        Explicit object_type=directory transfers the whole selected share directory, including
+        subtitles and other files, in one native copy. It preserves names/structure and has one receipt.
+        Episode/collection/version/rename options apply only to object_type=file.
 
         Reuse request_id after a lost reply. For tracking use a stable collection plus season and episode;
         an existing acquisition for that episode/target is reused. Background writes require media:TARGET.
@@ -279,6 +284,7 @@ def create_server(client, caller_run=None):
             name=name,
             version=version,
             parent_file_id=parent_file_id,
+            object_type=object_type,
         )
 
     @server.tool(annotations=READ)
@@ -327,7 +333,7 @@ def create_server(client, caller_run=None):
 
     @server.tool(annotations=READ)
     async def verify_media_operation(operation_id: ID, probe: bool = False) -> dict:
-        """Re-read the saved cloud file and independently check its configured OpenList mapping.
+        """Read existing cloud receipts, library writes or whole-folder manifests without new writes.
 
         cloud_verification describes current evidence; completed is the historical operation state.
         OpenList path is publishable only when path_verified=true. Failed visibility does not undo

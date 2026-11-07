@@ -27,6 +27,7 @@ FIELDS = (
     "file_extension",
     "content_hash",
     "content_hash_name",
+    "trashed_at",
 )
 
 
@@ -185,7 +186,11 @@ def execute(auth, action, args):
                 "/v2/recyclebin/list",
                 {**body, "limit": 100, "marker": args.get("marker", "")},
             )
-            return {"items": files(result), "marker": result.get("next_marker") or None}
+            return {
+                "items": files(result),
+                "marker": result.get("next_marker") or None,
+                "parent_scope": "recycle",
+            }
         body["file_id"] = args["file_id"]
         paths = {
             "rename": "/v3/file/update",

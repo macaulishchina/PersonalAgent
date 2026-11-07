@@ -287,6 +287,9 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         owner = object.__new__(TasksPlugin)
         owner.host = self.host
         owner.repo = repo
+        from assistant_runtime.core.tasks.business import BusinessResults
+
+        owner.business = BusinessResults(owner)
         from assistant_runtime.core.tasks.feedback import TaskFeedback
 
         owner.feedback = TaskFeedback(owner)

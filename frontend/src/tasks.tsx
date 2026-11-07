@@ -2,7 +2,13 @@ import { ResultBody } from "./result-content";
 import { chatPath } from "./http";
 import { useEffect, useState, useRef } from "react";
 import { Search, ListTodo, ArrowLeft, ChevronRight } from "lucide-react";
-import { RUN_LABELS, planLabel, runSummary } from "./task-presentation";
+import {
+  RUN_LABELS,
+  planLabel,
+  runSummary,
+  runLabel,
+  businessUnsettled,
+} from "./task-presentation";
 import { formatDuration } from "./duration";
 import { PanelHeader } from "./panel-header";
 import { useTaskFeed } from "./task-feed";
@@ -192,11 +198,13 @@ export function TaskPanel({
         if (event.target === event.currentTarget && !event.currentTarget.open)
           setTraceRunId((current) => (current === r.id ? null : current));
       }}
-      open={["running", "waiting_user", "unknown"].includes(r.state)}
+      open={
+        ["running", "waiting_user", "unknown"].includes(r.state) ||
+        businessUnsettled(r)
+      }
     >
       <summary>
-        {RUN_LABELS[r.state] || r.state} ·{" "}
-        {new Date(r.created * 1000).toLocaleString()}
+        {runLabel(r)} · {new Date(r.created * 1000).toLocaleString()}
       </summary>
       {r.data.finished_at && typeof r.data.duration_seconds === "number" && (
         <p
@@ -223,7 +231,7 @@ export function TaskPanel({
         <ModelFailureNotice
           value={{ ...r.data.failure, model: r.data.spec.execution.model }}
           turn={r.data.turn_id}
-          disabled={busy || r.state !== "failed"}
+          disabled={busy || r.state !== "failed" || businessUnsettled(r)}
           onRetry={async (turn, requestId) => {
             setBusy(true);
             try {
@@ -414,7 +422,7 @@ export function TaskPanel({
         {!["archived", "terminated"].includes(selected?.state) &&
           ["paused", "failed", "canceled"].includes(r.state) && (
             <button
-              disabled={busy}
+              disabled={busy || businessUnsettled(r)}
               onClick={() => {
                 setReply({ runId: r.id, action: "continue" });
                 setReplyText("");

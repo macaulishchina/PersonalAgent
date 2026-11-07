@@ -68,9 +68,7 @@
       }
     }
   },
-  "requires": [
-    "notifications"
-  ],
+  "requires": [],
   "application": {
     "*": "boundary"
   }

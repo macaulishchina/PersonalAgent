@@ -22,6 +22,7 @@ CHANGES = {
             change("rename", "file_id", "name"),
             change("move", "file_id", "folder_id"),
             change("trash", "file_id"),
+            change("trash", "folder_id"),
             change("restore", "file_id"),
             change("mkdir", "path"),
             change("rename", "path", "name"),
@@ -29,7 +30,7 @@ CHANGES = {
             change("trash", "path"),
         ]
     },
-    "description": "Cloud uses file/folder IDs; local/OpenList use relative paths. Use the target's declared backend; no recursive or permanent deletion.",
+    "description": "Native cloud trash(file_id) affects one file; trash(folder_id) explicitly selects the entire directory. Local/OpenList use relative paths and their declared capabilities. No permanent deletion.",
 }
 CHANGES["examples"] = [[{"action": "rename", "file_id": "example-file", "name": "example.mkv"}]]
 

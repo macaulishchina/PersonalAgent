@@ -166,7 +166,6 @@
   "requires": [
     "execution",
     "pi",
-    "notifications",
     "workfiles"
   ],
   "application": {

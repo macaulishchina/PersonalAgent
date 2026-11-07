@@ -24,6 +24,27 @@ def context(plugin, key):
 
 async def publish(plugin, payload):
     caller, group = context(plugin, payload["event_key"])
+    if payload["event_key"].startswith("media-complete:"):
+        # Correct an earlier uncertain/failed notice in place. Reconciliation is
+        # not another operation and must not leave a stale request for attention.
+        prior_key = payload["event_key"].replace("media-complete:", "media-attention:", 1)
+        prior = await plugin.api.invoke(NotificationLink("assistant", prior_key, caller, group))
+        if prior.get("linked"):
+            old = await plugin.api.invoke(NotificationRequest("get", {"id": prior["id"]}, caller))
+            return await plugin.api.invoke(
+                NotificationRequest(
+                    "update",
+                    {
+                        **payload,
+                        "id": old["id"],
+                        "revision": old["revision"],
+                        "kind": "result",
+                        "voice": False,
+                        "report_with_task": False,
+                    },
+                    caller,
+                )
+            )
     # A queued old receipt may already have committed with the old foreground attribution.
     # Enrich that same notice instead of publishing a second notification after restart.
     linked = await plugin.api.invoke(NotificationLink("assistant", payload["event_key"], caller, group))

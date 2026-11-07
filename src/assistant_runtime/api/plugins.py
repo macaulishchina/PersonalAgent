@@ -99,8 +99,11 @@ class PluginDefinition:
     configuration: ConfigurationSpec | None = None
     supported_platforms: tuple[str, ...] = ("linux", "windows")
     backends: BackendSpec | None = None
+    operation_request: type | None = None
 
     def __post_init__(self):
+        if self.operation_request is not None and self.operation_request not in self.provides:
+            raise ValueError("Operation observations require a declared public capability")
         if not self.supported_platforms or set(self.supported_platforms) - {"linux", "windows"}:
             raise ValueError("Plugin must declare supported platforms: linux and/or windows")
         if self.backends is not None and not isinstance(self.backends, BackendSpec):
@@ -140,10 +143,12 @@ class PluginContext:
         configuration_resource=None,
         platform=None,
         backend=None,
+        available=None,
     ):
         self.name, self.config = name, config
         self.__platform = platform or PlatformInfo.current()
         self.__backend = backend
+        self.__available = available or (lambda request: False)
         self.state_dir = Path(state_dir)
         self.log = logging.getLogger("plugin." + name)
         self.cancelled: asyncio.Event = cancelled
@@ -230,6 +235,12 @@ class PluginContext:
         if timeout is not None and timeout <= 0:
             raise TimeoutError("Request deadline exceeded")
         return await self.__invoke(request, timeout=timeout)
+
+    def available(self, request_type):
+        """Read readiness only for a capability already declared by this plugin."""
+        if request_type not in self.__capabilities:
+            raise ValueError("Capability not declared by this plugin")
+        return not self.cancelled.is_set() and self.__available(request_type)
 
     def publish(self, kind, **data):
         self.__publish(kind, **data)

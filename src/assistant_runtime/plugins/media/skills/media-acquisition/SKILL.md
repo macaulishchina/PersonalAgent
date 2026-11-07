@@ -58,10 +58,26 @@ When multiple accounts use one provider, pass the account alias to inspection/lo
 For Quark nested files, carry inspected `parent_file_id` into transfer; destination
 `folder_id` is separate. Check supported actions before planning organization/download.
 
+When the user wants an entire inspected share folder, use one `transfer_media`
+with `object_type="directory"`, its exact folder ID and a stable UUID. It preserves
+nested directories, subtitles and extras. Do not enumerate episodes into separate
+writes for that request. Partial/selected episodes continue to use individual files.
+Directory acquisition is same-provider only and does not imply local download.
+
+For an explicitly requested deletion of a whole show, locate its exact folder inside
+the configured target, preview one `trash(folder_id=...)` change and apply that plan.
+The operation moves the folder to recycle; it never permanently deletes it. Existing
+clear user authority covers that bounded action, without per-episode confirmation.
+Ambiguous folders, root removal and expanded scope still require resolution first.
+
 Submit individual selected video files with `transfer_media` and a stable UUID
 `request_id`; retain the returned `operation_id`. Reuse the UUID after a lost response.
 Query that operation to explain progress. Do not resubmit an uncertain copy or invent
-percentages. A transfer completes in the cloud. For the local viewing workflow, submit
+percentages. `verify_media_operation` observes already submitted folder/library writes
+without executing remaining changes. Explain the actual error and whether the system
+is verifying or the user must supply credentials. Never ask the user to query an opaque
+operation ID or confirm each episode to compensate for an uncertain receipt.
+A transfer completes in the cloud. For the local viewing workflow, submit
 `download_media(request_id, target, file_id=saved_file_id)` after transfer completes,
 or select an existing cloud file with `list_media_files`. Retain its separate operation
 ID. Downloads expose byte progress and publish the original file to the local library

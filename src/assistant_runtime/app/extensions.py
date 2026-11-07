@@ -404,6 +404,7 @@ class InstalledPlugin:
         from assistant_runtime.api.backends import select_backend
 
         public = self.public = PluginContext(
+            available=lambda request: context.runtime.available(request),
             platform=context.platform,
             backend=select_backend(
                 self.manifest.name, self.definition.backends, context.platform.name, self.backend_defaults

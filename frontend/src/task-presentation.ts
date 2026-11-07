@@ -47,3 +47,25 @@ export function runSummary(run: any): string {
   }
   return run.data.progress || RUN_SUMMARIES[run.state] || "暂无更多信息";
 }
+
+export function businessUnsettled(run: any): boolean {
+  return ["pending", "unknown", "waiting_user"].includes(
+    run.data?.business_result?.state,
+  );
+}
+
+export function runLabel(run: any): string {
+  const state = run.data?.business_result?.state;
+  const outcome: Record<string, string> = {
+    pending: "正在核验业务结果",
+    unknown: "业务结果待核验",
+    waiting_user: "业务操作需要你处理",
+    partial: "业务部分完成",
+    failed: "业务未完成",
+    cancelled: "业务操作已取消",
+  };
+  if (outcome[state]) {
+    return `${run.state === "completed" ? "执行已结束" : RUN_LABELS[run.state] || run.state} · ${outcome[state]}`;
+  }
+  return RUN_LABELS[run.state] || run.state;
+}

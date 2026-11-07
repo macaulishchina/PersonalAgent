@@ -1,8 +1,59 @@
 """Provider-neutral cloud evidence; presentation paths never identify a cloud write."""
 
 import time
+from datetime import datetime
 
 from .errors import MediaError
+
+
+def recycle_evidence(before, actual, *, parent_scope="original", submitted_at=None):
+    """Recycle placement differs from original ancestry; identity/content never do."""
+    fields = ["file_id", "name", "type"]
+    if before.get("type") == "file":
+        fields.append("size")
+    fresh_tombstone = False
+    if parent_scope == "original" or (
+        parent_scope == "recycle" and actual.get("parent_file_id") == before.get("parent_file_id")
+    ):
+        fields.append("parent_file_id")
+    elif parent_scope == "recycle":
+        # A changed recycle placement alone is insufficient. Require the provider's
+        # tombstone time to bind this exact object to the persisted submission.
+        try:
+            stamp = datetime.fromisoformat(actual["trashed_at"].replace("Z", "+00:00"))
+            if (
+                stamp.tzinfo is None
+                or submitted_at is None
+                or not (submitted_at - 5 <= stamp.timestamp() <= time.time() + 300)
+            ):
+                raise ValueError("Unbound recycle observation")
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise MediaError("library_write_unconfirmed", uncertain=True, field="trashed_at") from None
+        fresh_tombstone = True
+    else:
+        raise MediaError("provider_invalid_response", uncertain=True, field="parent_scope")
+    evidence = {
+        "parent_scope": parent_scope,
+        "expected": {key: before.get(key) for key in fields},
+        "observed": {key: actual.get(key) for key in fields},
+    }
+    for field in fields:
+        if before.get(field) is None or actual.get(field) is None:
+            raise MediaError("library_write_unconfirmed", uncertain=True, field=field, evidence=evidence)
+        if actual[field] != before[field]:
+            raise MediaError("library_content_changed", uncertain=True, field=field, evidence=evidence)
+    if before.get("content_hash") and actual.get("content_hash"):
+        for field in ("content_hash", "content_hash_name"):
+            if actual.get(field) != before.get(field):
+                raise MediaError("library_content_changed", uncertain=True, field=field)
+            fields.append(field)
+    return {
+        "basis": "recycle_identity",
+        "fields": fields,
+        "parent_scope": parent_scope,
+        "fresh_tombstone": fresh_tombstone,
+        "observed_at": time.time(),
+    }
 
 
 def cloud_binding(target):

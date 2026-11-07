@@ -132,7 +132,9 @@ class TaskFeedback:
             with self.db:
                 self.save(info)
         if run["state"] in TERMINAL:
-            await self.deliver(run, self.plugin.result_payload(run))
+            run = await self.plugin.business.refresh(run)
+            if run["data"].get("business_result", {}).get("state") != "pending":
+                await self.deliver(run, self.plugin.result_payload(run))
             info = self.describe(self.plugin.repo.run(run["id"]))
         return {**info, "transferred": True}
 
@@ -186,6 +188,12 @@ class TaskFeedback:
                         self.save(info, payload=snapshot)
                     receipt = None
             if receipt is None:
+                if NotificationRequest not in self.plugin.host.runtime.handlers:
+                    receipt = {"route": "query", "state": "available"}
+                    info.update(state="delivered", receipt=receipt)
+                    with self.db:
+                        self.save(info)
+                    return receipt
                 notice = await self.plugin.host.runtime.invoke(
                     NotificationRequest("publish", payload, run["id"])
                 )
@@ -194,3 +202,33 @@ class TaskFeedback:
             with self.db:
                 self.save(info)
             return receipt
+
+    async def refresh(self, run, payload):
+        """Amend the same inbox item after read-only owner reconciliation.
+
+        Conversation deliveries remain immutable execution history; current evidence
+        is available from the task. Never replay speech or create another result.
+        """
+        async with self.locks.setdefault(run["id"], asyncio.Lock()):
+            info = self.describe(run)
+            receipt = info.get("receipt") or {}
+            if receipt.get("route") != "notification":
+                return
+            if NotificationRequest not in self.plugin.host.runtime.handlers:
+                raise RuntimeError("Notification provider unavailable for result update")
+            old = await self.plugin.host.runtime.invoke(
+                NotificationRequest("get", {"id": receipt["notification_id"]}, run["id"])
+            )
+            # A lost update reply is safe: read the current revision before retrying.
+            await self.plugin.host.runtime.invoke(
+                NotificationRequest(
+                    "update",
+                    {**payload, "id": old["id"], "revision": old["revision"], "voice": False},
+                    run["id"],
+                )
+            )
+            with self.db:
+                self.save(
+                    info,
+                    payload={"notification": payload, "attachments": run["data"].get("attachments", [])[:4]},
+                )

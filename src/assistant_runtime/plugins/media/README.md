@@ -1,8 +1,13 @@
 # Media acquisition
 
+Version 1.2.0 adds native whole-folder trash/restore and same-provider share-folder
+acquisition. See [operation results and acceptance](../../../../docs/guides/business-operation-results.md)
+for receipt identity, bounded read-only reconciliation, task handoff and real-provider limits.
+
 Platform: Linux and Windows / Windows Server. Certification declares code support; physical devices and external services require separate acceptance. See the [module index](../../../../docs/reference/modules.md).
 
-Optional `media` plugin + independent `media` MCP/CLI. Requires `notifications`.
+Optional `media` plugin + independent `media` MCP/CLI. Notifications and tasks are optional;
+without notifications, operation receipts remain queryable without an undeliverable outbox.
 PanSou searches public candidates; account-scoped Aliyun/Quark adapters own share/auth protocol;
 OpenList supplies read verification and an optional reusable filesystem backend. Plans and AI decisions remain in tasks.
 There is no media scheduler, arbitrary-URL downloader, TV controller or new model endpoint.
@@ -567,12 +572,15 @@ Use small batches for slow cloud accounts: preview performs real bounded metadat
 conflict checks, so 100 is a ceiling, not a latency guarantee. Execution checks again.
 
 Cloud changes are `mkdir(folder_id,name)`, `rename(file_id,name)`,
-`move(file_id,folder_id)`, `trash(file_id)`, `restore(file_id)`. Local changes are
+`move(file_id,folder_id)`, `trash(file_id)`, `trash(folder_id)`, `restore(file_id)`. Local changes are
 `mkdir(path)`, `rename(path,name)`, `move(path,folder)`, `trash(path)`,
 `restore(file_id)`; each object includes `action`. Local paths are relative to the
 configured library. Create parents first. One change per file per plan keeps every
-precondition unambiguous; folders can be created but recursive folder moves/deletes
-are not exposed. No overwriting, extension changes or inferred media identity.
+precondition unambiguous. Native Aliyun/Quark folder trash uses one folder write with
+a bounded, frozen child manifest; configured roots and overlapping objects are refused.
+The manifest is checked again before submission. Folder restore requires our own
+recorded trash and verifies the original hierarchy. Recursive folder moves and permanent
+deletion are not exposed. No overwriting, extension changes or inferred media identity.
 
 Accepted writes are durably marked before IO. Lost replies reconcile against stable
 identity and the intended location, never blindly repeat the write. An interrupted

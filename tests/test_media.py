@@ -105,7 +105,7 @@ class RepositoryTest(unittest.TestCase):
         self.assertEqual(first["data"]["duration_seconds"], second["data"]["duration_seconds"])
         self.assertEqual(self.db.execute("SELECT count(*) FROM media_outbox").fetchone()[0], 1)
 
-    def test_delegated_success_is_progress_but_standalone_success_and_failure_are_reminders(self):
+    def test_delegated_results_are_owned_by_task_and_unknown_is_not_a_user_action(self):
         import json
 
         for caller in (None, "run-one"):
@@ -121,7 +121,15 @@ class RepositoryTest(unittest.TestCase):
         raw = self.db.execute(
             "SELECT payload FROM media_outbox WHERE key=?", ("media-attention:" + failure["id"],)
         ).fetchone()[0]
-        self.assertEqual(json.loads(raw)["kind"], "attention")
+        self.assertEqual(json.loads(raw)["kind"], "result")
+        self.assertTrue(json.loads(raw)["report_with_task"])
+        standalone = self.create(file_id="unknown")
+        self.repo.change(standalone["id"], "uncertain", submitted=True, error="provider_network_error")
+        raw = self.db.execute(
+            "SELECT payload FROM media_outbox WHERE key=?", ("media-attention:" + standalone["id"],)
+        ).fetchone()[0]
+        self.assertEqual(json.loads(raw)["kind"], "result")
+        self.assertIn("不会自动重新提交", json.loads(raw)["body"])
 
     def test_auth_notice_is_transition_scoped_and_retry_does_not_duplicate(self):
         self.repo.account_state("auth_required")

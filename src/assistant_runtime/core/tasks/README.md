@@ -1,5 +1,10 @@
 # Tasks plugin
 
+Since 0.4.31, optional owner-declared operation observations distinguish Agent completion
+from verified business completion. Unknown linked writes cannot be continued/replayed;
+owner reconciliation updates the existing result. Notifications are optional, with query-only
+delivery when absent. See [business results](../../../../docs/guides/business-operation-results.md).
+
 Tasks share `execution.concurrency` with conversations and auxiliary inference;
 there is no task-specific concurrency or queue-length setting. Background work may
 occupy every global slot; foreground work joins the same admission queue. Resource

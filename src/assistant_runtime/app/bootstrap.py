@@ -57,6 +57,10 @@ def compose(service):
         service.assistant = AssistantState(service)
     service.skill_paths = assistant_skill_paths(config)
     service.extension_tools = ToolRegistry()
+    # A narrow read-only convention, not an arbitrary plugin-method dispatcher.
+    service.operation_sources = {
+        name: spec.operation_request for name, spec in definitions.items() if spec.operation_request
+    }
     service.memory = None
     for name in order:
         spec = definitions[name]

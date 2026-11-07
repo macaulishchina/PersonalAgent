@@ -371,7 +371,10 @@ class TaskRepository:
 
     def pending(self):
         rows = self.db.execute(
-            "SELECT id FROM job_runs WHERE state IN ('queued','dispatching','running','waiting_user','unknown','paused') OR delivered<revision ORDER BY created"
+            "SELECT id FROM job_runs WHERE state IN ('queued','dispatching','running','waiting_user','unknown','paused') "
+            "OR delivered<revision OR json_extract(data,'$.business_result.state') IN ('pending','unknown','waiting_user') "
+            "OR json_extract(data,'$.business_feedback_pending')=1 "
+            "ORDER BY created"
         )
         return [self.run(row[0]) for row in rows]
 

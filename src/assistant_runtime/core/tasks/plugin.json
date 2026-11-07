@@ -11,10 +11,10 @@
   "requires": {
     "execution": "core",
     "pi": "core",
-    "notifications": "core",
     "workfiles": "core"
   },
   "optional": {
+    "notifications": "core",
     "conversation": "core",
     "devices": "core",
     "decisions": ">=1.0.0,<2.0.0"

@@ -5,7 +5,7 @@ from .declaration import DECLARATION
 import asyncio
 import time
 
-from assistant_runtime.api.contracts import MediaRequest, TaskRequest
+from assistant_runtime.api.contracts import MediaRequest, TaskRequest, NotificationRequest
 from .providers import Providers, CAPABILITIES
 from .errors import MediaError
 from .downloads import Downloads
@@ -54,6 +54,7 @@ class MediaPlugin:
         import aiohttp
 
         self.context = context
+        self.repo.notifications_enabled = self.api.available(NotificationRequest)
         context.own(self.provider.close)
         self.provider.claim()
         self.session = aiohttp.ClientSession(
@@ -87,10 +88,12 @@ class MediaPlugin:
         context.spawn(self.batches.worker(), "batches")
         self.downloads = Downloads(self)
         context.spawn(self.downloads.worker(), "downloads")
-        context.spawn(self.notifications(), "outbox")
+        if self.repo.notifications_enabled:
+            context.spawn(self.notifications(), "outbox")
         from .notifications import restore_associations
 
-        context.spawn(restore_associations(self), "notification-associations")
+        if self.repo.notifications_enabled:
+            context.spawn(restore_associations(self), "notification-associations")
         if self.repo.db.execute(
             "SELECT 1 FROM media_operations WHERE state='waiting_auth' LIMIT 1"
         ).fetchone():
@@ -128,6 +131,10 @@ class MediaPlugin:
         if not self.accepting:
             raise RuntimeError("Media service is stopping")
         action, args = request.action, request.arguments
+        if action == "operation_outcomes":
+            from .outcomes import for_run
+
+            return for_run(self.repo, args, request.caller_run)
         allowed = {
             "status": set(),
             "search": {"query", "before", "limit", "search_id", "refresh", "aliases", "platforms"},
@@ -157,6 +164,7 @@ class MediaPlugin:
                 "name",
                 "version",
                 "parent_file_id",
+                "object_type",
             },
             "download": {"request_id", "target", "file_id", "path"},
             "get": {"operation_id"},
@@ -196,6 +204,8 @@ class MediaPlugin:
                             if self.settings.files_for(name) == "openlist"
                             else sorted(CAPABILITIES[definition["provider"]]),
                             "download_requires_upstream_hash": True,
+                            "directory_trash": self.settings.files_for(name) == "native"
+                            and definition["provider"] in {"aliyun", "quark"},
                         },
                     }
                     for name, definition in self.settings.accounts.items()
@@ -225,6 +235,13 @@ class MediaPlugin:
                 "local": ["list", "mkdir", "rename", "move", "trash", "restore"],
                 "restore_scope": "recorded_own_trash",
                 "permanent_delete": False,
+                "directory_transfer": {
+                    "selection": "explicit_share_folder",
+                    "preserves_all_children": True,
+                    "cross_provider": False,
+                    "max_entries": 1000,
+                    "verification": "receipt_identity_and_relative_manifest",
+                },
                 "evidence": "implementation_available_provider_account_validation_is_separate",
             }
         if action == "library":
@@ -348,6 +365,18 @@ class MediaPlugin:
                 "target": target_id,
                 "destination": target,
             }
+            object_type = args.get("object_type", "file")
+            if object_type not in {"file", "directory"}:
+                raise ValueError("Transfer object_type must be file or directory")
+            if object_type == "directory":
+                if any(
+                    args.get(key) is not None
+                    for key in ("name", "collection", "season", "episode", "version")
+                ):
+                    raise ValueError(
+                        "A directory transfer preserves the complete folder; episode/rename options are file-only"
+                    )
+                intent["kind"] = "directory"
             if args.get("parent_file_id") is not None:
                 intent["parent_file_id"] = identifier(args["parent_file_id"])
             if args.get("folder_id"):
@@ -424,6 +453,13 @@ class MediaPlugin:
         if action == "verify":
             if type(args.get("probe", False)) is not bool:
                 raise ValueError("probe must be boolean")
+            await self.authorize(request.caller_run, item["data"]["intent"]["target"])
+            if item["data"]["intent"].get("kind") == "library" and item["state"] == "uncertain":
+                return await self.library.reconcile(item)
+            if item["data"]["intent"].get("kind") == "directory":
+                from .directory_transfer import reconcile
+
+                return await reconcile(self, item)
             self.openlist_sync.retry(item["id"])
             if item["state"] != "completed":
                 return self.repo.public(self.repo.get(item["id"]))
@@ -707,10 +743,34 @@ class MediaPlugin:
 
     async def worker(self):
         while True:
-            item = self.repo.due()
+            item = self.repo.due(("transfer", "directory"))
+            if not item:
+                observation = self.repo.observation_due("directory")
+                if observation:
+                    from .directory_transfer import reconcile
+
+                    self.repo.begin_observation(observation)
+                    try:
+                        await reconcile(self, observation)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self.repo.change(
+                            observation["id"],
+                            "uncertain",
+                            error="directory_observation_failed",
+                            due=self.repo.get(observation["id"])["due"],
+                        )
+                    continue
             if item:
                 try:
-                    await self.process(item)
+                    if item["data"]["intent"].get("kind") == "directory":
+                        from .directory_transfer import process
+
+                        async with self.library.lock:
+                            await process(self, item)
+                    else:
+                        await self.process(item)
                 except MediaError as exc:
                     current = self.repo.get(item["id"])
                     if exc.code == "auth_required":

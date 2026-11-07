@@ -146,8 +146,8 @@ class Library:
                 return
         raise MediaError("destination_listing_limit")
 
-    def busy(self, target, file_id):
-        return self.db.execute(
+    def busy(self, target, file_id, *, excluding=None):
+        direct = self.db.execute(
             """SELECT 1 FROM media_operations WHERE state NOT IN
             ('completed','failed','cancelled') AND json_extract(data,'$.intent.target')=?
             AND ((json_extract(data,'$.intent.kind')='download' AND json_extract(data,'$.intent.file_id')=?)
@@ -155,6 +155,35 @@ class Library:
                  OR json_extract(data,'$.copy_receipt.file_id')=?) LIMIT 1""",
             (target, file_id, file_id, file_id),
         ).fetchone()
+        if direct:
+            return True
+        for ident, raw in self.db.execute(
+            "SELECT id,data FROM media_operations WHERE state NOT IN ('completed','failed','cancelled') "
+            "AND json_extract(data,'$.intent.target')=? AND json_extract(data,'$.intent.kind')='directory'",
+            (target,),
+        ):
+            if ident != excluding and any(
+                row["file_id"] == file_id
+                for row in json.loads(raw).get("destination_manifest", {}).get("entries", [])
+            ):
+                return True
+        for ident, raw in self.db.execute(
+            "SELECT id,data FROM media_operations WHERE state NOT IN ('completed','failed','cancelled') "
+            "AND json_extract(data,'$.intent.target')=? AND json_extract(data,'$.intent.kind')='library'",
+            (target,),
+        ):
+            if ident == excluding:
+                continue
+            for step in json.loads(raw).get("steps", []):
+                if step["state"] == "completed":
+                    continue
+                ids = {
+                    step.get("file_id"),
+                    *[row["file_id"] for row in step.get("manifest", {}).get("entries", [])],
+                }
+                if file_id in ids:
+                    return True
+        return False
 
     async def preview(self, args, owner):
         from .tool_contracts import CHANGES
@@ -181,17 +210,20 @@ class Library:
             if not isinstance(change, dict):
                 raise ValueError("Expected a change object")
             action = change.get("action")
+            directory = action == "trash" and "folder_id" in change
             fields = {
                 "mkdir": {"action", "folder_id", "name"},
                 "rename": {"action", "file_id", "name"},
                 "move": {"action", "file_id", "folder_id"},
-                "trash": {"action", "file_id"},
+                "trash": {"action", "folder_id"} if directory else {"action", "file_id"},
                 "restore": {"action", "file_id"},
             }
             if not isinstance(action, str) or action not in fields or set(change) != fields[action]:
                 raise ValueError("Unknown library change or fields")
             self.p.provider.require(root["account"], action)
             step = dict(change)
+            if directory:
+                step = {"action": "trash", "file_id": change["folder_id"], "object_type": "folder"}
             if action == "mkdir":
                 identifier(step["folder_id"])
                 filename(step["name"])
@@ -215,15 +247,25 @@ class Library:
                         )
                     before = saved["file"]
                     step["recycle_id"] = saved.get("recycle_id")
+                    if before["type"] == "folder":
+                        if not saved.get("manifest"):
+                            raise MediaError("directory_content_unverifiable")
+                        step.update(object_type="folder", manifest=saved["manifest"])
                 else:
                     loc = await self.locate(target, fid)
                     before = loc["file"]
-                    # Moving a directory could affect downloads nested below it.
-                    # First release explicit file management; folders may be created.
-                    if before["type"] != "file":
+                    if before["type"] != "file" and not (directory and before["type"] == "folder"):
                         raise ValueError(
-                            "Manage individual files; recursive folder changes are not supported"
+                            "Folder management supports explicit trash(folder_id) and recorded restore only"
                         )
+                    if directory:
+                        from .directories import snapshot
+
+                        step["manifest"] = await snapshot(self.p.provider, before, root)
+                        children = {r["file_id"] for r in step["manifest"]["entries"]}
+                        if children & (seen - {fid}) or any(self.busy(target, child) for child in children):
+                            raise MediaError("media_file_busy")
+                        seen.update(children)
                     self.remember(
                         target, before, relative_path="/".join(loc["relative_parts"]), trashed=False
                     )
@@ -284,12 +326,20 @@ class Library:
         ).fetchone()
         if not existing and time.time() - row[1] > 3600:
             raise ValueError("Change plan expired; preview current state again")
+        if not existing:
+            for step in data["steps"]:
+                for fid in {
+                    step.get("file_id"),
+                    *[r["file_id"] for r in step.get("manifest", {}).get("entries", [])],
+                } - {None}:
+                    if self.busy(data["target"], fid):
+                        raise MediaError("media_file_busy")
         item = self.repo.create(
             args.get("request_id"), intent, owner, caller, initial={"steps": data["steps"]}
         )
         return self.repo.public(item)
 
-    async def process(self, item):
+    async def process(self, item, *, observe_only=False):
         ident = item["id"]
         intent = item["data"]["intent"]
         target = intent["target"]
@@ -311,6 +361,8 @@ class Library:
         for step in steps:
             if step["state"] == "completed":
                 continue
+            if observe_only and step["state"] != "submitted":
+                continue
             current = self.repo.get(ident)
             if current["data"].get("cancel_requested") and step["state"] != "submitted":
                 self.repo.change(ident, "cancelled", steps=steps, submitted=False)
@@ -318,19 +370,30 @@ class Library:
             action = step["action"]
             fid = step.get("file_id")
             before = step["before"]
-            if fid and self.busy(target, fid):
+            if fid and self.busy(target, fid, excluding=ident):
                 raise MediaError("media_file_busy")
             if step["state"] != "submitted":
                 if action not in {"mkdir", "restore"}:
                     actual = (await self.locate(target, fid))["file"]
                     if any(
                         actual.get(k) != before.get(k)
-                        for k in ("file_id", "name", "parent_file_id", "size", "content_hash")
+                        for k in (
+                            ("file_id", "name", "parent_file_id", "size", "content_hash")
+                            if before["type"] == "file"
+                            else ("file_id", "name", "parent_file_id", "type")
+                        )
                     ):
                         raise MediaError("library_precondition_changed")
+                    if step.get("object_type") == "folder":
+                        from .directories import snapshot
+
+                        manifest = await snapshot(self.p.provider, before, intent["destination"])
+                        if manifest["digest"] != step["manifest"]["digest"]:
+                            raise MediaError("library_precondition_changed")
                 if action != "trash":
                     await self.conflict(target, *step["destination"], fid)
                 step["state"] = "submitted"
+                step["submitted_at"] = time.time()
                 self.repo.change(ident, "submitting", steps=steps, submitted=True)
                 arguments = {
                     **intent["destination"],
@@ -366,14 +429,21 @@ class Library:
                         break
                 if not found:
                     raise MediaError("library_write_unconfirmed", uncertain=True)
-                if any(found.get(k) != before.get(k) for k in ("name", "size", "parent_file_id")):
-                    raise MediaError("library_content_changed", uncertain=True)
+                from .verification import recycle_evidence
+
+                step["verification"] = recycle_evidence(
+                    before,
+                    found,
+                    parent_scope=page.get("parent_scope", "original"),
+                    submitted_at=step.get("submitted_at"),
+                )
                 self.remember(
                     target,
                     before,
                     trashed=True,
                     trash_operation=ident,
                     recycle_id=found.get("recycle_id"),
+                    manifest=step.get("manifest"),
                 )
             else:
                 saved_id = fid or step.get("receipt", {}).get("file_id")
@@ -383,17 +453,70 @@ class Library:
                 file = loc["file"]
                 if [file["parent_file_id"], file["name"]] != step["destination"]:
                     raise MediaError("library_write_unconfirmed", uncertain=True)
-                if before and any(file.get(k) != before.get(k) for k in ("size", "content_hash")):
+                if (
+                    before
+                    and before["type"] == "file"
+                    and any(file.get(k) != before.get(k) for k in ("size", "content_hash"))
+                ):
                     raise MediaError("library_content_changed", uncertain=True)
+                if step.get("object_type") == "folder":
+                    from .directories import snapshot
+
+                    manifest = await snapshot(self.p.provider, file, intent["destination"])
+                    if manifest["digest"] != step["manifest"]["digest"]:
+                        raise MediaError("directory_restore_unconfirmed", uncertain=True)
                 self.remember(target, file, relative_path="/".join(loc["relative_parts"]), trashed=False)
                 step["result"] = file
             step["state"] = "completed"
             self.repo.change(ident, "checking", steps=steps, submitted=False)
-        self.repo.change(ident, "completed", steps=steps, submitted=False, error=None)
+        if observe_only and any(step["state"] != "completed" for step in steps):
+            self.repo.change(
+                ident, "uncertain", steps=steps, submitted=False, error="unsubmitted_steps_remain"
+            )
+        else:
+            self.repo.change(ident, "completed", steps=steps, submitted=False, error=None)
+
+    async def reconcile(self, item):
+        """Observe submitted steps only. Querying never dispatches remaining writes."""
+        if item["state"] in {"completed", "cancelled"}:
+            return self.repo.public(item)
+        async with self.lock:
+            current = self.repo.get(item["id"])
+            if (
+                current["data"].get("intent", {}).get("file_backend", "native") != "native"
+                or current["data"]["intent"].get("location") == "local"
+            ):
+                raise MediaError("reconciliation_unsupported")
+            try:
+                await self.process(current, observe_only=True)
+            except MediaError as exc:
+                self.repo.change(
+                    item["id"],
+                    "uncertain",
+                    error=exc.code,
+                    verification_issue={"code": exc.code, "field": exc.field, "evidence": exc.evidence},
+                )
+            return self.repo.public(self.repo.get(item["id"]))
 
     async def worker(self):
         while True:
             item = self.repo.due("library")
+            if not item:
+                observation = self.repo.observation_due("library")
+                if observation:
+                    self.repo.begin_observation(observation)
+                    try:
+                        await self.reconcile(observation)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self.repo.change(
+                            observation["id"],
+                            "uncertain",
+                            error="library_observation_failed",
+                            due=self.repo.get(observation["id"])["due"],
+                        )
+                    continue
             if item:
                 try:
                     async with self.lock:
@@ -422,6 +545,11 @@ class Library:
                         item["id"],
                         state,
                         error=code,
+                        verification_issue={
+                            "field": getattr(exc, "field", None),
+                            "code": code,
+                            "evidence": getattr(exc, "evidence", None),
+                        },
                         attempts=attempts,
                         due=time.time() + min(30, 2**attempts),
                     )

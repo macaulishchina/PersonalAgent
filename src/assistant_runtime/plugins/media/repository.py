@@ -30,6 +30,7 @@ def canonical(value):
 class MediaRepository:
     def __init__(self, db, settings):
         self.db, self.settings = db, settings
+        self.notifications_enabled = True
         db.executescript("""
             CREATE TABLE IF NOT EXISTS media_operations(
                 id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL,
@@ -37,6 +38,8 @@ class MediaRepository:
                 updated REAL NOT NULL, due REAL NOT NULL, data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS media_due ON media_operations(state,due);
             CREATE INDEX IF NOT EXISTS media_page ON media_operations(created DESC,id DESC);
+            CREATE INDEX IF NOT EXISTS media_run_operations ON media_operations(
+                json_extract(data,'$.caller_run'),created,id);
             CREATE INDEX IF NOT EXISTS media_sync_due ON media_operations(
                 json_extract(data,'$.openlist_sync.state'),json_extract(data,'$.openlist_sync.due'));
             CREATE UNIQUE INDEX IF NOT EXISTS media_identity ON media_operations(identity)
@@ -67,6 +70,8 @@ class MediaRepository:
         return self.account(account)
 
     def enqueue(self, key, title, body, *, kind="attention", report_with_task=False):
+        if not self.notifications_enabled:
+            return
         self.db.execute(
             "INSERT OR IGNORE INTO media_outbox VALUES(?,?)",
             (
@@ -168,9 +173,15 @@ class MediaRepository:
             if newer:
                 raise ValueError("A newer acquisition already owns this resource; query " + newer[0])
         data = item["data"]
+        if changes.get("error"):
+            data.setdefault("first_error", {"code": changes["error"], "state": state, "at": now})
         if item["state"] != state:
             data["stages"] = (data["stages"] + [{"state": state, "at": now}])[-16:]
         data.update(changes)
+        data["observation_revision"] = item["data"].get("observation_revision", 0) + 1
+        if state == "uncertain" and due is None:
+            # Keep the observation backoff when a read still cannot resolve it.
+            due = now + 30 if item["state"] != "uncertain" else item["due"]
         track(data, state, self.settings, now)
         if state in TERMINAL and item["state"] not in TERMINAL:
             data["duration_seconds"] = round(now - item["created_at"], 3)
@@ -198,8 +209,21 @@ class MediaRepository:
             elif state in {"failed", "uncertain"} and state != item["state"] and not data.get("batch_id"):
                 self.enqueue(
                     "media-attention:" + ident,
-                    "媒体操作需要处理",
-                    "请查询媒体操作 " + ident + " 的最新状态。",
+                    "媒体操作结果待核验" if state == "uncertain" else "媒体操作未完成",
+                    (
+                        "网盘操作曾提交，但结果核验未通过。原因："
+                        if data.get("submitted")
+                        or any(step["state"] in {"submitted", "completed"} for step in data.get("steps", []))
+                        else "操作结果尚不能确认。原因："
+                    )
+                    + str(data.get("error", "unconfirmed"))
+                    + "。已保留回执并停止后续操作；不会自动重新提交。无需逐项确认。"
+                    if state == "uncertain"
+                    else "操作未完成。原因："
+                    + str(data.get("error", "media_failed"))
+                    + "。原结果和执行记录保留。",
+                    kind="result" if data.get("caller_run") or state == "uncertain" else "attention",
+                    report_with_task=bool(data.get("caller_run")),
                 )
         return self.get(ident)
 
@@ -211,13 +235,37 @@ class MediaRepository:
             self.db.execute("UPDATE media_operations SET state='queued' WHERE state='downloading'")
 
     def due(self, kind="transfer"):
+        kinds = (kind,) if isinstance(kind, str) else tuple(kind)
+        placeholders = ",".join("?" for _ in kinds)
         row = self.db.execute(
             "SELECT id FROM media_operations WHERE state IN ('queued','verifying') AND due<=? "
-            "AND coalesce(json_extract(data,'$.intent.kind'),'transfer')=? "
+            f"AND coalesce(json_extract(data,'$.intent.kind'),'transfer') IN ({placeholders}) "
             "ORDER BY due,id LIMIT 1",
-            (time.time(), kind),
+            (time.time(), *kinds),
         ).fetchone()
         return self.get(row[0]) if row else None
+
+    def observation_due(self, kind):
+        row = self.db.execute(
+            "SELECT id FROM media_operations WHERE state='uncertain' AND due<=? "
+            "AND json_extract(data,'$.intent.kind')=? AND json_extract(data,'$.submitted')=1 "
+            "AND coalesce(json_extract(data,'$.observation_attempts'),0)<3 "
+            "AND (?='library' OR json_extract(data,'$.copy_receipt.file_id') IS NOT NULL "
+            "OR json_extract(data,'$.copy_receipt.task_id') IS NOT NULL) "
+            "AND (?!='library' OR (coalesce(json_extract(data,'$.intent.file_backend'),'native')='native' "
+            "AND coalesce(json_extract(data,'$.intent.location'),'cloud')='cloud')) ORDER BY due,id LIMIT 1",
+            (time.time(), kind, kind, kind),
+        ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def begin_observation(self, item):
+        attempts = item["data"].get("observation_attempts", 0) + 1
+        return self.change(
+            item["id"],
+            "uncertain",
+            observation_attempts=attempts,
+            due=time.time() + min(300, 30 * 2**attempts),
+        )
 
     def resume_auth(self, account="aliyun"):
         for (ident,) in self.db.execute(
@@ -270,6 +318,7 @@ class MediaRepository:
             else item["state"],
             "created_at": item["created_at"],
             "updated_at": item["updated_at"],
+            "revision": data.get("observation_revision", 0),
             "target": data["intent"]["target"],
             "account": data["intent"]["destination"]["account"],
             "kind": data["intent"].get("kind", "transfer"),
@@ -293,6 +342,8 @@ class MediaRepository:
                     "progress",
                     "local_path",
                     "steps",
+                    "verification_issue",
+                    "first_error",
                 )
                 if k in data
             },

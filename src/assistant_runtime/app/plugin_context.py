@@ -102,6 +102,7 @@ def environment(
         box[0].register(kind, handler, timeout=timeout)
 
     public = PluginContext(
+        available=lambda request: runtime().available(request),
         platform=runtime().platform,
         backend=backend,
         name=name,

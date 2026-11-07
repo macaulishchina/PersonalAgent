@@ -519,3 +519,13 @@ a permission grant or a framework retry loop; third-party MCP annotations alone 
 trusted. Explicit owner uncertainty overrides read hints. New read tools must cover both
 corrected-input recovery and attempts exhaustion; writes must retain lost-reply/no-replay
 tests. Tool UI projections show the safe owner explanation and exact error code.
+
+### Optional operation results (0.4.31)
+
+An owner with asynchronous business operations may declare `operation_request` using
+one of its `provides` types. The application binds its local, read-only
+`operation_outcomes` action; tasks observe its authoritative receipts without inspecting
+plugin instances or tables. This is optional for API 2 plugins. Missing observations
+never imply business success. Declare readiness checks with `PluginContext.available`
+only for capabilities in `uses`; optional notification/task capabilities need no hard
+dependency. See the [contract and media example](../guides/business-operation-results.md).

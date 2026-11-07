@@ -66,7 +66,7 @@ class TasksPlugin:
 
     def __init__(self, host):
         self.host = host
-        required = ("execution", host.config.bindings["brain"], "notifications", "workfiles")
+        required = ("execution", host.config.bindings["brain"], "workfiles")
         self.manifest = replace(
             DECLARATION.manifest,
             requires=required,
@@ -79,6 +79,10 @@ class TasksPlugin:
         self.settings = TaskSettings.parse(host.config.tasks)
         self.model_policy = ModelPolicy.parse(self.settings.model_policy)
         self.repo = TaskRepository(host.store.db)
+        from .business import BusinessResults
+
+        self.business = BusinessResults(self)
+        self.business_checks = {}
         from .contexts import TaskContexts
 
         self.contexts = TaskContexts(self)
@@ -113,7 +117,11 @@ class TasksPlugin:
             run = self.repo.run(ident)
         except ValueError:
             return True
-        return run["state"] not in TERMINAL or not run["data"].get("completion_delivered")
+        return (
+            run["state"] not in TERMINAL
+            or not run["data"].get("completion_delivered")
+            or self.business.unsettled(run)
+        )
 
     async def start(self, context):
         self.context = context
@@ -274,6 +282,10 @@ class TasksPlugin:
                 continue
             latest = self.repo.runs(ident, limit=1)
             if not latest or latest[0]["state"] not in TERMINAL:
+                continue
+            if self.business.unsettled(latest[0]) or (
+                getattr(self.host, "operation_sources", {}) and not latest[0]["data"].get("business_observed")
+            ):
                 continue
             # Automatic archival only changes organization. Unlike explicit archive,
             # it never interrupts work, deletes results or creates another notification.
@@ -822,6 +834,8 @@ class TasksPlugin:
             definition = self.repo.definition(ident)
             runs, active, before, updates = self.repo.run_page(ident, args)
             for run in [*runs, *active, *updates]:
+                if run["state"] in TERMINAL and self.business.unsettled(run):
+                    run.update(await self.business.refresh(run))
                 run["feedback"] = self.feedback.describe(run)
                 if run["data"].get("result_ref"):
                     from assistant_runtime.core.workfiles.inputs import caller as result_caller
@@ -980,6 +994,9 @@ class TasksPlugin:
                     retries[retry_id] = retry_target
                 if run["state"] == "unknown":
                     raise ValueError("结果未知，必须先核对执行和操作回执；不能直接继续或重做。")
+                run = await self.business.refresh(run)
+                if self.business.unsettled(run):
+                    raise ValueError("关联业务操作尚未核验结束；请先核对操作回执，不能重新执行。")
                 if run["state"] not in {"paused", "unknown", "failed", "canceled", "waiting_user"}:
                     raise ValueError("Execution cannot be continued in this state")
                 if run["state"] == "waiting_user":
@@ -995,6 +1012,8 @@ class TasksPlugin:
                     model_retry_target=retry_target,
                     goal={},
                     completion_delivered=False,
+                    business_observed=False,
+                    execution_summary=None,
                     completion_round=run["data"].get("completion_round", 0) + 1,
                     stop_requested=None,
                     artifacts=[],
@@ -1360,6 +1379,16 @@ class TasksPlugin:
                     busy.append(r)
                     self.context.spawn(self.launch(r), "execute:" + r["id"])
             for r in runs:
+                if (
+                    r["state"] in TERMINAL
+                    and (self.business.unsettled(r) or r["data"].get("business_feedback_pending"))
+                    and r["data"].get("completion_delivered")
+                    and r["id"] not in self.delivering_results
+                    and self.business_checks.get(r["id"], 0) <= time.monotonic()
+                    and len(self.delivering_results) < self.result_delivery_limit()
+                ):
+                    self.delivering_results.add(r["id"])
+                    self.context.spawn(self.refresh_business(r), "business-result:" + r["id"])
                 if r["revision"] <= r["delivered"]:
                     continue
                 if r["state"] in {"completed", "failed", "canceled", "unknown"}:
@@ -1386,12 +1415,15 @@ class TasksPlugin:
                         if (
                             r["id"] not in self.delivering_results
                             and len(self.delivering_results) < self.result_delivery_limit()
+                            and self.business_checks.get(r["id"], 0) <= time.monotonic()
                         ):
                             self.delivering_results.add(r["id"])
                             self.context.spawn(self.deliver_result(r), "task-result:" + r["id"])
                         continue
-                elif r["state"] in {"waiting_user", "unknown"} and not r["data"].get("ai_usage", {}).get(
-                    "blocked"
+                elif (
+                    NotificationRequest in self.host.runtime.handlers
+                    and r["state"] in {"waiting_user", "unknown"}
+                    and not r["data"].get("ai_usage", {}).get("blocked")
                 ):
                     # Budget attention is delivered once by ai_usage's durable outbox.
                     # User participation is distinct from routine completion preferences.
@@ -1438,7 +1470,10 @@ class TasksPlugin:
 
     @staticmethod
     def result_payload(r):
-        body = r["data"].get("progress") or RUN_SUMMARIES[r["state"]]
+        from .business import BusinessResults
+
+        business_report = BusinessResults.report(r)
+        body = business_report or r["data"].get("progress") or RUN_SUMMARIES[r["state"]]
         excerpt = bool(r["data"].get("result_is_preview"))
         if len(body) > 7600:
             body = body[:5000] + "\n\n[报告节选]\n\n" + body[-2400:]
@@ -1446,11 +1481,19 @@ class TasksPlugin:
         if r["data"].get("result_delivery_error"):
             body += "\n\n完整结果留存失败；当前内容与操作状态保留，不会因此重新执行。"
         return {
-            "kind": "result",
+            "kind": "attention"
+            if r["data"].get("business_result", {}).get("state") == "waiting_user"
+            else "result",
             "event_key": f"task-result:{r['id']}:{r['data'].get('completion_round', 0)}",
             "title": r["data"]["spec"]["title"]
             + " · "
-            + ("本次执行结束" if r["state"] == "completed" else RUN_LABELS[r["state"]]),
+            + (
+                "结果待核验"
+                if BusinessResults.unsettled(r)
+                else "本次执行结束"
+                if r["state"] == "completed"
+                else RUN_LABELS[r["state"]]
+            ),
             "body": body,
             "voice": r["data"]["spec"]["notify_voice"],
             "result_ref": r["data"].get("result_ref"),
@@ -1459,6 +1502,10 @@ class TasksPlugin:
 
     async def deliver_result(self, r):
         try:
+            r = await self.business.refresh(r)
+            if r["data"].get("business_result", {}).get("state") == "pending":
+                self.business_checks[r["id"]] = time.monotonic() + 5
+                return  # Owner workers finish verification; no agent or write is replayed.
             feedback_receipt = {"route": "disabled"}
             if r["data"]["spec"].get("notify_completion", True):
                 feedback_receipt = await self.feedback.deliver(
@@ -1479,7 +1526,7 @@ class TasksPlugin:
                 completion_feedback=feedback_receipt,
                 artifacts=self.host.workfiles.artifacts(self.owner(r)),
             )
-            if r["state"] != "unknown":
+            if r["state"] != "unknown" and not self.business.unsettled(r):
                 self.host.workfiles.results.release("task:" + r["id"])
             self.notification_error = None
         except Exception as exc:
@@ -1489,6 +1536,32 @@ class TasksPlugin:
             return
         finally:
             self.delivering_results.discard(r["id"])
+
+    async def refresh_business(self, run):
+        """Refresh owner evidence on the existing worker; never relaunch the agent."""
+        try:
+            current = await self.business.refresh(self.repo.run(run["id"]))
+            if current["state"] not in TERMINAL or current["data"].get("completion_round", 0) != run[
+                "data"
+            ].get("completion_round", 0):
+                return
+            if current["data"].get("business_feedback_pending"):
+                await self.feedback.refresh(current, self.result_payload(current))
+                latest = self.repo.run(current["id"])
+                if (
+                    latest["state"] != current["state"]
+                    or latest["data"].get("completion_round", 0) != current["data"].get("completion_round", 0)
+                    or latest["data"].get("business_result") != current["data"].get("business_result")
+                ):
+                    return
+                self.repo.update_run(current["id"], business_feedback_pending=False)
+            if not self.business.unsettled(current) and current["state"] != "unknown":
+                self.host.workfiles.results.release("task:" + current["id"])
+        except Exception as exc:
+            self.notification_error = str(exc)[:240]
+        finally:
+            self.business_checks[run["id"]] = time.monotonic() + 30
+            self.delivering_results.discard(run["id"])
 
     async def upgrade_run(self, ident):
         try:
@@ -1543,7 +1616,7 @@ class TasksPlugin:
                         r
                         for r in self.repo.runs(e["id"])
                         if r["created"] >= d["created"]
-                        and r["state"] == e["value"]
+                        and self.business.event_state(r) == e["value"]
                         and not self.repo.db.execute(
                             "SELECT 1 FROM job_runs WHERE task_id=? AND occurrence=?",
                             (d["id"], "event:" + r["id"]),

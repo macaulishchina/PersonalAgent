@@ -201,6 +201,16 @@ class Runtime:
         self.handlers[request_type] = owner, handler
         self.timeouts[request_type] = timeout
 
+    def available(self, request_type):
+        """Readiness of a registered capability, without invoking or exposing its owner."""
+        binding = self.handlers.get(request_type)
+        if binding is None:
+            return False
+        context = self.contexts.get(binding[0])
+        return bool(
+            context is not None and context.state in {"ready", "degraded"} and not context.cancelled.is_set()
+        )
+
     async def invoke(self, request, timeout=None):
         configuring = asyncio.current_task() in self.configuration_tasks
         if not configuring:
