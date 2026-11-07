@@ -1,8 +1,14 @@
 """One public registry; entrances bind stable views, never executor processes."""
 
+from assistant_runtime.api.conversation import ConversationInputChanged
+
 import asyncio
 import uuid
-from assistant_runtime.api.conversation import ConversationRequest, current_conversation
+from assistant_runtime.api.conversation import (
+    ConversationRequest,
+    ConversationInputRequest,
+    current_conversation,
+)
 from assistant_runtime.api.contracts import ConversationFeedbackRequest
 from assistant_runtime.api.ai_usage import current_usage
 from .declaration import DECLARATION
@@ -31,6 +37,9 @@ class Conversations:
         from .snapshots import Snapshots
 
         self.snapshots = Snapshots(self)
+        from .inputs import EntranceInputs
+
+        self.inputs = EntranceInputs(self)
 
     async def start(self, context):
         self.context = context
@@ -38,6 +47,7 @@ class Conversations:
             self.main.store.recover(row[0])
         await self.main.start(context, register=False)
         context.register(ConversationRequest, self.request)
+        context.register(ConversationInputRequest, self.inputs.request)
         context.register(ConversationFeedbackRequest, self.feedback)
 
     async def get(self, ident):
@@ -75,6 +85,7 @@ class Conversations:
             "list": {"before", "limit"},
             "open": {"operator", "session_id"},
             "history": {"session_id", "before"},
+            "message": {"session_id", "message_id", "offset", "limit"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
             "receipt": {"session_id", "request_id", "include_execution"},
@@ -120,6 +131,64 @@ class Conversations:
         if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:
             return await self.snapshots.request(action, args)
         store = self.main.store
+        if action == "message":
+            item = store.get(args.get("message_id"))
+            offset, limit = args.get("offset", 0), args.get("limit", 240)
+            if not item or item["session_id"] != ident:
+                raise ValueError("Unknown conversation message")
+            presentation = item.get("presentation") or {}
+            reference = item.get("result_ref")
+            total = (
+                presentation.get("result_length")
+                if reference and presentation.get("body") == "excerpt"
+                else len(item["text"])
+            )
+            if type(total) is not int:
+                total = len(item["text"])
+            if (
+                type(offset) is not int
+                or not 0 <= offset <= total
+                or type(limit) is not int
+                or not 1 <= limit <= 1000
+            ):
+                raise ValueError("Invalid message page")
+            end = min(offset + limit, total)
+            text = item["text"][offset:end]
+            if reference and presentation.get("body") == "excerpt":
+                from assistant_runtime.api.files import FileRequest
+
+                page = await self.host.runtime.invoke(
+                    FileRequest(
+                        "result_read",
+                        {
+                            "id": reference["id"],
+                            "version": reference["version"],
+                            "offset": presentation.get("result_offset", 0) + offset,
+                            "length": max(1, end - offset),
+                        },
+                    )
+                )
+                text = page["data"][: end - offset]
+                end = offset + len(text)
+            row = store.db.execute(
+                "SELECT id FROM conversation_queue WHERE session_id=? AND turn_id=?",
+                (ident, item.get("turn_id")),
+            ).fetchone()
+            work = (
+                await self.host.ai_usage.service.binding(row[0])
+                if row and getattr(self.host, "ai_usage", None)
+                else None
+            )
+            return {
+                "work_id": work.work_id if work else None,
+                "message_id": item["id"],
+                "text": text,
+                "offset": offset,
+                "next_offset": end if end < total else None,
+                "updated": item["updated"],
+                "status": item["status"],
+                "result_ref": item.get("result_ref"),
+            }
         if "include_execution" in args and type(args["include_execution"]) is not bool:
             raise ValueError("include_execution must be boolean")
         if action == "receipts":
@@ -212,12 +281,17 @@ class Conversations:
             return chat.remove_queued(args.get("request_id"), args.get("revision"))
         if action == "reorder_queue":
             return chat.reorder_queue(args.get("request_ids"), args.get("expected_order"))
+        return await self.active_input(chat, action, args)
+
+    async def active_input(self, chat, action, args, *, source="operator"):
+        """Shared dispatch for operator and identity-bound entrance supplements."""
+        ident, store = chat.session, chat.store
         row = store.db.execute(
             "SELECT state,turn_id FROM conversation_queue WHERE id=? AND session_id=?",
             (args.get("request_id"), ident),
         ).fetchone()
         if not row or row[0] != "running" or row[1] != chat.backend.active_turn:
-            raise ValueError("Request is no longer the active conversation turn")
+            raise ConversationInputChanged("Request is no longer the active conversation turn")
         text = args.get("text")
         if not isinstance(text, str) or not text.strip() or len(text) > 32000:
             raise ValueError("A bounded nonempty input is required")
@@ -226,7 +300,7 @@ class Conversations:
             "input:" + uuid.uuid4().hex,
             ident,
             role="user",
-            source="operator",
+            source=source,
             text=text,
             status="complete",
             turn_id=row[1],

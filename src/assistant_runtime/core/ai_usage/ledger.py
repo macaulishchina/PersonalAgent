@@ -130,7 +130,7 @@ class Ledger:
         return (exact or prices or [None])[0]
 
     @staticmethod
-    def cost(price, inp, out):
+    def cost(price, inp, out, quantities=None):
         if not price:
             return None
         if any(
@@ -138,8 +138,19 @@ class Ledger:
             for k, v in (("input_cny_per_million", inp), ("output_cny_per_million", out))
         ):
             return None
+        quantities = quantities or {}
+        extra = 0
+        for key, rate in (
+            ("audio_seconds", "audio_cny_per_second"),
+            ("text_characters", "text_cny_per_character"),
+        ):
+            if price.get(rate, 0):
+                if key not in quantities:
+                    return None
+                extra += quantities[key] * price[rate]
         return (
-            price.get("request_cny", 0)
+            extra
+            + price.get("request_cny", 0)
             + (inp or 0) * price.get("input_cny_per_million", 0) / 1e6
             + (out or 0) * price.get("output_cny_per_million", 0) / 1e6
         )
@@ -221,7 +232,7 @@ class Ledger:
             reason = work[1] or ("usage_plan_paused" if plan else None)
             reserve_input, reserve_output = bounds.get("input_tokens"), bounds.get("output_tokens")
             price = self.price(provider, model)
-            reserve_cost = self.cost(price, reserve_input, reserve_output)
+            reserve_cost = self.cost(price, reserve_input, reserve_output, bounds)
             from .controlled import enforce
 
             enforce(self, meta, (reserve_input, reserve_output, reserve_cost), compaction, now)
@@ -292,6 +303,7 @@ class Ledger:
                     "state": "submitted",
                     "config_revision": self.settings.revision(),
                     "price": price,
+                    "reserved_quantities": bounds,
                     "details": details,
                     "compaction": compaction,
                 }
@@ -345,7 +357,7 @@ class Ledger:
             inp, out = usage.get("input_tokens"), usage.get("output_tokens")
             inp = inp if type(inp) is int and inp >= 0 else None
             out = out if type(out) is int and out >= 0 else None
-            cost = self.cost(record.get("price"), inp, out)
+            cost = self.cost(record.get("price"), inp, out, usage)
             record.update(
                 input_tokens=inp,
                 output_tokens=out,

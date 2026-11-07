@@ -37,6 +37,9 @@ class Console:
         from .chat_gateway import ChatGateway
 
         self.chat_gateway = ChatGateway(business)
+        from .entrances import EntranceGateway
+
+        self.entrances = EntranceGateway(business)
         from .accounts import Accounts
 
         self.accounts = Accounts(business)
@@ -65,6 +68,18 @@ class Console:
                 pass
         expected = public_origin if trusted else request.scheme + "://" + request.host
         request["secure_context"] = expected.startswith("https://")
+        if request.path.startswith("/entrances/"):
+            import ipaddress
+
+            peer_trusted = any(
+                ipaddress.ip_address(request.remote or "0.0.0.0") in ipaddress.ip_network(p, strict=False)
+                for p in settings.trusted_proxies
+            )
+            if not request.secure and not (
+                peer_trusted and request.headers.get("X-Forwarded-Proto") == "https"
+            ):
+                raise web.HTTPForbidden(text="TLS required for device credentials")
+            return await handler(request)
         if request.path in {"/", "/chat"} or request.path.startswith("/chat/"):
             origin = request.headers.get("Origin")
             if (origin and origin != expected) or (
@@ -136,6 +151,8 @@ class Console:
         app.add_routes(
             [
                 web.get("/", self.chat_gateway.forward),
+                web.route("*", "/entrances/{owner}/{route}", self.entrances.forward),
+                web.post("/api/entrances/{owner}", self.entrance_manage),
                 web.get("/config", self.configuration_redirect),
                 web.get("/config/", self.index),
                 web.route("*", "/chat", self.chat_gateway.forward),
@@ -216,6 +233,7 @@ class Console:
 
     async def close(self):
         await self.chat_gateway.close()
+        await self.entrances.close()
         await self.permissions.close()
         await self.provider_queries.close()
         await self.accounts.close()
@@ -230,6 +248,15 @@ class Console:
 
     async def javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.js")
+
+    async def entrance_manage(self, request):
+        data = await request.json()
+        if set(data) != {"action", "arguments"} or not isinstance(data["arguments"], dict):
+            raise ValueError("Invalid entrance operation")
+        result = await self.business.request(
+            {"command": "frontend-manage", "owner": request.match_info["owner"], **data}
+        )
+        return web.json_response(result, headers={"Cache-Control": "no-store"})
 
     async def permissions_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "permissions.js")

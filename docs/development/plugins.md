@@ -147,6 +147,14 @@ windows = "directshow"
 `conversation` 依赖 `workfiles`、`execution`，不依赖个人助手；`assistant` 和 `cli`
 依赖公共对话，`web` 仍是扩展。对话拥有持久化会话目录、入口绑定、历史、附件、队列与结果投递。
 个人助手的提示、语音同步、播报及设备状态协调留在 `core/speech`，仅启用时装配。
+
+独立终端的云语音 I/O 使用 `core/speech_io`，不依赖本地唤醒或固定声卡：
+`SpeechRequest` 统一管理输入序号、流上限、结束与取消，供应商分别实现
+`RecognitionRequest`／`SynthesisRequest`。`aliyun_speech` 可配置仅提供其中一种能力，
+通过 `ai_usage` 以同一工作身份预留和结算音频秒数、合成字符数，不用第二套额度。
+终端插件通过 `ConversationInputRequest` 先绑定入口身份与当前执行再提交最终输入；
+设备自身不能指定任意会话。异步结果通过 `TerminalNotifications` 读取已归属该会话的
+原通知及独立投递收据，不复制任务状态。实现示例见 `plugins/ai_passport`。
 公共 `ConversationRequest` 提供 create/list/open/history/events/state/submit/queue/supplement/answer/cancel，
 只接收逻辑会话 ID、请求 ID、问题 ID 与事件游标，入口不操作 Pi 原生会话。
 

@@ -103,6 +103,9 @@ class Config(ModuleSettings):
     main_reasoning_effort: str = field(
         default_factory=lambda: configuration_default(__file__, "main_reasoning_effort")
     )
+    speech_io: dict = field(default_factory=dict)
+    aliyun_speech: dict = field(default_factory=dict)
+    ai_passport: dict = field(default_factory=dict)
     web: dict = field(default_factory=dict)
     apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)

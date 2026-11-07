@@ -1,7 +1,10 @@
 # PPDemo：AI Passport 硬件体验与质检
 
 这是独立 ESP-IDF 固件，不依赖 PA 服务、不调用模型，也不实现 PA 设备接入。
-复用官方板级驱动，应用、界面及测试逻辑独立实现。PA 的 Python 插件仍是占位。
+复用官方板级驱动，应用、界面及测试逻辑独立实现。
+
+PA 交互终端为独立工程 [apps/pa_terminal](apps/pa_terminal/README.md)，与本页的
+PPDemo／PPDemo-Zh 共用 BSP、构建环境及打包工具，不混合菜单。终端候选已构建，真机待验收。
 
 ## 能体验什么
 
@@ -22,7 +25,9 @@
 或 NOT TESTED。报告只表示人工结论，不能用作出厂认证。录音只放 RAM；不会上传，
 下一次录音、进入无线测试或重启会释放。仅结果和测试计数写入独立 `ppdemo` NVS 命名空间。
 
-屏幕使用英文短标签，下面为中文操作说明。显示区域为 240×320、圆角屏；不复制官方测试菜单。
+提供 PPDemo 英文版与 PPDemo-Zh 中文版，共用测试逻辑，显示区域为 240×320、圆角屏。
+中文版包含中文菜单、动作、评价、状态和 Wi-Fi 配网页；错误代码、协议名及 JSON 机器字段保留原文。
+字体按实际界面文字裁剪，随固件内置，无需联网下载。长报告在固定内容区域自动滚动。
 
 ## 按键与测试流程
 
@@ -63,7 +68,7 @@ HTTP 服务及无线。配网页仅接受发往临时热点地址的请求，不
 
 用数据线连接电脑，串口终端选择实际端口、115200、8N1，输入 `report` 加回车。
 `help` 也导出报告；没有任意命令执行入口。JSON 与 ESP-IDF 日志共用串口，
-只提取以 `{"app":"PPDemo"` 开头的完整行。报告含版本、开机次数、十项人工结论、
+只提取以 `{"app":"PPDemo"` 或 `{"app":"PPDemo-Zh"` 开头的完整行。报告含版本、开机次数、十项人工结论、
 UI 队列丢弃数和剩余堆内存，不含录音、Wi-Fi 密码或生产凭据。
 
 ## 本机稳定开发环境
@@ -103,6 +108,23 @@ docker run --rm -v "$PWD:/project" -w /project espressif/idf:v5.5.3 idf.py build
 
 首次解析组件会生成本工程自己的 `dependencies.lock`，应在真实构建通过后保留锁文件。
 不能用上游旧锁文件或宿主 C 编译冒充 ESP-IDF 构建成功。
+
+### 中文版构建
+
+默认构建仍是英文版。中文版使用独立构建目录与配置，不覆盖英文构建：
+
+```sh
+idf.py -B build/zh -D SDKCONFIG=build/zh/sdkconfig \
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.zh.defaults' build
+python3 tools/package_firmware.py --build build/zh --output build/zh/ppdemo-zh-0.2.0.zip
+```
+
+中文字体来自锁定 LVGL 9.5.0 附带的 SourceHanSansSC，生成的 14/16/20 px 子集和 SIL OFL
+许可位于 `main/fonts/`。无需额外字体工具即可构建；修改中文文案后，开发者用固定的
+`lv_font_conv@1.5.3` 执行 `python3 tools/generate_fonts.py --converter /path/to/lv_font_conv`，
+再运行 `python3 tests/test_localization.py` 检查字形覆盖和 printf 参数一致性。
+Dell 的字体工具安装于 `/home/macaulish/workspace/esp32-toolchain/font-tools/`，与网站和 PA 依赖隔离。
+英文和中文固件共用 `ppdemo` NVS 命名空间，切换语言不清空原来的人工报告。
 
 ## 编译后的交付包
 

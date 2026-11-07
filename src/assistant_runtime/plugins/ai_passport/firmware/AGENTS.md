@@ -2,9 +2,10 @@
 
 - 先读本目录 README、`upstream.json` 和上游对应提交的硬件指南。
 - 这里是 PA 插件内独立的 ESP-IDF 工程；不把 PA、Pi 或 Python 运行时搬入固件。
-- 当前实现独立 PPDemo 硬件体验／质检固件；不实现 PA 接入、生产通信或语音助手。
+- PPDemo／PPDemo-Zh 是独立体验和质检应用；PA 终端位于 `apps/pa_terminal`，两者共用 BSP，不混合菜单。
+- PA 终端仅负责收音、播放、显示、按键和设备身份；不运行 Agent、不保存模型供应商密钥。
 - 固定 ESP-IDF 5.5.3、ESP32-C3、8 MB Flash、无 PSRAM；保留原生 USB 控制台。
-- 后续板级代码放 `components/`，应用放 `main/`，业务测试放 `tests/`。
+- 后续板级代码放 `components/`，质检应用放 `main/`，PA 终端放 `apps/pa_terminal/main/`，业务测试放 `tests/`。
   按需复用官方 BSP；硬件常量只由 BSP 定义，不复制测试菜单或混合示例分支。
 - 不在按键／UI 回调执行阻塞 I/O；显示、音频、无线与任务共同预算内存和生命周期。
 - 固件、插件和未来通信协议分别维护版本；不得把固件版本当作协议兼容性证明。

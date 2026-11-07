@@ -1,9 +1,24 @@
 #include "lab_ui.h"
+#include "lab_language.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "lvgl.h"
 #include <string.h>
 
+#ifdef PPDEMO_ZH
+LV_FONT_DECLARE(ppdemo_zh_14);
+LV_FONT_DECLARE(ppdemo_zh_16);
+LV_FONT_DECLARE(ppdemo_zh_20);
+#define FONT_SMALL (&ppdemo_zh_14)
+#define FONT_BODY (&ppdemo_zh_16)
+#define FONT_TITLE (&ppdemo_zh_20)
+#define FONT_REPORT (&ppdemo_zh_14)
+#else
+#define FONT_SMALL (&lv_font_montserrat_14)
+#define FONT_BODY (&lv_font_montserrat_14)
+#define FONT_TITLE (&lv_font_montserrat_20)
+#define FONT_REPORT (&lv_font_montserrat_12)
+#endif
 static lv_obj_t *screen, *heading, *tag, *content, *hint, *bars[6];
 static lv_obj_t *label(int x, int y, int width, const lv_font_t *font)
 {
@@ -22,13 +37,16 @@ bool lab_ui_init(void)
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *brand = label(24, 25, 190, &lv_font_montserrat_14);
-    lv_label_set_text(brand, "PP  /  DEMO LAB");
+    lv_obj_t *brand = label(24, 25, 190, FONT_SMALL);
+    lv_label_set_text(brand, LAB_TEXT("PP  /  DEMO LAB", "PP  /  中文体验"));
     lv_obj_set_style_text_color(brand, lv_color_hex(0x738b9d), 0);
-    heading = label(22, 58, 198, &lv_font_montserrat_20);
-    tag = label(24, 87, 190, &lv_font_montserrat_14);
-    content = label(24, 117, 194, &lv_font_montserrat_14);
-    hint = label(24, 274, 194, &lv_font_montserrat_14);
+    heading = label(22, 58, 198, FONT_TITLE);
+    tag = label(24, 87, 190, FONT_SMALL);
+    content = label(24, 117, 194, FONT_BODY);
+    lv_obj_set_height(content, 146);
+    lv_obj_set_style_text_line_space(content, 0, 0);
+    lv_label_set_long_mode(content, LV_LABEL_LONG_SCROLL);
+    hint = label(24, 274, 194, FONT_SMALL);
     lv_obj_set_style_text_color(hint, lv_color_hex(0x738b9d), 0);
     for (int i = 0; i < 6; i++) {
         bars[i] = lv_obj_create(screen);
@@ -49,7 +67,7 @@ void lab_ui_show(const char *title, const char *meta, const char *body, const ch
     lv_obj_set_style_text_color(content, lv_color_hex(ink), 0);
     lv_obj_set_style_text_color(tag, lv_color_hex(pattern == 4 ? 0x17765f : 0x6ce4b9), 0);
     lv_label_set_text(heading, title); lv_label_set_text(tag, meta);
-    lv_obj_set_style_text_font(content, !strcmp(title, "Manual report") ? &lv_font_montserrat_12 : &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(content, !strcmp(title, LAB_TEXT("Manual report", "测试报告")) ? FONT_REPORT : FONT_BODY, 0);
     lv_label_set_text(content, body); lv_label_set_text(hint, footer);
     for (int i = 0; i < 6; i++) {
         if (pattern >= 7) {

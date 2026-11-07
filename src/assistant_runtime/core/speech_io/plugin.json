@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "speech_io",
+  "version": "core",
+  "api_version": 2,
+  "requires_core": "core",
+  "supported_platforms": [
+    "linux"
+  ],
+  "requires": {},
+  "optional": {},
+  "critical": false
+}

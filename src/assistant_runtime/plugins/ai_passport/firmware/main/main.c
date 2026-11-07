@@ -1,3 +1,4 @@
+#include "lab_language.h"
 #include "lab_model.h"
 #include "lab_runtime.h"
 #include "lab_ui.h"
@@ -32,7 +33,7 @@ typedef struct {
     bsp_btn_t key;
     bsp_btn_ev_t action;
     esp_err_t error;
-    char text[224];
+    char text[512];
 } event_t;
 typedef struct { lab_case_t test; unsigned action; } job_t;
 typedef enum { HOME, TEST, REVIEW, REPORT } view_t;
@@ -52,7 +53,7 @@ static unsigned selected, action, key_counts[3][5];
 static view_t view = HOME;
 static int64_t ignore_click_until;
 static bool review_pending;
-static char detail[224] = "Driver evidence is separate\nfrom your PASS / FAIL grade.";
+static char detail[512] = LAB_TEXT("Driver evidence is separate\nfrom your PASS / FAIL grade.", "操作结果供参考\n是否通过由你判断");
 
 void lab_require_restart(void) { atomic_store(&restart_required, true); }
 bool lab_cancelled(void) { return atomic_load(&cancel_job); }
@@ -85,7 +86,7 @@ static void init_storage(void)
     lab_record_init(&record);
     esp_err_t e = nvs_flash_init();
     // Never erase a user's NVS to recover an incompatible or full partition.
-    if (e != ESP_OK) { snprintf(detail, sizeof(detail), "NVS unavailable: %s\nNo erase attempted.", esp_err_to_name(e)); return; }
+    if (e != ESP_OK) { snprintf(detail, sizeof(detail), LAB_TEXT("NVS unavailable: %s\nNo erase attempted.", "NVS 不可用: %s\n未擦除存储"), esp_err_to_name(e)); return; }
     e = nvs_open("ppdemo", NVS_READWRITE, &storage);
     if (e != ESP_OK) return;
     storage_open = true;
@@ -94,7 +95,7 @@ static void init_storage(void)
     e = nvs_get_blob(storage, "record", &saved, &n);
     if (e == ESP_OK && n == sizeof(saved) && lab_record_valid(&saved)) record = saved;
     else if (e != ESP_ERR_NVS_NOT_FOUND)
-        snprintf(detail, sizeof(detail), "Saved report invalid.\nRAM report starts empty.\nNo erase attempted.");
+        snprintf(detail, sizeof(detail), LAB_TEXT("Saved report invalid.\nRAM report starts empty.\nNo erase attempted.", "原报告无效\n本次从空报告开始\n未擦除存储"));
     (void)nvs_get_u32(storage, "boots", &boots);
     if (boots < UINT32_MAX) boots++;
     if (nvs_set_u32(storage, "boots", boots) == ESP_OK) (void)nvs_commit(storage);
@@ -102,7 +103,7 @@ static void init_storage(void)
 static void export_report(void)
 {
     char json[1100];
-    int n = snprintf(json, sizeof(json), "{\"app\":\"PPDemo\",\"version\":\"%s\",\"boots\":%lu,\"manual_grades\":{",
+    int n = snprintf(json, sizeof(json), "{\"app\":\"" LAB_APP_NAME "\",\"version\":\"%s\",\"boots\":%lu,\"manual_grades\":{",
                      esp_app_get_description()->version, (unsigned long)boots);
     for (unsigned i=0; i<LAB_COUNT; i++)
         n += snprintf(json+n, sizeof(json)-(size_t)n, "%s\"%s\":\"%s\"", i ? "," : "", lab_name(i), lab_result_name(record.results[i]));
@@ -120,7 +121,7 @@ static esp_err_t audio_test(unsigned operation)
     if (operation == 0) {
         const unsigned tones[] = {440, 660, 880};
         for (unsigned tone=0; tone<3 && !lab_cancelled(); tone++) {
-            lab_notice("Tone %u Hz\nVolume 45%%\n\nListen for clean sound.", tones[tone]);
+            lab_notice(LAB_TEXT("Tone %u Hz\nVolume 45%%\n\nListen for clean sound.", "音调 %u Hz\n音量 45%%\n\n请听声音是否清晰"), tones[tone]);
             for (unsigned block=0; block<16 && !lab_cancelled(); block++) {
                 for (unsigned i=0; i<256; i++) samples[i]=(int16_t)(7000*sinf(6.2831853f*tones[tone]*(block*256+i)/16000));
                 e = bsp_audio_write(samples, sizeof(samples)); if (e != ESP_OK) return e;
@@ -131,7 +132,7 @@ static esp_err_t audio_test(unsigned operation)
         int16_t *recording=malloc(48000*sizeof(int16_t));
         if (!recording) return ESP_ERR_NO_MEM;
         unsigned peak=0, clipped=0;
-        lab_notice("Recording 3 seconds...\nSpeak normally.\n\nRAM only. Never uploaded.");
+        lab_notice(LAB_TEXT("Recording 3 seconds...\nSpeak normally.\n\nRAM only. Never uploaded.", "正在录音 3 秒\n请正常说话\n\n仅存内存，不上传"));
         for (unsigned offset=0; offset<48000 && !lab_cancelled();) {
             unsigned count=48000-offset < 256 ? 48000-offset : 256;
             e=bsp_audio_read(recording+offset, count*sizeof(int16_t)); if (e != ESP_OK) break;
@@ -143,7 +144,7 @@ static esp_err_t audio_test(unsigned operation)
         }
         if (e == ESP_OK && !lab_cancelled()) { clip=recording; clip_samples=48000; }
         else free(recording);
-        lab_notice("Recording %s\nPeak %u / 32768\nClipped samples %u\n\nSelect playback to listen.", clip ? "complete" : "discarded", peak, clipped);
+        lab_notice(LAB_TEXT("Recording %s\nPeak %u / 32768\nClipped samples %u\n\nSelect playback to listen.", "录音%s\n峰值 %u / 32768\n削波采样 %u\n\n选择回放试听"), clip ? LAB_TEXT("complete", "完成") : LAB_TEXT("discarded", "已丢弃"), peak, clipped);
     } else {
         if (!clip_samples) return ESP_ERR_INVALID_STATE;
         for (size_t offset=0; offset<clip_samples && !lab_cancelled();) {
@@ -164,12 +165,12 @@ static esp_err_t storage_test(void)
     if (e == ESP_OK) e=nvs_commit(storage);
     if (e == ESP_OK) e=nvs_get_u32(storage, "probe", &after);
     if (e == ESP_OK && after!=before+1) e=ESP_FAIL;
-    lab_notice("NVS commit/read: %s\nCounter %lu -> %lu\nBoot counter %lu\n\nPower-cycle to verify\nreport persistence.", esp_err_to_name(e), (unsigned long)before, (unsigned long)after, (unsigned long)boots);
+    lab_notice(LAB_TEXT("NVS commit/read: %s\nCounter %lu -> %lu\nBoot counter %lu\n\nPower-cycle to verify\nreport persistence.", "NVS 写入/读取: %s\n计数 %lu -> %lu\n开机次数 %lu\n\n重启后核对报告保留"), esp_err_to_name(e), (unsigned long)before, (unsigned long)after, (unsigned long)boots);
     return e;
 }
 static esp_err_t sleep_test(unsigned mode)
 {
-    lab_notice("Sleep starts in 1 second.\nRelease all buttons.\nHold OK to cancel.");
+    lab_notice(LAB_TEXT("Sleep starts in 1 second.\nRelease all buttons.\nHold OK to cancel.", "1 秒后进入休眠\n请松开所有按键\n长按 OK 取消"));
     vTaskDelay(pdMS_TO_TICKS(1000));
     if (lab_cancelled()) return ESP_OK;
     if (mode == 0) {
@@ -181,7 +182,7 @@ static esp_err_t sleep_test(unsigned mode)
         (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
         esp_err_t wake=audio_state == ESP_OK ? bsp_audio_wake() : ESP_OK;
         bsp_display_backlight(75);
-        lab_notice("Light sleep: %s\nElapsed %lld ms\nAudio wake: %s\n\nNo current measurement.", esp_err_to_name(e), (long long)((esp_timer_get_time()-start)/1000), esp_err_to_name(wake));
+        lab_notice(LAB_TEXT("Light sleep: %s\nElapsed %lld ms\nAudio wake: %s\n\nNo current measurement.", "浅睡: %s\n耗时 %lld ms\n音频唤醒: %s\n\n不测量电流"), esp_err_to_name(e), (long long)((esp_timer_get_time()-start)/1000), esp_err_to_name(wake));
         return e == ESP_OK ? wake : e;
     }
     int mv=bsp_button_read_mv();
@@ -231,7 +232,7 @@ static void io_worker(void *arg)
             int soc=e == ESP_OK ? bsp_battery_soc() : -1;
             int mv=e == ESP_OK ? bsp_battery_mv() : -1;
             if (soc<0 || mv<0) e=ESP_FAIL;
-            lab_notice("Fuel gauge: %s\nSOC %d %%\nVoltage %d mV\n\nGauge may be absent.\nNo calibrated current\nor runtime claim.", esp_err_to_name(e), soc, mv);
+            lab_notice(LAB_TEXT("Fuel gauge: %s\nSOC %d %%\nVoltage %d mV\n\nGauge may be absent.\nNo calibrated current\nor runtime claim.", "电量计: %s\n电量 %d %%\n电压 %d mV\n\n部分设备无电量计\n不测电流与续航"), esp_err_to_name(e), soc, mv);
             break;
         }
         default: e=ESP_ERR_NOT_SUPPORTED; break;
@@ -267,45 +268,45 @@ static unsigned action_count(void)
 }
 static const char *action_name(void)
 {
-    static const char *display[]={"Alignment", "Red", "Green", "Blue", "White", "Black", "Gray", "Color bars", "Gray steps", "Backlight 25%"};
-    static const char *audio[]={"Play test tones", "Record 3 seconds", "Play recording"};
+    static const char *display[]={LAB_TEXT("Alignment", "边缘对齐"), LAB_TEXT("Red", "红色"), LAB_TEXT("Green", "绿色"), LAB_TEXT("Blue", "蓝色"), LAB_TEXT("White", "白色"), LAB_TEXT("Black", "黑色"), LAB_TEXT("Gray", "灰色"), LAB_TEXT("Color bars", "彩色条"), LAB_TEXT("Gray steps", "灰阶"), LAB_TEXT("Backlight 25%", "背光 25%")};
+    static const char *audio[]={LAB_TEXT("Play test tones", "播放测试音"), LAB_TEXT("Record 3 seconds", "录音 3 秒"), LAB_TEXT("Play recording", "回放录音")};
     if (selected==LAB_DISPLAY) return display[action];
     if (selected==LAB_AUDIO) return audio[action];
-    if (selected==LAB_SLEEP) return action ? "Deep sleep 10s" : "Light sleep 2s";
-    if (selected==LAB_WIFI) return "Start Wi-Fi test";
-    if (selected==LAB_BLE) return "Start BLE echo";
-    return "Run check";
+    if (selected==LAB_SLEEP) return action ? LAB_TEXT("Deep sleep 10s", "深睡 10 秒") : LAB_TEXT("Light sleep 2s", "浅睡 2 秒");
+    if (selected==LAB_WIFI) return LAB_TEXT("Start Wi-Fi test", "开始 Wi-Fi 测试");
+    if (selected==LAB_BLE) return LAB_TEXT("Start BLE echo", "开始蓝牙回读");
+    return LAB_TEXT("Run check", "开始检查");
 }
 static void render(void)
 {
     if (atomic_load(&terminal_sleep)) return;
-    char meta[80], body[256];
-    snprintf(meta,sizeof(meta),"%02u / %02u   %s",selected+1,LAB_COUNT,lab_result_name(record.results[selected]));
+    char meta[128], body[768];
+    snprintf(meta,sizeof(meta),"%02u / %02u   %s",selected+1,LAB_COUNT,lab_ui_result(record.results[selected]));
     if (view==HOME) {
-        snprintf(body,sizeof(body),"%s\n\n%u / %u marked PASS\nBoot %lu\n\nOK: open test\nHold OK: report",lab_name(selected),lab_record_passed(&record),LAB_COUNT,(unsigned long)boots);
-        lab_ui_show("Hardware checks",meta,body,"UP / DOWN: select",0);
+        snprintf(body,sizeof(body),LAB_TEXT("%s\n\n%u / %u marked PASS\nBoot %lu\n\nOK: open test\nHold OK: report", "%s\n\n通过 %u / %u 项\n开机 %lu 次\n\n单击 OK 开始\n长按 OK 查看报告"),lab_ui_name(selected),lab_record_passed(&record),LAB_COUNT,(unsigned long)boots);
+        lab_ui_show(LAB_TEXT("Hardware checks", "硬件体验"),meta,body,LAB_TEXT("UP / DOWN: select", "上/下选择项目"),0);
     } else if (view==REVIEW) {
-        lab_ui_show(lab_name(selected),"YOUR OBSERVATION","UP: mark PASS\nDOWN: mark FAIL\nOK: leave untested\n\nDriver return codes\nnever auto-grade.\nHold OK: go back","Saved in local NVS",0);
+        lab_ui_show(lab_ui_name(selected),LAB_TEXT("YOUR OBSERVATION", "请按实际体验评价"),LAB_TEXT("UP: mark PASS\nDOWN: mark FAIL\nOK: leave untested\n\nDriver return codes\nnever auto-grade.\nHold OK: go back", "上键: 通过\n下键: 不通过\nOK: 未测试\n\n不会自动判定结果\n长按 OK 返回"),LAB_TEXT("Saved in local NVS", "结果保存在本机"),0);
     } else if (view==REPORT) {
         size_t n=0;
-        for (unsigned i=0;i<LAB_COUNT;i++) n+=(size_t)snprintf(body+n,sizeof(body)-n,"%s: %s\n",lab_name(i),lab_result_name(record.results[i]));
-        lab_ui_show("Manual report","OK: USB JSON EXPORT",body,"Hold OK: home",0);
+        for (unsigned i=0;i<LAB_COUNT;i++) n+=(size_t)snprintf(body+n,sizeof(body)-n,"%s: %s\n",lab_ui_name(i),lab_ui_result(record.results[i]));
+        lab_ui_show(LAB_TEXT("Manual report", "测试报告"),LAB_TEXT("OK: USB JSON EXPORT", "OK 导出 USB JSON"),body,LAB_TEXT("Hold OK: home", "长按 OK 返回首页"),0);
     } else if (selected==LAB_DISPLAY) {
-        lab_ui_show("Display",action_name(),action==0 ? "Check edge alignment,\ntext and rounded corners.\n\nUP / DOWN: pattern\nOK: next pattern" : "", "Hold OK: finish test",action<9 ? (int)action : 0);
+        lab_ui_show(LAB_TEXT("Display", "屏幕"),action_name(),action==0 ? LAB_TEXT("Check edge alignment,\ntext and rounded corners.\n\nUP / DOWN: pattern\nOK: next pattern", "检查边缘、文字和圆角\n\n上/下切换图案\nOK 选择下一个图案") : "", LAB_TEXT("Hold OK: finish test", "长按 OK 结束测试"),action<9 ? (int)action : 0);
     } else {
         if (selected==LAB_KEYS) {
-            snprintf(body,sizeof(body),"ADC: %d mV\nPRESS CLICK DBL LONG UP\nU %u %u %u %u %u\nD %u %u %u %u %u\nK %u %u %u %u %u\n\nTry each button / hold.",bsp_button_read_mv(),key_counts[0][0],key_counts[0][1],key_counts[0][2],key_counts[0][3],key_counts[0][4],key_counts[1][0],key_counts[1][1],key_counts[1][2],key_counts[1][3],key_counts[1][4],key_counts[2][0],key_counts[2][1],key_counts[2][2],key_counts[2][3],key_counts[2][4]);
+            snprintf(body,sizeof(body),LAB_TEXT("ADC: %d mV\nPRESS CLICK DBL LONG UP\nU %u %u %u %u %u\nD %u %u %u %u %u\nK %u %u %u %u %u\n\nTry each button / hold.", "ADC: %d mV\n按下 单击 双击 长按 松开\n上 %u %u %u %u %u\n下 %u %u %u %u %u\nOK %u %u %u %u %u\n\n请逐个按键和长按"),bsp_button_read_mv(),key_counts[0][0],key_counts[0][1],key_counts[0][2],key_counts[0][3],key_counts[0][4],key_counts[1][0],key_counts[1][1],key_counts[1][2],key_counts[1][3],key_counts[1][4],key_counts[2][0],key_counts[2][1],key_counts[2][2],key_counts[2][3],key_counts[2][4]);
         } else snprintf(body,sizeof(body),"%s",detail);
-        lab_ui_show(lab_name(selected),busy ? "RUNNING / HOLD OK TO STOP" : action_name(),body,"Hold OK: finish test",0);
+        lab_ui_show(lab_ui_name(selected),busy ? LAB_TEXT("RUNNING / HOLD OK TO STOP", "运行中 / 长按 OK 停止") : action_name(),body,LAB_TEXT("Hold OK: finish test", "长按 OK 结束测试"),0);
     }
 }
 static void enter_test(void)
 {
     view=TEST; action=0;
-    snprintf(detail,sizeof(detail),"UP / DOWN: select action\nOK: start\n\nHold OK: review result");
+    snprintf(detail,sizeof(detail),LAB_TEXT("UP / DOWN: select action\nOK: start\n\nHold OK: review result", "上/下选择动作\nOK 开始\n\n长按 OK 评价结果"));
     if (selected==LAB_KEYS) memset(key_counts,0,sizeof(key_counts));
-    if (selected==LAB_USB) snprintf(detail,sizeof(detail),"USB Serial / JTAG\n115200 8N1\n\nType report + Enter\nto export JSON.\n\nNot a USB sound card.");
-    if (selected==LAB_NFC) snprintf(detail,sizeof(detail),"Passive NTAG213\n\nRead tag with a phone.\nDo not overwrite tag.\n\nNo MCU NFC reader.\nManual result only.");
+    if (selected==LAB_USB) snprintf(detail,sizeof(detail),LAB_TEXT("USB Serial / JTAG\n115200 8N1\n\nType report + Enter\nto export JSON.\n\nNot a USB sound card.", "USB 串口 / JTAG\n115200 8N1\n\n输入 report 并回车\n导出 JSON 报告\n\n不是 USB 声卡"));
+    if (selected==LAB_NFC) snprintf(detail,sizeof(detail),LAB_TEXT("Passive NTAG213\n\nRead tag with a phone.\nDo not overwrite tag.\n\nNo MCU NFC reader.\nManual result only.", "被动 NTAG213 标签\n\n请用手机读取\n不要改写标签\n\n芯片不能读写 NFC\n由你手动评价"));
 }
 static void handle_key(const event_t *event)
 {
@@ -326,7 +327,7 @@ static void handle_key(const event_t *event)
         lab_record_t before=record;
         lab_record_set(&record,selected,event->key==BSP_BTN_UP ? LAB_PASS : event->key==BSP_BTN_DOWN ? LAB_FAIL : LAB_UNTESTED);
         esp_err_t e=save_record();
-        if (e!=ESP_OK) { record=before; view=TEST; snprintf(detail,sizeof(detail),"Report NOT saved: %s\nNo grade changed.",esp_err_to_name(e)); }
+        if (e!=ESP_OK) { record=before; view=TEST; snprintf(detail,sizeof(detail),LAB_TEXT("Report NOT saved: %s\nNo grade changed.", "报告未保存: %s\n原评价保持不变"),esp_err_to_name(e)); }
         else view=HOME;
     } else if (view==REPORT) {
         if (event->key==BSP_BTN_OK) export_report();
@@ -335,7 +336,7 @@ static void handle_key(const event_t *event)
         else if (selected==LAB_DISPLAY) action=(action+1)%action_count();
         else {
             if (atomic_load(&restart_required)) {
-                snprintf(detail,sizeof(detail),"Resource cleanup unconfirmed.\nRestart device before\nstarting another test."); return;
+                snprintf(detail,sizeof(detail),LAB_TEXT("Resource cleanup unconfirmed.\nRestart device before\nstarting another test.", "资源清理未确认\n请先重启设备\n再开始其他测试")); return;
             }
             atomic_store(&cancel_job,false);
             job_t job={.test=selected,.action=action};
@@ -362,13 +363,13 @@ void app_main(void)
     e=bsp_button_init(button,NULL);
     if (e==ESP_OK && bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN)
         atomic_store(&wake_guard,false);
-    if (e!=ESP_OK) snprintf(detail,sizeof(detail),"Buttons unavailable: %s",esp_err_to_name(e));
+    if (e!=ESP_OK) snprintf(detail,sizeof(detail),LAB_TEXT("Buttons unavailable: %s", "按键不可用: %s"),esp_err_to_name(e));
     if (xTaskCreate(io_worker,"pp_io",6144,NULL,3,NULL)!=pdPASS || xTaskCreate(console,"pp_console",3072,NULL,2,NULL)!=pdPASS) {
-        lab_ui_show("Startup failed","OUT OF MEMORY","Restart device.\nNo tests started.","USB log has details",0); return;
+        lab_ui_show(LAB_TEXT("Startup failed", "启动失败"),LAB_TEXT("OUT OF MEMORY", "内存不足"),LAB_TEXT("Restart device.\nNo tests started.", "请重启设备\n尚未开始测试"),LAB_TEXT("USB log has details", "详情见 USB 日志"),0); return;
     }
     if (sleep_marker==0x50505731) {
         sleep_marker=0; selected=LAB_SLEEP; view=TEST;
-        snprintf(detail,sizeof(detail),"Deep sleep wake cause: %d\n\nVerify display, keys\nand audio after wake.\nNo automatic PASS.",(int)esp_sleep_get_wakeup_cause());
+        snprintf(detail,sizeof(detail),LAB_TEXT("Deep sleep wake cause: %d\n\nVerify display, keys\nand audio after wake.\nNo automatic PASS.", "深睡唤醒原因: %d\n\n请检查屏幕、按键\n和声音是否正常\n不会自动判定通过"),(int)esp_sleep_get_wakeup_cause());
     }
     ESP_LOGI("ppdemo","Firmware %s; audio=%s battery=%s. USB: type report",esp_app_get_description()->version,esp_err_to_name(audio_state),esp_err_to_name(battery_state));
     render();
@@ -381,9 +382,9 @@ void app_main(void)
         else if (event.kind==EV_REPORT) export_report();
         else if (event.kind==EV_DONE) {
             busy=false;
-            if (atomic_load(&restart_required)) snprintf(detail,sizeof(detail),"Cleanup unconfirmed: %s\nRestart device.\nNo new tests accepted.",esp_err_to_name(event.error));
-            else if (event.error!=ESP_OK) snprintf(detail,sizeof(detail),"Driver returned: %s\n\nNo automatic FAIL.\nCheck USB logs / wiring.",esp_err_to_name(event.error));
-            else if (lab_cancelled()) snprintf(detail,sizeof(detail),"Test stopped.\nManual grade unchanged.");
+            if (atomic_load(&restart_required)) snprintf(detail,sizeof(detail),LAB_TEXT("Cleanup unconfirmed: %s\nRestart device.\nNo new tests accepted.", "清理未确认: %s\n请重启设备\n暂停接受新测试"),esp_err_to_name(event.error));
+            else if (event.error!=ESP_OK) snprintf(detail,sizeof(detail),LAB_TEXT("Driver returned: %s\n\nNo automatic FAIL.\nCheck USB logs / wiring.", "驱动返回: %s\n\n不会自动判定失败\n请检查日志与接线"),esp_err_to_name(event.error));
+            else if (lab_cancelled()) snprintf(detail,sizeof(detail),LAB_TEXT("Test stopped.\nManual grade unchanged.", "测试已停止\n原评价保持不变"));
             if (review_pending) { view=REVIEW; review_pending=false; }
         }
         render();

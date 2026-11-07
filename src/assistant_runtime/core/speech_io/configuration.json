@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "namespace": "speech_io",
+  "title": "流式语音",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "max_streams": {
+        "type": "integer",
+        "default": 2,
+        "title": "同时语音流上限",
+        "minimum": 1,
+        "maximum": 8
+      },
+      "max_recording_seconds": {
+        "type": "integer",
+        "default": 60,
+        "title": "单次收音秒数",
+        "minimum": 1,
+        "maximum": 120
+      }
+    }
+  }
+}

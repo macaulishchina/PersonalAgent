@@ -1,3 +1,4 @@
+#include "lab_language.h"
 #include "lab_runtime.h"
 #include "lab_model.h"
 #include "esp_event.h"
@@ -42,39 +43,48 @@ static bool from_test_ap(httpd_req_t *r)
 }
 static esp_err_t form(httpd_req_t *r)
 {
-    if (!from_test_ap(r)) return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, "Use the PP test hotspot");
+    if (!from_test_ap(r)) return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, LAB_TEXT("Use the PP test hotspot", "请连接 PP 测试热点"));
+#ifdef PPDEMO_ZH
+    static const char html[] = "<!doctype html><html lang=zh-CN><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>PPDemo-Zh 配网</title><h1>PP 中文体验</h1>"
+        "<p>请选择 2.4 GHz 网络。名称与密码仅存内存，测试结束即清除；不测试互联网。</p>"
+        "<form method=post action=/connect><p>网络名称 <input name=ssid maxlength=32 required></p>"
+        "<p>密码 <input name=password type=password maxlength=63></p><button>连接</button></form></html>";
+#else
     static const char html[] = "<!doctype html><meta name=viewport content='width=device-width'>"
         "<title>PP DEMO Wi-Fi</title><h1>PP DEMO</h1><p>Connect to a 2.4 GHz network. "
         "Credentials stay in RAM and disappear when this test ends. No Internet test is performed.</p>"
         "<form method=post action=/connect><p>SSID <input name=ssid maxlength=32 required></p>"
         "<p>Password <input name=password type=password maxlength=63></p><button>Connect</button></form>";
+#endif
     httpd_resp_set_type(r, "text/html; charset=utf-8");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     return httpd_resp_send(r, html, HTTPD_RESP_USE_STRLEN);
 }
 static esp_err_t connect_network(httpd_req_t *r)
 {
-    if (!from_test_ap(r)) return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, "Use the PP test hotspot");
+    if (!from_test_ap(r)) return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, LAB_TEXT("Use the PP test hotspot", "请连接 PP 测试热点"));
     char body[257] = {0}, ssid[33] = {0}, password[65] = {0}, origin[80];
     if (r->content_len <= 0 || r->content_len > 256)
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Body exceeds limit");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, LAB_TEXT("Body exceeds limit", "请求内容过长"));
     size_t origin_len = httpd_req_get_hdr_value_len(r, "Origin");
     if (origin_len && (origin_len >= sizeof(origin) ||
         httpd_req_get_hdr_value_str(r, "Origin", origin, sizeof(origin)) != ESP_OK ||
         strcmp(origin, "http://192.168.4.1")))
-        return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, "Wrong origin");
+        return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, LAB_TEXT("Wrong origin", "请求来源不符"));
     int used = 0;
     while (used < r->content_len) {
         int got = httpd_req_recv(r, body+used, r->content_len-used);
         if (got <= 0) {
             memset(body, 0, sizeof(body));
-            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Incomplete form");
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, LAB_TEXT("Incomplete form", "表单接收不完整"));
         }
         used += got;
     }
     if (!lab_parse_credentials(body, ssid, password)) {
         memset(body, 0, sizeof(body)); memset(password, 0, sizeof(password));
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Invalid SSID/password");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, LAB_TEXT("Invalid SSID/password", "网络名称或密码无效"));
     }
     wifi_config_t config = {0};
     memcpy(config.sta.ssid, ssid, strlen(ssid));
@@ -85,9 +95,9 @@ static esp_err_t connect_network(httpd_req_t *r)
     esp_err_t error = esp_wifi_set_config(WIFI_IF_STA, &config);
     memset(&config, 0, sizeof(config));
     if (error == ESP_OK) error = esp_wifi_connect();
-    if (error != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Connection rejected");
+    if (error != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, LAB_TEXT("Connection rejected", "连接请求被拒绝"));
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    return httpd_resp_sendstr(r, "Connection requested. Check PP screen for IP or failure. This is not proof of Internet access.");
+    return httpd_resp_sendstr(r, LAB_TEXT("Connection requested. Check PP screen for IP or failure. This is not proof of Internet access.", "已请求连接，请查看 PP 屏幕上的 IP 或错误。这不代表互联网可用。"));
 }
 
 esp_err_t lab_wifi_test(void)
@@ -139,12 +149,12 @@ esp_err_t lab_wifi_test(void)
     const httpd_uri_t post = {.uri="/connect", .method=HTTP_POST, .handler=connect_network};
     if ((error = httpd_register_uri_handler(server, &get)) != ESP_OK) goto cleanup;
     if ((error = httpd_register_uri_handler(server, &post)) != ESP_OK) goto cleanup;
-    lab_notice("Found %u networks\n\nJoin %s\nKey %s\nOpen 192.168.4.1\n\nRAM only / 180s limit", found, name, key);
+    lab_notice(LAB_TEXT("Found %u networks\n\nJoin %s\nKey %s\nOpen 192.168.4.1\n\nRAM only / 180s limit", "找到 %u 个网络\n热点 %s\n密码 %s\n打开 192.168.4.1\n\n仅存内存 / 限时 180 秒"), found, name, key);
     for (int second = 0; second < 180 && !lab_cancelled(); second++) {
         EventBits_t bits = xEventGroupWaitBits(events, GOT_IP | DISCONNECTED, pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
         esp_ip4_addr_t ip = {.addr=atomic_load(&assigned_ip)};
-        if (bits & GOT_IP) lab_notice("Wi-Fi IP acquired\n" IPSTR "\n\nLAN connection only.\nInternet not tested.\n\nHold OK to stop.", IP2STR(&ip));
-        if ((bits & DISCONNECTED) && !(bits & GOT_IP)) lab_notice("Wi-Fi disconnected.\nReason code %u\nCheck password/signal.\n\nReopen the phone form\nor hold OK to stop.", atomic_load(&disconnect_reason));
+        if (bits & GOT_IP) lab_notice(LAB_TEXT("Wi-Fi IP acquired\n", "Wi-Fi 已获取 IP\n") IPSTR LAB_TEXT("\n\nLAN connection only.\nInternet not tested.\n\nHold OK to stop.", "\n\n仅确认局域网连接\n未验证互联网\n长按 OK 停止"), IP2STR(&ip));
+        if ((bits & DISCONNECTED) && !(bits & GOT_IP)) lab_notice(LAB_TEXT("Wi-Fi disconnected.\nReason code %u\nCheck password/signal.\n\nReopen the phone form\nor hold OK to stop.", "Wi-Fi 已断开\n原因代码 %u\n请检查密码和信号\n\n手机重新配网\n或长按 OK 停止"), atomic_load(&disconnect_reason));
     }
 cleanup:
     // Failed shutdown is not permission to free resources still in use.

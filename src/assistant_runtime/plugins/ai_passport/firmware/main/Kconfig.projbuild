@@ -1,0 +1,8 @@
+menu "PPDemo"
+config PPDEMO_LANGUAGE_ZH
+    bool "Chinese display and provisioning page"
+    default n
+    help
+        Build PPDemo-Zh with bundled Chinese glyphs. Tests and JSON report keys
+        remain shared with the English PPDemo firmware.
+endmenu

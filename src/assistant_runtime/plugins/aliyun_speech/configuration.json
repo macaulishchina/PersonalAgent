@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "namespace": "aliyun_speech",
+  "title": "阿里百炼语音",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "default": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+        "title": "北京地域接口",
+        "pattern": "^wss://[^\\s]+$"
+      },
+      "recognition_model": {
+        "type": "string",
+        "default": "fun-asr-realtime",
+        "title": "识别模型",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "synthesis_model": {
+        "type": "string",
+        "default": "cosyvoice-v3-flash",
+        "title": "合成模型",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "voice": {
+        "type": "string",
+        "default": "longanyang",
+        "title": "中文音色",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "rate": {
+        "type": "number",
+        "default": 1.0,
+        "title": "语速",
+        "minimum": 0.5,
+        "maximum": 2
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "default": 30,
+        "title": "语音流无响应超时",
+        "minimum": 5,
+        "maximum": 120
+      },
+      "api_key_env": {
+        "type": "string",
+        "const": "DASHSCOPE_API_KEY",
+        "default": "DASHSCOPE_API_KEY",
+        "title": "凭据名称",
+        "description": "在模型与账号的私有环境凭据中设置；密钥不会写入插件配置。"
+      },
+      "capabilities": {
+        "type": "array",
+        "title": "提供的语音能力",
+        "default": [
+          "recognize",
+          "synthesize"
+        ],
+        "items": {
+          "type": "string",
+          "enum": [
+            "recognize",
+            "synthesize"
+          ]
+        },
+        "minItems": 1,
+        "uniqueItems": true,
+        "description": "识别、合成可分别由不同适配插件提供；同一种能力只启用一个提供方。"
+      }
+    }
+  }
+}

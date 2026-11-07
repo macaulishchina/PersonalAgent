@@ -1,12 +1,69 @@
 {
   "version": 1,
-  "namespace": "",
-  "title": "AI Passport（开发骨架）",
+  "namespace": "ai_passport",
+  "title": "AI Passport",
   "group": "extensions",
   "schema": {
     "type": "object",
-    "description": "仅提供插件与固件工程骨架，尚无设备连接或业务配置。通过实例 plugins 列表启停；启用不代表设备可用。",
-    "properties": {},
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {
+      "public_url": {
+        "type": "string",
+        "default": "",
+        "title": "PP 公网 WSS 地址",
+        "description": "例如 wss://服务器:9443/pa/passport/stream；需受信 TLS 证书。"
+      },
+      "nickname": {
+        "type": "string",
+        "default": "嘟嘟",
+        "minLength": 1,
+        "maxLength": 24,
+        "title": "终端显示昵称"
+      },
+      "volume": {
+        "type": "integer",
+        "default": 45,
+        "minimum": 0,
+        "maximum": 100,
+        "title": "初始音量"
+      },
+      "sleep_seconds": {
+        "type": "integer",
+        "default": 120,
+        "minimum": 30,
+        "maximum": 3600,
+        "title": "空闲休眠秒数"
+      },
+      "input_mode": {
+        "type": "string",
+        "default": "steer",
+        "enum": [
+          "steer",
+          "queue"
+        ],
+        "title": "初始输入模式"
+      },
+      "auto_speak": {
+        "type": "boolean",
+        "default": true,
+        "title": "自动播报新回复"
+      },
+      "max_connections": {
+        "type": "integer",
+        "default": 2,
+        "minimum": 1,
+        "maximum": 8,
+        "title": "设备连接上限"
+      },
+      "keep_online": {
+        "type": "boolean",
+        "default": false,
+        "title": "初始保持在线",
+        "description": "硬件暂不检测外部供电；设备菜单可手动切换并保存。关闭时按空闲时间休眠。"
+      }
+    }
+  },
+  "interface": {
+    "terminal_management": true
   }
 }

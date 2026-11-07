@@ -8,6 +8,7 @@ class HttpFrontend:
     def __init__(self):
         self.key = secrets.token_urlsafe(32)
         self.endpoint = None
+        self.management = None
 
     def publish(self, host, port):
         address = ipaddress.ip_address(host)
@@ -15,8 +16,12 @@ class HttpFrontend:
             raise ValueError("HTTP frontend must use a local transport")
         self.endpoint = {"host": host, "port": port, "key": self.key}
 
+    def register_management(self, callback):
+        self.management = callback
+
     def withdraw(self):
         self.endpoint = None
+        self.management = None
 
 
 def scoped(host, owner):

@@ -102,6 +102,8 @@ class UsageSettings:
                 "input_cny_per_million",
                 "output_cny_per_million",
                 "request_cny",
+                "audio_cny_per_second",
+                "text_cny_per_character",
             }:
                 raise ValueError("Invalid usage price")
             if not isinstance(price.get("provider"), str) or not isinstance(price.get("model", ""), str):
@@ -110,7 +112,13 @@ class UsageSettings:
             if route in price_routes:
                 raise ValueError("Ambiguous usage price route")
             price_routes.add(route)
-            if not set(price) & {"request_cny", "input_cny_per_million", "output_cny_per_million"}:
+            if not set(price) & {
+                "request_cny",
+                "input_cny_per_million",
+                "output_cny_per_million",
+                "audio_cny_per_second",
+                "text_cny_per_character",
+            }:
                 raise ValueError("Usage price needs explicit amounts")
             if ("input_cny_per_million" in price) != ("output_cny_per_million" in price):
                 raise ValueError("Token prices require both input and output amounts")

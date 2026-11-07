@@ -3,6 +3,7 @@ from assistant_runtime.api.files import FileRequest
 from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import NotificationSettings
+from assistant_runtime.api.terminal import TerminalNotifications
 
 
 def build(host):
@@ -15,6 +16,7 @@ DECLARATION = PluginDefinition(
     provides=(
         NotificationRequest,
         NotificationLink,
+        TerminalNotifications,
     ),
     uses=(TaskRequest, FileRequest),
     configuration=configuration_spec(__file__),

@@ -13,8 +13,10 @@ def package(build: Path, destination: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     build = build.resolve()
     description = json.loads((build / "project_description.json").read_text())
-    if description["target"] != "esp32c3" or description["project_name"] != "ppdemo":
-        raise ValueError("Expected the actual ESP32-C3 PPDemo build")
+    if description["target"] != "esp32c3" or description["project_name"] not in {"ppdemo", "pa_terminal"}:
+        raise ValueError("Expected an actual ESP32-C3 PPDemo or PA terminal build")
+    project = description["project_name"]
+    app_root = root / "apps/pa_terminal" if project == "pa_terminal" else root
     args = json.loads((build / "flasher_args.json").read_text())
     files = {int(address, 0): name for address, name in args["flash_files"].items()}
     if set(files) != {0, 0x8000, 0x10000}:
@@ -24,7 +26,11 @@ def package(build: Path, destination: Path) -> None:
         raise ValueError("Expected the pinned ESP-IDF 5.5.3 build")
     images = {}
     manifest = {
-        "application": "PPDemo",
+        "application": "PA-Terminal"
+        if project == "pa_terminal"
+        else "PPDemo-Zh"
+        if configuration.get("PPDEMO_LANGUAGE_ZH", False)
+        else "PPDemo",
         "version": description["project_version"],
         "target": description["target"],
         "idf_version": configuration["IDF_INIT_VERSION"],
@@ -52,13 +58,26 @@ def package(build: Path, destination: Path) -> None:
             }
         )
     resources = {
-        "README.md": root / "README.md",
+        "README.md": app_root / "README.md",
         "docs/publishing-research.md": root / "docs/publishing-research.md",
         "LICENSE.folotoy": root / "LICENSE.folotoy",
-        "debug/ppdemo.elf": build / "ppdemo.elf",
-        "debug/ppdemo.map": build / "ppdemo.map",
-        "build-info/dependencies.lock": root / "dependencies.lock",
-        "build-info/sdkconfig": root / "sdkconfig",
+        **(
+            {
+                "docs/acceptance.md": root.parent / "docs/acceptance.md",
+                "docs/protocol.md": root.parent / "docs/protocol.md",
+            }
+            if project == "pa_terminal"
+            else {}
+        ),
+        **(
+            {"SourceHanSansSC.LICENSE.txt": app_root / "main/fonts/LICENSE.txt"}
+            if project == "pa_terminal" or configuration.get("PPDEMO_LANGUAGE_ZH", False)
+            else {}
+        ),
+        f"debug/{project}.elf": build / f"{project}.elf",
+        f"debug/{project}.map": build / f"{project}.map",
+        "build-info/dependencies.lock": app_root / "dependencies.lock",
+        "build-info/sdkconfig": Path(description.get("config_file", root / "sdkconfig")),
     }
     if any(not path.is_file() for path in resources.values()):
         raise ValueError("Missing build evidence; no package generated")
@@ -71,7 +90,12 @@ def package(build: Path, destination: Path) -> None:
                 archive.writestr(name, data)
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
             for name, path in resources.items():
-                archive.write(path, name)
+                if name == "README.md" and project == "pa_terminal":
+                    archive.writestr(
+                        name, path.read_text().replace("../../../docs/acceptance.md", "docs/acceptance.md")
+                    )
+                else:
+                    archive.write(path, name)
         os.replace(staged, destination)
     finally:
         staged.unlink(missing_ok=True)

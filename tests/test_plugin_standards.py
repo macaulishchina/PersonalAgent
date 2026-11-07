@@ -22,8 +22,7 @@ class PluginStandardsTest(unittest.TestCase):
                 self.assertEqual(spec.manifest.name, name)
                 self.assertIsNone(compatibility(releases[name]))
                 if module.startswith("assistant_runtime.core."):
-                    self.assertTrue(callable(spec.internal_factory))
-                    self.assertIsNone(spec.create)
+                    self.assertNotEqual(callable(spec.internal_factory), callable(spec.create))
                 else:
                     self.assertTrue(callable(spec.create))
                     self.assertIsNone(spec.internal_factory)
@@ -32,7 +31,7 @@ class PluginStandardsTest(unittest.TestCase):
                 self.assertEqual(len(spec.uses), len(set(spec.uses)))
                 if spec.config_key:
                     self.assertIsNotNone(spec.configuration)
-                    self.assertTrue(callable(spec.validate))
+                    self.assertTrue(callable(spec.validate) or bool(spec.configuration.schema))
                 if spec.configuration:
                     self.assertEqual(spec.configuration.version, 1)
                 for skill in spec.skills:

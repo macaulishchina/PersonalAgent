@@ -1,5 +1,7 @@
 """Pi foreground execution backend with unified model_api routing."""
 
+from assistant_runtime.api.conversation import ConversationInputChanged
+
 import asyncio
 import logging
 import re
@@ -426,18 +428,18 @@ class PiBackend:
     async def conversation_input(self, action, text, expected_turn, question_id=None):
         async with self.submit_lock:
             if self.active_turn != expected_turn:
-                raise ValueError("Conversation execution changed")
+                raise ConversationInputChanged("Conversation execution changed")
             if action == "answer":
                 question = self.pending_question
                 if not question or str(question["id"]) != str(question_id):
-                    raise ValueError("Question is no longer pending")
+                    raise ConversationInputChanged("Question is no longer pending")
                 answers = {item["id"]: {"answers": [text]} for item in question["data"].get("questions", [])}
                 await self.client.respond(question["id"], {"answers": answers})
                 if self.pending_question is question:
                     self.pending_question = None
                 return {"state": "answered"}
             if self.pending_question:
-                raise ValueError("Answer the pending question explicitly before supplementing")
+                raise ConversationInputChanged("Answer the pending question explicitly before supplementing")
             await self.client.request(
                 "run.steer",
                 {

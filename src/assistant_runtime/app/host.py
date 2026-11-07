@@ -170,6 +170,16 @@ class AssistantService:
                 writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
                 await writer.drain()
                 return
+            if action == "frontend-manage":
+                if d.get("execution_session"):
+                    raise ValueError("Frontend management is operator-only")
+                frontend = getattr(self, "http_frontends", {}).get(d.get("owner"))
+                if not frontend or not frontend.management:
+                    raise ValueError("Entrance management is unavailable")
+                result = await frontend.management(d.get("action"), d.get("arguments", {}))
+                writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                await writer.drain()
+                return
             if action == "http-frontend":
                 if d.get("execution_session"):
                     raise ValueError("HTTP routing is operator-only")

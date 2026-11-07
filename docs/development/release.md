@@ -6,7 +6,7 @@
 
 版本变更及历史适配说明见[0.4 发布历史](../archive/release-history-0.4.md)。本页只维护当前版本规则与发布流程。
 
-`src/assistant_runtime/VERSION` 是内核版本的唯一来源，Python 包、CLI 和全部核心插件共用它。当前开发候选为 `0.4.32`（API 2）；扩展分别在自己的 `plugin.json` 维护版本，仍随同一个框架 wheel 交付。内核与扩展分类保持不变。
+`src/assistant_runtime/VERSION` 是内核版本的唯一来源，Python 包、CLI 和全部核心插件共用它。当前开发候选为 `0.4.34`（API 2）；扩展分别在自己的 `plugin.json` 维护版本，仍随同一个框架 wheel 交付。内核与扩展分类保持不变。
 
 使用稳定的 `主.次.修订` 版本，首轮不发布预发行版本。`0.x` 阶段修订号用于兼容修复及可选的兼容新增能力（例如 0.4.14、0.4.17）；次版本可引入不兼容变化，插件通常声明 `>=0.4.0,<0.5.0`。进入 `1.x` 后，兼容新增功能递增次版本，不兼容变化递增主版本。已发布版本不得覆盖重发；兼容范围须经验证维护，不能为了通过检查自动放宽。
 
@@ -101,3 +101,10 @@ python -m scripts.verify_models --config /private/test/config.toml \
 结构化错误贯通 IPC、MCP、执行记录与网页；安全恢复关联原失败执行和原预算。
 未知费用保留预留，未确认操作仍受保护。API 2、data_format 1 不变，配置和存储为
 增量调整。Web 1.2.3 使用新的失败展示和恢复入口，要求内核至少 0.4.9。
+
+### 0.4.34 AI Passport 候选
+
+可选 `speech_io` 核心能力、`aliyun_speech` 适配及 `ai_passport` 终端入口，继续使用 API 2。
+新增终端输入回执、通知投递回执和语音非 token 计量；不替换对话、任务和通知的原始记录。
+固定 USB 语音仍不启用。三项新能力仅声明 Linux，Windows 与 PP 真机均需独立验收。
+发布状态与操作步骤见 [PP 接入](../../src/assistant_runtime/plugins/ai_passport/README.md)。

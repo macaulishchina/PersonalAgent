@@ -245,6 +245,14 @@ class Resources:
                     visit(child)
 
         visit(data)
+        # Shipped schema defaults declare credential references even before an explicit override exists.
+        from .catalog import catalog
+
+        enabled = set(data.get("plugins", []))
+        for item in catalog()["plugins"]:
+            if item["id"] in enabled:
+                properties = (item.get("configuration") or {}).get("schema", {}).get("properties", {})
+                visit({key: rule["default"] for key, rule in properties.items() if "default" in rule})
         from assistant_runtime.core.models.configuration_resources import credential_names
 
         names.update(credential_names(data))

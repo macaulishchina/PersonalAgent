@@ -243,6 +243,7 @@ function interfaceVisible(field) {
   );
 }
 function drawActions(plugin, section) {
+  if (plugin?.configuration?.interface?.terminal_management) drawTerminalDevices(plugin, section);
   for (const [id, operation] of Object.entries(
     plugin?.configuration?.interface?.actions || {},
   )) {
@@ -1868,4 +1869,52 @@ function displayProperties(rule, current) {
       ),
     );
   return props;
+}
+
+
+function drawTerminalDevices(plugin, section) {
+  const panel = node("section", undefined, "owner-action"),
+    name = node("input"), list = node("div"), status = node("p", "", "hint"),
+    refresh = node("button", "刷新设备", "secondary"),
+    pair = node("button", "添加设备并下载配对文件", "secondary");
+  name.placeholder = "设备名称";
+  name.setAttribute("aria-label", "设备名称");
+  name.maxLength = 48;
+  panel.append(node("h3", "终端设备"), node("p", "配对文件仅在本次生成时提供，有效期 10 分钟。通过 USB 写入设备；请勿分享，配置完成后删除本机文件。", "hint"), name, pair, refresh, status, list);
+  async function operation(actionName, args = {}) {
+    return api("/api/entrances/" + encodeURIComponent(plugin.id), {action: actionName, arguments: args});
+  }
+  async function reload() {
+    const reply = await operation("list");
+    list.replaceChildren();
+    for (const device of reply.devices) {
+      const row = node("div", undefined, "owner-action"),
+        revoke = node("button", "撤销配对", "secondary");
+      row.append(node("strong", device.name), node("span", device.revoked ? "已撤销" : device.connected ? "在线" : device.paired ? "离线" : "待配对"), node("small", "设备 " + device.device_id + " · 会话 " + device.session_id));
+      revoke.disabled = Boolean(device.revoked);
+      revoke.onclick = () => action(async () => {
+        if (!confirm("撤销后，该设备将立即断开且不能重新连接。已接受的任务继续执行。确定？")) return;
+        await operation("revoke", {device_id: device.device_id});
+        await reload();
+      });
+      row.append(revoke); list.append(row);
+    }
+    if (!reply.devices.length) list.append(node("p", "尚无配对设备", "hint"));
+  }
+  refresh.onclick = () => action(reload);
+  pair.onclick = () => action(async () => {
+    if (dirty()) throw Error("请先保存设置；配对使用已生效的 WSS 地址。");
+    if (!name.value.trim()) throw Error("请填写设备名称");
+    pair.disabled = true;
+    try {
+      const bundle = await operation("pair", {name: name.value.trim()});
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle)], {type: "application/json"}));
+      const link = node("a", "重新下载本次配对文件");
+      link.href = url; link.download = "pp-pairing.json";
+      status.replaceChildren(link); link.click();
+      setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 600000);
+      await reload();
+    } finally { pair.disabled = false; }
+  });
+  section.append(panel);
 }

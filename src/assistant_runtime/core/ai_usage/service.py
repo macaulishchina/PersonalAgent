@@ -112,7 +112,9 @@ class UsageService:
                 raise UsageError("usage_invalid_dimensions")
         bounds = bounds or {}
         if any(
-            k not in {"input_tokens", "output_tokens"} or type(v) is not int or v < 0
+            k not in {"input_tokens", "output_tokens", "audio_seconds", "text_characters"}
+            or type(v) is not int
+            or v < 0
             for k, v in bounds.items()
         ):
             raise UsageError("usage_invalid_reservation")
@@ -191,7 +193,15 @@ class UsageService:
             result["usage"] = {
                 k: v
                 for k, v in usage.items()
-                if k in {"input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"}
+                if k
+                in {
+                    "input_tokens",
+                    "output_tokens",
+                    "cached_input_tokens",
+                    "reasoning_tokens",
+                    "audio_seconds",
+                    "text_characters",
+                }
                 and type(v) is int
                 and v >= 0
             }

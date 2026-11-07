@@ -4,6 +4,7 @@ from assistant_runtime.api.lifecycle import admits_work
 from assistant_runtime.api.conversation import ConversationCancelled
 from assistant_runtime.api.models import CapabilityRequestError
 
+import re
 import asyncio
 import base64
 from dataclasses import asdict
@@ -82,7 +83,7 @@ class Conversation:
             row[0]
             for row in self.store.db.execute(
                 "SELECT DISTINCT turn_id FROM chat_messages WHERE session_id=? "
-                "AND source IN ('web','cli','operator') AND turn_id IS NOT NULL",
+                "AND (source IN ('web','cli','operator') OR source LIKE 'terminal:%') AND turn_id IS NOT NULL",
                 (self.session,),
             )
         }
@@ -454,7 +455,9 @@ class Conversation:
         retry_of=None,
         expected_model=None,
     ):
-        if source not in {"web", "cli", "operator"}:
+        if source not in {"web", "cli", "operator"} and not (
+            isinstance(source, str) and re.fullmatch(r"terminal:[a-zA-Z0-9_-]{1,64}", source)
+        ):
             raise ValueError("Unknown conversation entrance")
         if not getattr(getattr(self.backend.client, "settings", None), "enabled", True):
             raise ValueError("Model configuration required; configure this instance before chatting")

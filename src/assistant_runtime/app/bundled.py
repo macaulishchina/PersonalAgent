@@ -63,7 +63,7 @@ def dependencies(host, name):
         if name == "search"
         else ("TYPESAFE_API_KEY",)
         if name == "decisions"
-        else ()
+        else spec.credentials
     )
     from assistant_runtime.api.backends import select_backend
 

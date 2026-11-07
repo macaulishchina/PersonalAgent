@@ -51,7 +51,9 @@ class CertificationTest(unittest.TestCase):
 
     def test_bundled_platform_matrix_and_core_scope_is_unchanged(self):
         for name, module in OWNERS.items():
-            expected = ("linux", "windows")
+            expected = (
+                ("linux",) if name in {"ai_passport", "speech_io", "aliyun_speech"} else ("linux", "windows")
+            )
             with self.subTest(plugin=name):
                 self.assertEqual(platforms(name), expected)
                 self.assertEqual(declaration(name).supported_platforms, expected)

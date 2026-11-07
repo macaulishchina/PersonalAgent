@@ -1,11 +1,21 @@
 {
   "schema_version": 1,
   "id": "ai_passport",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "api_version": 2,
-  "requires_core": ">=0.4.30,<0.5.0",
-  "supported_platforms": ["linux"],
-  "requires": {},
-  "optional": {},
+  "requires_core": ">=0.4.34,<0.5.0",
+  "supported_platforms": [
+    "linux"
+  ],
+  "requires": {
+    "conversation": ">=0.4.34,<0.5.0",
+    "speech_io": ">=0.4.34,<0.5.0",
+    "ai_usage": ">=0.4.34,<0.5.0"
+  },
+  "optional": {
+    "notifications": ">=0.4.34,<0.5.0",
+    "tasks": ">=0.4.34,<0.5.0",
+    "memory": ">=0.4.34,<0.5.0"
+  },
   "critical": false
 }

@@ -1420,6 +1420,8 @@ class PiClient:
             from assistant_runtime.api.ai_usage import UsageScope
 
             existing_scope = await self.usage.binding(meta["budget_id"])
+            if not existing_scope and not retry_of and meta.get("context_input_id"):
+                existing_scope = await self.usage.binding(meta["context_input_id"])
             if existing_scope:
                 meta["budget_id"] = existing_scope.work_id
             else:

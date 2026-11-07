@@ -93,6 +93,11 @@ class NotificationsPlugin:
             self.host.workfiles.results.protection_checks["notification"] = self.result_protected
         context.register(NotificationRequest, self.request)
         context.register(NotificationLink, self.link)
+        from .terminals import TerminalDelivery
+        from assistant_runtime.api.terminal import TerminalNotifications
+
+        self.terminals = TerminalDelivery(self)
+        context.register(TerminalNotifications, self.terminals.request)
         for name, channel in self.channels.items():
             self.repo.recover(name, channel.replay_safe)
         for name in self.channels.keys() | {"voice"}:

@@ -69,7 +69,9 @@ version = {file = "src/assistant_runtime/VERSION"}
 "assistant_runtime.platforms" = ["*.mjs"]
 "assistant_runtime.plugins" = ["*.plugin.json"]
 "assistant_runtime.plugins.keyword" = ["FUNASR_LICENSE.txt"]
-"assistant_runtime.plugins.ai_passport" = ["README.md", "docs/*.md"]
+"assistant_runtime.plugins.ai_passport" = ["README.md", "docs/*.md", "docs/*.conf"]
+"assistant_runtime.plugins.aliyun_speech" = ["README.md"]
+"assistant_runtime.core.speech_io" = ["README.md"]
 "assistant_runtime.plugins.web" = ["static/*", "static/assets/*"]
 
 [tool.setuptools.exclude-package-data]

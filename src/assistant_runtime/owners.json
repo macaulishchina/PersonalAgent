@@ -27,5 +27,7 @@
   "v4l2": "assistant_runtime.plugins.v4l2",
   "voice_disabled": "assistant_runtime.plugins.speech",
   "gesture": "assistant_runtime.plugins.gesture",
-  "ai_passport": "assistant_runtime.plugins.ai_passport"
+  "ai_passport": "assistant_runtime.plugins.ai_passport",
+  "speech_io": "assistant_runtime.core.speech_io",
+  "aliyun_speech": "assistant_runtime.plugins.aliyun_speech"
 }

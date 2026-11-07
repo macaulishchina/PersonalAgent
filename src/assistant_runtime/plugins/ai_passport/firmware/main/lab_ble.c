@@ -1,3 +1,4 @@
+#include "lab_language.h"
 #include "lab_runtime.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -98,14 +99,14 @@ esp_err_t lab_ble_test(void)
     }
     for (unsigned second = 0; second < 120 && !lab_cancelled(); second++) {
         if (atomic_load(&failure)) { error = ESP_FAIL; break; }
-        lab_notice("Scan: PP-DEMO\nService FFF0\nWrite FFF1 / Read FFF2\n\nConnections %u\nEcho writes %u\n\nNo secrets on test BLE", atomic_load(&connections), atomic_load(&writes));
+        lab_notice(LAB_TEXT("Scan: PP-DEMO\nService FFF0\nWrite FFF1 / Read FFF2\n\nConnections %u\nEcho writes %u\n\nNo secrets on test BLE", "扫描 PP-DEMO\n服务 FFF0\n写入 FFF1 / 读取 FFF2\n连接次数 %u\n回读次数 %u\n\n请勿发送隐私数据"), atomic_load(&connections), atomic_load(&writes));
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 cleanup:
     atomic_store(&active, false);
     if (host_task) {
         if (nimble_port_stop() || xSemaphoreTake(stopped, pdMS_TO_TICKS(3000)) != pdTRUE) {
-            lab_notice("BLE stop unconfirmed.\nRestart required.");
+            lab_notice(LAB_TEXT("BLE stop unconfirmed.\nRestart required.", "蓝牙停止未确认\n请重启设备"));
             // Do not free resources the unconfirmed host may still access.
             // The UI/report remains available, but no replacement test can start.
             lab_require_restart();
