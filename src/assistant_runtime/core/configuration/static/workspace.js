@@ -778,6 +778,9 @@ function renderSettingsPage() {
       enabled.includes(f.owner_id),
   );
   const used = new Set();
+  const owner = inventory.plugins.find(
+    (p) => p.page === selected && selected.startsWith("plugin:"),
+  );
   if (selected.startsWith("plugin:")) {
     const plugin = inventory.plugins.find((p) => p.id === selected.slice(7));
     if (!enabled.includes(plugin?.id))
@@ -824,7 +827,10 @@ function renderSettingsPage() {
     for (const field of rest) panel.append(drawField(prettyField(field)));
     $("documents").append(panel);
   }
-  if (!fields.length)
+  if (
+    !fields.length &&
+    !Object.keys(owner?.configuration?.interface?.actions || {}).length
+  )
     $("documents").append(
       emptyState(
         "此能力尚未启用",
@@ -847,13 +853,10 @@ function renderSettingsPage() {
         "subtle",
       ),
     );
-  const owner = inventory.plugins.find(
-    (p) => p.page === selected && selected.startsWith("plugin:"),
-  );
   if (owner) {
     const panel = surface("管理操作", "即时执行，独立于配置保存。");
     drawActions(owner, panel);
-    if (panel.querySelector("select")) $("documents").append(panel);
+    if (panel.querySelector(".owner-action")) $("documents").append(panel);
   }
   drawResources();
   if (selected === "resources" || selected === "plugin:memory")

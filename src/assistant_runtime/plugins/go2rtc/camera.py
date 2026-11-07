@@ -169,6 +169,8 @@ class Go2RTCCamera:
                 if response.status in {401, 403}:
                     raise GatewayUnavailable("go2rtc access denied")
                 if response.status == 404:
+                    if endpoint == "/api/restart":
+                        raise GatewayUnavailable("go2rtc restart API unavailable")
                     if endpoint == "/api/xiaomi/ptz":
                         raise GatewayUnavailable("go2rtc pan/tilt API unavailable")
                     raise RuntimeError("Configured go2rtc stream not found")

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "namespace": "",
+  "title": "go2rtc 摄像头网关",
+  "group": "extensions",
+  "description": "管理已配置的摄像头网关。重新授权后仍无法加载设备时，可手动重启网关以清除旧会话。",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "interface": {
+    "actions": {
+      "restart_gateway": {
+        "title": "重启网关",
+        "read_only": false,
+        "confirmation": "重启会短暂中断该网关的所有视频流，保留已保存的配置和授权。确定重启？",
+        "input": {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "title": "摄像头设备 ID（只有一个网关时可留空）",
+              "maxLength": 64
+            }
+          },
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "message": {"type": "string", "maxLength": 300}
+          },
+          "required": ["message"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

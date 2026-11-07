@@ -5,7 +5,7 @@
   ],
   "schema_version": 1,
   "id": "go2rtc",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "api_version": 2,
   "requires_core": ">=0.4.0,<0.5.0",
   "requires": {},

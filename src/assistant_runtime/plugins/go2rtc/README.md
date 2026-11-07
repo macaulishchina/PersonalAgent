@@ -131,6 +131,19 @@ Pi calls `capture_image(device_id="office_camera")` and receives native image co
 
 ## Availability and failure behavior
 
+### 手动重启网关
+
+配置后台 → 插件 → go2rtc 摄像头网关 → **重启网关**。只有一个已配置网关时，
+设备 ID 可留空；有多个网关时填写其中一台已启用摄像头的设备 ID。
+确认后仅向该网关的原生 `/api/restart` 发送一次 POST，复用现有连接认证，
+不修改第三方代码、配置或授权，不依赖 Docker 管理权限。重启会中断该网关的
+所有视频流；PA 正在该网关取图、录像或控制云台时拒绝重启。
+
+此操作仅通过管理员配置操作入口提供，不注册模型工具，不自动触发，也不与 PA
+重启联动。网关必须支持原生重启 API（当前固定 Linux 网关已提供该接口；其他部署
+需自行验证）。连接中断或超时时不自动重试，也不宣称重启成功；收到正常响应仅表示
+请求已提交。稍后在 go2rtc 页面重新加载设备并验证取流，授权本身失效时仍需重新登录。
+
 The five-second observer queries only stream metadata and the declared stream configuration, without the video-probing parameters that open a consumer. `available` means the gateway can list the configured stream; it does not establish physical camera availability. `capture_verified` requires a successful frame in the current observed source generation. An unchanged stream registration does not prove that a disconnected physical camera is back online.
 
 Capture requests use `/api/frame.jpeg?src=STREAM` without the gateway cache option. JSON and image response sizes, overall capture time and JPEG dimensions are bounded. One acquisition per logical camera is allowed. A failed acquisition returns an error; there is no stale-image or alternate-camera fallback. Server error bodies are never copied into model-visible errors because they may contain source credentials.

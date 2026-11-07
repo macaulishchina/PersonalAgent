@@ -34,6 +34,37 @@ class Go2RTCPlugin:
         # Discovery only; finite device operations are owned by core/devices.
         return []
 
+    async def configuration_action(self, name, arguments):
+        if name != "restart_gateway":
+            raise ValueError("未知的 go2rtc 管理操作")
+        ident = arguments.get("device_id", "").strip()
+        if ident:
+            provider = self.providers.get(ident)
+            if provider is None:
+                raise ValueError("请选择已启用的 go2rtc 摄像头设备 ID")
+        else:
+            gateways = {item.base_url: item for item in self.providers.values()}
+            if not gateways:
+                raise ValueError("尚未配置已启用的 go2rtc 摄像头")
+            if len(gateways) != 1:
+                raise ValueError("存在多个网关，请填写目标摄像头设备 ID")
+            provider = next(iter(gateways.values()))
+        affected = [item for item in self.providers.values() if item.base_url == provider.base_url]
+        if any(item.lock.locked() or item.recording for item in affected) or any(
+            control.active is not None or control.pending_stops
+            for device, control in self.controllers.items()
+            if self.providers[device] in affected
+        ):
+            raise ValueError("该网关正在取图、录像或控制云台，请结束操作后再重启")
+        try:
+            await provider.read("/api/restart", 4096, method="POST", params={})
+        except RuntimeError as exc:
+            raise RuntimeError("重启请求未获确认，请检查网关状态；不会自动重试。" + str(exc)) from None
+        finally:
+            for item in affected:
+                item.invalidate()
+        return {"message": "已提交网关重启请求。请稍后重新加载设备；此结果不代表小米授权或摄像头取流已恢复。"}
+
     async def start(self, context):
         self.context = context
         for ident, provider in self.providers.items():
