@@ -12,18 +12,12 @@
   "interface": {
     "actions": {
       "restart_gateway": {
-        "title": "重启网关",
+        "title": "重启全部网关",
         "read_only": false,
-        "confirmation": "重启会短暂中断该网关的所有视频流，保留已保存的配置和授权。确定重启？",
+        "confirmation": "将重启所有已配置的 go2rtc 网关，短暂中断其视频流，保留已保存的配置和授权。确定重启？",
         "input": {
           "type": "object",
-          "properties": {
-            "device_id": {
-              "type": "string",
-              "title": "摄像头设备 ID（只有一个网关时可留空）",
-              "maxLength": 64
-            }
-          },
+          "properties": {},
           "additionalProperties": false
         },
         "output": {

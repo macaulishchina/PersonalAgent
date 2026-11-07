@@ -84,30 +84,50 @@ class Go2RTCManagementTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConfigurationError) as error:
             await self.action(confirmed=False)
         self.assertEqual(error.exception.code, "confirmation")
-        for arguments in ({"url": self.base}, {"device_id": 123}):
+        for arguments in ({"url": self.base}, {"device_id": 123}, {"device_id": "camera"}):
             with self.assertRaises(ConfigurationError):
                 await self.action(arguments)
-        with self.assertRaisesRegex(ValueError, "设备 ID"):
-            await self.action({"device_id": "missing"})
         self.assertEqual(self.calls, [])
 
-    async def test_multiple_gateways_require_explicit_device_and_target_only_its_gateway(self):
-        other = Go2RTCCamera("other", self.spec("http://127.0.0.1:1"))
+    async def test_multiple_gateways_each_receive_one_request_without_device_input(self):
+        other_calls = []
+
+        async def restart_other(request):
+            other_calls.append((request.method, request.path, dict(request.query)))
+            return web.Response()
+
+        app = web.Application()
+        app.router.add_post("/api/restart", restart_other)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        self.addAsyncCleanup(runner.cleanup)
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        other = Go2RTCCamera("other", self.spec(f"http://127.0.0.1:{runner.addresses[0][1]}"))
         self.plugin.providers["other"] = other
-        other.identity = "untouched"
-        with self.assertRaisesRegex(ValueError, "多个网关"):
-            await self.action()
-        self.assertEqual(self.calls, [])
-        await self.action({"device_id": "camera"})
+        await other.start()
+        other.identity = "previous-source"
+        result = await self.action()
+        self.assertIn("全部 2 个", result["message"])
+        self.assertEqual(self.calls, [("POST", "/api/restart", {})])
+        self.assertEqual(other_calls, self.calls)
+        self.assertIsNone(other.identity)
+
+    async def test_failed_gateway_does_not_prevent_other_gateways_from_restarting(self):
+        other = Go2RTCCamera("other", self.spec("http://127.0.0.1:1"))
+        await other.start()
+        self.plugin.providers = {"other": other, **self.plugin.providers}
+        result = await self.action()
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(other.identity, "untouched")
+        self.assertIn("1/2", result["message"])
+        self.assertIn("other", result["message"])
+        self.assertIn("不会自动重试", result["message"])
 
     async def test_active_acquisition_recording_and_motion_block_restart(self):
         second = self.plugin.providers["second_lens"]
         await second.lock.acquire()
         try:
             with self.assertRaisesRegex(ValueError, "正在"):
-                await self.action({"device_id": "camera"})
+                await self.action()
         finally:
             second.lock.release()
         second.recording = True
@@ -157,4 +177,5 @@ class Go2RTCManagementTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(page["id"] == "plugin:go2rtc" for page in pages))
         operation = plugin["configuration"]["interface"]["actions"]["restart_gateway"]
         self.assertFalse(operation["read_only"])
+        self.assertEqual(operation["input"]["properties"], {})
         self.assertIn("视频流", operation["confirmation"])
