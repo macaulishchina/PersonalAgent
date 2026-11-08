@@ -3,6 +3,7 @@
 from assistant_runtime.api.lifecycle import admits_work
 from assistant_runtime.api.conversation import ConversationCancelled
 from assistant_runtime.api.models import CapabilityRequestError
+from . import delivery
 
 import re
 import asyncio
@@ -74,6 +75,9 @@ class Conversation:
 
     async def start(self, context, *, register=True):
         self.context = context
+        self.store.on_change = lambda session, cursor: context.publish(
+            "conversation.changed", session_id=session, cursor=cursor
+        )
         if register:
             context.register(ConversationFeedbackRequest, self.task_replies.request)
         context.spawn(self.save_images(), "reply-images")
@@ -179,12 +183,37 @@ class Conversation:
                 mid,
                 self.session,
                 text=(old["text"] if old else "") + event["delta"],
+                presentation=delivery.append(
+                    old.get("presentation") if old else None,
+                    len(old["text"]) if old else 0,
+                    len(event["delta"]),
+                    event.get("block", 0),
+                    event.get("delivery"),
+                ),
                 kind="message",
                 turn_id=turn,
             )
+        elif kind == "message_delivery" and ident:
+            mid = f"task:{self.session}:{ident}"
+            old = self.store.get(mid)
+            if old and old["status"] == "streaming":
+                self.store.put(
+                    mid,
+                    self.session,
+                    text=old["text"],
+                    kind=old["kind"],
+                    turn_id=turn,
+                    presentation=delivery.classify(old["presentation"], event.get("delivery")),
+                )
         elif kind == "message" and ident:
             mid = f"task:{self.session}:{ident}"
             old = self.store.get(mid)
+            presentation = dict(old.get("presentation") or {}) if old else {}
+            if old and old["status"] == "streaming" and not event["text"].startswith(old["text"]):
+                # Streaming evidence refers to exact source offsets. A provider
+                # replacing that text must not retain permission for old spans.
+                presentation["text_ranges"] = []
+                presentation["range_limit"] = True
             references = self.media.resolve(event.get("attachments", []))
             self.store.put(
                 mid,
@@ -196,7 +225,11 @@ class Conversation:
                 attachments=references or None,
                 tool_summary=None if restored else event.get("tool_summary"),
                 result_ref=event.get("result_ref"),
-                presentation={"phase": "tool" if event["detail"] else event.get("phase"), "body": "complete"},
+                presentation={
+                    **presentation,
+                    "phase": "tool" if event["detail"] else event.get("phase"),
+                    "body": "complete",
+                },
                 updated_at=old["updated"]
                 if old and (restored or event.get("images") or event.get("attachments"))
                 else None,
@@ -215,7 +248,6 @@ class Conversation:
             if (
                 event.get("images")
                 and not references
-                and self.host.config.web.get("enable")
                 and not (old and old["attachments"])
                 and mid not in self.image_pending
             ):

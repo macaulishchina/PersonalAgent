@@ -150,6 +150,8 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[1] / "src/assistant_runtime"
         forbidden = {"fcntl", "termios", "msvcrt", "win32api", "win32file", "win32job", "win32service"}
         for path in root.rglob("*.py"):
+            if any(part in {"managed_components", "build"} for part in path.relative_to(root).parts):
+                continue  # Downloaded ESP-IDF vendor/build tools are not Python runtime code.
             if "platforms" in path.parts or any(p in path.parts for p in ("hid_buttons", "pipewire", "v4l2")):
                 continue
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):

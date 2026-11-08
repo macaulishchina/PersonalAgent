@@ -2,3 +2,4 @@ dependencies:
   idf: "==5.5.3"
   lvgl/lvgl: "==9.5.0"
   espressif/esp_websocket_client: "==1.6.1"
+  joltwallet/littlefs: "==1.22.3"

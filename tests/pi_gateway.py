@@ -33,7 +33,7 @@ def release_host_target(body):
 class FakeResponsesGateway:
     """Local OpenAI-Responses SSE server for deterministic real `pi --mode rpc` tests."""
 
-    def __init__(self, script_fn):
+    def __init__(self, script_fn, *, port=0):
         self.script_fn = script_fn
         self.requests = []
         self.headers = []
@@ -65,9 +65,13 @@ class FakeResponsesGateway:
                     self.wfile.write(
                         f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8")
                     )
+                    self.wfile.flush()
                 self.wfile.flush()
 
-        self.httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+
+        self.httpd = Server(("127.0.0.1", port), Handler)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()

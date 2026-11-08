@@ -1,0 +1,39 @@
+{
+  "format": "rgb565a8",
+  "source": {
+    "open": {
+      "name": "cat-companion-v2.png",
+      "sha256": "5e520e0c2b53c2ad070958a762ab74473ac72b767d39739364af57c0364e23dc"
+    },
+    "blink": {
+      "name": "cat-companion-blink.png",
+      "sha256": "2434c3ac2d95f4d4b462bd539b66bf40ceca5b2aadceebd8f0102de811d7859c"
+    }
+  },
+  "images": {
+    "cat_idle_open.rgb565a8": {
+      "width": 120,
+      "height": 144,
+      "bytes": 51840,
+      "sha256": "c8c474893592ba76f1e6695d83fd581fabeb9350e52d19175bded586042e313e"
+    },
+    "cat_input_open.rgb565a8": {
+      "width": 60,
+      "height": 72,
+      "bytes": 12960,
+      "sha256": "0dd150a6ab8ddaf7412f52b8829fbec29608fee3aa9bd9af39f456013a24883d"
+    },
+    "cat_idle_blink.rgb565a8": {
+      "width": 120,
+      "height": 144,
+      "bytes": 51840,
+      "sha256": "730fd8d0fbc17842ad1b6d88b9c5424ee5a42d34f9adc4926bfe1aa934ce2de8"
+    },
+    "cat_input_blink.rgb565a8": {
+      "width": 60,
+      "height": 72,
+      "bytes": 12960,
+      "sha256": "d21fac37363f9ed52f79d60d072224a09a5e7d3fefd93c13a88ef0d7b2596611"
+    }
+  }
+}

@@ -81,3 +81,106 @@ size_t pp_text(char *out, size_t cap, const char *text) {
     out[n] = 0;
     return n;
 }
+
+bool pp_input_start(pp_input_t *s, uint32_t now) {
+    if (s->phase != PP_INPUT_IDLE)
+        return false;
+    s->generation++;
+    s->started = now;
+    s->max_audio_bytes = 60u * 32000u;
+    s->audio_bytes = 0;
+    s->released = s->limited = false;
+    s->phase = PP_INPUT_PREBUFFER;
+    return true;
+}
+bool pp_input_begin(pp_input_t *s) {
+    if (s->phase != PP_INPUT_PREBUFFER || s->released)
+        return false;
+    s->phase = PP_INPUT_OPENING;
+    return true;
+}
+bool pp_input_ready(pp_input_t *s, uint32_t generation, unsigned max_audio_bytes) {
+    if (s->generation != generation || s->phase != PP_INPUT_OPENING || max_audio_bytes < 32000 ||
+        max_audio_bytes > 120u * 32000u || max_audio_bytes % 32000)
+        return false;
+    if (max_audio_bytes < s->max_audio_bytes)
+        s->max_audio_bytes = max_audio_bytes;
+    s->phase = s->released ? PP_INPUT_DRAINING : PP_INPUT_RECORDING;
+    return true;
+}
+bool pp_input_audio(pp_input_t *s, unsigned bytes) {
+    if ((s->phase != PP_INPUT_RECORDING && s->phase != PP_INPUT_DRAINING) || !bytes || bytes % 2 ||
+        bytes > s->max_audio_bytes - s->audio_bytes)
+        return false;
+    s->audio_bytes += bytes;
+    if (s->audio_bytes == s->max_audio_bytes) {
+        s->limited = true;
+        pp_input_release(s);
+    }
+    return true;
+}
+void pp_input_release(pp_input_t *s) {
+    s->released = true;
+    if (s->phase == PP_INPUT_PREBUFFER)
+        pp_input_abort(s);
+    else if (s->phase == PP_INPUT_RECORDING)
+        s->phase = PP_INPUT_DRAINING;
+}
+bool pp_input_limit(pp_input_t *s, uint32_t now, uint32_t limit_ms) {
+    if (s->max_audio_bytes / 32 < limit_ms)
+        limit_ms = s->max_audio_bytes / 32;
+    if (!pp_input_capturing(s) || s->phase == PP_INPUT_PREBUFFER || now - s->started < limit_ms)
+        return false;
+    s->limited = true;
+    pp_input_release(s);
+    return true;
+}
+bool pp_input_drained(pp_input_t *s) {
+    if (s->phase != PP_INPUT_DRAINING)
+        return false;
+    s->phase = PP_INPUT_FINALIZING;
+    return true;
+}
+bool pp_input_transcript(pp_input_t *s, uint32_t generation) {
+    if (s->generation != generation || s->phase != PP_INPUT_FINALIZING)
+        return false;
+    s->phase = s->limited ? PP_INPUT_CONFIRM : PP_INPUT_SUBMITTING;
+    return true;
+}
+bool pp_input_confirm(pp_input_t *s) {
+    if (s->phase != PP_INPUT_CONFIRM)
+        return false;
+    s->phase = PP_INPUT_SUBMITTING;
+    return true;
+}
+void pp_input_restore_confirmation(pp_input_t *s) {
+    s->generation++;
+    s->phase = PP_INPUT_CONFIRM;
+    s->released = true;
+    s->limited = true;
+}
+bool pp_input_done(pp_input_t *s, uint32_t generation) {
+    if (s->generation != generation ||
+        (s->phase != PP_INPUT_SUBMITTING && s->phase != PP_INPUT_UNKNOWN))
+        return false;
+    s->phase = PP_INPUT_IDLE;
+    return true;
+}
+void pp_input_abort(pp_input_t *s) {
+    s->generation++;
+    s->phase = PP_INPUT_IDLE;
+    s->released = true;
+    s->limited = false;
+}
+bool pp_input_capturing(const pp_input_t *s) {
+    return !s->released && (s->phase == PP_INPUT_PREBUFFER || s->phase == PP_INPUT_OPENING ||
+                            s->phase == PP_INPUT_RECORDING);
+}
+const char *pp_input_name(pp_input_phase_t phase) {
+    static const char *names[] = {"idle",       "prebuffer", "opening",    "recording", "draining",
+                                  "finalizing", "confirm",   "submitting", "unknown"};
+    return (unsigned)phase < sizeof(names) / sizeof(names[0]) ? names[phase] : "invalid";
+}
+bool pp_input_listening(const pp_input_t *s) {
+    return s->phase != PP_INPUT_PREBUFFER && pp_input_capturing(s);
+}

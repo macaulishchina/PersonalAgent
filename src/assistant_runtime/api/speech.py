@@ -21,6 +21,12 @@ class RecognitionStream(Protocol):
     async def close(self) -> None: ...
 
 
+class RecognitionUpdates(RecognitionStream, Protocol):
+    """Optional event-driven partials. Final-only providers keep the base contract."""
+
+    async def wait_update(self, previous: str) -> str: ...
+
+
 @dataclass(frozen=True)
 class RecognitionRequest:
     """Provider contract, independently bound from synthesis."""
@@ -34,7 +40,17 @@ class RecognitionRequest:
 class SynthesisRequest:
     scope: UsageScope
     text: str
+    voice: str | None = None
+    rate: float | None = None
     action = "synthesize"
+
+    def __post_init__(self):
+        if self.voice is not None and (
+            not isinstance(self.voice, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", self.voice)
+        ):
+            raise SpeechError("speech_invalid_voice")
+        if self.rate is not None and (type(self.rate) not in {float, int} or not 0.5 <= self.rate <= 2.0):
+            raise SpeechError("speech_invalid_rate")
 
 
 @dataclass(frozen=True)
@@ -42,6 +58,8 @@ class SpeechRequest:
     action: str
     scope: UsageScope
     text: str = ""
+    voice: str | None = None
+    rate: float | None = None
 
 
 class PlaybackStream(Protocol):
@@ -105,3 +123,13 @@ def spoken_excerpt(text, offset=0, limit=200):
         return "", offset
     end = offset + boundaries[-1].end()
     return text[offset:end], end
+
+
+def spoken_sentence(text, *, final=False, limit=200):
+    """One confirmed sentence. A short streaming fragment is not a final tail."""
+    if not isinstance(text, str) or type(limit) is not int or limit < 1:
+        raise SpeechError("speech_invalid_text")
+    boundary = re.search(r"[。！？!?；;\n]|\.(?=\s|$)", text[:limit])
+    if boundary:
+        return text[: boundary.end()]
+    return text if final and len(text) <= limit else ""

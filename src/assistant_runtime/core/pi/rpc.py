@@ -20,6 +20,7 @@ import uuid
 from assistant_runtime.api.execution import Command
 from assistant_runtime.core.pi.catalog import write_pi_models
 from assistant_runtime.core.pi.mcp import to_pi_mcp_json
+from assistant_runtime.core.pi.conversation import retained_native_media_item
 
 log = logging.getLogger(__name__)
 MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -289,6 +290,40 @@ class PiSessionWorker:
             method = msg.get("method")
             if method == "notify":
                 text = str(msg.get("message", ""))
+                if text.startswith("__assistant_message_delivery__:"):
+                    try:
+                        delivery = json.loads(text.split(":", 1)[1])
+                    except ValueError:
+                        return
+                    if (
+                        self.pending_msg
+                        and self.active_turn
+                        and isinstance(delivery, dict)
+                        and set(delivery) == {"block", "phase", "evidence"}
+                        and type(delivery["block"]) is int
+                        and 0 <= delivery["block"] < 128
+                        and (
+                            (
+                                delivery["phase"] in {"final", "commentary"}
+                                and delivery["evidence"] == "provider"
+                            )
+                            or (delivery["phase"] == "unknown" and delivery["evidence"] == "conflict")
+                        )
+                    ):
+                        self.pending_msg.setdefault("delivery", {})[delivery["block"]] = delivery
+                        if self.pending_msg["published"]:
+                            await self.parent.events.put(
+                                {
+                                    "kind": "message.delivery",
+                                    "data": {
+                                        "session_id": self.execution_session_id,
+                                        "run_id": self.active_turn,
+                                        "activity_id": self.pending_msg["id"],
+                                        "delivery": delivery,
+                                    },
+                                }
+                            )
+                    return
                 if text.startswith("__assistant_context_checkpoint__:"):
                     self.context_boundary = json.loads(text.split(":", 1)[1])
                     return
@@ -441,6 +476,10 @@ class PiSessionWorker:
                                 "run_id": turn_id,
                                 "activity_id": self.pending_msg["id"],
                                 "delta": delta,
+                                "block": ame.get("contentIndex", 0),
+                                "delivery": self.pending_msg.get("delivery", {}).get(
+                                    ame.get("contentIndex", 0)
+                                ),
                             },
                         }
                     )
@@ -527,7 +566,11 @@ class PiSessionWorker:
             result = msg.get("result") or {}
             self.meta.setdefault("pending_operations", {}).pop(call_id, None)
             self.active_bash.pop(call_id, None)
-            item = self.pending_tools.pop(call_id, None) or self._to_tool_item(call_id, tool_name, args)
+            item = (
+                self.pending_tools.pop(call_id, None)
+                or self._to_tool_item(call_id, tool_name, args)
+                or retained_native_media_item(call_id, tool_name, result)
+            )
             if item:
                 item["status"] = "failed" if is_error else "completed"
                 if outcome:

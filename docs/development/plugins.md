@@ -144,6 +144,14 @@ windows = "directshow"
 
 ## 公共对话与入口
 
+Web 可选提供 `api.conversation.ConversationAccessRequest`：已认证终端接入方声明
+`uses` 后，通过绑定的 `endpoint_id` 查询访问申请、批准并指定时长或拒绝。
+浏览器不能调用批准能力，模型执行身份也不能调用；Web 持有申请和授权记录，
+入口插件不能读取其数据表。固定入口按服务端记录绑定会话，申请本身不授予访问权。
+通知事件用于唤醒接入方，`pending` 用于重连补齐；批准幂等且不延长原有效期。
+普通 Web 登录仍使用现有身份、权限和有效期。详情见
+[Web 访问入口](../../src/assistant_runtime/plugins/web/README.md#fixed-entrances-device-approval-or-account-login)。
+
 `conversation` 依赖 `workfiles`、`execution`，不依赖个人助手；`assistant` 和 `cli`
 依赖公共对话，`web` 仍是扩展。对话拥有持久化会话目录、入口绑定、历史、附件、队列与结果投递。
 个人助手的提示、语音同步、播报及设备状态协调留在 `core/speech`，仅启用时装配。

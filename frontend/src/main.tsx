@@ -1,6 +1,16 @@
 import { ResultContent, ResultBody } from "./result-content";
 import { ExecutionProcess } from "./execution-process";
-import { chatPath } from "./http";
+import {
+  chatPath,
+  chatBase,
+  scopedConversation,
+  selectedConversation,
+  entranceBase,
+  entranceLanding,
+  conversationStorageKey,
+  openConversationLink,
+} from "./http";
+import { AccessEntry } from "./access-entry";
 import { ModelFailureNotice, type ModelFailure } from "./model-failure";
 import { DeliveryModeSelector, useDeliveryMode } from "./delivery-mode";
 import {
@@ -70,6 +80,10 @@ type MessageGroup = {
   messages: Message[];
 };
 type State = {
+  conversation_title?: string;
+  conversation_access?: "read" | "chat";
+  conversation_auth?: "temporary" | "account";
+  conversation_expires?: number;
   name: string;
   voice: string;
   speaking: boolean;
@@ -648,7 +662,7 @@ function App() {
     [online, setOnline] = useState(false);
   const [before, setBefore] = useState<number | null>(null),
     [draft, setDraft] = useState(
-      () => sessionStorage.getItem("pa-draft") || "",
+      () => sessionStorage.getItem(conversationStorageKey("pa-draft")) || "",
     );
   const [deliveryMode, setDeliveryMode] = useDeliveryMode();
   const replying = !!state.active_request_id && deliveryMode === "steer";
@@ -801,7 +815,7 @@ function App() {
     };
   }, [connect]);
   useEffect(() => {
-    sessionStorage.setItem("pa-draft", draft);
+    sessionStorage.setItem(conversationStorageKey("pa-draft"), draft);
     if (input.current) {
       input.current.style.height = "auto";
       input.current.style.height =
@@ -917,7 +931,7 @@ function App() {
         ? { notification_id: notificationContext.id }
         : {}),
     };
-    const cached = sessionStorage.getItem("pa-outbox");
+    const cached = sessionStorage.getItem(conversationStorageKey("pa-outbox"));
     if (cached) {
       const old = JSON.parse(cached);
       if (
@@ -927,7 +941,10 @@ function App() {
       )
         body.request_id = old.request_id;
     }
-    sessionStorage.setItem("pa-outbox", JSON.stringify(body));
+    sessionStorage.setItem(
+      conversationStorageKey("pa-outbox"),
+      JSON.stringify(body),
+    );
     try {
       const d = await api("messages", {
         method: "POST",
@@ -940,7 +957,7 @@ function App() {
         setDraft((current) => (current.trim() === body.text ? "" : current));
         setAttachments([]);
         setNotificationContext(null);
-        sessionStorage.removeItem("pa-outbox");
+        sessionStorage.removeItem(conversationStorageKey("pa-outbox"));
         following.current = true;
         bottom.current?.scrollIntoView({ behavior: "smooth" });
       }
@@ -1075,9 +1092,16 @@ function App() {
   return (
     <>
       <header className="header">
-        <a className="brand" href="/" aria-label="Personal Agent">
+        <a
+          className="brand"
+          href={selectedConversation ? chatBase : "/"}
+          aria-label="Personal Agent"
+        >
           <Mark />
-          <span>Personal Agent</span>
+          <span>
+            {state.conversation_title || "Personal Agent"}
+            {state.conversation_access === "read" ? " · 只读" : ""}
+          </span>
         </a>
         <div className="header-right">
           {authorized && (
@@ -1086,6 +1110,18 @@ function App() {
                 <span className="dot" />
                 {status}
               </span>
+              {state.conversation_auth === "temporary" &&
+                state.conversation_expires && (
+                  <span className="connection">
+                    访问至{" "}
+                    {new Date(
+                      state.conversation_expires * 1000,
+                    ).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                )}
               <button
                 className="icon-button"
                 title="退出登录"
@@ -1103,7 +1139,7 @@ function App() {
           )}
         </div>
       </header>
-      {authorized && (
+      {authorized && !scopedConversation && (
         <ActivityPanel
           section={activePanel}
           selectedTaskId={selectedTaskId}
@@ -1127,6 +1163,24 @@ function App() {
             <p role="alert">
               {error}
               <button onClick={() => connect()}>重新连接</button>
+            </p>
+          )}
+        </main>
+      ) : !authorized && selectedConversation ? (
+        <main className="welcome">
+          <Mark />
+          <h1>{entranceBase ? "当前访问已结束" : "此会话需要重新授权"}</h1>
+          <p>
+            {entranceBase
+              ? "授权已到期、已关闭或登录已失效。"
+              : "请重新打开完整快捷链接。链接过期或已撤销时，请联系管理员。"}
+          </p>
+          {entranceBase && (
+            <a href={entranceBase}>返回入口，申请访问或登录进入</a>
+          )}
+          {error && (
+            <p className="error" role="alert">
+              {error}
             </p>
           )}
         </main>
@@ -1195,6 +1249,12 @@ function App() {
                 onCopy={copy}
                 onOpen={setZoom}
                 onOpenTask={(id) => {
+                  if (scopedConversation) {
+                    setError(
+                      "此入口提供当前会话及已交付的任务结果；任务管理请使用完整入口。",
+                    );
+                    return;
+                  }
                   setSelectedTaskId(id);
                   setActivePanel("tasks");
                 }}
@@ -1209,7 +1269,11 @@ function App() {
             )}
             <div ref={bottom} />
           </main>
-          <div className="composer-wrap" ref={composer}>
+          <div
+            className="composer-wrap"
+            ref={composer}
+            hidden={state.conversation_access === "read"}
+          >
             {!atBottom && (
               <button
                 className="jump"
@@ -1436,47 +1500,49 @@ function App() {
               )}
             </form>
             <div className="composer-caption">
-              <div className="composer-shortcuts">
-                <button
-                  type="button"
-                  className="task-entry"
-                  aria-label="任务"
-                  aria-haspopup="dialog"
-                  aria-expanded={activePanel === "tasks"}
-                  aria-controls="activity-panel"
-                  onClick={() => {
-                    setActivePanel((current) =>
-                      current === "tasks" ? null : "tasks",
-                    );
-                  }}
-                >
-                  <ListTodo size={15} />
-                  后台任务
-                </button>
-                <button
-                  type="button"
-                  className="task-entry"
-                  aria-label="通知"
-                  aria-haspopup="dialog"
-                  aria-expanded={activePanel === "notifications"}
-                  aria-controls="activity-panel"
-                  onClick={() => {
-                    setActivePanel((current) =>
-                      current === "notifications" ? null : "notifications",
-                    );
-                  }}
-                >
-                  <Bell size={15} />
-                  通知
-                  {!!state.notifications_unread && (
-                    <b className="notification-badge">
-                      {state.notifications_unread > 99
-                        ? "99+"
-                        : state.notifications_unread}
-                    </b>
-                  )}
-                </button>
-              </div>
+              {!scopedConversation && (
+                <div className="composer-shortcuts">
+                  <button
+                    type="button"
+                    className="task-entry"
+                    aria-label="任务"
+                    aria-haspopup="dialog"
+                    aria-expanded={activePanel === "tasks"}
+                    aria-controls="activity-panel"
+                    onClick={() => {
+                      setActivePanel((current) =>
+                        current === "tasks" ? null : "tasks",
+                      );
+                    }}
+                  >
+                    <ListTodo size={15} />
+                    后台任务
+                  </button>
+                  <button
+                    type="button"
+                    className="task-entry"
+                    aria-label="通知"
+                    aria-haspopup="dialog"
+                    aria-expanded={activePanel === "notifications"}
+                    aria-controls="activity-panel"
+                    onClick={() => {
+                      setActivePanel((current) =>
+                        current === "notifications" ? null : "notifications",
+                      );
+                    }}
+                  >
+                    <Bell size={15} />
+                    通知
+                    {!!state.notifications_unread && (
+                      <b className="notification-badge">
+                        {state.notifications_unread > 99
+                          ? "99+"
+                          : state.notifications_unread}
+                      </b>
+                    )}
+                  </button>
+                </div>
+              )}
               <div className="composer-caption-info">
                 <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
@@ -1488,4 +1554,26 @@ function App() {
     </>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+async function boot() {
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    if (entranceLanding) {
+      root.render(<AccessEntry />);
+      return;
+    }
+    if (await openConversationLink()) return;
+    root.render(<App />);
+  } catch (error) {
+    root.render(
+      <main className="welcome">
+        <Mark />
+        <h1>无法打开对话</h1>
+        <p role="alert">
+          {error instanceof Error ? error.message : "快捷链接暂时不可用。"}
+        </p>
+        <p>请重新打开完整快捷链接，或联系管理员。</p>
+      </main>,
+    );
+  }
+}
+void boot();

@@ -1,1 +1,1 @@
-"""FoloToy AI Passport extension; device integration is not implemented yet."""
+"""FoloToy AI Passport entrance: paired sessions, speech and terminal delivery."""

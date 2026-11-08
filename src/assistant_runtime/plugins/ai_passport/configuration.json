@@ -7,46 +7,17 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "public_url": {
-        "type": "string",
-        "default": "",
-        "title": "PP 公网 WSS 地址",
-        "description": "例如 wss://服务器:9443/pa/passport/stream；需受信 TLS 证书。"
-      },
-      "nickname": {
-        "type": "string",
-        "default": "嘟嘟",
-        "minLength": 1,
-        "maxLength": 24,
-        "title": "终端显示昵称"
-      },
       "volume": {
-        "type": "integer",
-        "default": 45,
-        "minimum": 0,
-        "maximum": 100,
-        "title": "初始音量"
+        "$ref": "#/$defs/volume",
+        "default": 45
       },
       "sleep_seconds": {
-        "type": "integer",
-        "default": 120,
-        "minimum": 30,
-        "maximum": 3600,
-        "title": "空闲休眠秒数"
+        "$ref": "#/$defs/sleep_seconds",
+        "default": 120
       },
       "input_mode": {
-        "type": "string",
-        "default": "steer",
-        "enum": [
-          "steer",
-          "queue"
-        ],
-        "title": "初始输入模式"
-      },
-      "auto_speak": {
-        "type": "boolean",
-        "default": true,
-        "title": "自动播报新回复"
+        "$ref": "#/$defs/input_mode",
+        "default": "steer"
       },
       "max_connections": {
         "type": "integer",
@@ -56,10 +27,231 @@
         "title": "设备连接上限"
       },
       "keep_online": {
+        "$ref": "#/$defs/keep_online",
+        "default": false
+      },
+      "speech_mode": {
+        "$ref": "#/$defs/speech_mode",
+        "default": "brief"
+      },
+      "voice": {
+        "$ref": "#/$defs/voice",
+        "default": ""
+      },
+      "rate": {
+        "$ref": "#/$defs/rate",
+        "default": 1.0
+      },
+      "offline_cache": {
+        "$ref": "#/$defs/offline_cache",
+        "default": true
+      },
+      "show_images": {
+        "$ref": "#/$defs/show_images",
+        "default": true
+      },
+      "devices": {
+        "type": "object",
+        "default": {},
+        "title": "设备云端配置",
+        "description": "省略字段使用上面的默认值。只覆盖后台实际改过的字段，本地音量、模式与保持在线不会因重连被重置。",
+        "propertyNames": {
+          "pattern": "^[A-Za-z0-9_-]{32,128}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "volume": {
+              "$ref": "#/$defs/volume"
+            },
+            "sleep_seconds": {
+              "$ref": "#/$defs/sleep_seconds"
+            },
+            "input_mode": {
+              "$ref": "#/$defs/input_mode"
+            },
+            "keep_online": {
+              "$ref": "#/$defs/keep_online"
+            },
+            "speech_mode": {
+              "$ref": "#/$defs/speech_mode"
+            },
+            "voice": {
+              "$ref": "#/$defs/voice"
+            },
+            "rate": {
+              "$ref": "#/$defs/rate"
+            },
+            "offline_cache": {
+              "$ref": "#/$defs/offline_cache"
+            },
+            "show_images": {
+              "$ref": "#/$defs/show_images"
+            },
+            "wifi_networks": {
+              "$ref": "#/$defs/wifi_networks"
+            },
+            "server_url": {
+              "$ref": "#/$defs/server_url"
+            },
+            "trusted_ca": {
+              "$ref": "#/$defs/trusted_ca"
+            },
+            "brightness": {
+              "$ref": "#/$defs/brightness"
+            },
+            "text_size": {
+              "$ref": "#/$defs/text_size"
+            }
+          }
+        },
+        "maxProperties": 32
+      },
+      "brightness": {
+        "$ref": "#/$defs/brightness",
+        "default": 65
+      },
+      "text_size": {
+        "$ref": "#/$defs/text_size",
+        "default": 16
+      }
+    },
+    "$defs": {
+      "volume": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "title": "初始音量"
+      },
+      "sleep_seconds": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 3600,
+        "title": "空闲休眠秒数"
+      },
+      "input_mode": {
+        "type": "string",
+        "enum": [
+          "steer",
+          "queue"
+        ],
+        "title": "初始输入模式",
+        "x-labels": {
+          "steer": "引导当前执行",
+          "queue": "排队"
+        }
+      },
+      "keep_online": {
         "type": "boolean",
-        "default": false,
         "title": "初始保持在线",
         "description": "硬件暂不检测外部供电；设备菜单可手动切换并保存。关闭时按空闲时间休眠。"
+      },
+      "speech_mode": {
+        "type": "string",
+        "enum": [
+          "brief",
+          "full",
+          "off"
+        ],
+        "title": "自动播报",
+        "description": "简短播报、完整播报或关闭。按 OK 结束本条播报，文字与执行继续。",
+        "x-labels": {
+          "brief": "简短 · 约 200 字完整句",
+          "full": "完整 · 分句连续播报",
+          "off": "关闭"
+        }
+      },
+      "voice": {
+        "type": "string",
+        "maxLength": 80,
+        "pattern": "^[A-Za-z0-9_-]*$",
+        "title": "播报音色",
+        "description": "留空使用语音供应商配置的音色，仅填写供应商支持的系统音色名称。"
+      },
+      "rate": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2.0,
+        "title": "播报语速"
+      },
+      "offline_cache": {
+        "type": "boolean",
+        "title": "离线缓存聊天记录",
+        "description": "在设备独立 Flash 分区缓存最近三条已完成消息及缩略图，重启后保留。固定占用预算 256 KiB（按 Flash 块计算）；长内容可能仅缓存部分。关闭后停止使用和写入缓存，已有缓存不等于安全擦除。"
+      },
+      "show_images": {
+        "type": "boolean",
+        "title": "显示图片",
+        "description": "仅下载适合 PP 的会话授权缩略图，不下载原始图片。"
+      },
+      "wifi_networks": {
+        "type": "object",
+        "title": "Wi-Fi 连接顺序",
+        "description": "按优先级 1—5 逐个连接，可只填部分优先级；单次流程最多三轮。密码留空为开放网络。",
+        "minProperties": 1,
+        "maxProperties": 5,
+        "propertyNames": {
+          "pattern": "^[1-5]$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ssid"
+          ],
+          "properties": {
+            "ssid": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Wi-Fi 名称"
+            },
+            "password": {
+              "type": "string",
+              "maxLength": 64,
+              "writeOnly": true,
+              "title": "Wi-Fi 密码",
+              "description": "开放网络留空。保留已保存密码无需重新输入。",
+              "default": ""
+            }
+          }
+        },
+        "x-entry-placeholder": "优先级 1—5",
+        "x-entry-add": "添加 Wi-Fi"
+      },
+      "server_url": {
+        "type": "string",
+        "maxLength": 512,
+        "title": "PA 业务地址",
+        "description": "例如 http://47.109.34.254:8047；保存后设备空闲时切换，不使用固件网站端口。"
+      },
+      "trusted_ca": {
+        "type": "string",
+        "maxLength": 4096,
+        "title": "自签 HTTPS 的 CA 公钥证书",
+        "x-advanced": true,
+        "description": "仅 HTTPS 且使用私有 CA 时需要；HTTP 不需要，不得填写私钥。"
+      },
+      "brightness": {
+        "type": "integer",
+        "minimum": 40,
+        "maximum": 100,
+        "title": "屏幕亮度",
+        "description": "设备背光亮度；默认 65。只影响屏幕，不改变音量或休眠。"
+      },
+      "text_size": {
+        "type": "integer",
+        "enum": [
+          16,
+          18
+        ],
+        "title": "正文字号",
+        "x-labels": {
+          "16": "标准 · 16 px",
+          "18": "较大 · 18 px"
+        },
+        "description": "只调整输入、回复与历史正文；状态栏和菜单保持紧凑。整行分页随实际字体调整。"
       }
     }
   },

@@ -12,7 +12,9 @@
   ],
   "adapted_files": [
     "sdkconfig.defaults",
-    "partitions.csv"
+    "partitions.csv",
+    "components/bsp/include/bsp_audio.h",
+    "components/bsp/src/bsp_audio.c"
   ],
   "license": "MIT",
   "license_file": "LICENSE.folotoy",

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { findPackageJSON } from "node:module";
 import { pathToFileURL } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
+import { OutputPhases } from "./output_delivery.mjs";
 import {
   observeFetch,
   observeError,
@@ -239,6 +240,7 @@ async function runAttempt(id, args, signal, evidence) {
     }
   }
   const buffered = [];
+  const outputPhases = new OutputPhases();
   const options = {
     signal,
     maxRetries: 0,
@@ -357,6 +359,7 @@ async function runAttempt(id, args, signal, evidence) {
       return payload;
     },
     onProviderStreamEvent: (data) => {
+      outputPhases.observe(data);
       // Keep metadata only; never retain or log provider payloads/deltas.
       if (typeof data?.type === "string" && /^[a-z_.]{1,96}$/.test(data.type))
         evidence.last_event = data.type;
@@ -382,7 +385,8 @@ async function runAttempt(id, args, signal, evidence) {
   const stream = runtime.streamSimple(model, context, options);
   let emitted = 0,
     largestPartial = 0;
-  for await (const event of stream) {
+  for await (const original of stream) {
+    const event = outputPhases.decorate(original);
     if (event.type.endsWith("_delta") && event.delta?.length) {
       timings.first_content_ms ??= elapsed();
       if (event.type === "text_delta") timings.first_text_ms ??= elapsed();

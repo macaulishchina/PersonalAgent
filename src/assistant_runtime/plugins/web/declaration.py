@@ -5,7 +5,7 @@ from assistant_runtime.api import PluginDefinition, plugin_manifest
 from .settings import WebSettings
 
 from assistant_runtime.api.contracts import TaskRequest, NotificationRequest
-from assistant_runtime.api.conversation import ConversationRequest
+from assistant_runtime.api.conversation import ConversationRequest, ConversationAccessRequest
 from assistant_runtime.api.files import FileRequest
 from assistant_runtime.api.models import ModelRequest
 
@@ -28,7 +28,14 @@ DECLARATION = PluginDefinition(
         NotificationRequest,
         ModelRequest,
     ),
-    resources=("conversation", "notifications_enabled", "tasks_enabled", "http_frontend"),
+    provides=(ConversationAccessRequest,),
+    resources=(
+        "conversation",
+        "conversation_views",
+        "notifications_enabled",
+        "tasks_enabled",
+        "http_frontend",
+    ),
     config_key="web",
     validate=WebSettings.parse,
 )

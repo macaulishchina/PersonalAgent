@@ -2,6 +2,7 @@ import { registerControlled } from "./controlled_tools.ts";
 import { registerToolLifecycle } from "./tool_lifecycle.ts";
 import { registerResultDelivery } from "./tool_results.ts";
 import { registerDiscovery } from "./discovery.ts";
+import { registerOutputDelivery } from "./output_delivery.mjs";
 import { Type } from "typebox";
 import { readFileSync } from "node:fs";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -66,6 +67,7 @@ function loadPolicy(): PolicySpec {
 }
 
 export default function (pi: any) {
+  registerOutputDelivery(pi);
   pi.on("agent_settled", async (_event: any, ctx: any) => {
     ctx.ui.notify(
       "__assistant_context_checkpoint__:" +

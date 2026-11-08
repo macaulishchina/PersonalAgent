@@ -16,13 +16,15 @@ class EntranceInputs:
         self.db = conversations.sessions.db
         self.lock = asyncio.Lock()
         self.db.execute(
-            "CREATE TABLE IF NOT EXISTS conversation_inputs(id TEXT PRIMARY KEY, session TEXT NOT NULL, source TEXT NOT NULL, mode TEXT NOT NULL, target TEXT, question TEXT, work TEXT NOT NULL, state TEXT NOT NULL, fingerprint TEXT, result TEXT)"
+            "CREATE TABLE IF NOT EXISTS conversation_inputs(id TEXT PRIMARY KEY, session TEXT NOT NULL, source TEXT NOT NULL, mode TEXT NOT NULL, target TEXT, question TEXT, work TEXT NOT NULL, state TEXT NOT NULL, fingerprint TEXT, result TEXT, draft TEXT)"
         )
+        if "draft" not in {row[1] for row in self.db.execute("PRAGMA table_info(conversation_inputs)")}:
+            self.db.execute("ALTER TABLE conversation_inputs ADD COLUMN draft TEXT")
         self.db.commit()
 
     def get(self, ident, session):
         row = self.db.execute(
-            "SELECT id,session,source,mode,target,question,work,state,fingerprint,result FROM conversation_inputs WHERE id=? AND session=?",
+            "SELECT id,session,source,mode,target,question,work,state,fingerprint,result,draft FROM conversation_inputs WHERE id=? AND session=?",
             (ident, session),
         ).fetchone()
         if row is None:
@@ -40,6 +42,7 @@ class EntranceInputs:
                     "state",
                     "fingerprint",
                     "result",
+                    "draft",
                 ),
                 row,
             )
@@ -49,7 +52,7 @@ class EntranceInputs:
         if current_usage.get() is not None:
             raise PermissionError("Entrance input management is not an execution tool")
         args = request.arguments
-        if set(args) - {"session_id", "request_id", "source", "mode", "text"}:
+        if set(args) - {"session_id", "request_id", "source", "mode", "text", "offset", "limit"}:
             raise ValueError("Unknown entrance input field")
         ident = str(uuid.UUID(args.get("request_id")))
         session = args.get("session_id")
@@ -67,7 +70,10 @@ class EntranceInputs:
                 if old:
                     if (source, mode) != (old["source"], old["mode"]):
                         raise ValueError("Input identity conflict")
-                    return {"state": old["state"], "work_id": old["work"]}
+                    result = {"state": old["state"], "work_id": old["work"]}
+                    if old["state"] == "review":
+                        result["text_length"] = len(old["draft"] or "")
+                    return result
                 chat = await self.owner.get(session)
                 state = chat.state()
                 if state.get("configuration_required") or not getattr(
@@ -88,7 +94,7 @@ class EntranceInputs:
                 await usage.bind(ident, UsageScope(work, source))
                 with self.db:
                     self.db.execute(
-                        "INSERT INTO conversation_inputs VALUES(?,?,?,?,?,?,?,'prepared',NULL,NULL)",
+                        "INSERT INTO conversation_inputs(id,session,source,mode,target,question,work,state,fingerprint,result) VALUES(?,?,?,?,?,?,?,'prepared',NULL,NULL)",
                         (ident, session, source, mode, target, state.get("question_id"), work),
                     )
                 return {"state": "prepared", "work_id": work}
@@ -104,25 +110,53 @@ class EntranceInputs:
                     if receipt["found"]:
                         with self.db:
                             self.db.execute(
-                                "UPDATE conversation_inputs SET state='accepted',result=? WHERE id=?",
+                                "UPDATE conversation_inputs SET state='accepted',result=?,draft=NULL WHERE id=?",
                                 (json.dumps(receipt), ident),
                             )
                         old = self.get(ident, session)
+                return self.receipt(old)
+            if request.action == "transcript":
+                offset, limit = args.get("offset", 0), args.get("limit", 80)
+                text = old["draft"]
+                if (
+                    old["state"] != "review"
+                    or not isinstance(text, str)
+                    or type(offset) is not int
+                    or not 0 <= offset <= len(text)
+                    or type(limit) is not int
+                    or not 1 <= limit <= 240
+                    or set(args) - {"session_id", "request_id", "offset", "limit"}
+                ):
+                    raise ValueError("No matching transcript page awaiting confirmation")
+                end = min(len(text), offset + limit)
                 return {
-                    "state": old["state"],
-                    "result": json.loads(old["result"]) if old["result"] else None,
-                    "work_id": old["work"],
+                    "state": "review",
+                    "text": text[offset:end],
+                    "offset": offset,
+                    "next_offset": end if end < len(text) else None,
+                    "total": len(text),
                 }
             if request.action == "cancel":
-                if old["state"] == "prepared":
+                if old["state"] in {"prepared", "review", "target_changed", "question_changed"}:
                     with self.db:
                         self.db.execute(
-                            "UPDATE conversation_inputs SET state='cancelled' WHERE id=?", (ident,)
+                            "UPDATE conversation_inputs SET state='cancelled',draft=NULL WHERE id=?", (ident,)
                         )
                 return {"state": self.get(ident, session)["state"]}
-            text = args.get("text")
+            confirming = request.action == "confirm"
+            if confirming:
+                if set(args) - {"session_id", "request_id"}:
+                    raise ValueError("Confirmation uses the saved transcript, without replacement text")
+                if old["state"] in {"accepted", "unknown"}:
+                    return {
+                        "state": old["state"],
+                        "result": json.loads(old["result"]) if old["result"] else None,
+                    }
+                if old["state"] != "review":
+                    raise ValueError("No input awaiting explicit confirmation")
+            text = old["draft"] if confirming else args.get("text")
             if (
-                request.action != "commit"
+                request.action not in {"commit", "review", "confirm"}
                 or not isinstance(text, str)
                 or not text.strip()
                 or len(text) > 16000
@@ -131,7 +165,17 @@ class EntranceInputs:
             fingerprint = hashlib.sha256(text.encode()).hexdigest()
             if old["fingerprint"] and old["fingerprint"] != fingerprint:
                 raise ValueError("Input identity reused with different text")
-            if old["state"] != "prepared":
+            if request.action == "review":
+                if old["state"] == "prepared":
+                    with self.db:
+                        self.db.execute(
+                            "UPDATE conversation_inputs SET state='review',fingerprint=?,draft=? WHERE id=?",
+                            (fingerprint, text, ident),
+                        )
+                return self.receipt(self.get(ident, session))
+            if old["state"] == "review" and not confirming:
+                raise ValueError("Input awaits explicit confirmation")
+            if old["state"] not in {"prepared", "review"}:
                 return {"state": old["state"], "result": json.loads(old["result"]) if old["result"] else None}
             chat = await self.owner.get(session)
             state = chat.state()
@@ -182,7 +226,18 @@ class EntranceInputs:
                 result = await chat.submit(ident, text, [], source=old["source"])
             with self.db:
                 self.db.execute(
-                    "UPDATE conversation_inputs SET state='accepted',result=? WHERE id=?",
+                    "UPDATE conversation_inputs SET state='accepted',result=?,draft=NULL WHERE id=?",
                     (json.dumps(result), ident),
                 )
             return {"state": "accepted", "result": result}
+
+    @staticmethod
+    def receipt(item):
+        result = {
+            "state": item["state"],
+            "result": json.loads(item["result"]) if item["result"] else None,
+            "work_id": item["work"],
+        }
+        if item["state"] == "review":
+            result["text_length"] = len(item["draft"] or "")
+        return result

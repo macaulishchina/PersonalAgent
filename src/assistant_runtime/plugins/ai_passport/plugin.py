@@ -2,12 +2,14 @@
 
 import asyncio
 import hmac
-import uuid
-from urllib.parse import urlsplit
+import re
+import time
 from aiohttp import web
 from assistant_runtime.api.conversation import ConversationRequest
+from assistant_runtime.api.configuration import ConfigurationUpdate
 from .declaration import DECLARATION
 from .repository import Devices
+from .settings import desired, DEVICE_FIELDS, NETWORK_FIELDS
 
 
 class AiPassportPlugin:
@@ -17,6 +19,7 @@ class AiPassportPlugin:
         self.context, self.settings = context, context.config
         self.connections = {}
         self.runner = None
+        self.pair_attempts = []
 
     async def start(self, context):
         self.devices = context.repository(Devices)
@@ -31,6 +34,18 @@ class AiPassportPlugin:
         port = site._server.sockets[0].getsockname()[1]
         self.frontend.publish("127.0.0.1", port)
         self.frontend.register_management(self.manage)
+        context.spawn(self.changes(context.subscribe(capacity=64)), "passport-changes")
+
+    async def changes(self, queue):
+        while True:
+            event = await queue.get()
+            try:
+                if event.kind == "conversation.changed":
+                    for connection in tuple(self.connections.values()):
+                        if connection.session == event.data.get("session_id"):
+                            connection.changed.set()
+            finally:
+                queue.task_done()
 
     @web.middleware
     async def guard(self, request, handler):
@@ -49,40 +64,39 @@ class AiPassportPlugin:
         if action == "list":
             return {
                 "devices": [
-                    {**d, "connected": d["device_id"] in self.connections} for d in self.devices.list()
+                    {
+                        **d,
+                        "connected": d["device_id"] in self.connections,
+                        "configuration": self.devices.configuration_state(d["device_id"]),
+                    }
+                    for d in self.devices.list()
                 ]
             }
         if action == "pair":
+            now = time.monotonic()
+            self.pair_attempts = [t for t in self.pair_attempts if now - t < 60]
+            if len(self.pair_attempts) >= 10:
+                raise ValueError("配对尝试过于频繁，请一分钟后重试")
+            self.pair_attempts.append(now)
             name = arguments.get("name", "PP")
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 48:
                 raise ValueError("设备名称须为 1—48 个字符")
-            url = self.settings["public_url"]
-            parsed = urlsplit(url)
-            if (
-                parsed.scheme != "wss"
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-                or not parsed.path.endswith("/stream")
-            ):
-                raise ValueError("请先配置公开 WSS 地址（以 /stream 结尾）")
-            ident = uuid.uuid4().hex
+            code = arguments.get("code")
+            if not isinstance(code, str) or len(code) != 8 or not code.isascii() or not code.isdigit():
+                raise ValueError("请输入设备屏幕上的八位配对数字")
+            try:
+                ident = self.devices.challenge(code)
+            except PermissionError:
+                raise ValueError("配对码无效或已过期，请核对设备屏幕") from None
             result = await self.context.invoke(
                 ConversationRequest(
                     "create", {"title": name, "request_id": ident, "policy": {"capture_memory": True}}
                 )
             )
-            return {
-                "protocol": 1,
-                "url": url,
-                **self.devices.issue(name, result["id"], ident),
-                "settings": {
-                    k: self.settings[k]
-                    for k in ("nickname", "volume", "sleep_seconds", "input_mode", "keep_online")
-                },
-            }
+            try:
+                return self.devices.activate(code, name.strip(), result["id"])
+            except PermissionError:
+                raise ValueError("配对码已失效，请在设备刷新后重试") from None
         if action == "revoke":
             ident = arguments["device_id"]
             self.devices.revoke(ident)
@@ -91,21 +105,56 @@ class AiPassportPlugin:
             return {"revoked": True}
         raise ValueError("Unsupported terminal management action")
 
+    def settings_for(self, device):
+        return desired(self.settings, device)
+
+    def configuration_for(self, device):
+        values = self.settings_for(device)
+        return self.devices.configuration(
+            device, {k: values[k] for k in (*DEVICE_FIELDS, *NETWORK_FIELDS) if k in values}
+        )
+
+    async def prepare_configuration(self, settings):
+        previous = self.settings
+
+        async def commit():
+            self.settings = settings
+
+        async def rollback():
+            self.settings = previous
+
+        async def release(committed):
+            if committed:
+                # Values are sent only after the file transaction applies. Each
+                # device acknowledges its own fields after safe, durable apply.
+                results = await asyncio.gather(
+                    *(c.send_configuration() for c in tuple(self.connections.values())),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, Exception):
+                        self.context.log.warning(
+                            "passport_configuration_pending type=%s", type(result).__name__
+                        )
+
+        return ConfigurationUpdate(commit, rollback, release)
+
     async def pair(self, request):
         data = await request.json()
         if (
-            set(data) != {"device_id", "pairing_token", "credential", "protocol"}
+            set(data) != {"device_id", "credential", "protocol"}
             or type(data["protocol"]) is not int
-            or data["protocol"] != 1
+            or data["protocol"] != 2
         ):
             raise ValueError("Invalid pairing")
         if any(
-            not isinstance(data[k], str) or not 16 <= len(data[k]) <= 128
-            for k in ("device_id", "pairing_token", "credential")
+            not isinstance(data[k], str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", data[k])
+            for k in ("device_id", "credential")
         ):
             raise ValueError("Invalid pairing")
-        self.devices.pair(data["device_id"], data["pairing_token"], data["credential"])
-        return web.json_response({"paired": True, "protocol": 1})
+        # The device creates its own random credential; no administrator or
+        # supplier credential is ever delivered to the terminal.
+        return web.json_response({"protocol": 2, **self.devices.begin(data["device_id"], data["credential"])})
 
     async def stream(self, request):
         from .connection import Connection
@@ -113,19 +162,35 @@ class AiPassportPlugin:
         ident = request.headers.get("X-Device-Id", "")
         credential = request.headers.get("Authorization", "").removeprefix("Bearer ")
         session = self.devices.authenticate(ident, credential)
-        if ident in self.connections:
-            raise web.HTTPConflict(text="device_already_connected")
-        if len(self.connections) >= self.settings["max_connections"]:
+        previous = self.connections.get(ident)
+        if previous is None and len(self.connections) >= self.settings["max_connections"]:
             raise web.HTTPServiceUnavailable(text="terminal_capacity")
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=15)
         connection = Connection(self, ident, session, ws)
         self.connections[ident] = connection
         try:
+            # Only this device's authenticated credential can supersede its
+            # transport. Pairing/session/accepted work remain unchanged.
+            if previous:
+                try:
+                    await previous.close()
+                except Exception as exc:
+                    self.context.log.warning(
+                        "passport_previous_connection_cleanup_failed device=%s type=%s",
+                        ident,
+                        type(exc).__name__,
+                    )
+            if self.connections.get(ident) is not connection or connection.closed:
+                raise web.HTTPConflict(text="device_connection_superseded")
             await ws.prepare(request)
             await connection.run()
         finally:
-            await connection.close()
-            self.connections.pop(ident, None)
+            try:
+                await connection.close()
+            finally:
+                # Old handler completion must never remove its replacement.
+                if self.connections.get(ident) is connection:
+                    self.connections.pop(ident, None)
         return ws
 
     async def close(self):

@@ -85,7 +85,9 @@ class Conversations:
             "list": {"before", "limit"},
             "open": {"operator", "session_id"},
             "history": {"session_id", "before"},
+            "history_index": {"session_id", "before", "after", "limit"},
             "message": {"session_id", "message_id", "offset", "limit"},
+            "thumbnail": {"session_id", "message_id", "image_id", "width", "height"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
             "receipt": {"session_id", "request_id", "include_execution"},
@@ -131,11 +133,29 @@ class Conversations:
         if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:
             return await self.snapshots.request(action, args)
         store = self.main.store
-        if action == "message":
+        if action in {"message", "thumbnail"}:
             item = store.get(args.get("message_id"))
             offset, limit = args.get("offset", 0), args.get("limit", 240)
             if not item or item["session_id"] != ident:
                 raise ValueError("Unknown conversation message")
+            images = [ref for ref in item["attachments"] if ref.get("type", "").startswith("image/")][:4]
+            if action == "thumbnail":
+                width, height = args.get("width", 160), args.get("height", 96)
+                if (
+                    type(width) is not int
+                    or not 16 <= width <= 160
+                    or type(height) is not int
+                    or not 16 <= height <= 96
+                    or args.get("image_id") not in {r["id"] for r in images}
+                ):
+                    raise ValueError("Invalid conversation image request")
+                from assistant_runtime.core.workfiles.thumbnails import render
+
+                raw = self.main.media.image_bytes(args["image_id"])
+                # The owning media registry validates file identity and bounds.
+                # This worker only processes registered bytes, never paths/URLs.
+                result = await asyncio.to_thread(render, raw, width, height)
+                return {"image_id": args["image_id"], **result}
             presentation = item.get("presentation") or {}
             reference = item.get("result_ref")
             total = (
@@ -182,12 +202,16 @@ class Conversations:
             return {
                 "work_id": work.work_id if work else None,
                 "message_id": item["id"],
+                "role": item["role"],
                 "text": text,
+                "total": total,
                 "offset": offset,
                 "next_offset": end if end < total else None,
                 "updated": item["updated"],
                 "status": item["status"],
+                "kind": item["kind"],
                 "result_ref": item.get("result_ref"),
+                "images": images,
             }
         if "include_execution" in args and type(args["include_execution"]) is not bool:
             raise ValueError("include_execution must be boolean")
@@ -231,6 +255,10 @@ class Conversations:
                     else {}
                 ),
             }
+        if action == "history_index":
+            return store.history_index(
+                ident, before=args.get("before"), after=args.get("after"), limit=args.get("limit", 4)
+            )
         if action == "history":
             messages = store.history(ident, args.get("before"))
             return {

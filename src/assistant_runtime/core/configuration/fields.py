@@ -190,19 +190,26 @@ def patch_documents(snapshot, entry_name, patches, inventory=None):
             or any(not isinstance(k, str) or not k or len(k) > 128 for k in path)
         ):
             raise ValueError("Invalid field path")
-        if any(path[: len(old)] == old or old[: len(path)] == path for old in seen):
+        if any(
+            (path[: len(old)] == old or old[: len(path)] == path)
+            and not (op == "create" and len(old) < len(path) and path[: len(old)] == old)
+            for old, op in seen
+        ):
             raise ValueError("Overlapping patches")
-        seen.append(path)
+        seen.append((path, patch.get("op")))
         rule = rule_for(path, fields)
         if rule.get("readOnly"):
             raise ValueError("Field requires local maintenance")
         operation = patch.get("op")
         secret = rule.get("writeOnly") or rule.get("x-sensitive")
-        if operation not in ({"replace_secret", "clear_secret"} if secret else {"set", "default"}):
+        if operation not in ({"replace_secret", "clear_secret"} if secret else {"set", "default", "create"}):
             raise ValueError("Invalid field operation")
         if not secret and operation == "set" and secret_shape(rule):
             raise ValueError("Edit sensitive child fields individually")
         matches = [n for n, doc in documents.items() if lookup(doc, path) is not MISSING]
+        if operation == "create":
+            if rule.get("type") != "object" or patch.get("value") != {} or matches:
+                raise ValueError("Create requires a new empty declared object")
         if len(matches) > 1:
             # A table may be split across includes. Edit children rather than relocating it.
             raise ValueError("Field spans multiple files; edit individual child fields")

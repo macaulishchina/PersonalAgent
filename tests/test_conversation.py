@@ -1,6 +1,8 @@
 """Conversation consistency under duplicate delivery, correction and recovery."""
 
 import asyncio
+import base64
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -22,6 +24,10 @@ class Owned:
     def __init__(self):
         self.tasks = []
         self.cleanups = []
+        self.events = []
+
+    def publish(self, kind, **data):
+        self.events.append((kind, data))
 
     def spawn(self, coro, label=""):
         task = asyncio.create_task(coro)
@@ -271,6 +277,30 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         await self.context.close()
         self.host.store.db.close()
         self.temp.cleanup()
+
+    async def test_tool_image_is_retained_with_web_entrance_disabled(self):
+        from PIL import Image
+
+        c = self.host.conversation
+        self.host.config.web["enable"] = False
+        data = io.BytesIO()
+        Image.new("RGB", (4, 4), "red").save(data, format="PNG")
+        c.provider_event(
+            {
+                "kind": "message",
+                "message_id": "headless-image",
+                "detail": True,
+                "text": "工具图片",
+                "status": "complete",
+                "images": [
+                    {"data_base64": base64.b64encode(data.getvalue()).decode(), "mime_type": "image/png"}
+                ],
+            }
+        )
+        await asyncio.wait_for(c.image_queue.join(), 2)
+        message = c.store.get("task:session:headless-image")
+        self.assertEqual(len(message["attachments"]), 1)
+        self.assertTrue(c.media.folder.joinpath(message["attachments"][0]["id"]).is_file())
 
     async def test_duplicate_web_request_dispatches_once_and_conflict_rejected(self):
         c = self.host.conversation

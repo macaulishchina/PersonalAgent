@@ -17,6 +17,7 @@ from .plugin_context import (
 RESOURCE_OWNERS = {
     "usage": "ai_usage",
     "conversation": "conversation",
+    "conversation_views": "conversation",
     **{
         key: "devices"
         for key in (
@@ -86,7 +87,12 @@ def resources_for(host, name, keys):
     resources = {}
     for key in keys:
         required = RESOURCE_OWNERS.get(key)
-        attribute = {"usage": "ai_usage", "directory": "devices", "voice_binding": "voice_io"}.get(key, key)
+        attribute = {
+            "usage": "ai_usage",
+            "directory": "devices",
+            "voice_binding": "voice_io",
+            "conversation_views": "conversation",
+        }.get(key, key)
         if required and getattr(host, attribute, None) is None:
             raise ValueError(f"Plugin {name}: resource {key} requires enabled plugin {required}")
         if key == "system_io":
@@ -110,6 +116,17 @@ def resources_for(host, name, keys):
         elif key == "usage":
             usage = host.ai_usage
             resources[key] = UsageAccess(usage.scope, usage.service.admit, usage.service.settle)
+        elif key == "conversation_views":
+            from assistant_runtime.api.conversation import ConversationViews
+            from assistant_runtime.core.conversation.access import ConversationAccess
+
+            async def open_view(ident):
+                chat = await host.conversations.get(ident)
+                return ConversationAccess(
+                    lambda: chat, title=host.conversations.sessions.get(ident)["title"], controls={"cancel"}
+                )
+
+            resources[key] = ConversationViews(open_view)
         elif key == "conversation":
             from assistant_runtime.core.conversation.access import ConversationAccess
 

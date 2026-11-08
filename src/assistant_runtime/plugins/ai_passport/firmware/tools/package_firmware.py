@@ -4,9 +4,31 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import tempfile
 from pathlib import Path
 import zipfile
+
+
+def application_size(table: bytes) -> int:
+    """Read the actual built partition table, including its cache boundary."""
+    partitions = []
+    application = None
+    entry = struct.Struct("<HBBII16sI")
+    for offset in range(0, len(table) - entry.size + 1, entry.size):
+        magic, kind, subtype, start, size, name, flags = entry.unpack_from(table, offset)
+        if magic in {0xFFFF, 0xEBEB}:  # End marker or ESP-IDF MD5 record.
+            break
+        if magic != 0x50AA or start < 0x9000 or not size or start + size > 0x800000:
+            raise ValueError("Invalid built partition table")
+        if any(start < end and begin < start + size for begin, end in partitions):
+            raise ValueError("Overlapping built partitions")
+        partitions.append((start, start + size))
+        if kind == 0 and subtype == 0 and start == 0x10000:
+            application = size
+    if application is None:
+        raise ValueError("Missing actual factory application partition")
+    return application
 
 
 def package(build: Path, destination: Path) -> None:
@@ -37,7 +59,10 @@ def package(build: Path, destination: Path) -> None:
         "hardware_acceptance": "pending",
         "flash_files": [],
     }
-    limits = {0: 0x8000, 0x8000: 0x1000, 0x10000: 0x7F0000}
+    table = (build / files[0x8000]).resolve()
+    if not table.is_relative_to(build):
+        raise ValueError("Partition image must belong to this build")
+    limits = {0: 0x8000, 0x8000: 0x1000, 0x10000: application_size(table.read_bytes())}
     for offset, name in sorted(files.items()):
         path = (build / name).resolve()
         if not path.is_relative_to(build) or not path.is_file():
@@ -65,6 +90,9 @@ def package(build: Path, destination: Path) -> None:
             {
                 "docs/acceptance.md": root.parent / "docs/acceptance.md",
                 "docs/protocol.md": root.parent / "docs/protocol.md",
+                "docs/terminal-rebuild.md": root.parent / "docs/terminal-rebuild.md",
+                "docs/hardware-acceptance.md": root.parent / "docs/hardware-acceptance.md",
+                "docs/hardware-platform.md": root.parent / "docs/hardware-platform.md",
             }
             if project == "pa_terminal"
             else {}
@@ -90,10 +118,11 @@ def package(build: Path, destination: Path) -> None:
                 archive.writestr(name, data)
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
             for name, path in resources.items():
-                if name == "README.md" and project == "pa_terminal":
-                    archive.writestr(
-                        name, path.read_text().replace("../../../docs/acceptance.md", "docs/acceptance.md")
-                    )
+                if name.endswith(".md") and project == "pa_terminal":
+                    text = path.read_text()
+                    text = text.replace("../../../docs/", "docs/")
+                    text = text.replace("../firmware/apps/pa_terminal/README.md", "../README.md")
+                    archive.writestr(name, text)
                 else:
                     archive.write(path, name)
         os.replace(staged, destination)

@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import re
 from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, ClientError, web
@@ -56,9 +57,18 @@ class ChatGateway:
         outgoing = headers(request.headers)
         # Never disclose the administrator credential/session to the chat plugin.
         outgoing.popall("Cookie", None)
-        cookie = request.cookies.get("personal_agent_session")
-        if cookie:
-            outgoing["Cookie"] = "personal_agent_session=" + cookie
+        cookies = []
+        for name in (
+            "personal_agent_session",
+            "personal_agent_view",
+            "personal_agent_access_request",
+            "personal_agent_visit",
+        ):
+            cookie = request.cookies.get(name)
+            if cookie and re.fullmatch(r"[A-Za-z0-9_-]{43}", cookie):
+                cookies.append(name + "=" + cookie)
+        if cookies:
+            outgoing["Cookie"] = "; ".join(cookies)
         outgoing["X-PA-Frontend-Key"] = endpoint["key"]
         outgoing["X-PA-Frontend-Scheme"] = request["gateway_scheme"]
         outgoing["X-PA-Frontend-Origin"] = request.get(
@@ -79,7 +89,12 @@ class ChatGateway:
                     raise web.HTTPRequestEntityTooLarge(max_size=11 * 1024 * 1024, actual_size=size)
                 yield chunk
 
-        timeout = ClientTimeout(total=None if request.path == "/chat/api/events" else 120, connect=5)
+        streaming = bool(
+            re.fullmatch(
+                r"/chat/(?:c/[a-f0-9]{32}/|e/[a-f0-9]{32}/(?:account|visit)/)?api/events", request.path
+            )
+        )
+        timeout = ClientTimeout(total=None if streaming else 120, connect=5)
         response = None
         try:
             async with self.client.request(

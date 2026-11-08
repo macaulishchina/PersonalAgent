@@ -12,6 +12,7 @@ from assistant_runtime.core.notifications.repository import Notifications
 from assistant_runtime.core.notifications.settings import NotificationSettings
 from assistant_runtime.core.notifications.terminals import TerminalDelivery
 from assistant_runtime.core.configuration.entrances import EntranceGateway
+from assistant_runtime.plugins.ai_passport.connection import Connection
 
 
 class DeliveryTest(unittest.IsolatedAsyncioTestCase):
@@ -86,6 +87,49 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
             await self.call("played", id=item["id"], revision=2)
         data = await self.call("get", **args, offset=2, limit=2)
         self.assertEqual(data["text"], "内容")
+
+    async def test_passport_page_preserves_notification_identity_through_real_delivery(self):
+        item = self.notice("passport-page")
+        text = "这是分页的后台任务报告。" * 20
+        payload = item["payload"] | {"body": text}
+        self.db.execute("UPDATE notifications SET payload=? WHERE id=?", (json.dumps(payload), item["id"]))
+        self.db.commit()
+        ws = SimpleNamespace(send_json=AsyncMock())
+        owner = SimpleNamespace(context=SimpleNamespace(invoke=self.delivery.request))
+        connection = Connection(owner, "device", "pp", ws)
+        pages, offset = [], 0
+        while True:
+            await connection.command(
+                {"type": "notification.page", "id": item["id"], "revision": 1, "offset": offset}
+            )
+            page = ws.send_json.call_args.args[0]
+            self.assertEqual(
+                (page["type"], page["id"], page["revision"], page["offset"]),
+                ("notification.page", item["id"], 1, offset),
+            )
+            self.assertNotIn("notification_id", page)
+            self.assertNotIn("work_id", page)
+            self.assertNotIn("result_ref", page)
+            pages.append(page["text"])
+            if page["next_offset"] is None:
+                break
+            self.assertGreater(page["next_offset"], offset)
+            offset = page["next_offset"]
+        self.assertEqual("".join(pages), text)
+        self.assertTrue(self.repo.get(item["id"])["unread"])
+        with self.assertRaises(ValueError):
+            await connection.command(
+                {"type": "notification.page", "id": item["id"], "revision": 2, "offset": 0}
+            )
+        with self.assertRaises(ValueError):
+            await connection.command(
+                {
+                    "type": "notification.page",
+                    "id": self.notice("other", "web")["id"],
+                    "revision": 1,
+                    "offset": 0,
+                }
+            )
 
 
 class GatewayTest(unittest.IsolatedAsyncioTestCase):

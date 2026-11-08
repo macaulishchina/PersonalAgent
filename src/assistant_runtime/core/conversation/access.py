@@ -1,12 +1,15 @@
 """Public entrance view; conversation owns message and attachment storage."""
 
 import re
+import json
 import time
 
 
 class ConversationAccess:
-    def __init__(self, conversation, project=lambda messages: None):
+    def __init__(self, conversation, project=lambda messages: None, *, title=None, controls=None):
         self.__get, self.__project = conversation, project
+        self.__controls = controls
+        self.title = title
 
     @property
     def __conversation(self):
@@ -19,6 +22,8 @@ class ConversationAccess:
         return await self.__conversation.submit(*args)
 
     async def control(self, action):
+        if self.__controls is not None and action not in self.__controls:
+            raise ValueError("Control is outside this conversation view")
         return await self.__conversation.control(action)
 
     def project(self, messages):
@@ -41,6 +46,18 @@ class ConversationAccess:
         if events:
             self.project([e["data"] for e in events if e["kind"] == "message" and e["data"]])
         return events
+
+    def result_reference(self, ident):
+        """Only results recorded on a message in this view are reachable."""
+        conversation = self.__conversation
+        row = conversation.store.db.execute(
+            "SELECT result_ref FROM chat_messages WHERE session_id=? "
+            "AND json_extract(result_ref,'$.id')=? LIMIT 1",
+            (conversation.session, ident),
+        ).fetchone()
+        if not row:
+            raise FileNotFoundError()
+        return json.loads(row[0])
 
     async def upload(self, data, name):
         conversation = self.__conversation

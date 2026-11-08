@@ -24,31 +24,34 @@ def generate(converter):
     symbols.update("".join(p.read_text() for p in (ROOT / "main").glob("*.c")))
     symbols = "".join(sorted(c for c in symbols if ord(c) > 127))
     target = ROOT / "main/fonts"
-    subprocess.run(
-        [
-            converter,
-            "--font",
-            str(font),
-            "-r",
-            "0x20-0x7e",
-            "--symbols",
-            symbols,
-            "--size",
-            "16",
-            "--bpp",
-            "2",
-            "--no-compress",
-            "--format",
-            "lvgl",
-            "--lv-include",
-            "lvgl.h",
-            "--lv-font-name",
-            "terminal_zh_16",
-            "-o",
-            str(target / "terminal_zh_16.c"),
-        ],
-        check=True,
-    )
+    for size in (16, 18):
+        subprocess.run(
+            [
+                converter,
+                "--font",
+                str(font),
+                "-r",
+                "0x20-0x7e",
+                "--symbols",
+                symbols,
+                "--size",
+                str(size),
+                "--bpp",
+                "2",
+                "--no-compress",
+                "--format",
+                "lvgl",
+                "--lv-include",
+                "lvgl.h",
+                "--lv-font-name",
+                f"terminal_zh_{size}",
+                "-o",
+                str(target / f"terminal_zh_{size}.c"),
+            ],
+            check=True,
+        )
+        output = target / f"terminal_zh_{size}.c"
+        output.write_text(output.read_text().rstrip() + "\n")
     (target / "LICENSE.txt").write_text(
         (font.parent / "font_license/SourceHanSansSC/LICENSE.txt").read_text()
     )
@@ -58,7 +61,7 @@ def generate(converter):
                 "font_sha256": hashlib.sha256(font.read_bytes()).hexdigest(),
                 "lvgl": "9.5.0",
                 "converter": "1.5.3",
-                "size": 16,
+                "sizes": [16, 18],
                 "bpp": 2,
                 "characters": symbols,
             },

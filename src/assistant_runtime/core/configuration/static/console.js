@@ -644,7 +644,8 @@ function drawField(field) {
       const toolbar = node("div", undefined, "collection-toolbar"),
         name = node("input"),
         add = node("button", "添加条目", "secondary");
-      name.placeholder = "条目名称，例如 primary";
+      name.placeholder = rule["x-entry-placeholder"] || "条目名称，例如 primary";
+      add.textContent = rule["x-entry-add"] || "添加条目";
       name.setAttribute(
         "aria-label",
         (rule.title || path.at(-1)) + " · 新条目名称",
@@ -665,7 +666,8 @@ function drawField(field) {
         }
         const child = [...path, text];
         openEntries.add(key(child));
-        changed(child, "set", seedValue(rule.additionalProperties));
+        const seed = seedValue(rule.additionalProperties);
+        changed(child, rule.additionalProperties.type === "object" && !Object.keys(seed).length ? "create" : "set", seed);
         render();
         document
           .getElementById(
@@ -1874,13 +1876,16 @@ function displayProperties(rule, current) {
 
 function drawTerminalDevices(plugin, section) {
   const panel = node("section", undefined, "owner-action"),
-    name = node("input"), list = node("div"), status = node("p", "", "hint"),
+    name = node("input"), code = node("input"), list = node("div"), status = node("p", "", "hint"),
     refresh = node("button", "刷新设备", "secondary"),
-    pair = node("button", "添加设备并下载配对文件", "secondary");
+    pair = node("button", "配对设备", "secondary");
   name.placeholder = "设备名称";
   name.setAttribute("aria-label", "设备名称");
   name.maxLength = 48;
-  panel.append(node("h3", "终端设备"), node("p", "配对文件仅在本次生成时提供，有效期 10 分钟。通过 USB 写入设备；请勿分享，配置完成后删除本机文件。", "hint"), name, pair, refresh, status, list);
+  code.placeholder = "设备屏幕上的八位配对码";
+  code.setAttribute("aria-label", "八位配对码");
+  code.inputMode = "numeric"; code.maxLength = 8; code.autocomplete = "off";
+  panel.append(node("h3", "终端设备"), node("p", "先在 PP 热点页面配置 Wi-Fi 和 PA 地址，再输入设备屏幕上的八位数字。配对码十分钟有效，只能使用一次。", "hint"), name, code, pair, refresh, status, list);
   async function operation(actionName, args = {}) {
     return api("/api/entrances/" + encodeURIComponent(plugin.id), {action: actionName, arguments: args});
   }
@@ -1889,7 +1894,8 @@ function drawTerminalDevices(plugin, section) {
     list.replaceChildren();
     for (const device of reply.devices) {
       const row = node("div", undefined, "owner-action"),
-        revoke = node("button", "撤销配对", "secondary");
+        revoke = node("button", "撤销配对", "secondary"),
+        configure = node("button", "设备配置", "secondary");
       row.append(node("strong", device.name), node("span", device.revoked ? "已撤销" : device.connected ? "在线" : device.paired ? "离线" : "待配对"), node("small", "设备 " + device.device_id + " · 会话 " + device.session_id));
       revoke.disabled = Boolean(device.revoked);
       revoke.onclick = () => action(async () => {
@@ -1897,22 +1903,33 @@ function drawTerminalDevices(plugin, section) {
         await operation("revoke", {device_id: device.device_id});
         await reload();
       });
-      row.append(revoke); list.append(row);
+      const fields = Object.values(device.configuration || {}),
+        pending = fields.filter(f => f.desired !== f.applied).length;
+      if (fields.length) row.append(node("small", pending ? `${pending} 项配置等待设备确认` : "设备配置已确认"));
+      configure.disabled = Boolean(device.revoked);
+      configure.onclick = () => {
+        const field = snapshot.fields.find(f => key(f.path) === key(["ai_passport", "devices"]));
+        if (!field) throw Error("设备配置声明不可用，请刷新配置页面");
+        const path = [...field.path, device.device_id];
+        if (!Object.hasOwn(currentValue(field) || {}, device.device_id)) changed(path, "create", {});
+        openEntries.add(key(path));
+        render();
+        requestAnimationFrame(() => document.querySelector(`[data-field-path="${CSS.escape(key(path))}"]`)?.scrollIntoView({block: "center", behavior: "smooth"}));
+      };
+      row.append(configure, revoke); list.append(row);
     }
     if (!reply.devices.length) list.append(node("p", "尚无配对设备", "hint"));
   }
   refresh.onclick = () => action(reload);
   pair.onclick = () => action(async () => {
-    if (dirty()) throw Error("请先保存设置；配对使用已生效的 WSS 地址。");
+    if (dirty()) throw Error("请先保存当前配置草稿，再配对设备。");
     if (!name.value.trim()) throw Error("请填写设备名称");
+    if (!/^\d{8}$/.test(code.value.trim())) throw Error("请输入设备屏幕上的八位数字");
     pair.disabled = true;
     try {
-      const bundle = await operation("pair", {name: name.value.trim()});
-      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle)], {type: "application/json"}));
-      const link = node("a", "重新下载本次配对文件");
-      link.href = url; link.download = "pp-pairing.json";
-      status.replaceChildren(link); link.click();
-      setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 600000);
+      await operation("pair", {name: name.value.trim(), code: code.value.trim()});
+      code.value = "";
+      status.textContent = "配对成功，设备会自动连接。";
       await reload();
     } finally { pair.disabled = false; }
   });

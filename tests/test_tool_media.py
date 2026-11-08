@@ -19,7 +19,7 @@ from assistant_runtime.api import ExecutionRequest
 from assistant_runtime.api.ai_usage import UsageScope, current_usage
 from assistant_runtime.app.store import Store
 from assistant_runtime.core.workfiles import WorkFiles
-from assistant_runtime.core.pi.conversation import task_event
+from assistant_runtime.core.pi.conversation import task_event, retained_native_media_item
 
 
 def picture():
@@ -30,6 +30,20 @@ def picture():
 
 
 class ToolMediaTest(unittest.IsolatedAsyncioTestCase):
+    async def test_native_hidden_tool_delivers_only_retained_media(self):
+        receipt = {"state": "ready", "attachments": [{"id": "a" * 32, "type": "image/png"}], "issues": []}
+        raw = {
+            "content": [{"type": "image", "data": "private-raw-data"}],
+            "details": {"personal_agent.tool_media": receipt},
+        }
+        item = retained_native_media_item("call", "read", raw)
+        event = task_event("activity.completed", {"item": {**item, "status": "completed"}})
+        self.assertEqual(event["attachments"], receipt["attachments"])
+        self.assertTrue(event["detail"])
+        self.assertNotIn("private-raw-data", json.dumps(item))
+        self.assertNotIn("arguments", item)
+        self.assertIsNone(retained_native_media_item("ordinary", "read", {"content": []}))
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

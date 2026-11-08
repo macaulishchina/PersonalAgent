@@ -2059,3 +2059,17 @@ p {
 .model-failure-actions dl { display: grid; grid-template-columns: auto minmax(0,1fr); gap: .4rem .8rem; margin: .5rem 0; }
 .model-failure-actions dt { opacity: .65; }
 .model-failure-actions dd { margin: 0; overflow-wrap: anywhere; }
+
+:root [hidden] {
+  display: none !important;
+}
+
+.access-entry { max-width: 920px; width: 100%; margin: 0 auto; }
+.access-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; width: 100%; margin: 24px 0; text-align: left; }
+.access-choice { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); padding: 28px; }
+.access-choice h2 { margin: 14px 0 10px; font-size: 20px; }
+.access-choice > p { min-height: 48px; }
+.access-choice button { width: 100%; margin-top: 14px; }
+.access-choice form { width: 100%; min-width: 0; }
+.access-code { display: block; font-size: 28px; letter-spacing: .18em; margin: 12px 0; }
+@media (max-width: 640px) { .access-choices { grid-template-columns: 1fr; } }

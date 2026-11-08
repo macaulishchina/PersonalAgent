@@ -1,6 +1,7 @@
 """Durable, ordered conversation projection and resumable change notifications."""
 
 import hashlib
+import base64
 import json
 import time
 from contextlib import nullcontext
@@ -9,6 +10,7 @@ from contextlib import nullcontext
 class ConversationStore:
     def __init__(self, store):
         self.store, self.db = store, store.db
+        self.on_change = None
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id TEXT PRIMARY KEY, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
@@ -139,6 +141,8 @@ class ConversationStore:
             seq = cur.lastrowid
             if seq % 500 == 0:
                 self.db.execute("DELETE FROM chat_events WHERE seq < ?", (seq - 20000,))
+        if self.on_change:
+            self.on_change(session, seq)
         return seq
 
     def put(
@@ -238,6 +242,8 @@ class ConversationStore:
                     json.dumps(presentation),
                 ),
             )
+        if commit and self.on_change:
+            self.on_change(session, seq)
         return self.get(ident)
 
     def history(self, session, before=None, limit=60):
@@ -246,6 +252,59 @@ class ConversationStore:
             (session, before or 2**63 - 1, min(limit, 100)),
         ).fetchall()
         return [self.get(row[0]) for row in reversed(rows)]
+
+    def history_index(self, session, *, before=None, after=None, limit=4):
+        """Bounded timeline metadata; only image-bearing tool results get an image entry."""
+        if type(limit) is not int or not 1 <= limit <= 20 or before is not None and after is not None:
+            raise ValueError("Invalid history index page")
+        boundary = before if before is not None else after
+        arguments = [session]
+        where = "session_id=? AND (kind='message' OR (kind='detail' AND attachments!='[]')) AND role IN ('user','assistant')"
+        if boundary is not None:
+            try:
+                if not isinstance(boundary, str) or len(boundary) > 1024:
+                    raise ValueError()
+                source, ordinal, ident = json.loads(base64.b64decode(boundary, altchars=b"-_", validate=True))
+                if source != session or type(ordinal) is not int or ordinal < 0 or not isinstance(ident, str):
+                    raise ValueError()
+            except (ValueError, TypeError, UnicodeError):
+                raise ValueError("Invalid history cursor") from None
+            compare = "<" if before is not None else ">"
+            where += f" AND (ordinal {compare} ? OR (ordinal=? AND id {compare} ?))"
+            arguments.extend((ordinal, ordinal, ident))
+        order = "ASC" if after is not None else "DESC"
+        rows = self.db.execute(
+            f"SELECT id,ordinal,role,status,updated,CASE WHEN kind='detail' THEN '图片' ELSE substr(text,1,80) END,attachments!='[]',kind FROM chat_messages WHERE {where} ORDER BY ordinal {order},id {order} LIMIT ?",
+            (*arguments, limit + 1),
+        ).fetchall()
+        more = len(rows) > limit
+        rows = rows[:limit]
+        if after is None:
+            rows.reverse()
+
+        def cursor(row):
+            return base64.urlsafe_b64encode(json.dumps([session, row[1], row[0]]).encode()).decode()
+
+        return {
+            "items": [
+                {
+                    "id": r[0],
+                    "cursor": cursor(r),
+                    "role": r[2],
+                    "status": r[3],
+                    "updated": r[4],
+                    "preview": r[5],
+                    "has_attachments": bool(r[6]),
+                    "kind": "image" if r[7] == "detail" else "message",
+                }
+                for r in rows
+            ],
+            "before": cursor(rows[0]) if rows and (after is not None or after is None and more) else None,
+            "after": cursor(rows[-1])
+            if rows and (after is not None and more or before is not None)
+            else None,
+            "cursor": self.cursor(),
+        }
 
     def cursor(self):
         return self.db.execute("SELECT coalesce(max(seq),0) FROM chat_events").fetchone()[0]

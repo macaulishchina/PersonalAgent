@@ -42,6 +42,13 @@ class WebPlugin:
             AuthRepository,
             self.settings.credential_path(self.api.state_dir.parent),
         )
+        from .scoped import ScopedWeb
+
+        self.scoped = ScopedWeb(self)
+        self.scoped.entrances.context = context
+        from assistant_runtime.api.conversation import ConversationAccessRequest
+
+        context.register(ConversationAccessRequest, self.scoped.entrances.device_request)
         static = Path(__file__).with_name("static")
         if not (static / "index.html").exists():
             raise RuntimeError("Build the web interface with npm --prefix frontend run build")
@@ -69,6 +76,7 @@ class WebPlugin:
                 web.post("/api/uploads", self.upload),
                 web.get("/api/uploads/{id}", self.attachment),
                 web.get("/", self.index),
+                *self.scoped.routes(),
             ]
         )
         self.app.router.add_static("/assets/", static / "assets", show_index=False)
@@ -78,10 +86,13 @@ class WebPlugin:
         self.site = web.TCPSite(self.runner, self.settings.host, self.settings.port)
         await self.site.start()
         self.publish()
+        self.frontend.register_management(self.scoped.manage)
         self.cleanup_task = context.spawn(self.cleanup_uploads(), "upload-retention")
 
     def publish(self):
         self.frontend.publish(self.settings.host, self.site._server.sockets[0].getsockname()[1])
+        if hasattr(self, "scoped"):
+            self.frontend.register_management(self.scoped.manage)
 
     async def prepare_configuration(self, settings):
         from assistant_runtime.api.configuration import ConfigurationUpdate
@@ -167,6 +178,7 @@ class WebPlugin:
                 raise web.HTTPForbidden(text="跨站请求已拒绝")
             if request.method not in ("GET", "HEAD") and origin != expected:
                 raise web.HTTPForbidden(text="缺少同源请求标识")
+            await self.scoped.authorize(request)
             if request.path.startswith("/api/") and request.path != "/api/login":
                 if not self.auth.valid(request.cookies.get(COOKIE)):
                     raise web.HTTPUnauthorized(text="请先输入访问口令")
@@ -184,12 +196,15 @@ class WebPlugin:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' blob: data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
-        if request.path.startswith("/api/"):
+        if "/api/" in request.path or request.path.startswith(("/c/", "/e/")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
     async def index(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "index.html")
+
+    def view(self, request):
+        return request.get("conversation_view", self.conversation)
 
     async def object_body(self, request):
         data = await request.json()
@@ -219,7 +234,7 @@ class WebPlugin:
         return response
 
     async def session(self, request):
-        return web.json_response(self.conversation.state())
+        return web.json_response(self.scoped.state(request, self.view(request).state()))
 
     async def models(self, request):
         from assistant_runtime.api.models import ModelRequest
@@ -250,18 +265,23 @@ class WebPlugin:
 
     async def history(self, request):
         before = int(request.query["before"]) if request.query.get("before") else None
-        return web.json_response(self.conversation.history(before))
+        result = self.view(request).history(before)
+        result["state"] = self.scoped.state(request, result["state"])
+        return web.json_response(result)
 
     async def send(self, request):
         data = await self.object_body(request)
-        result = await self.conversation.submit(
+        if request.get("conversation_grant") and set(data) - {"request_id", "text", "attachments"}:
+            raise ValueError("Invalid scoped conversation input")
+        result = await self.view(request).submit(
             data["request_id"], data.get("text", ""), data.get("attachments", []), data.get("notification_id")
         )
         return web.json_response(result, status=202)
 
     async def control(self, request):
         data = await self.object_body(request)
-        return web.json_response(await self.conversation.control(data["action"]))
+        view = self.conversation if data["action"] == "stop" else self.view(request)
+        return web.json_response(await view.control(data["action"]))
 
     async def conversation_action(self, request):
         from assistant_runtime.api.conversation import ConversationRequest
@@ -283,7 +303,7 @@ class WebPlugin:
             or "session_id" in data
         ):
             raise ValueError("Unsupported web conversation operation")
-        data["session_id"] = self.conversation.state()["session_id"]
+        data["session_id"] = self.view(request).state()["session_id"]
         return web.json_response(await self.api.invoke(ConversationRequest(action, data)))
 
     async def notification_list(self, request):
@@ -392,6 +412,14 @@ class WebPlugin:
         for field in ("version", "path"):
             if field in request.query:
                 args[field] = request.query[field]
+        if request.get("conversation_grant"):
+            try:
+                reference = self.view(request).result_reference(args["id"])
+            except FileNotFoundError:
+                raise web.HTTPNotFound() from None
+            if args.get("version", reference["version"]) != reference["version"]:
+                raise web.HTTPNotFound()
+            args["version"] = reference["version"]
         try:
             return web.json_response(await self.api.invoke(FileRequest("result_read", args)))
         except ResultAccessError as error:
@@ -430,14 +458,16 @@ class WebPlugin:
         await response.prepare(request)
         self.streams.add(response)
         try:
-            while self.settings.enable and self.auth.valid(request.cookies.get(COOKIE)):
-                events = self.conversation.changes(cursor)
+            while self.settings.enable and self.scoped.valid(request):
+                events = self.view(request).changes(cursor)
                 if events is None:
                     await response.write(b"event: reset\ndata: {}\n\n")
                     break
                 payload = ""
                 for event in events:
                     cursor = event["seq"]
+                    if event["kind"] == "state":
+                        event = {**event, "data": self.scoped.state(request, event["data"])}
                     payload += (
                         f"id: {cursor}\nevent: update\ndata: "
                         + json.dumps(event, ensure_ascii=False)
@@ -465,10 +495,23 @@ class WebPlugin:
                 if len(data) > 10 * 1024 * 1024:
                     raise ValueError("单张图片不能超过 10 MB")
 
-            media = await self.conversation.upload(data, field.filename)
+            media = await self.view(request).upload(data, field.filename)
             ident = media["id"]
             return web.json_response(
-                {"id": ident, "name": media["name"], "url": f"/chat/api/uploads/{ident}"}, status=201
+                {
+                    "id": ident,
+                    "name": media["name"],
+                    "url": (
+                        request.get("chat_mount")
+                        or (
+                            f"/chat/c/{request.match_info['link']}"
+                            if request.get("conversation_grant")
+                            else "/chat"
+                        )
+                    )
+                    + f"/api/uploads/{ident}",
+                },
+                status=201,
             )
 
     async def attachment(self, request):
@@ -476,7 +519,7 @@ class WebPlugin:
         if len(ident) != 32 or any(c not in "0123456789abcdef" for c in ident):
             raise web.HTTPNotFound()
         try:
-            path, media_type = self.conversation.attachment(ident)
+            path, media_type = self.view(request).attachment(ident)
         except FileNotFoundError:
             raise web.HTTPNotFound() from None
         return web.FileResponse(path, headers={"Content-Type": media_type})

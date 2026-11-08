@@ -110,12 +110,22 @@ static int audio_data_set_fmt(const audio_codec_data_if_t *data,
 
 static int audio_data_read(const audio_codec_data_if_t *data, uint8_t *pcm, int size) {
     (void)data;
-    return s_data->read(s_data, pcm, size);
+    if (!s_rx || size <= 0) return ESP_CODEC_DEV_INVALID_ARG;
+    size_t completed = 0;
+    unsigned bytes_per_second = s_hz * (s_bits / 8) * s_ch;
+    unsigned timeout = bytes_per_second ? (uint64_t)size * 1000 / bytes_per_second + 50 : 100;
+    esp_err_t error = i2s_channel_read(s_rx, pcm, (size_t)size, &completed, timeout);
+    return error == ESP_OK && completed == (size_t)size ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
 }
 
 static int audio_data_write(const audio_codec_data_if_t *data, uint8_t *pcm, int size) {
     (void)data;
-    return s_data->write(s_data, pcm, size);
+    if (!s_tx || size <= 0) return ESP_CODEC_DEV_INVALID_ARG;
+    size_t completed = 0;
+    unsigned bytes_per_second = s_hz * (s_bits / 8) * s_ch;
+    unsigned timeout = bytes_per_second ? (uint64_t)size * 1000 / bytes_per_second + 50 : 100;
+    esp_err_t error = i2s_channel_write(s_tx, pcm, (size_t)size, &completed, timeout);
+    return error == ESP_OK && completed == (size_t)size ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
 }
 
 static const audio_codec_data_if_t s_checked_data = {
@@ -564,7 +574,13 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
     return esp_codec_dev_read(s_dev, pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
 }
 
-void bsp_audio_set_volume(uint8_t percent) {
-    s_volume = percent > 100 ? 100 : percent;
-    if (s_dev && s_opened && !s_sleeping) esp_codec_dev_set_out_vol(s_dev, s_volume);
+esp_err_t bsp_audio_set_volume(uint8_t percent) {
+    uint8_t target = percent > 100 ? 100 : percent;
+    if (s_dev && s_opened && !s_sleeping) {
+        s_io_error = ESP_CODEC_DEV_OK;
+        if (esp_codec_dev_set_out_vol(s_dev, target) != ESP_CODEC_DEV_OK ||
+            s_io_error != ESP_CODEC_DEV_OK) return ESP_FAIL;
+    }
+    s_volume = target;
+    return ESP_OK;
 }

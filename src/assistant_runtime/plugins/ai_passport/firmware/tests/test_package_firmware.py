@@ -3,6 +3,9 @@
 import importlib.util
 import json
 from pathlib import Path
+import posixpath
+import re
+import struct
 import tempfile
 import unittest
 import zipfile
@@ -14,6 +17,32 @@ spec.loader.exec_module(module)
 
 
 class PackageTest(unittest.TestCase):
+    @staticmethod
+    def partition_table(cache=False):
+        records = [
+            (1, 2, 0x9000, 0x6000, b"nvs"),
+            (1, 1, 0xF000, 0x1000, b"phy_init"),
+            (0, 0, 0x10000, 0x770000 if cache else 0x7F0000, b"factory"),
+        ]
+        if cache:
+            records.append((1, 0x83, 0x780000, 0x80000, b"pp_cache"))
+        return (
+            b"".join(
+                struct.pack("<HBBII16sI", 0x50AA, kind, subtype, start, size, name, 0)
+                for kind, subtype, start, size, name in records
+            )
+            + b"\xff" * 32
+        )
+
+    def test_actual_partition_boundary_protects_cache_region(self):
+        self.assertEqual(module.application_size(self.partition_table(True)), 0x770000)
+        self.assertEqual(module.application_size(self.partition_table(False)), 0x7F0000)
+        table = self.partition_table(False)[:-32] + self.partition_table(True)[-64:]
+        with self.assertRaisesRegex(ValueError, "Overlapping"):
+            module.application_size(table)
+        with self.assertRaisesRegex(ValueError, "partition"):
+            module.application_size(b"not a partition table")
+
     def test_unexpected_nvs_offset_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -87,6 +116,7 @@ class PackageTest(unittest.TestCase):
                     project + ".map",
                 ):
                     (build / name).write_bytes(b"synthetic build evidence")
+                (build / "partition-table.bin").write_bytes(self.partition_table(project == "pa_terminal"))
                 output = build / "candidate.zip"
                 module.package(build, output)
                 with zipfile.ZipFile(output) as archive:
@@ -98,6 +128,16 @@ class PackageTest(unittest.TestCase):
                     if project == "pa_terminal":
                         self.assertIn("docs/acceptance.md", archive.namelist())
                         self.assertNotIn("../../../docs", archive.read("README.md").decode())
+                        for name in archive.namelist():
+                            if not name.endswith(".md"):
+                                continue
+                            for link in re.findall(r"\]\(([^)\s]+)\)", archive.read(name).decode()):
+                                if link.startswith(("https://", "http://", "#")):
+                                    continue
+                                target = posixpath.normpath(
+                                    posixpath.join(posixpath.dirname(name), link.split("#")[0])
+                                )
+                                self.assertIn(target, archive.namelist(), (name, link))
                     self.assertEqual(manifest["hardware_acceptance"], "pending")
                     self.assertEqual(archive.read("build-info/sdkconfig"), config.read_bytes())
                     self.assertEqual("SourceHanSansSC.LICENSE.txt" in archive.namelist(), chinese)

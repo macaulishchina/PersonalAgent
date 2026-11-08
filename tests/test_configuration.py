@@ -213,6 +213,33 @@ class SchemaTest(unittest.TestCase):
 
 
 class ConsoleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_native_http_entrance_preserves_device_and_browser_auth_boundaries(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from assistant_runtime.core.configuration.console import Console, web
+        from assistant_runtime.core.configuration.entrances import EntranceGateway
+
+        class Business:
+            calls = 0
+
+            async def request(self, payload):
+                self.calls += 1
+                return None
+
+        business = Business()
+        gateway = EntranceGateway(business)
+        console = object.__new__(Console)
+        app = web.Application(middlewares=[console.guard])
+        app.add_routes([web.post("/entrances/{owner}/{route}", gateway.forward)])
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post("/entrances/ai_passport/pair", json={})
+            self.assertEqual(response.status, 503)
+            self.assertEqual(business.calls, 1)
+            for headers in ({"Origin": "http://untrusted.example"}, {"Cookie": "admin=secret"}):
+                response = await client.post("/entrances/ai_passport/pair", json={}, headers=headers)
+                self.assertEqual(response.status, 403)
+            self.assertEqual(business.calls, 1)
+        await gateway.close()
+
     async def test_admin_auth_origin_isolation_and_configuration_unavailable(self):
         from aiohttp.test_utils import TestClient, TestServer
         from assistant_runtime.core.configuration.console import Console, web

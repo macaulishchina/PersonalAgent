@@ -187,12 +187,15 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(c.store.get("task:session:mixed")["attachments"]), 1)
         self.assertTrue(c.store.get("image-error:task:session:mixed"))
 
-    async def test_voice_only_mode_does_not_start_persisting_camera_images(self):
+    async def test_shared_conversation_retains_tool_images_without_a_web_configuration(self):
         c = self.host.conversation
         self.host.config = replace(self.host.config, web={})
         c.provider_event(task_event("activity.completed", provider_item([picture()])))
         await asyncio.wait_for(c.image_queue.join(), 2)
-        self.assertFalse(c.media.folder.exists())
+        message = c.store.get("task:session:image-tool")
+        self.assertEqual(len(message["attachments"]), 1)
+        asset = message["attachments"][0]
+        self.assertTrue((c.media.folder / asset["id"]).is_file())
 
     async def test_image_recovery_updates_previous_failure_notice(self):
         c = self.host.conversation

@@ -6,6 +6,7 @@ from assistant_runtime.api.passwords import validate_password
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from collections import OrderedDict
@@ -65,13 +66,33 @@ class Access:
         return session
 
     def valid(self, session):
+        return self.session_info(session) is not None
+
+    def session_info(self, session):
         if not session:
-            return False
+            return None
         key = hashlib.sha256(session.encode()).digest()
         row = self.db.execute(
             "SELECT expires FROM web_sessions WHERE id=? AND credential=?", (key, self.digest)
         ).fetchone()
-        return bool(row and row[0] > time.time())
+        return {"id": key.hex(), "expires": row[0]} if row and row[0] > time.time() else None
+
+    def sessions(self):
+        return [
+            {"id": row[0].hex(), "expires": row[1], "created": row[1] - 7 * 86400}
+            for row in self.db.execute(
+                "SELECT id,expires FROM web_sessions WHERE credential=? AND expires>?",
+                (self.digest, time.time()),
+            )
+        ]
+
+    def close_session(self, ident):
+        if not isinstance(ident, str) or not re.fullmatch(r"[a-f0-9]{64}", ident):
+            raise ValueError("Invalid browser session")
+        with self.db:
+            self.db.execute(
+                "DELETE FROM web_sessions WHERE id=? AND credential=?", (bytes.fromhex(ident), self.digest)
+            )
 
     def logout(self, session):
         with self.db:

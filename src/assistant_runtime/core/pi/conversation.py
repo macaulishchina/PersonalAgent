@@ -21,6 +21,19 @@ def tool_media_receipt(result):
     return None
 
 
+def retained_native_media_item(call_id, name, result):
+    """A hidden native tool still delivers its retained media, without raw data or arguments."""
+    receipt = tool_media_receipt(result)
+    if receipt is None:
+        return None
+    return {
+        "id": call_id,
+        "type": "tool",
+        "tool": name,
+        "result": {"details": {"personal_agent.tool_media": receipt}},
+    }
+
+
 def image_content(result, *, task_result=False):
     """Normalize native and JSON-wrapped MCP media; preserve durable asset refs."""
     images, attachments = [], []
@@ -85,7 +98,14 @@ def task_event(method, params):
             "failure": params["run"].get("failure"),
         }
     if method == "message.delta" and ident:
-        return {**common, "kind": "message_delta", "delta": params.get("delta", "")}
+        return {
+            **common,
+            "kind": "message_delta",
+            "delta": params.get("delta", ""),
+            **{k: params[k] for k in ("block", "delivery") if k in params},
+        }
+    if method == "message.delivery" and ident:
+        return {**common, "kind": "message_delivery", "delivery": params.get("delivery")}
     if method not in ("activity.started", "activity.completed") or not ident:
         return None
     kind = item.get("type")
@@ -101,6 +121,7 @@ def task_event(method, params):
         "command": "执行命令",
         "file": "修改文件",
         "mcp": "调用工具",
+        "tool": "调用工具",
         "search": "检索资料",
     }
     if kind == "message":
@@ -125,7 +146,7 @@ def task_event(method, params):
     event = {**common, "kind": "message", "text": text, "detail": detail, "status": status}
     if kind == "message":
         event["phase"] = item.get("phase") or "final"
-    if kind == "mcp" and method == "activity.completed":
+    if kind in {"mcp", "tool"} and method == "activity.completed":
         raw_result = item.get("result")
         delivery = raw_result.get("details", {}) if isinstance(raw_result, dict) else {}
         if isinstance(delivery, dict):

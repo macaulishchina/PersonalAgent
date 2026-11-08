@@ -69,16 +69,9 @@ class Console:
         expected = public_origin if trusted else request.scheme + "://" + request.host
         request["secure_context"] = expected.startswith("https://")
         if request.path.startswith("/entrances/"):
-            import ipaddress
-
-            peer_trusted = any(
-                ipaddress.ip_address(request.remote or "0.0.0.0") in ipaddress.ip_network(p, strict=False)
-                for p in settings.trusted_proxies
-            )
-            if not request.secure and not (
-                peer_trusted and request.headers.get("X-Forwarded-Proto") == "https"
-            ):
-                raise web.HTTPForbidden(text="TLS required for device credentials")
+            # Native entrances follow the configured listener/proxy transport.
+            # Their gateway rejects browser cookies/origins and the owning
+            # plugin authenticates device credentials; HTTP/WS is supported.
             return await handler(request)
         if request.path in {"/", "/chat"} or request.path.startswith("/chat/"):
             origin = request.headers.get("Origin")
@@ -155,6 +148,8 @@ class Console:
                 web.post("/api/entrances/{owner}", self.entrance_manage),
                 web.get("/config", self.configuration_redirect),
                 web.get("/config/", self.index),
+                web.get("/config/chat-links/", self.chat_links),
+                web.get("/chat-links.js", self.chat_links_javascript),
                 web.route("*", "/chat", self.chat_gateway.forward),
                 web.route("*", "/chat/{path:.*}", self.chat_gateway.forward),
                 web.get("/console.js", self.javascript),
@@ -257,6 +252,12 @@ class Console:
             {"command": "frontend-manage", "owner": request.match_info["owner"], **data}
         )
         return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+    async def chat_links(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "chat-links.html")
+
+    async def chat_links_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "chat-links.js")
 
     async def permissions_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "permissions.js")

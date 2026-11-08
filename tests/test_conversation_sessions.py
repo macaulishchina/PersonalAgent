@@ -23,6 +23,10 @@ from assistant_runtime.core.cli.client import Chat
 class Context:
     def __init__(self):
         self.tasks = []
+        self.events = []
+
+    def publish(self, kind, **data):
+        self.events.append((kind, data))
 
     def register(self, *args, **kwargs):
         pass

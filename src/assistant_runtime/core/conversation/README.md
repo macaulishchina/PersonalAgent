@@ -77,6 +77,17 @@ policy and jobs; conversation owns source identity and history. Copied transcrip
 has a unique message ID and session/request/turn/entrance provenance. Assistant and task
 reports, cancelled inputs and uncertain executions are excluded. See [memory](../memory/README.md).
 
+The additive `conversation_views` resource lets trusted declared entrances open a
+session-bound view after authenticating and authorizing their client. It does not
+alter another entrance's selection. History, events, uploads, attachment reads and
+recorded result-reference lookup stay within the view. The ordinary `conversation`
+resource keeps its original behavior. Web-owned shortcut grants are documented in
+[Web conversation links](../../plugins/web/README.md).
+The additive `ConversationAccessRequest` contract lets a trusted authenticated
+entrance approve only its bound Web access requests. Approval/login/expiry and
+access shutdown remain Web-owned; none changes conversation execution policy or
+cancels accepted work. The conversation/Pi request protocol remains unchanged.
+
 Web stays bound to `web`; CLI bindings use `cli:<operator>`. A client's live selection
 is local to that client. Model sessions are adapter-owned views of one shared Pi client,
 with separate locks, callbacks, context, questions and MCP refresh state. Pi owns context

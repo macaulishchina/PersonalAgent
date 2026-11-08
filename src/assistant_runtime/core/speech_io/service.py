@@ -2,8 +2,91 @@
 
 import asyncio
 import time
+from collections import deque
 
 from assistant_runtime.api.speech import SpeechError, RecognitionRequest, SynthesisRequest
+
+
+class BufferedRecognition:
+    """Accept bounded PCM while the provider opens, preserving the first sound.
+
+    This buffer lives on PA, not the no-PSRAM terminal. There is one provider
+    opening and one ordered sender, with no retry or incomplete-input fallback.
+    """
+
+    def __init__(self, context, request):
+        self.context, self.request = context, request
+        self.upstream = None
+        self.chunks = deque()
+        self.pending_bytes = 0
+        self.changed = asyncio.Event()
+        self.opened = asyncio.Event()
+        self.ended = self.closed = False
+        self.task = context.spawn(self.run(), "speech-recognition")
+        self.task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+
+    @property
+    def partial(self):
+        return getattr(self.upstream, "partial", "")
+
+    async def send(self, pcm):
+        if self.closed or self.ended:
+            raise SpeechError("speech_input_closed")
+        if self.task.done():
+            await self.task
+            raise SpeechError("speech_input_closed")
+        # Both byte and item limits cover tiny frames as well as large ones.
+        if self.pending_bytes + len(pcm) > 65536 or len(self.chunks) >= 256:
+            raise SpeechError("speech_input_buffer_limit")
+        self.chunks.append(pcm)
+        self.pending_bytes += len(pcm)
+        self.changed.set()
+
+    async def run(self):
+        try:
+            self.upstream = await self.context.invoke(self.request, timeout=30)
+            self.opened.set()
+            while True:
+                if self.chunks:
+                    pcm = self.chunks.popleft()
+                    await asyncio.wait_for(self.upstream.send(pcm), 10)
+                    self.pending_bytes -= len(pcm)
+                elif self.ended:
+                    return await self.upstream.finish()
+                else:
+                    self.changed.clear()
+                    await self.changed.wait()
+        finally:
+            self.opened.set()
+            if self.upstream:
+                await self.upstream.close()
+
+    async def wait_update(self, previous):
+        await self.opened.wait()
+        if self.task.done():
+            await self.task
+            raise StopAsyncIteration
+        update = getattr(self.upstream, "wait_update", None)
+        if not callable(update):
+            raise StopAsyncIteration
+        return await update(previous)
+
+    async def finish(self):
+        if self.closed:
+            raise SpeechError("speech_input_closed")
+        self.ended = True
+        self.changed.set()
+        return await self.task
+
+    async def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if not self.task.done():
+            self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+        self.chunks.clear()
+        self.pending_bytes = 0
 
 
 class InputStream:
@@ -20,22 +103,32 @@ class InputStream:
     def partial(self):
         return getattr(self.upstream, "partial", "")
 
+    async def wait_update(self, previous):
+        if self.closed:
+            raise StopAsyncIteration
+        update = getattr(self.upstream, "wait_update", None)
+        if not callable(update):
+            raise StopAsyncIteration
+        return await update(previous)
+
     async def accept(self, sequence, pcm):
         async with self.lock:
             if self.closed:
                 raise SpeechError("speech_input_closed")
-            if (
-                type(sequence) is not int
-                or sequence != self.sequence
-                or not isinstance(pcm, bytes)
-                or not pcm
-                or len(pcm) % 2
-                or len(pcm) > 8192
-                or self.size + len(pcm) > self.max_bytes
-                or time.monotonic() - self.started > self.max_seconds + 10
-            ):
+            code = (
+                "speech_input_gap"
+                if type(sequence) is not int or sequence != self.sequence
+                else "speech_invalid_pcm"
+                if not isinstance(pcm, bytes) or not pcm or len(pcm) % 2 or len(pcm) > 8192
+                else "speech_input_limit"
+                if self.size + len(pcm) > self.max_bytes
+                else "speech_input_deadline"
+                if time.monotonic() - self.started > self.max_seconds + 10
+                else None
+            )
+            if code:
                 await self.close()
-                raise SpeechError("speech_input_gap_or_limit")
+                raise SpeechError(code)
             self.sequence += 1
             self.size += len(pcm)
             try:
@@ -110,11 +203,11 @@ class SpeechService:
                 raise SpeechError("speech_busy")
             self.opening += 1
             try:
-                upstream = await self.context.invoke(
+                upstream = BufferedRecognition(
+                    self.context,
                     RecognitionRequest(
                         request.scope, max_seconds=self.context.config["max_recording_seconds"]
                     ),
-                    timeout=30,
                 )
                 if self.closed:
                     await upstream.close()
@@ -131,11 +224,12 @@ class SpeechService:
                 raise SpeechError("speech_invalid_text")
             if len(self.streams) + self.opening >= self.context.config["max_streams"]:
                 raise SpeechError("speech_busy")
+            provider_request = SynthesisRequest(
+                request.scope, request.text, voice=request.voice, rate=request.rate
+            )
             self.opening += 1
             try:
-                upstream = await self.context.invoke(
-                    SynthesisRequest(request.scope, request.text), timeout=30
-                )
+                upstream = await self.context.invoke(provider_request, timeout=30)
                 if self.closed:
                     await upstream.aclose()
                     raise SpeechError("speech_unavailable")

@@ -23,6 +23,7 @@ class Duplex:
         self.sentences = {}
         self.reader = None
         self.partial = ""
+        self.updated = asyncio.Event()
         self.deadline = time.monotonic() + (
             request.max_seconds + 45 if request.action == "recognize" else 120
         )
@@ -68,7 +69,10 @@ class Duplex:
         is_asr = self.request.action == "recognize"
         parameters = {"format": "pcm", "sample_rate": 16000 if is_asr else 24000}
         if not is_asr:
-            parameters.update(voice=self.owner.settings["voice"], rate=self.owner.settings["rate"])
+            parameters.update(
+                voice=self.request.voice or self.owner.settings["voice"],
+                rate=self.request.rate if self.request.rate is not None else self.owner.settings["rate"],
+            )
         self.sent = 1  # A failed send may still have reached the provider.
         await self.command(
             "run-task",
@@ -96,12 +100,13 @@ class Duplex:
             kind = event["header"].get("event")
             if kind == "task-finished":
                 self.done = True
+                self.updated.set()
                 return "".join(self.sentences.values())
             if kind == "result-generated":
                 sentence = event.get("payload", {}).get("output", {}).get("sentence", {})
                 partial = sentence.get("text", "")
-                if isinstance(partial, str):
-                    self.partial = partial[:1000]
+                if not isinstance(partial, str):
+                    raise SpeechError("speech_invalid_response")
                 if sentence.get("sentence_end") is True:
                     text = sentence.get("text")
                     if not isinstance(text, str) or len(text) > 16000:
@@ -110,6 +115,26 @@ class Duplex:
                     self.sentences[key] = text
                     if sum(map(len, self.sentences.values())) > 16000:
                         raise SpeechError("speech_transcript_limit")
+                self.partial = "".join(self.sentences.values()) + (
+                    "" if sentence.get("sentence_end") is True else partial
+                )
+                if len(self.partial) > 16000:
+                    raise SpeechError("speech_transcript_limit")
+                self.updated.set()
+
+    async def wait_update(self, previous):
+        while self.partial == previous:
+            if self.reader.done():
+                await self.reader
+                raise StopAsyncIteration
+            self.updated.clear()
+            waiter = asyncio.create_task(self.updated.wait())
+            try:
+                await asyncio.wait((waiter, self.reader), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                waiter.cancel()
+                await asyncio.gather(waiter, return_exceptions=True)
+        return self.partial
 
     async def send(self, pcm):
         if self.closed or self.done:
