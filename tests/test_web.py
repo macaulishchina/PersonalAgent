@@ -34,7 +34,10 @@ class WebTest(unittest.IsolatedAsyncioTestCase):
         self.host.config = replace(
             self.host.config,
             plugins=["tasks", "notifications"],
-            web={"enable": True, "host": "127.0.0.1", "port": port},
+            plugin_settings={
+                **self.host.config.plugin_settings,
+                "web": {"enable": True, "host": "127.0.0.1", "port": port},
+            },
         )
         self.context = Owned()
         await self.host.conversation.start(self.context)

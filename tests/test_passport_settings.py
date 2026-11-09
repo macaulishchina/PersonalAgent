@@ -99,7 +99,7 @@ class SettingsTest(unittest.TestCase):
         from assistant_runtime.core.configuration.fields import patch_documents, present
 
         snapshot = SimpleNamespace(contents={"config.toml": b""}, version="test")
-        base = ["ai_passport", "devices", DEVICE]
+        base = ["plugin_settings", "ai_passport", "devices", DEVICE]
         network = [*base, "wifi_networks", "1"]
         patches = [
             {"path": base, "op": "create", "value": {}},
@@ -109,7 +109,7 @@ class SettingsTest(unittest.TestCase):
             {"path": [*base, "volume"], "op": "set", "value": 60},
         ]
         documents = patch_documents(snapshot, "config.toml", patches)
-        raw = documents["config.toml"]["ai_passport"]
+        raw = documents["config.toml"]["plugin_settings"]["ai_passport"]
         self.assertEqual(resolve_definition(self.spec, raw)["devices"][DEVICE]["volume"], 60)
         import tomlkit
 
@@ -120,7 +120,9 @@ class SettingsTest(unittest.TestCase):
             snapshot, "config.toml", [{"path": [*base, "volume"], "op": "set", "value": 80}]
         )
         self.assertEqual(
-            changed["config.toml"]["ai_passport"]["devices"][DEVICE]["wifi_networks"]["1"]["password"],
+            changed["config.toml"]["plugin_settings"]["ai_passport"]["devices"][DEVICE]["wifi_networks"]["1"][
+                "password"
+            ],
             "synthetic-private",
         )
         for bad in (

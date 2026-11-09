@@ -1,5 +1,6 @@
 """Register gateway cameras through the shared device and video capabilities."""
 
+from assistant_runtime.api.configuration import ConfigurationActionRejected, ConfigurationError
 from .declaration import DECLARATION
 
 import asyncio
@@ -39,11 +40,13 @@ class Go2RTCPlugin:
             raise ValueError("未知的 go2rtc 管理操作")
         gateways = {item.base_url: item for item in self.providers.values()}
         if not gateways:
-            raise ValueError("尚未配置已启用的 go2rtc 摄像头")
+            raise ConfigurationActionRejected([], "no_gateways", "尚未配置已启用的 go2rtc 摄像头")
         if any(item.lock.locked() or item.recording for item in self.providers.values()) or any(
             control.active is not None or control.pending_stops for control in self.controllers.values()
         ):
-            raise ValueError("摄像头正在取图、录像或控制云台，请结束操作后再重启")
+            raise ConfigurationActionRejected(
+                [], "camera_busy", "摄像头正在取图、录像或控制云台，请结束操作后再重启"
+            )
         try:
             results = await asyncio.gather(
                 *(item.read("/api/restart", 4096, method="POST", params={}) for item in gateways.values()),
@@ -63,7 +66,7 @@ class Go2RTCPlugin:
                 "未获确认：" + "；".join(failures)[:180] + "。请检查网关状态；不会自动重试。"
             )
             if len(failures) == len(gateways):
-                raise RuntimeError(message)
+                raise ConfigurationError([], "outcome_unknown", message)
             return {"message": message}
         return {
             "message": f"已提交全部 {len(gateways)} 个 go2rtc 网关的重启请求。"

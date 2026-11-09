@@ -134,11 +134,12 @@ class Console:
                 {"error": "配置或文件操作失败；请检查字段、依赖及本地配置"}, status=400
             )
         response.headers.setdefault("Cache-Control", "no-store")
+        plugin_page = request.path.startswith("/api/plugin-pages/")
         response.headers.update(
             {
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors "
-                + ("'self'" if request.path.startswith("/api/plugin-pages/") else "'none'")
+                + ("'self'; form-action 'none'" if plugin_page else "'none'")
                 + "; base-uri 'none'",
             }
         )
@@ -153,8 +154,6 @@ class Console:
                 web.post("/api/entrances/{owner}", self.entrance_manage),
                 web.get("/config", self.configuration_redirect),
                 web.get("/config/", self.index),
-                web.get("/config/chat-links/", self.chat_links),
-                web.get("/chat-links.js", self.chat_links_javascript),
                 web.route("*", "/chat", self.chat_gateway.forward),
                 web.route("*", "/chat/{path:.*}", self.chat_gateway.forward),
                 web.get("/console.js", self.javascript),
@@ -261,12 +260,6 @@ class Console:
             {"command": "frontend-manage", "owner": request.match_info["owner"], **data}
         )
         return web.json_response(result, headers={"Cache-Control": "no-store"})
-
-    async def chat_links(self, request):
-        return web.FileResponse(Path(__file__).with_name("static") / "chat-links.html")
-
-    async def chat_links_javascript(self, request):
-        return web.FileResponse(Path(__file__).with_name("static") / "chat-links.js")
 
     async def permissions_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "permissions.js")

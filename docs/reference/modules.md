@@ -30,20 +30,20 @@
 
 | 模块 | 阅读内容 |
 | --- | --- |
-| [media](../../src/assistant_runtime/plugins/media/README.md) | 媒体搜索、转存、下载和文件管理 |
-| [search](../../src/assistant_runtime/plugins/search/README.md) | 公开网页搜索与读取 |
+| [plugin_settings.media](../../src/assistant_runtime/plugins/media/README.md) | 媒体搜索、转存、下载和文件管理 |
+| [plugin_settings.search](../../src/assistant_runtime/plugins/search/README.md) | 公开网页搜索与读取 |
 | [observations](../../src/assistant_runtime/plugins/observations/README.md) | 设备观察与事件来源 |
-| [decisions](../../src/assistant_runtime/plugins/decisions/README.md) | 事件决策与触发规则 |
+| [plugin_settings.decisions](../../src/assistant_runtime/plugins/decisions/README.md) | 事件决策与触发规则 |
 | [go2rtc](../../src/assistant_runtime/plugins/go2rtc/README.md) | 已注册摄像头流的适配 |
 | [v4l2](../../src/assistant_runtime/plugins/v4l2/README.md) | 本机视频：Linux V4L2 / Windows DirectShow |
 | [pipewire](../../src/assistant_runtime/plugins/pipewire/README.md) | 本机音频：Linux PipeWire / Windows WASAPI |
 | [speech](../../src/assistant_runtime/plugins/speech/README.md) | 语音适配与当前停用边界 |
 | [airplay](../../src/assistant_runtime/plugins/airplay/README.md) | AirPlay 设备适配 |
-| [apple_home](../../src/assistant_runtime/plugins/apple_home/README.md) | Apple Home 接入 |
+| [plugin_settings.apple_home](../../src/assistant_runtime/plugins/apple_home/README.md) | Apple Home 接入 |
 | [adb_tv](../../src/assistant_runtime/plugins/adb_tv/README.md) | ADB 电视操作 |
 | [reyee](../../src/assistant_runtime/plugins/reyee/README.md) | 路由器设备接入 |
-| [hid_buttons](../../src/assistant_runtime/plugins/hid_buttons/README.md) | HID 按钮输入 |
-| [ai_passport](../../src/assistant_runtime/plugins/ai_passport/README.md) | AI Passport 插件占位与独立 PPDemo 固件；PA 接入默认停用、尚未实现 |
+| [plugin_settings.hid_buttons](../../src/assistant_runtime/plugins/hid_buttons/README.md) | HID 按钮输入 |
+| [ai_passport](../../src/assistant_runtime/plugins/ai_passport/README.md) | AI Passport 设备入口与自主管理页，包含配对、设备配置和独立 PPDemo 固件，默认停用 |
 
 聊天网页和语音占位的使用边界见[安装组合](installation.md#slim-与-standard)。实际插件清单及认证使用 `pa plugins` 查询，本文不另维护版本表。
 

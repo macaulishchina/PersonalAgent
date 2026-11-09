@@ -1,6 +1,6 @@
 """An explicit simulated trigger, useful before a camera/perception plugin exists."""
 
-from .gesture_declaration import DECLARATION
+from .declaration import DECLARATION
 
 from assistant_runtime.api.contracts import Trigger
 

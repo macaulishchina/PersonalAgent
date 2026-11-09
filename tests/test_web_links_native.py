@@ -27,13 +27,17 @@ class WebLinksNativeTest(unittest.IsolatedAsyncioTestCase):
         )
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
+            initial = Config.load(initialize(root / "instance", preset="slim"))
             config = replace(
-                Config.load(initialize(root / "instance", preset="slim")),
+                initial,
                 main_model="model-a",
                 main_reasoning_effort="low",
                 workspace=str(root),
                 model_api=configuration(gateway.base_url),
-                web={"enable": True, "host": "127.0.0.1", "port": 0},
+                plugin_settings={
+                    **initial.plugin_settings,
+                    "web": {"enable": True, "host": "127.0.0.1", "port": 0},
+                },
             )
             config = replace(config, plugins=[*config.plugins, "web"])
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n", encoding="utf-8")

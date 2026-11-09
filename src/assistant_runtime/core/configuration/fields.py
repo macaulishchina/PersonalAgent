@@ -195,7 +195,7 @@ def patch_documents(snapshot, entry_name, patches, inventory=None):
             raise ValueError("Invalid field path")
         if any(
             (path[: len(old)] == old or old[: len(path)] == path)
-            and not (op == "create" and len(old) < len(path) and path[: len(old)] == old)
+            and not (op in {"create", "default"} and len(old) < len(path) and path[: len(old)] == old)
             for old, op in seen
         ):
             raise ValueError("Overlapping patches")

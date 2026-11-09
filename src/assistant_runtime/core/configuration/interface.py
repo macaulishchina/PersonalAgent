@@ -1,6 +1,7 @@
 """Task-oriented presentation, independent of storage layout and runtime imports."""
 
 from copy import deepcopy
+import re
 
 PAGES = (
     ("models", "模型与账号", "连接供应商，选择模型，再指定对话及辅助用途。"),
@@ -48,7 +49,6 @@ FIELD_OWNERS = {
     "workspace": "workfiles",
     "memory_enabled": "memory",
     "memory_auto_capture": "memory",
-    "hid_buttons": "hid_buttons",
 }
 
 LABELS = {
@@ -98,6 +98,12 @@ def validate_interface(ui, spec=None):
         for flag in ("advanced",):
             if flag in field and type(field[flag]) is not bool:
                 raise ValueError("Interface flag must be boolean")
+        if "section" in field and (
+            not isinstance(field["section"], str)
+            or not field["section"].strip()
+            or len(field["section"]) > 80
+        ):
+            raise ValueError("Invalid settings section title")
         when = field.get("visible_when")
         if when is not None and (
             not isinstance(when, dict)
@@ -113,6 +119,32 @@ def validate_interface(ui, spec=None):
             raise ValueError("Action read_only must be boolean")
         validator(json.dumps(expand(operation["output"])))
         validator(json.dumps(expand(operation.get("input", {"type": "object"}))))
+    links = ui.get("links", [])
+    if not isinstance(links, list) or len(links) > 8:
+        raise ValueError("Invalid management links")
+    for link in links:
+        if not isinstance(link, dict) or not isinstance(link.get("title"), str) or not link["title"]:
+            raise ValueError("Management link requires a title")
+        if "section" in link:
+            if set(link) != {"title", "section"} or link["section"] not in {page[0] for page in PAGES}:
+                raise ValueError("Unknown management section")
+            continue
+        if set(link) - {"title", "href", "requires_running", "enabled_field"}:
+            raise ValueError("Invalid management link")
+        if not re.fullmatch(r"/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]*", link.get("href", "")):
+            raise ValueError("Management links must target local routes")
+        if type(link.get("requires_running", False)) is not bool:
+            raise ValueError("Invalid management link state")
+        if (
+            "enabled_field" in link
+            and (spec or {})
+            .get("schema", {})
+            .get("properties", {})
+            .get(link["enabled_field"], {})
+            .get("type")
+            != "boolean"
+        ):
+            raise ValueError("A management link must refer to an owned boolean field")
     if "page" in ui:
         from .pages import validate_page
 
@@ -143,7 +175,7 @@ def describe(inventory):
             spec["application"] = {}
         page = (
             ("plugin:" + owner["id"])
-            if ui.get("page")
+            if owner["kind"] == "extension" or ui.get("page")
             else OWNER_PAGES.get(owner["id"], "plugin:" + owner["id"])
         )
         owner["page"] = page
@@ -151,7 +183,7 @@ def describe(inventory):
             pages.append(
                 {
                     "id": page,
-                    "title": ui.get("page", {}).get("title", ui.get("title", spec.get("title", owner["id"]))),
+                    "title": ui.get("title", spec.get("title", owner["id"])),
                     "description": ui.get("description", spec.get("description", "")),
                     "owner": owner["id"],
                 }

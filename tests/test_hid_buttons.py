@@ -72,7 +72,7 @@ class ButtonsTest(unittest.IsolatedAsyncioTestCase):
         self.runtime.invoke = AsyncMock(return_value={"accepted": True})
         self.runtime.ready.set()
         self.context = Context(self.runtime, "hid_buttons")
-        self.plugin = HidButtonsPlugin(SimpleNamespace(hid_buttons=SETTINGS))
+        self.plugin = HidButtonsPlugin(parse(SETTINGS))
         self.plugin.context = self.context
         self.button = self.plugin.buttons[0]
 

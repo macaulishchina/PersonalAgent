@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "web",
+  "namespace": "plugin_settings.web",
   "title": "聊天网页",
   "group": "access",
   "schema": {
@@ -49,5 +49,36 @@
   ],
   "application": {
     "*": "boundary"
+  },
+  "interface": {
+    "page": {
+      "version": 1,
+      "root": "management",
+      "entry": "chat-links.html",
+      "title": "会话快捷链接",
+      "presentation": "link"
+    },
+    "links": [
+      {
+        "title": "打开聊天界面",
+        "href": "/",
+        "requires_running": true,
+        "enabled_field": "enable"
+      }
+    ],
+    "fields": {
+      "enable": {
+        "section": "聊天访问"
+      },
+      "token_file": {
+        "section": "聊天访问"
+      },
+      "host": {
+        "section": "内部监听"
+      },
+      "port": {
+        "section": "内部监听"
+      }
+    }
   }
 }

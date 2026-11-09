@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "apple_home",
+  "namespace": "plugin_settings.apple_home",
   "title": "Apple Home",
   "group": "extensions",
   "schema": {
@@ -60,5 +60,34 @@
   "requires": [],
   "application": {
     "*": "boundary"
+  },
+  "description": "接收 Apple Home 环境数据，传感器端点在设备目录管理。",
+  "interface": {
+    "links": [
+      {
+        "title": "管理传感器端点",
+        "section": "connections"
+      }
+    ],
+    "fields": {
+      "host": {
+        "section": "服务监听"
+      },
+      "port": {
+        "section": "服务监听"
+      },
+      "hap_port": {
+        "section": "服务监听"
+      },
+      "poll_seconds": {
+        "section": "状态刷新与诊断"
+      },
+      "refresh_timeout": {
+        "section": "状态刷新与诊断"
+      },
+      "log_invalid_values": {
+        "section": "状态刷新与诊断"
+      }
+    }
   }
 }

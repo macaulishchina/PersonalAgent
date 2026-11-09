@@ -40,7 +40,7 @@ def plan(root, args, environment, platform):
     if any(e not in available or e in {"slim", "standard"} for e in extras):
         raise ValueError("Unknown extra (or preset used as extra); use --preset slim|standard")
     options = {"schema_version": 1, "preset": preset, "extras": sorted(extras)}
-    commands = []
+    commands = [[sys.executable, "scripts/build_plugin_pages.py"]]
     if preset == "standard" or "web" in extras:
         commands.extend(
             [["npm", "--prefix", "frontend", "ci"], ["npm", "--prefix", "frontend", "run", "build"]]

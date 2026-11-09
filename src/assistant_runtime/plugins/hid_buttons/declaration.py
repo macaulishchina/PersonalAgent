@@ -19,7 +19,5 @@ DECLARATION = PluginDefinition(
     create=create,
     supported_platforms=plugin_platforms(Path(__file__).parent),
     uses=(Trigger,),
-    config_fields=("hid_buttons",),
-    config_key="hid_buttons",
     validate=parse,
 )

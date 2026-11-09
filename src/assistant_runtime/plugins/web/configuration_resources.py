@@ -19,7 +19,9 @@ def provision(path, settings, selected):
 def prepare_defaults(value, cleared, writable, settings, selected):
     if selected and settings.get("enable", True) and value is None:
         if cleared:
-            raise ConfigurationError(["web", "token_file"], "required", "已启用的网页入口需要访问口令")
+            raise ConfigurationError(
+                ["plugin_settings", "web", "token_file"], "required", "已启用的网页入口需要访问口令"
+            )
         if writable:
             return (secrets.token_urlsafe(32) + "\n").encode()
     return value
@@ -32,4 +34,6 @@ def validate_candidate(settings, selected, token):
         try:
             validate_password(token.decode("utf-8").rstrip("\r\n"))
         except ValueError as exc:
-            raise ConfigurationError(["web", "token_file"], "credential", str(exc)) from exc
+            raise ConfigurationError(
+                ["plugin_settings", "web", "token_file"], "credential", str(exc)
+            ) from exc

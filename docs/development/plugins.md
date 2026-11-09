@@ -58,13 +58,13 @@ windows = "directshow"
 {
   "schema_version": 1,
   "id": "sample",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "api_version": 2,
-  "requires_core": ">=0.4.0,<0.5.0",
+  "requires_core": ">=0.5.1,<0.6.0",
   "supported_platforms": ["linux"],
   "requires": {
-    "execution": ">=0.4.0,<0.5.0",
-    "workfiles": ">=0.4.0,<0.5.0"
+    "execution": ">=0.5.1,<0.6.0",
+    "workfiles": ">=0.5.1,<0.6.0"
   },
   "optional": {},
   "critical": false
@@ -86,7 +86,7 @@ windows = "directshow"
    ```toml
    [project]
    name = "personal-agent-sample"
-   version = "1.1.0"
+   version = "1.1.2"
 
    [project.entry-points."personal_agent.plugins"]
    sample = "personal_agent_sample:definition"
@@ -97,7 +97,7 @@ windows = "directshow"
 
 4. 在独立验收环境安装 wheel，检查 `pa plugins` 的版本、平台及依赖，再按[版本专项检查](testing.md#版本与兼容性检查)验证拒绝与正常加载场景。发布时按[版本规则](release.md#版本规则)递增版本；修改兼容声明也属于发布变更。
 
-单文件插件的静态资源是 `<入口模块>.plugin.json`。`plugin_manifest(__file__)` 默认读取同目录 `plugin.json`，仅对 `<名称>_declaration.py` 自动选择 `<名称>.plugin.json`（例如内置 gesture）；不要假定任意单文件入口都能这样定位。其他单文件布局可使用公共 `assistant_runtime.api.releases.read_descriptor` 与 `manifest` 显式读取对应路径。独立包元数据必须位于 entry point 模块对应位置，不能靠导入插件后查找文件。
+单文件插件的静态资源是 `<入口模块>.plugin.json`。`plugin_manifest(__file__)` 默认读取同目录 `plugin.json`，对 `<名称>_declaration.py` 自动选择 `<名称>.plugin.json`；不要假定任意单文件入口都能这样定位。其他单文件布局可使用公共 `assistant_runtime.api.releases.read_descriptor` 与 `manifest` 显式读取对应路径。独立包元数据必须位于 entry point 模块对应位置，不能靠导入插件后查找文件。
 
 业务配置和实例插件列表不自动改写。缺少新声明的旧插件无法启用，但可在管理页查看并取消；宿主不提供旧声明的隐式兼容层。升级、失败恢复和数据格式边界见[发布与切换](release.md)。
 
@@ -551,4 +551,6 @@ dependency. See the [contract and media example](../guides/business-operation-re
 
 新增独立页面使用 [管理页面规范](plugin-management-pages.md)：插件拥有 React/TypeScript/Vite 页面，
 框架负责 iframe 外壳、身份、草稿、保存与生效。开发模板见 `examples/configuration-plugin`；
-使用 `pa plugin-ui-check` 检查声明和打包资源。现有业务页面迁移独立安排。
+使用 `pa plugin-ui-check` 检查声明和打包资源。PP 使用独立页面，Web 扩展声明自己的快捷链接管理入口。
+
+使用共享表单的扩展可以在 `interface.fields.<字段>.section` 声明小节标题。相同标题的字段放在同一张设置卡片内；字段的默认值、校验和保存方式仍由原配置契约决定。

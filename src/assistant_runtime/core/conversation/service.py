@@ -363,7 +363,7 @@ class Conversation:
         metadata = asdict(frame)
         metadata.pop("data")
         result = {"frame": {**metadata, "data_base64": base64.b64encode(frame.data).decode()}}
-        if self.host.config.web.get("enable"):
+        if self.host.config.plugin_settings.get("web", {}).get("enable"):
             reference = await self.media.add_image(
                 frame.data,
                 "摄像头画面.jpg",

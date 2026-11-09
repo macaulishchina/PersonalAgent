@@ -1254,7 +1254,6 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                     main_model="model-a",
                     main_reasoning_effort="auto",
                     model_api=fixtures.configuration(gateway.base_url),
-                    ai_passport={},
                 )
                 host = AssistantService(config)
                 running = asyncio.create_task(host.run())
@@ -1275,7 +1274,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                     async with client.post(base + "/pair", json=body, headers=headers) as response:
                         self.assertEqual(response.status, 200)
                         challenge = await response.json()
-                    pair = await frontend.management(
+                    pair = await host.runtime.plugins["ai_passport"].instance.configuration_action(
                         "pair", {"name": "Synthetic PP", "code": challenge["code"]}
                     )
                     headers.update(

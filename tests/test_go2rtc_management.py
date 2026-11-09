@@ -143,15 +143,16 @@ class Go2RTCManagementTest(unittest.IsolatedAsyncioTestCase):
         for status in (401, 302, 404, 500):
             self.status = status
             before = len(self.calls)
-            with self.assertRaises(RuntimeError) as error:
+            with self.assertRaises(ConfigurationError) as error:
                 await self.action()
+            self.assertEqual(error.exception.code, "outcome_unknown")
             self.assertIn("不会自动重试", str(error.exception))
             self.assertNotIn("private-cloud-token", str(error.exception))
             self.assertEqual(len(self.calls), before + 1)
 
     async def test_disconnect_does_not_repeat_an_uncertain_restart(self):
         self.disconnect = True
-        with self.assertRaisesRegex(RuntimeError, "未获确认"):
+        with self.assertRaisesRegex(ConfigurationError, "未获确认"):
             await self.action()
         self.assertEqual(len(self.calls), 1)
 

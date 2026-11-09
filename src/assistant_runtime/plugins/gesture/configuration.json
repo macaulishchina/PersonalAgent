@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.gesture",
+  "title": "手势模拟",
+  "group": "extensions",
+  "description": "提供显式的模拟唤醒触发。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "语音设置",
+        "section": "execution"
+      }
+    ]
+  }
+}

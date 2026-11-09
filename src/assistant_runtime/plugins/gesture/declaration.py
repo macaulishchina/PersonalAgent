@@ -1,18 +1,20 @@
 from pathlib import Path
+from assistant_runtime.api.configuration import configuration_spec
 from assistant_runtime.api.plugins import plugin_platforms
 from assistant_runtime.api import PluginDefinition, plugin_manifest
 from assistant_runtime.api.contracts import Trigger
 
 
 def create(api):
-    from .gesture import GesturePlugin
+    from . import GesturePlugin
 
     return GesturePlugin()
 
 
 DECLARATION = PluginDefinition(
-    supported_platforms=plugin_platforms(Path(__file__).with_name("gesture.plugin.json")),
+    supported_platforms=plugin_platforms(Path(__file__).parent),
     manifest=plugin_manifest(__file__),
+    configuration=configuration_spec(__file__),
     create=create,
     uses=(Trigger,),
 )

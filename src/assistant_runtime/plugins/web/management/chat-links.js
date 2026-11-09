@@ -106,6 +106,7 @@ async function entrances() {
     }
     $("entrances").append(row);
   }
+  if (!result.entrances.length) $("entrances").textContent = "尚无固定入口。";
 }
 async function accesses() {
   const result = await api("accesses");

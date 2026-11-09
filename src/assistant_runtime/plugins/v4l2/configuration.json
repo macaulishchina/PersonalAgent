@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.v4l2",
+  "title": "本机摄像头",
+  "group": "extensions",
+  "description": "在设备目录中添加并配置本机摄像头。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "管理设备",
+        "section": "connections"
+      }
+    ]
+  }
+}

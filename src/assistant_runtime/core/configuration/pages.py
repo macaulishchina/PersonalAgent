@@ -16,10 +16,12 @@ def relative_path(value):
 
 
 def validate_page(page):
-    if not isinstance(page, dict) or set(page) - {"version", "root", "entry", "title"}:
+    if not isinstance(page, dict) or set(page) - {"version", "root", "entry", "title", "presentation"}:
         raise ValueError("Invalid management page declaration")
     if type(page.get("version")) is not int or page["version"] != SDK_VERSION:
         raise ValueError("Unsupported management page SDK version")
+    if page.get("presentation", "embed") not in ("embed", "link"):
+        raise ValueError("Unsupported management page presentation")
     relative_path(page.get("root"))
     relative_path(page.get("entry"))
     if not page["entry"].endswith(".html"):

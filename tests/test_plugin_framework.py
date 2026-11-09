@@ -170,7 +170,7 @@ from assistant_runtime.app.config import Config
 from assistant_runtime.app.host import AssistantService
 async def main():
     with tempfile.TemporaryDirectory() as folder:
-        host = AssistantService(Config(root=Path(folder), web={"enable": False}))
+        host = AssistantService(Config(root=Path(folder), plugin_settings={"web": {"enable": False}}))
         try:
             await host.runtime.start()
             await asyncio.sleep(.05)
@@ -323,7 +323,7 @@ asyncio.run(main())
             if sys.platform == "win32":
                 self.assertNotIn("web", config.plugins)
             else:
-                self.assertTrue(config.web["enable"])
+                self.assertTrue(config.plugin_settings["web"]["enable"])
             self.assertEqual(private_mode(root / ".env"), 0o600)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 initialize(root)
@@ -364,7 +364,7 @@ asyncio.run(main())
         from assistant_runtime.app.host import AssistantService
 
         with tempfile.TemporaryDirectory() as folder:
-            config = Config(root=Path(folder), web={"enable": False})
+            config = Config(root=Path(folder), plugin_settings={"web": {"enable": False}})
             store = Store(config.state_dir / "assistant.sqlite3")
             with (
                 patch("assistant_runtime.app.host.Store", return_value=store),

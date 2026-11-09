@@ -108,7 +108,7 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
             "providers": {"ds": {"base_url": self.endpoint, "api_key_env": "SEARCH_TEST_KEY"}},
         }
         self.host = SimpleNamespace(
-            config=SimpleNamespace(search=self.settings, root=self.root),
+            config=SimpleNamespace(plugin_settings={"search": self.settings}, root=self.root),
             store=self.store,
             runtime=self.runtime,
         )
@@ -454,9 +454,9 @@ class ValidationTest(unittest.IsolatedAsyncioTestCase):
             p = Path(d)
             (p / "config.toml").write_text('root="."\nprofile="headless"\ninclude=["search.toml"]\n')
             (p / "search.toml").write_text(
-                '[search]\ndefault_provider="ds"\n[search.providers.ds]\nadapter="deepseek"\n'
+                '[plugin_settings.search]\ndefault_provider="ds"\n[plugin_settings.search.providers.ds]\nadapter="deepseek"\n'
             )
-            self.assertIn("ds", Config.load(p / "config.toml").search["providers"])
+            self.assertIn("ds", Config.load(p / "config.toml").plugin_settings["search"]["providers"])
 
     async def test_public_url_and_dns_rebinding_boundary(self):
         for url in [

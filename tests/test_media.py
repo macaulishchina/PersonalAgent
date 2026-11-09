@@ -246,7 +246,7 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
         self.host = SimpleNamespace(
             config=SimpleNamespace(
                 plugin_backends={},
-                media={"targets": {"movies": dict(TARGET)}},
+                plugin_settings={"media": {"targets": {"movies": dict(TARGET)}}},
                 state_dir=Path(self.tmp.name),
                 root=Path(self.tmp.name),
             ),

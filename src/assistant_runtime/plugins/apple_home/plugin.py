@@ -17,7 +17,7 @@ from aiohttp import web
 
 from assistant_runtime.api.contracts import DeviceObservation, SensorReading
 from .payload import UNITS, PayloadError, diagnostic_fields, parse_payload
-from .settings import AppleHomeSettings, endpoint_settings
+from .settings import endpoint_settings
 
 http_log = logging.getLogger(__name__ + ".http")
 
@@ -27,7 +27,7 @@ class AppleHomePlugin:
 
     def __init__(self, config, store, directory, bridge_factory=None):
         self.config, self.store, self.directory = config, store, directory
-        self.settings = AppleHomeSettings.parse(config.apple_home)
+        self.settings = config.settings
         self.endpoints = {
             ident: endpoint_settings(spec)
             for ident, spec in config.devices.items()

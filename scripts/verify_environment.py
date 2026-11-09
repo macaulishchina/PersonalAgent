@@ -209,7 +209,10 @@ async def verify(config, ident, execution, restart, synthetic):
                     root=Path(folder),
                     workspace=folder,
                     plugins=["apple_home"],
-                    apple_home={"port": free_port(), "hap_port": free_port()},
+                    plugin_settings={
+                        **config.plugin_settings,
+                        "apple_home": {"port": free_port(), "hap_port": free_port()},
+                    },
                     devices={
                         ident: {
                             "adapter": "apple_home",

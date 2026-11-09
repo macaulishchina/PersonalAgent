@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from assistant_runtime.app.config import Config, read_config
-from assistant_runtime.app.prepare_config import prepare, set_field
+from assistant_runtime.app.prepare_config import migrate_plugins, prepare, set_field
 
 
 class PrepareConfigTest(unittest.TestCase):
@@ -19,7 +19,7 @@ class PrepareConfigTest(unittest.TestCase):
             original = 'include = ["services.toml"]\nroot = ".."\nmain_model = "unconfigured"\n'
             source.write_text(original)
             services = source.parent / "services.toml"
-            service_text = 'plugins = [\n "pi", # comment containing ]\n "web",\n]\n[web]\nenable = false\n'
+            service_text = 'plugins = [\n "pi", # comment containing ]\n "web",\n]\n[plugin_settings.web]\nenable = false\n'
             services.write_text(service_text)
             result = prepare(source, root / "candidate")
             candidate = Path(result["config"])
@@ -30,7 +30,7 @@ class PrepareConfigTest(unittest.TestCase):
                 <= set(data["plugins"])
             )
             self.assertTrue({"assistant", "devices", "voice_disabled"}.isdisjoint(data["plugins"]))
-            self.assertEqual(data["web"], {"enable": False})
+            self.assertEqual(data["plugin_settings"]["web"], {"enable": False})
             self.assertEqual(source.read_text(), original)
             self.assertEqual(services.read_text(), service_text)
             self.assertEqual((root / "candidate/original/services.toml").read_text(), service_text)
@@ -53,6 +53,45 @@ class PrepareConfigTest(unittest.TestCase):
             self.assertFalse(output.exists())
 
     def test_only_changes_top_level_field(self):
-        original = '[web]\nenable = false\nplugins = ["nested"]\n'
+        original = '[plugin_settings.web]\nenable = false\nplugins = ["nested"]\n'
         updated = set_field(original, "plugins", ["pi"])
         self.assertEqual(updated, 'plugins = ["pi"]\n' + original)
+
+    def test_05_migration_preserves_plugin_selection_split_fields_and_secrets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            entry = root / "live/config.toml"
+            entry.parent.mkdir()
+            source = (
+                'root = ".."\ninclude = ["settings.toml"]\nplugins = []\n'
+                "[web]\nenable = false # existing setting\n[ai_passport]\nvolume = 62\n"
+            )
+            fragment = '[web]\nport = 8030\n[ai_passport.devices.example.wifi_networks."1"]\nssid = "lab"\npassword = "fixture-only"\n'
+            entry.write_text(source)
+            # Device identities remain unchanged and must still satisfy the PP schema.
+            ident = "a" * 32
+            fragment = fragment.replace(".example.", "." + ident + ".")
+            (entry.parent / "settings.toml").write_text(fragment)
+            result = migrate_plugins(entry, root / "candidate")
+            self.assertCountEqual(result["migrated_plugins"], ["web", "ai_passport"])
+            config = Config.load(result["config"])
+            self.assertEqual(config.plugins, [])
+            self.assertEqual(config.root, root)
+            self.assertEqual(config.plugin_settings["web"], {"enable": False, "port": 8030})
+            self.assertEqual(
+                config.plugin_settings["ai_passport"]["devices"][ident]["wifi_networks"]["1"]["password"],
+                "fixture-only",
+            )
+            self.assertIn("# existing setting", Path(result["config"]).read_text())
+            self.assertEqual(entry.read_text(), source)
+            self.assertEqual((Path(result["original"]) / "settings.toml").read_text(), fragment)
+
+    def test_05_migration_rejects_old_and_new_namespaces_across_includes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            entry = root / "config.toml"
+            entry.write_text('include = ["new.toml"]\n[web]\nenable = false\n')
+            (root / "new.toml").write_text("[plugin_settings.web]\nport = 8030\n")
+            with self.assertRaisesRegex(ValueError, "Both old and new settings exist for web"):
+                migrate_plugins(entry, root / "candidate")
+            self.assertFalse((root / "candidate").exists())

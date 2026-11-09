@@ -625,13 +625,17 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
             from dataclasses import replace
             from assistant_runtime.app.initialize import initialize
 
+            initial = Config.load(initialize(root / "instance", preset=preset))
             config = replace(
-                Config.load(initialize(root / "instance", preset=preset)),
+                initial,
                 workspace=str(root),
                 main_model="model-a",
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
-                web={"enable": False},
+                plugin_settings={
+                    **initial.plugin_settings,
+                    "web": {"enable": False},
+                },
             )
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             config = replace(config, instance_skills=["selected", "omitted"])

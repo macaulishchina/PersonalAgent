@@ -16,7 +16,7 @@
 
 ## 安装脚本选项
 
-在源码仓库安装时，Windows 使用 `.\scripts\install.ps1`，Linux 使用 `bash scripts/install.sh`。两者调用同一份 `scripts/install.py`，根据脚本位置定位仓库，不依赖终端当前目录。需要先安装 uv；standard 或 `web` 依赖组合还需要 Node.js／npm。
+在源码仓库安装时，Windows 使用 `.\scripts\install.ps1`，Linux 使用 `bash scripts/install.sh`。两者调用同一份 `scripts/install.py`，根据脚本位置定位仓库，不依赖终端当前目录。源码安装需要 uv 和 Node.js／npm，以构建随包交付的插件管理页。
 
 ```powershell
 # Windows：普通安装或停服备份后的更新
@@ -33,7 +33,7 @@ Linux 使用相同参数，例如 `bash scripts/install.sh --preset slim`。`--e
 
 首次采用脚本时，如果环境来自手动安装，还没有此记录，应显式选择原来的 `--preset` 和所需 `--extra`。脚本使用 `--inexact` 保留环境里额外安装的独立插件和工具；取消 extra 或改成 slim 不会卸载这些包。未选中的额外包也不会因此得到锁文件升级保障，仍需声明实际使用的 extras，独立插件按自己的版本流程维护。
 
-内部使用 `uv sync --locked --python 3.12 --extra <组合> --no-default-groups --no-editable --inexact`，standard／web 会先执行前端构建，任一步失败即停止，保留上次成功的安装选项。失败不代表安装环境已回滚，恢复方式见[日常维护](../guides/operations.md#备份和升级)。脚本不负责 Pi、实例初始化、服务登记或重启；新安装继续执行安装指南中的后续步骤，更新前须先停服备份。
+内部使用 `uv sync --locked --python 3.12 --extra <组合> --no-default-groups --no-editable --inexact`，各组合先构建插件管理页，standard／web 同时构建聊天前端，任一步失败即停止，保留上次成功的安装选项。失败不代表安装环境已回滚，恢复方式见[日常维护](../guides/operations.md#备份和升级)。脚本不负责 Pi、实例初始化、服务登记或重启；新安装继续执行安装指南中的后续步骤，更新前须先停服备份。
 
 默认设置 `UV_LINK_MODE=copy`，避免跨磁盘硬链接警告；已设置该环境变量时沿用。仍需手动执行 `uv sync` 时，不带 `--inexact` 会移除未被本次选择覆盖的包，包括独立插件和开发工具。
 
@@ -79,13 +79,14 @@ Pi 自定义路径也会记录在用户数据目录的 `personal-agent/pi-instal
 
 ## wheel 交付
 
-发布方在干净构建目录完成 standard 前端构建后，导出两组锁定依赖和同一个 wheel：
+发布方在干净构建目录完成 standard 前端构建后，执行插件页面构建并导出两组锁定依赖和同一个 wheel：
 
 ```sh
 mkdir -p dist
+python scripts/build_plugin_pages.py
 uv export --locked --extra standard --no-default-groups --no-emit-project --output-file dist/requirements-standard.txt
 uv export --locked --extra slim --no-default-groups --no-emit-project --output-file dist/requirements-slim.txt
-uv build --wheel
+uv build
 ```
 
 安装方在新环境使用对应依赖文件，不重新解析版本。以下为 Linux standard 示例，wheel 文件名以实际交付为准：

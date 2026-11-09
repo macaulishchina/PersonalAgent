@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.keyword",
+  "title": "唤醒词检测",
+  "group": "extensions",
+  "description": "使用实例语音设置中的模型目录和唤醒词。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "语音设置",
+        "section": "execution"
+      }
+    ]
+  }
+}

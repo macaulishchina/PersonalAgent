@@ -11,7 +11,7 @@ OWNERS = json.loads((Path(__file__).resolve().parents[1] / "owners.json").read_t
 
 
 def declaration(name):
-    spec = import_module(OWNERS[name] + ("_declaration" if name == "gesture" else ".declaration")).DECLARATION
+    spec = import_module(OWNERS[name] + ".declaration").DECLARATION
     if set(spec.supported_platforms) != set(platforms(name)):
         raise ValueError(f"Plugin {name}: static and runtime platform certifications differ")
     if spec.backends != backends(name):
@@ -26,7 +26,7 @@ def declaration(name):
 def metadata(name):
     root = Path(__file__).resolve().parents[1]
     path = root.joinpath(*OWNERS[name].removeprefix("assistant_runtime.").split("."))
-    return path.with_suffix(".plugin.json") if name == "gesture" else path / "plugin.json"
+    return path / "plugin.json"
 
 
 def release(name):
@@ -39,7 +39,7 @@ def backends(name):
     module = OWNERS[name]
     root = Path(__file__).resolve().parents[1]
     path = root.joinpath(*module.removeprefix("assistant_runtime.").split("."))
-    metadata = path.with_suffix(".plugin.json") if name == "gesture" else path / "plugin.json"
+    metadata = path / "plugin.json"
     return plugin_backends(metadata) if metadata.is_file() else None
 
 
@@ -47,7 +47,7 @@ def platforms(name):
     module = OWNERS[name]
     root = Path(__file__).resolve().parents[1]
     path = root.joinpath(*module.removeprefix("assistant_runtime.").split("."))
-    metadata = path.with_suffix(".plugin.json") if name == "gesture" else path / "plugin.json"
+    metadata = path / "plugin.json"
     if module.startswith("assistant_runtime.core.") and not metadata.exists():
         return ("linux", "windows")
     return plugin_platforms(metadata)

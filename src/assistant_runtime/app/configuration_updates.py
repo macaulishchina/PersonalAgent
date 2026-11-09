@@ -121,10 +121,14 @@ class ConfigurationRuntime:
                 raise ConfigurationError(
                     [owner], "version_conflict", "配置尚未生效或版本已改变，请刷新后核对"
                 )
-            return await self._action(owner, action, arguments, confirmed)
+            return await self._action(owner, action, arguments, confirmed, version)
 
-    async def _action(self, owner, action, arguments, confirmed=False):
-        from assistant_runtime.api.configuration import ConfigurationSpec, ConfigurationError
+    async def _action(self, owner, action, arguments, confirmed, version):
+        from assistant_runtime.api.configuration import (
+            ConfigurationSpec,
+            ConfigurationError,
+            ConfigurationActionRejected,
+        )
         from assistant_runtime.core.configuration.schema import resolve
         from assistant_runtime.core.configuration.fields import redact_declared
 
@@ -133,6 +137,8 @@ class ConfigurationRuntime:
             raise ConfigurationError([owner], "disabled", "请先启用此功能")
         spec = declaration(owner) if owner in OWNERS else plugin.definition
         actions = spec.configuration.interface.get("actions", {}) if spec.configuration else {}
+        if spec.configuration and spec.configuration.interface.get("page") and version is None:
+            raise ConfigurationError([owner], "version_required", "请通过插件管理页面执行此操作")
         operation = actions.get(action)
         if not operation:
             raise ConfigurationError([owner, action], "undeclared", "此管理操作未声明")
@@ -154,6 +160,20 @@ class ConfigurationRuntime:
             raise ConfigurationError([owner, action], "unavailable", "插件没有提供此管理操作")
         try:
             result = await callback(action, value)
+        except Exception as exc:
+            if isinstance(exc, ConfigurationActionRejected) or (
+                isinstance(exc, ConfigurationError)
+                and (operation.get("read_only", False) or exc.code == "outcome_unknown")
+            ):
+                raise
+            # An unclassified exception cannot establish that a dispatched write failed safely.
+            raise ConfigurationError(
+                [owner, action],
+                "outcome_unknown",
+                "操作已派发但结果未确认，请通过状态查询核对，不要直接重复操作",
+            ) from None
+
+        try:
             from assistant_runtime.core.configuration.schema import expand
             import json
 
@@ -164,7 +184,6 @@ class ConfigurationRuntime:
                 raise ValueError("Management result exceeds limit")
             return public
         except Exception:
-            # Dispatch or presentation failure cannot prove an external write did not happen.
             raise ConfigurationError(
                 [owner, action],
                 "outcome_unknown",

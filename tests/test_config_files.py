@@ -118,9 +118,9 @@ class ConfigFilesTest(unittest.TestCase):
         self.write("config.toml", 'profile="headless"\ninclude=["models.toml"]')
         self.write("models.toml", 'main_model="selected"')
         before = self.entry.read_text()
-        merged = read_config(self.entry, text=before + "\n[media]\nenabled=false\n")
+        merged = read_config(self.entry, text=before + "\n[plugin_settings.media]\nenabled=false\n")
         self.assertEqual(merged["main_model"], "selected")
-        self.assertFalse(merged["media"]["enabled"])
+        self.assertFalse(merged["plugin_settings"]["media"]["enabled"])
         self.assertEqual(self.entry.read_text(), before)
 
     def test_missing_implicit_xdg_config_remains_headless(self):

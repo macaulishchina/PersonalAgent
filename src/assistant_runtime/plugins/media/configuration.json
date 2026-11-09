@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "media",
+  "namespace": "plugin_settings.media",
   "title": "媒体资源",
   "group": "extensions",
   "schema": {
@@ -25,12 +25,12 @@
       },
       "search_url": {
         "type": "string",
-        "title": "search_url",
+        "title": "媒体搜索地址",
         "default": "http://127.0.0.1:8888"
       },
       "openlist_url": {
         "type": "string",
-        "title": "openlist_url",
+        "title": "OpenList 服务地址",
         "default": ""
       },
       "timeout_seconds": {
@@ -46,7 +46,7 @@
       },
       "queue_capacity": {
         "type": "integer",
-        "title": "queue_capacity",
+        "title": "操作队列容量",
         "default": 128
       },
       "targets": {
@@ -71,5 +71,39 @@
   "requires": [],
   "application": {
     "*": "boundary"
+  },
+  "interface": {
+    "fields": {
+      "accounts": {
+        "section": "账号与接口"
+      },
+      "file_backend": {
+        "section": "账号与接口"
+      },
+      "search_url": {
+        "section": "账号与接口"
+      },
+      "openlist_url": {
+        "section": "账号与接口"
+      },
+      "targets": {
+        "section": "保存位置"
+      },
+      "local_targets": {
+        "section": "保存位置"
+      },
+      "timeout_seconds": {
+        "section": "运行限制"
+      },
+      "max_operations": {
+        "section": "运行限制"
+      },
+      "queue_capacity": {
+        "section": "运行限制"
+      },
+      "download_min_free_bytes": {
+        "section": "运行限制"
+      }
+    }
   }
 }

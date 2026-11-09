@@ -312,7 +312,9 @@ class EventInbox:
                 )
             return False
         advice = None
-        if valid and self.plugin.host.config.decisions.get("external_data_consent", False):
+        if valid and self.plugin.host.config.plugin_settings.get("decisions", {}).get(
+            "external_data_consent", False
+        ):
             advice = await decide(
                 self.plugin.host.runtime,
                 DecisionQuery(

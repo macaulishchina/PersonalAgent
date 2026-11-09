@@ -96,18 +96,18 @@ async def prepare(args):
                 "openlist_path": getattr(args, ident + "_openlist_path").rstrip("/") or "/",
             }
         save(root / "targets.json", targets)
-        snippet = "\n[media]\nsearch_url = " + json.dumps(args.search_url) + "\n"
+        snippet = "\n[plugin_settings.media]\nsearch_url = " + json.dumps(args.search_url) + "\n"
         if args.openlist_url:
             snippet += "openlist_url = " + json.dumps(args.openlist_url) + "\n"
         for ident, target in targets.items():
-            snippet += "\n[media.targets." + ident + "]\n"
+            snippet += "\n[plugin_settings.media.targets." + ident + "]\n"
             snippet += "".join(
                 key + " = " + json.dumps(value, ensure_ascii=False) + "\n" for key, value in target.items()
             )
         if args.apply_config:
             path = args.config.resolve()
             content = path.read_text()
-            if config.media:
+            if config.plugin_settings["media"]:
                 raise ValueError(
                     "Media is already configured; merge targets explicitly instead of replacing it"
                 )

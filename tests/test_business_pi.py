@@ -28,7 +28,7 @@ class BusinessPiTest(unittest.IsolatedAsyncioTestCase):
                 main_reasoning_effort="auto",
                 model_api=fixtures.configuration(gateway.base_url),
                 tasks={"model_policy": {"review_mode": "off"}},
-                media={"targets": {"series": ROOT}},
+                plugin_settings={"media": {"targets": {"series": ROOT}}},
             )
             host = AssistantService(config)
             running = asyncio.create_task(host.run())

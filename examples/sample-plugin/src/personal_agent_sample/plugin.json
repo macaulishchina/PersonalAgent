@@ -4,12 +4,12 @@
   ],
   "schema_version": 1,
   "id": "sample",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "api_version": 2,
-  "requires_core": ">=0.4.6,<0.5.0",
+  "requires_core": ">=0.5.1,<0.6.0",
   "requires": {
-    "execution": ">=0.4.0,<0.5.0",
-    "workfiles": ">=0.4.0,<0.5.0"
+    "execution": ">=0.5.1,<0.6.0",
+    "workfiles": ">=0.5.1,<0.6.0"
   },
   "optional": {},
   "critical": false

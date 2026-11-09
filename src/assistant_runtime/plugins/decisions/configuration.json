@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "decisions",
+  "namespace": "plugin_settings.decisions",
   "title": "快速判断",
   "group": "extensions",
   "schema": {
@@ -127,5 +127,60 @@
   ],
   "application": {
     "*": "boundary"
+  },
+  "interface": {
+    "fields": {
+      "enabled": {
+        "section": "服务与模型"
+      },
+      "external_data_consent": {
+        "section": "服务与模型"
+      },
+      "mode": {
+        "section": "服务与模型"
+      },
+      "model": {
+        "section": "服务与模型"
+      },
+      "default_threshold": {
+        "section": "判断规则"
+      },
+      "thresholds": {
+        "section": "判断规则"
+      },
+      "scenes": {
+        "section": "判断规则"
+      },
+      "queue_size": {
+        "section": "运行与记录"
+      },
+      "retention": {
+        "section": "运行与记录"
+      },
+      "timeout_seconds": {
+        "section": "运行与记录"
+      },
+      "max_age_seconds": {
+        "section": "运行与记录"
+      },
+      "active_timeout_seconds": {
+        "section": "运行与记录"
+      },
+      "warmup_enabled": {
+        "section": "运行与记录"
+      },
+      "keepalive_seconds": {
+        "section": "运行与记录"
+      },
+      "dns_cache_seconds": {
+        "section": "运行与记录"
+      },
+      "concurrency": {
+        "section": "运行与记录"
+      },
+      "timezone": {
+        "section": "运行与记录"
+      }
+    }
   }
 }

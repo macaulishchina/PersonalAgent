@@ -19,7 +19,7 @@ class ChoiceTest(unittest.IsolatedAsyncioTestCase):
     def enable(self):
         self.runtime.plugins["decisions"] = self.runtime.plugins["pi"]
         self.plugin.model_policy.review_mode = "active"
-        self.host.config.decisions.update(
+        self.host.config.plugin_settings.setdefault("decisions", {}).update(
             enabled=True,
             external_data_consent=True,
             mode="active",

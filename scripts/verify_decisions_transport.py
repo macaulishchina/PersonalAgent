@@ -18,7 +18,7 @@ from assistant_runtime.plugins.decisions.settings import DecisionSettings
 
 
 async def verify(config):
-    settings = DecisionSettings.parse(config.decisions)
+    settings = DecisionSettings.parse(config.plugin_settings["decisions"])
     if not settings.enabled or not settings.external_data_consent or not settings.warmup_enabled:
         raise RuntimeError("Enabled, consented startup warmup is required")
     client = LocalRuntimeClient(config.socket, timeout=5)

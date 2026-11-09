@@ -36,6 +36,5 @@ DECLARATION = PluginDefinition(
         "tasks_enabled",
         "http_frontend",
     ),
-    config_key="web",
     validate=WebSettings.parse,
 )

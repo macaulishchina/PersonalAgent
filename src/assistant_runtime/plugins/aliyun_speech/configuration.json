@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "aliyun_speech",
+  "namespace": "plugin_settings.aliyun_speech",
   "title": "阿里百炼语音",
   "group": "extensions",
   "schema": {
@@ -72,6 +72,34 @@
         "minItems": 1,
         "uniqueItems": true,
         "description": "识别、合成可分别由不同适配插件提供；同一种能力只启用一个提供方。"
+      }
+    }
+  },
+  "interface": {
+    "fields": {
+      "endpoint": {
+        "section": "服务连接"
+      },
+      "api_key_env": {
+        "section": "服务连接"
+      },
+      "recognition_model": {
+        "section": "识别与合成"
+      },
+      "synthesis_model": {
+        "section": "识别与合成"
+      },
+      "voice": {
+        "section": "识别与合成"
+      },
+      "rate": {
+        "section": "识别与合成"
+      },
+      "capabilities": {
+        "section": "识别与合成"
+      },
+      "timeout_seconds": {
+        "section": "运行限制"
       }
     }
   }

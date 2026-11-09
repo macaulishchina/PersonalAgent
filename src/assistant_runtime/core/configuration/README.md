@@ -282,4 +282,4 @@ It never uses production configuration, credentials, accounts, media or devices.
 页面使用公共 SDK 编辑自身草稿，统一保存栏负责文件事务和生效；切页保留草稿。
 静态资源发现不启动插件，业务停止时仍可配置。
 公开规范见 [插件管理页面](../../../../docs/development/plugin-management-pages.md)，
-开发及验收模板见 `examples/configuration-plugin`。当前 PP 等业务页面暂不迁移。
+开发及验收模板见 `examples/configuration-plugin`。内置 PP 页面展示设备配对和嵌套配置的完整接入。

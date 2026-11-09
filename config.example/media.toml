@@ -3,44 +3,44 @@
 # openlist_path 单独填写 OpenList 实际展示路径，不能照抄云盘完整路径。
 # 例如挂载根已经是云盘“影视”，电视剧路径就是 /夸克网盘/电视剧；不再加 /影视。
 # 下面路径仅是示例；网页路径可见性与云盘转存成功分别核验。
-# [media]
+# [plugin_settings.media]
 # search_url = "http://127.0.0.1:8888"
 # openlist_url = "http://127.0.0.1:5244"
 # file_backend = "openlist" # 新账号默认复用；账号可明确覆盖为 native。
 #
-# [media.accounts.aliyun]
+# [plugin_settings.media.accounts.aliyun]
 # provider = "aliyun"
 # file_backend = "native" # 已有阿里接入保持自身文件实现。
-# [media.accounts.quark]
+# [plugin_settings.media.accounts.quark]
 # provider = "quark"
 # file_backend = "native" # 已有夸克接入保持自身文件实现。
 #
-# [media.targets.aliyun_movies]
+# [plugin_settings.media.targets.aliyun_movies]
 # account = "aliyun"
 # drive_id = "RESOURCE_DRIVE_ID"
 # folder_id = "MOVIES_FOLDER_ID"
 # openlist_path = "/阿里云盘/影视/电影"
 #
-# [media.targets.quark_series]
+# [plugin_settings.media.targets.quark_series]
 # account = "quark"
 # folder_id = "SERIES_FOLDER_ID"
 # openlist_path = "/夸克网盘/影视/电视剧"
 #
 # 夸克支持浏览、建目录、转存、重命名、移动、原文件下载及回收站删除/恢复（仅自己记录的删除）。
 # 两种网盘均可配置同名目标的本地下载目录，使用云端校验值检查完整文件。
-# [media.local_targets.aliyun_movies]
+# [plugin_settings.media.local_targets.aliyun_movies]
 # path = "/mnt/Q/openlist/media/电影"
 # staging_path = "/mnt/Q/openlist/temp/media-downloads"
 # mount_path = "/mnt/Q"
-# [media.local_targets.quark_series]
+# [plugin_settings.media.local_targets.quark_series]
 # path = "/mnt/Q/openlist/media/电视剧"
 # staging_path = "/mnt/Q/openlist/temp/media-downloads"
 # mount_path = "/mnt/Q"
 
 # 其它已经挂载在 OpenList 的存储，无需在助手里再次提供网盘凭据：
-# [media.accounts.mounted_drive]
+# [plugin_settings.media.accounts.mounted_drive]
 # provider = "openlist"
-# [media.targets.mounted_movies]
+# [plugin_settings.media.targets.mounted_movies]
 # account = "mounted_drive"
 # openlist_path = "/其它网盘/影视/电影"
 # 不填写虚构的 drive_id/folder_id；通过相对 path 浏览和管理。

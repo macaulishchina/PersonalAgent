@@ -127,7 +127,9 @@ class ShadowTest(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.store = Store(self.root / "host.sqlite3")
-        self.config = Config(root=self.root, decisions={"mode": "shadow", "external_data_consent": True})
+        self.config = Config(
+            root=self.root, plugin_settings={"decisions": {"mode": "shadow", "external_data_consent": True}}
+        )
         self.runtime = Runtime(self.store)
         self.provider = FakeProvider()
         adapter = create(
@@ -416,7 +418,7 @@ class ActiveTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_disabled_start_does_not_construct_optional_http_provider(self):
         await self.runtime.close()
-        self.config.decisions = {"enabled": False}
+        self.config.plugin_settings["decisions"] = {"enabled": False}
         self.runtime = Runtime(self.store)
         plugin = DecisionsPlugin(context_for(decision_host(self.config, self.runtime), "decisions"))
         self.runtime.add(plugin)
@@ -877,7 +879,7 @@ class EventIngressTest(unittest.IsolatedAsyncioTestCase):
         event = await self.emit("semantic")
         await self.inbox.cycle()
         run = self.tasks.repo.runs(definition["id"])[0]
-        self.config.decisions = {"external_data_consent": True}
+        self.config.plugin_settings["decisions"] = {"external_data_consent": True}
         judge = AsyncMock(return_value={"status": "ok", "choice": "irrelevant", "receipt_id": "receipt"})
         self.runtime.register("tasks", DecisionQuery, judge)
         self.assertFalse(await self.inbox.prepare(run))
@@ -896,7 +898,7 @@ class EventIngressTest(unittest.IsolatedAsyncioTestCase):
         await self.emit("cancel-during-adoption")
         await self.inbox.cycle()
         run = self.tasks.repo.runs(definition["id"])[0]
-        self.config.decisions = {"external_data_consent": True}
+        self.config.plugin_settings["decisions"] = {"external_data_consent": True}
         self.runtime.register(
             "tasks",
             DecisionQuery,
@@ -926,7 +928,7 @@ class EventIngressTest(unittest.IsolatedAsyncioTestCase):
         event = await self.emit("deleted-while-awaiting")
         await self.inbox.cycle()
         run = self.tasks.repo.runs(definition["id"])[0]
-        self.config.decisions = {"external_data_consent": True}
+        self.config.plugin_settings["decisions"] = {"external_data_consent": True}
 
         async def deleting(request):
             await self.events.request(EventRequest("delete", {"id": event["id"], "revision": 1}))

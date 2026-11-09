@@ -48,13 +48,13 @@ pa = "assistant_runtime.app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-exclude = ["assistant_runtime.plugins.ai_passport.firmware*"]
+exclude = ["assistant_runtime.plugins.ai_passport.firmware*", "*.ui", "*.ui.*", "*.management", "*.management.*"]
 
 [tool.setuptools.dynamic]
 version = {file = "src/assistant_runtime/VERSION"}
 
 [tool.setuptools.package-data]
-"*" = ["configuration.json", "plugin.json"]
+"*" = ["configuration.json", "plugin.json", "management/*", "management/assets/*"]
 "assistant_runtime" = ["VERSION", "release.json", "owners.json"]
 "assistant_runtime.app" = ["templates/*/*.toml"]
 "assistant_runtime.core.configuration" = ["static/*"]
@@ -101,6 +101,7 @@ cache-keys = [
     { file = "src/**/*.toml" },
     { file = "src/**/*.json" },
     { file = "src/assistant_runtime/core/configuration/static/*" },
+    { file = "src/**/management/**/*" },
     { file = "src/**/*.md" },
     { file = "src/**/*.ts" },
     { file = "src/**/*.mjs" },

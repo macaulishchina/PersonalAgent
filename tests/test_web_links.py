@@ -25,7 +25,13 @@ from test_conversation import Owned
 class WebLinksTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await session_fixtures.SessionsTest.asyncSetUp(self)
-        self.host.config = replace(self.host.config, web={"enable": True, "host": "127.0.0.1", "port": 0})
+        self.host.config = replace(
+            self.host.config,
+            plugin_settings={
+                **self.host.config.plugin_settings,
+                "web": {"enable": True, "host": "127.0.0.1", "port": 0},
+            },
+        )
         self.host.runtime = Runtime(self.store)
 
         async def invoke(request, timeout=None):

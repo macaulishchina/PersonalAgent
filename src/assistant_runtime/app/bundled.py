@@ -39,6 +39,8 @@ def settings_for(config, name, spec):
     settings = spec.validate(raw) if spec.validate else raw
     if spec.config_fields or name in {"airplay", "go2rtc", "v4l2"}:
         values = {key: deepcopy(getattr(config, key)) for key in spec.config_fields}
+        if spec.configuration and spec.configuration.namespace == "plugin_settings." + name:
+            values["settings"] = settings
         values["devices"] = deepcopy(
             {
                 key: row

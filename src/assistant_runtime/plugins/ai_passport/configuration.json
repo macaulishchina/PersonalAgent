@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "ai_passport",
+  "namespace": "plugin_settings.ai_passport",
   "title": "AI Passport",
   "group": "extensions",
   "schema": {
@@ -256,6 +256,180 @@
     }
   },
   "interface": {
-    "terminal_management": true
+    "page": {
+      "version": 1,
+      "root": "management",
+      "entry": "index.html",
+      "title": "AI Passport"
+    },
+    "actions": {
+      "list": {
+        "title": "读取设备列表",
+        "read_only": true,
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "devices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "device_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{32,128}$"
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 48,
+                    "pattern": "\\S"
+                  },
+                  "connected": {
+                    "type": "boolean"
+                  },
+                  "configuration": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "desired": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "applied": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "actual": {
+                          "type": [
+                            "integer",
+                            "boolean",
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "desired",
+                        "applied",
+                        "actual"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "device_id",
+                  "session_id",
+                  "name",
+                  "connected",
+                  "configuration"
+                ]
+              }
+            }
+          },
+          "required": [
+            "devices"
+          ]
+        }
+      },
+      "pair": {
+        "title": "配对新设备",
+        "read_only": false,
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48,
+              "pattern": "\\S"
+            },
+            "code": {
+              "type": "string",
+              "pattern": "^[0-9]{8}$"
+            }
+          },
+          "required": [
+            "name",
+            "code"
+          ]
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paired": {
+              "type": "boolean",
+              "const": true
+            },
+            "device_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{32,128}$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "paired",
+            "device_id",
+            "session_id"
+          ]
+        },
+        "confirmation": "确认使用该配对码添加设备？设备将拥有独立会话。"
+      },
+      "revoke": {
+        "title": "撤销设备配对",
+        "read_only": false,
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{32,128}$"
+            }
+          },
+          "required": [
+            "device_id"
+          ]
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "revoked": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "revoked"
+          ]
+        },
+        "confirmation": "确认撤销此设备配对？设备将断开，再次使用时需要重新配对。"
+      }
+    }
+  },
+  "description": "管理配对设备、默认设置和单台设备的配置。",
+  "application": {
+    "*": "immediate"
   }
 }

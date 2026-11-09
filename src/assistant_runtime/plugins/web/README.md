@@ -2,7 +2,7 @@
 
 The independent kernel management service owns the public address/port. Chat opens directly at `/` while this extension is enabled and ready; configuration is at `/config/`. Chat API and assets remain mounted at `/chat/`. Management streams HTTP, SSE, uploads and attachments to the worker's private loopback transport. No chat implementation is imported into management, and chat failure/restart never removes configuration/repair access.
 
-Enable the web plugin and web.enable. Public listening settings belong to management.toml. web.host is loopback only; web.port defaults to 0 (automatic local port). Both are advanced internal transport settings, not another public address. Existing instances must replace non-loopback web.host with 127.0.0.1 before upgrading. No inference, conversations, tasks or credentials are reset.
+Enable the web plugin and `plugin_settings.web.enable`. Public listening settings belong to management.toml. `plugin_settings.web.host` is loopback only; `plugin_settings.web.port` defaults to 0 (automatic local port). Both are advanced internal transport settings, not another public address. Existing instances must replace non-loopback `plugin_settings.web.host` with 127.0.0.1 before upgrading. No inference, conversations, tasks or credentials are reset.
 
 Admin and chat logins remain separate. Chat cookies have Path=/chat/; administrator cookies are never forwarded to the worker. An instance-private frontend key from the operator control channel protects internal HTTP. Direct local-port access is rejected. Client identity and HTTPS scheme are forwarded only on this authenticated path; external X-PA headers are stripped. Trusted public_origin/proxy policy remains owned by management.
 
@@ -54,8 +54,8 @@ start another Agent, enable memory or change model/tool configuration.
 
 ### Operator workflow
 
-Log into `/config/`, then open **会话快捷链接** (also at
-`/config/chat-links/`). Select an existing conversation, or explicitly create an
+Log into `/config/`, then open **聊天网页 → 会话快捷链接**. Select an existing
+conversation, or explicitly create an
 empty one for independent verification. Choose **仅查看** or **查看并继续聊天**
 and a lifetime. The secret link is shown only when created; subsequent lists
 contain management metadata, not the secret. Revoke it from the same page.

@@ -14,7 +14,7 @@ from assistant_runtime.plugins.web.settings import WebSettings
 
 
 async def verify(config, devices, duration):
-    settings = WebSettings.parse(config.web)
+    settings = WebSettings.parse(config.plugin_settings["web"])
     if not settings.enable:
         raise ValueError("Web must be enabled for this playback acceptance")
     before = await request(config, {"command": "status"})

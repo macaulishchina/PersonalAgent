@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.observations",
+  "title": "观察记录",
+  "group": "extensions",
+  "description": "按事件模块的保留与投递规则提供设备观察能力。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "管理事件",
+        "section": "tasks"
+      }
+    ]
+  }
+}

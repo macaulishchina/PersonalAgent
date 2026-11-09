@@ -68,6 +68,9 @@ const pluginPages = (() => {
         ...f,
         path: f.path.slice(prefix.length),
         value: redact(currentValue(f), f.schema),
+        modified: [...edits.values()].some((edit) =>
+          contains(f.path, edit.path),
+        ),
       }));
     const resources = resourceInventory
       .filter((r) => r.id.startsWith(owner.id + ":"))
@@ -87,6 +90,10 @@ const pluginPages = (() => {
       version: snapshot.version,
       loadedVersion: snapshot.loaded_version,
       owner: owner.id,
+      enabled:
+        snapshot.fields
+          .find((f) => f.path.length === 1 && f.path[0] === "plugins")
+          ?.value?.includes(owner.id) ?? false,
       schema: spec.schema,
       fields,
       resources,
@@ -119,15 +126,34 @@ const pluginPages = (() => {
     clearTimeout(active.timeout);
     active = null;
   }
+  function retain(owner) {
+    if (
+      !active?.port ||
+      !active.frame.isConnected ||
+      owner?.id !== active.owner.id
+    )
+      return false;
+    active.owner = owner;
+    notify();
+    return true;
+  }
+  function assetURL(owner) {
+    const page = owner.configuration.interface.page;
+    const entry = page.entry.split("/").map(encodeURIComponent).join("/");
+    return `/api/plugin-pages/${encodeURIComponent(owner.id)}/assets/${entry}`;
+  }
   function mount(owner, target) {
     dispose();
     const page = owner.configuration.interface.page;
     const frame = document.createElement("iframe");
     frame.title = page.title || owner.configuration.title || owner.id;
     frame.className = "plugin-management-frame";
-    frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+    frame.setAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin allow-forms",
+    );
     frame.referrerPolicy = "same-origin";
-    frame.src = `/api/plugin-pages/${encodeURIComponent(owner.id)}/assets/${page.entry.split("/").map(encodeURIComponent).join("/")}`;
+    frame.src = assetURL(owner);
     const status = node("p", "正在加载插件管理页面…", "hint");
     const session = { owner, frame, closed: false, port: null };
     active = session;
@@ -289,7 +315,9 @@ const pluginPages = (() => {
     throw new Error("不支持的页面接口");
   }
   return {
+    assetURL,
     mount,
+    retain,
     dispose,
     notify,
     errors: (values) => {

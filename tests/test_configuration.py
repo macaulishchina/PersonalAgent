@@ -124,14 +124,19 @@ class ConfigurationTest(ConfigurationFixture, unittest.TestCase):
 
     def test_secrets_never_returned_or_audited_and_unrelated_patch_preserves(self):
         secret = "private-cookie-for-test"
-        (self.folder / "usage.toml").write_text(f'[web]\npassword = "{secret}"\n')
+        (self.folder / "usage.toml").write_text(f'[plugin_settings.web]\npassword = "{secret}"\n')
         # Generic persistence has no knowledge of this synthetic owner's schema.
         self.files.validate = lambda contents: None
         snapshot = self.documents()
         self.assertNotIn(secret, json.dumps(snapshot))
-        self.assertEqual(snapshot["files"]["usage.toml"]["web"]["password"], MASK)
-        self.files.patch(snapshot["version"], [{"path": ["web", "enable"], "op": "set", "value": True}])
-        self.assertEqual(tomllib.loads((self.folder / "usage.toml").read_text())["web"]["password"], secret)
+        self.assertEqual(snapshot["files"]["usage.toml"]["plugin_settings"]["web"]["password"], MASK)
+        self.files.patch(
+            snapshot["version"], [{"path": ["plugin_settings", "web", "enable"], "op": "set", "value": True}]
+        )
+        self.assertEqual(
+            tomllib.loads((self.folder / "usage.toml").read_text())["plugin_settings"]["web"]["password"],
+            secret,
+        )
         self.assertNotIn(secret, (self.files.state / "audit.jsonl").read_text())
         self.assertNotIn(secret, json.dumps(self.files.history()))
 
@@ -439,13 +444,13 @@ class ListenerValidationTest(unittest.TestCase):
         from types import SimpleNamespace
         from assistant_runtime.core.configuration.validation import validate_ports
 
-        configuration = SimpleNamespace(enabled_plugins=("apple_home",), apple_home={}, plugin_settings={})
+        configuration = SimpleNamespace(enabled_plugins=("apple_home",), plugin_settings={})
         management = SimpleNamespace(host="0.0.0.0", port=8047)
         with self.assertRaisesRegex(ValueError, "Listener conflict"):
             validate_ports(configuration, management)
-        configuration.apple_home = {"port": 8048}
+        configuration.plugin_settings["apple_home"] = {"port": 8048}
         validate_ports(configuration, management)
-        configuration.apple_home = {"host": "127.0.0.2"}
+        configuration.plugin_settings["apple_home"] = {"host": "127.0.0.2"}
         management.host = "127.0.0.1"
         validate_ports(configuration, management)
 

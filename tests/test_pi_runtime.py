@@ -39,7 +39,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                 'profile="headless"\nbackend="pi"\nmain_model="model-a"\n'
                 'main_reasoning_effort="low"\nmemory_enabled=false\n'
                 'plugins=["ai_usage", "workfiles", "devices", "assistant", "conversation", "execution", "models","pi","voice_disabled","web"]\n'
-                '[web]\nenable=true\nhost="127.0.0.1"\nport=0\n'
+                '[plugin_settings.web]\nenable=true\nhost="127.0.0.1"\nport=0\n'
                 "[model_api]\nenabled=true\n"
                 '[model_api.providers.local]\nprotocol="openai_responses"\n'
                 f'base_url="{gateway.base_url}"\nkey_env="TEST_KEY"\nenabled=true\n'

@@ -21,7 +21,6 @@ DECLARATION = PluginDefinition(
     uses=(TaskRequest,),
     provides=(SearchRequest,),
     resources=("usage",),
-    config_key="search",
     validate=SearchSettings.parse,
     service="search",
     tools_factory="assistant_runtime.plugins.search.tools:create_server",

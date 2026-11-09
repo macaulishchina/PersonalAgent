@@ -36,7 +36,6 @@ DECLARATION = PluginDefinition(
         DecisionOutcome,
     ),
     resources=("usage",),
-    config_key="decisions",
     validate=DecisionSettings.parse,
     service="decisions",
     tools_factory="assistant_runtime.plugins.decisions.tools:create_server",

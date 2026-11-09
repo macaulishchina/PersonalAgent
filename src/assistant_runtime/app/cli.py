@@ -80,6 +80,10 @@ def main():
         "prepare-config", help="Prepare an explicit plugin configuration from an older assistant instance"
     )
     prepare.add_argument("destination")
+    migrate = sub.add_parser(
+        "migrate-plugin-config", help="Convert bundled plugin settings into a private candidate"
+    )
+    migrate.add_argument("destination")
     executions = sub.add_parser("executions", help="Submit and inspect individual agent executions")
     executions.add_argument(
         "action",
@@ -381,12 +385,13 @@ def main():
 
             print(initialize(args.destination, preset=args.preset))
             return
-        if args.command == "prepare-config":
-            from .prepare_config import prepare
+        if args.command in {"prepare-config", "migrate-plugin-config"}:
+            from .prepare_config import migrate_plugins, prepare
 
             if not args.config:
-                raise ValueError("prepare-config requires an explicit --config source")
-            print(json.dumps(prepare(args.config, args.destination), ensure_ascii=False, indent=2))
+                raise ValueError(f"{args.command} requires an explicit --config source")
+            operation = migrate_plugins if args.command == "migrate-plugin-config" else prepare
+            print(json.dumps(operation(args.config, args.destination), ensure_ascii=False, indent=2))
             return
         if args.command == "configuration":
             from assistant_runtime.core.configuration.settings import ManagementSettings

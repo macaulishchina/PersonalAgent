@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.airplay",
+  "title": "AirPlay 输出",
+  "group": "extensions",
+  "description": "在设备目录中添加 AirPlay 扬声器，并配置对应设备参数。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "管理设备",
+        "section": "connections"
+      }
+    ]
+  }
+}

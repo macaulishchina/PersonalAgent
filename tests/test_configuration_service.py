@@ -48,10 +48,10 @@ class ConfigurationIdentityTest(unittest.TestCase):
         )
 
     def test_disabled_owner_keeps_structural_settings_without_activation_validation(self):
-        config = Config(root=self.root, plugins=[], web={"port": 70000}, wake_words=[])
-        self.assertEqual(config.web["port"], 70000)
+        config = Config(root=self.root, plugins=[], plugin_settings={"web": {"port": 70000}}, wake_words=[])
+        self.assertEqual(config.plugin_settings["web"]["port"], 70000)
         with self.assertRaises(ValueError):
-            Config(root=self.root, plugins=[], web={"port": "invalid type"})
+            Config(root=self.root, plugins=[], plugin_settings={"web": {"port": "invalid type"}})
 
     def test_dormant_model_settings_do_not_block_other_application_steps(self):
         from assistant_runtime.app.management import BusinessProcess

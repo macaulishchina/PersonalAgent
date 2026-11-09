@@ -1,26 +1,72 @@
 {
   "version": 1,
-  "namespace": "hid_buttons",
+  "namespace": "plugin_settings.hid_buttons",
   "title": "硬件按键",
   "group": "extensions",
   "schema": {
     "type": "object",
     "default": {},
     "maxProperties": 8,
-    "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,47}$"},
+    "propertyNames": {
+      "pattern": "^[a-z][a-z0-9_-]{0,47}$"
+    },
     "additionalProperties": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["vendor_id", "product_id", "serial", "report", "action"],
+      "required": [
+        "vendor_id",
+        "product_id",
+        "serial",
+        "report",
+        "action"
+      ],
       "properties": {
-        "vendor_id": {"type": "string", "pattern": "^[0-9a-fA-F]{4}$", "title": "USB 厂商 ID"},
-        "product_id": {"type": "string", "pattern": "^[0-9a-fA-F]{4}$", "title": "USB 产品 ID"},
-        "serial": {"type": "string", "minLength": 1, "maxLength": 128, "title": "设备序列号"},
-        "report": {"type": "string", "pattern": "^(?:[0-9a-fA-F]{2}){1,64}$", "title": "触发报告", "description": "精确匹配的十六进制 HID 报告，包含报告 ID；不推断其他设备的键值。"},
-        "action": {"const": "wake", "type": "string", "title": "动作"},
-        "debounce_ms": {"type": "integer", "default": 500, "minimum": 100, "maximum": 5000, "title": "防抖间隔", "x-unit": "毫秒"}
+        "vendor_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{4}$",
+          "title": "USB 厂商 ID"
+        },
+        "product_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{4}$",
+          "title": "USB 产品 ID"
+        },
+        "serial": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "title": "设备序列号"
+        },
+        "report": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-fA-F]{2}){1,64}$",
+          "title": "触发报告",
+          "description": "精确匹配的十六进制 HID 报告，包含报告 ID；不推断其他设备的键值。"
+        },
+        "action": {
+          "const": "wake",
+          "type": "string",
+          "title": "动作"
+        },
+        "debounce_ms": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 100,
+          "maximum": 5000,
+          "title": "防抖间隔",
+          "x-unit": "毫秒"
+        }
       }
     }
   },
-  "application": {"*": "boundary"}
+  "application": {
+    "*": "boundary"
+  },
+  "interface": {
+    "fields": {
+      "": {
+        "section": "按键映射"
+      }
+    }
+  }
 }

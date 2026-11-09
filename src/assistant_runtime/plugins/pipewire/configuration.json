@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.pipewire",
+  "title": "本机音频",
+  "group": "extensions",
+  "description": "在设备目录中管理本机音频设备，主音频绑定归实例语音设置。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "管理设备",
+        "section": "connections"
+      }
+    ]
+  }
+}

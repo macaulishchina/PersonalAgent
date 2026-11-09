@@ -14,7 +14,6 @@ DECLARATION = PluginDefinition(
     create=create,
     supported_platforms=("linux",),
     configuration=configuration_spec(__file__),
-    config_key="aliyun_speech",
     credentials=("DASHSCOPE_API_KEY",),
     resources=("usage",),
     provides=(RecognitionRequest, SynthesisRequest),

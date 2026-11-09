@@ -21,7 +21,7 @@ Vite 页面单独打开时使用 mockClient，数据仅在内存中，**不会�
 npm run build --prefix examples/configuration-plugin/ui
 uv build --wheel examples/configuration-plugin
 # 在目标实例所用的 Python 环境安装刚构建的 wheel：
-uv pip install --python /绝对路径/python examples/configuration-plugin/dist/personal_agent_configuration_demo-1.0.0-py3-none-any.whl
+uv pip install --python /绝对路径/python examples/configuration-plugin/dist/personal_agent_configuration_demo-1.0.1-py3-none-any.whl
 pa plugin-ui-check
 ```
 
@@ -59,7 +59,7 @@ package-lock.json。生产构建不需要源码仓库中 packages 目录的存�
 不要把测试插件安装进正在运行的生产环境。可安装到临时 target，并在子进程 PYTHONPATH 中引用：
 
 ```sh
-uv pip install --python .venv/bin/python --no-deps --target /tmp/pa-page-installed examples/configuration-plugin/dist/personal_agent_configuration_demo-1.0.0-py3-none-any.whl
+uv pip install --python .venv/bin/python --no-deps --target /tmp/pa-page-installed examples/configuration-plugin/dist/personal_agent_configuration_demo-1.0.1-py3-none-any.whl
 PYTHONPATH=src:/tmp/pa-page-installed .venv/bin/python scripts/verify_plugin_pages.py
 ```
 

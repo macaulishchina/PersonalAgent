@@ -17,7 +17,6 @@ DECLARATION = PluginDefinition(
     manifest=plugin_manifest(__file__),
     create=create,
     resources=("state", "directory"),
-    config_fields=("apple_home", "state_dir"),
-    config_key="apple_home",
+    config_fields=("state_dir",),
     validate=AppleHomeSettings.parse,
 )

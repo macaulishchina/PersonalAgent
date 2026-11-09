@@ -9,7 +9,6 @@ from pathlib import Path
 import time
 
 from assistant_runtime.api.contracts import Trigger
-from .settings import parse
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +39,8 @@ def discover(button, root=Path("/sys/class/hidraw"), devices=Path("/dev")):
 class HidButtonsPlugin:
     manifest = DECLARATION.manifest
 
-    def __init__(self, config):
-        self.buttons = parse(config.hid_buttons)
+    def __init__(self, buttons):
+        self.buttons = buttons
         self.context = None
         self.states = {button.name: "starting" for button in self.buttons}
         self.last_report = {}

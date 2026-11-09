@@ -345,7 +345,10 @@ class VoiceLifecycle:
                         if cmd:
                             await self.control(cmd)
                         elif (
-                            self.config.decisions.get("external_data_consent", False) and 0 < len(text) <= 800
+                            self.config.plugin_settings.get("decisions", {}).get(
+                                "external_data_consent", False
+                            )
+                            and 0 < len(text) <= 800
                         ):
                             # No new external route is enabled before consent.
                             pending = getattr(self, "voice_decision_task", None)

@@ -59,7 +59,6 @@ const pluginNames = {
   v4l2: "本机摄像头",
   airplay: "AirPlay 音频",
   voice_disabled: "语音占位",
-  web: "聊天网页",
 };
 function button(text, callback, cls = "secondary") {
   const item = node("button", text, cls);
@@ -74,24 +73,47 @@ function valueAt(path, fallback) {
   const field = fieldAt(path);
   return field ? (currentValue(field) ?? fallback) : fallback;
 }
-function renderChatShortcut() {
-  const entry = $("chat-open");
-  if (!entry) return;
-  entry.hidden = selected !== "plugin:web";
-  entry.onclick = null;
-  if (entry.hidden) return;
-  const plugins = fieldAt(["plugins"])?.loaded_value,
-    enabled = fieldAt(["web", "enable"])?.loaded_value;
-  const address =
-    plugins?.includes("web") &&
-    enabled &&
-    ["running", "degraded"].includes($("health").dataset.state)
-      ? new URL("/", location.origin).href
-      : null;
-  entry.disabled = !address;
-  entry.title = address || "聊天网页尚未生效或当前地址不可访问";
-  if (address)
-    entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
+function renderPluginToolbar(owner, fields, enabled) {
+  const ui = owner.configuration?.interface || {};
+  const links = ui.links || [];
+  const page = ui.page;
+  const items = [];
+  const embedded = page && page.presentation !== "link";
+  const toolbar = node("div", undefined, "plugin-settings-toolbar");
+  const back = button("返回功能与插件", () => moveTo("plugins"), "subtle");
+  toolbar.append(back);
+  if (!embedded && !enabled) {
+    toolbar.append(node("span", "未启用 · 仍可编辑配置", "hint"));
+  } else if (!embedded && !fields.length && links.some((link) => link.section)) {
+    toolbar.append(node("span", "相关设置由设备目录统一维护", "hint"));
+  }
+  for (const link of links) {
+    if (link.section) {
+      items.push(button(link.title, () => moveTo(link.section)));
+      continue;
+    }
+    const running = ["running", "degraded"].includes($("health").dataset.state);
+    const prefix = owner.configuration.namespace.split(".");
+    const applied = fieldAt(["plugins"])?.loaded_value?.includes(owner.id);
+    const fieldEnabled = !link.enabled_field || fieldAt([...prefix, link.enabled_field])?.loaded_value;
+    const open = button(link.title, () => window.open(link.href, "_blank", "noopener,noreferrer"));
+    open.disabled = link.requires_running && (!running || !applied || !fieldEnabled);
+    if (open.disabled) open.title = "此入口尚未生效";
+    items.push(open);
+  }
+  if (page?.presentation === "link") {
+    const open = node("a", page.title || "打开管理页面", "secondary");
+    open.href = pluginPages.assetURL(owner);
+    open.target = "_blank";
+    open.rel = "noopener noreferrer";
+    items.push(open);
+  }
+  if (items.length) {
+    const actions = node("div", undefined, "plugin-settings-links");
+    actions.append(...items);
+    toolbar.append(actions);
+  }
+  $("documents").append(toolbar);
 }
 function moveTo(page, tab) {
   // Drafts belong to the management session, not the currently displayed page.
@@ -149,10 +171,14 @@ function prettyField(field) {
   };
 }
 function workspaceRender() {
-  pluginPages.dispose();
   const docs = $("documents"),
     navigation = $("navigation");
-  docs.replaceChildren();
+  const owner = inventory.plugins.find((p) => p.page === selected);
+  const keepPage = pluginPages.retain(owner);
+  if (!keepPage) {
+    pluginPages.dispose();
+    docs.replaceChildren();
+  }
   navigation.replaceChildren();
   const enabled = valueAt(["plugins"], []);
   for (const [section, pages] of [
@@ -200,12 +226,11 @@ function workspaceRender() {
   $("page-title").textContent = copy[0];
   $("page-description").textContent = copy[1];
   $("breadcrumb-current").textContent = copy[0];
-  renderChatShortcut();
   if (selected === "overview") renderOverview();
   else if (selected === "models") renderModels();
   else if (selected === "permissions") renderPermissions();
   else if (selected === "plugins") renderPlugins();
-  else renderSettingsPage();
+  else if (!keepPage) renderSettingsPage();
   if (selected !== "models" || modelTab !== "connections") {
     clearTimeout(accountTimer);
     accountTimer = undefined;
@@ -749,33 +774,28 @@ function renderSettingsPage() {
   const owner = inventory.plugins.find(
     (p) => p.page === selected && selected.startsWith("plugin:"),
   );
-  if (owner?.configuration?.interface?.page) {
+  if (owner) renderPluginToolbar(owner, fields, enabled.includes(owner.id));
+  if (owner?.configuration?.interface?.page && owner.configuration.interface.page.presentation !== "link") {
     pluginPages.mount(owner, $("documents"));
     return;
   }
-  if (owner?.configuration?.interface?.terminal_management) {
-    drawTerminalDevices(owner, $("documents"), fields, enabled.includes(owner.id));
-    return;
-  }
-  if (selected.startsWith("plugin:")) {
-    const plugin = inventory.plugins.find((p) => p.id === selected.slice(7));
-    if (!enabled.includes(plugin?.id))
-      $("documents").append(
-        node(
-          "p",
-          "此插件未启用。可以先准备设置，再到“功能与插件”检查认证和依赖。",
-          "inline-note",
-        ),
+  const sections = owner
+    ? [...new Set(fields.map((field) => field.interface?.section || "设置"))].map(
+        (title) => [
+          title,
+          "",
+          (field) => (field.interface?.section || "设置") === title,
+        ],
+      )
+    : (pageSections[selected] || [[groups[selected], descriptions[selected], []]]).map(
+        ([title, detail, prefixes]) => [
+          title,
+          detail,
+          (field) => !prefixes.length || prefixes.includes(field.path[0]),
+        ],
       );
-  }
-  for (const [title, detail, prefixes] of pageSections[selected] || [
-    [groups[selected], descriptions[selected], []],
-  ]) {
-    const items = fields.filter(
-      (f) =>
-        !used.has(key(f.path)) &&
-        (!prefixes.length || prefixes.includes(f.path[0])),
-    );
+  for (const [title, detail, includes] of sections) {
+    const items = fields.filter((f) => !used.has(key(f.path)) && includes(f));
     if (!items.length) continue;
     const panel = surface(title, detail),
       advanced = advancedGroup("page:" + selected + ":" + title);
@@ -805,7 +825,7 @@ function renderSettingsPage() {
   }
   if (
     !fields.length &&
-    !Object.keys(owner?.configuration?.interface?.actions || {}).length
+    !owner?.configuration
   )
     $("documents").append(
       emptyState(

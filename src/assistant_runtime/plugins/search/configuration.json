@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "namespace": "search",
+  "namespace": "plugin_settings.search",
   "title": "网页搜索",
   "group": "extensions",
   "schema": {
@@ -60,5 +60,30 @@
   ],
   "application": {
     "*": "boundary"
+  },
+  "interface": {
+    "fields": {
+      "default_provider": {
+        "section": "服务商"
+      },
+      "providers": {
+        "section": "服务商"
+      },
+      "timeout_seconds": {
+        "section": "请求与缓存"
+      },
+      "concurrency": {
+        "section": "请求与缓存"
+      },
+      "max_pending": {
+        "section": "请求与缓存"
+      },
+      "cache_seconds": {
+        "section": "请求与缓存"
+      },
+      "requests_per_second": {
+        "section": "请求与缓存"
+      }
+    }
   }
 }

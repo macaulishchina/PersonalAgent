@@ -100,7 +100,7 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
 
     async def restart(self, **settings):
         await self.runtime.close()
-        self.config.decisions.update(settings)
+        self.config.plugin_settings.setdefault("decisions", {}).update(settings)
         self.runtime = type(self.runtime)(self.store)
         from usage_fixture import decision_host
 
@@ -166,7 +166,7 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
 
         await self.runtime.close()
         self.provider.warmup = AsyncMock()
-        self.config.decisions["mode"] = "active"
+        self.config.plugin_settings["decisions"]["mode"] = "active"
         self.runtime = Runtime(self.store)
         from usage_fixture import decision_host
 

@@ -299,13 +299,15 @@ async def run(args):
                 "aliyun_speech",
                 "ai_passport",
             ],
-            ai_passport={
-                "keep_online": True,
-                **(
-                    {"devices": {args.device_id: {"server_url": args.device_server_url}}}
-                    if args.device_server_url
-                    else {}
-                ),
+            plugin_settings={
+                "ai_passport": {
+                    "keep_online": True,
+                    **(
+                        {"devices": {args.device_id: {"server_url": args.device_server_url}}}
+                        if args.device_server_url
+                        else {}
+                    ),
+                }
             },
         )
         host = AssistantService(config)
@@ -357,7 +359,9 @@ async def run(args):
             async with client.post(base + "/pair", json=value, headers=headers(request)) as response:
                 data, status = await response.json(), response.status
             if status == 200 and data.get("code"):
-                await frontend.management("pair", {"name": "Hardware Acceptance PP", "code": data["code"]})
+                await host.runtime.plugins["ai_passport"].instance.configuration_action(
+                    "pair", {"name": "Hardware Acceptance PP", "code": data["code"]}
+                )
                 print("designated hardware paired (isolated synthetic instance)", flush=True)
             return web.json_response(data, status=status)
 

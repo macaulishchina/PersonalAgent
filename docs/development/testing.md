@@ -23,6 +23,7 @@ uv sync --locked --python 3.12 --extra slim --extra dev --no-default-groups --in
 | 修改内容 | editable 安装下的生效方式 |
 | --- | --- |
 | 配置网页的 `core/configuration/static/` JS／CSS／HTML | 刷新网页；管理服务按请求读取文件 |
+| 插件管理页面的 `ui/` 源码 | 执行 `python scripts/build_plugin_pages.py <插件标识>`，再刷新网页 |
 | Python 后端代码 | 重启对应进程；配置管理接口代码变化需要重启管理进程 |
 | 对话网页 `frontend/` 源码 | 先执行 `npm --prefix frontend run build`，再刷新网页 |
 | 依赖、命令入口、打包元数据 | 重新安装／同步环境，必要时重启 |
@@ -31,6 +32,8 @@ uv sync --locked --python 3.12 --extra slim --extra dev --no-default-groups --in
 非 editable 安装还需要先更新安装包。`pa restart` 重启所选实例的管理和业务进程，不会执行安装或前端构建。开发与验收使用独立实例，不能为验证热更新而重启生产服务。
 
 ## 自动检查
+
+全新 checkout 先执行 `python scripts/build_plugin_pages.py`，生成声明检查所需的插件页面资源。
 
 ```sh
 python scripts/check.py --list

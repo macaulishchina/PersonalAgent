@@ -18,6 +18,8 @@ from fastmcp import Client
 from pyhap.accessory_driver import get_topic
 
 from assistant_runtime.app.config import Config
+from assistant_runtime.app.bundled import settings_for
+from assistant_runtime.core.plugin_catalog import declaration
 from assistant_runtime.core.devices.directory import DeviceDirectory, DevicesPlugin
 from assistant_runtime.api.contracts import DeviceObservation, SensorReading
 from assistant_runtime.kernel.runtime import Runtime
@@ -241,7 +243,9 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
             root=Path(self.temp.name),
             plugins=["apple_home"],
             devices={"environment": spec()},
-            apple_home={"port": receiver_port, "hap_port": bridge_port, "refresh_timeout": 1},
+            plugin_settings={
+                "apple_home": {"port": receiver_port, "hap_port": bridge_port, "refresh_timeout": 1}
+            },
         )
         self.store = Store(self.config.state_dir / "assistant.db")
         self.client = ClientSession()
@@ -249,7 +253,12 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
 
     async def launch(self, factory=FakeBridge):
         self.directory = DeviceDirectory(self.config.devices)
-        self.plugin = AppleHomePlugin(self.config, self.store, self.directory, factory)
+        self.plugin = AppleHomePlugin(
+            settings_for(self.config, "apple_home", declaration("apple_home")),
+            self.store,
+            self.directory,
+            factory,
+        )
         self.runtime = Runtime(self.store)
         self.runtime.add(self.plugin)
         self.runtime.add(DevicesPlugin(self.directory))
@@ -258,7 +267,7 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(3):
             while not self.plugin.receiver_ready or self.plugin.bridge is None:
                 await asyncio.sleep(0.01)
-        self.url = f"http://127.0.0.1:{self.config.apple_home['port']}/readings"
+        self.url = f"http://127.0.0.1:{self.config.plugin_settings['apple_home']['port']}/readings"
         self.headers = {"Authorization": "Bearer " + self.plugin.token}
 
     async def asyncTearDown(self):
@@ -328,7 +337,9 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.plugin.token, "\n".join(messages))
 
     async def test_invalid_value_diagnostics_identify_field_type_and_bounded_original(self):
-        self.plugin.settings = AppleHomeSettings.parse({**self.config.apple_home, "log_invalid_values": True})
+        self.plugin.settings = AppleHomeSettings.parse(
+            {**self.config.plugin_settings["apple_home"], "log_invalid_values": True}
+        )
         cases = (
             ("temperature", "24 °C\n25 °C"),
             ("humidity", ["46 %", "47 %"]),
@@ -357,7 +368,9 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.store.get("sensors.apple_home.environment"))
 
     async def test_value_diagnostics_exclude_unauthorized_unknown_and_unrelated_data(self):
-        self.plugin.settings = AppleHomeSettings.parse({**self.config.apple_home, "log_invalid_values": True})
+        self.plugin.settings = AppleHomeSettings.parse(
+            {**self.config.plugin_settings["apple_home"], "log_invalid_values": True}
+        )
         with self.assertLogs("assistant_runtime.plugins.apple_home.plugin.http", level="INFO") as logs:
             self.assertEqual(
                 (await self.post(self.sample() | {"temperature": "unauthorized-value"}, {}))[0], 401
@@ -476,7 +489,12 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
                 raise OSError("unavailable source")
 
         self.directory = DeviceDirectory(self.config.devices)
-        self.plugin = AppleHomePlugin(self.config, self.store, self.directory, BrokenBridge)
+        self.plugin = AppleHomePlugin(
+            settings_for(self.config, "apple_home", declaration("apple_home")),
+            self.store,
+            self.directory,
+            BrokenBridge,
+        )
         self.runtime = Runtime(self.store)
         self.runtime.add(self.plugin)
         self.runtime.add(DevicesPlugin(self.directory))
@@ -488,7 +506,7 @@ class AppleSourceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runtime.fatal.is_set())
         self.assertEqual(self.directory.snapshot("environment")["state"], "unavailable")
         with socket.socket() as sock:
-            sock.bind(("127.0.0.1", self.config.apple_home["port"]))
+            sock.bind(("127.0.0.1", self.config.plugin_settings["apple_home"]["port"]))
 
 
 class UpstreamBridgeTest(unittest.IsolatedAsyncioTestCase):

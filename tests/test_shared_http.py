@@ -52,7 +52,7 @@ class SharedHttpTest(unittest.IsolatedAsyncioTestCase):
                     entry.write_text(
                         "root="
                         + json.dumps(str(root))
-                        + '\nplugins=["ai_usage","workfiles","models","pi","execution","conversation","web"]\n[web]\nenable=true\n',
+                        + '\nplugins=["ai_usage","workfiles","models","pi","execution","conversation","web"]\n[plugin_settings.web]\nenable=true\n',
                         encoding="utf-8",
                     )
                     business.resources.provision(business.files.snapshot().contents)
@@ -93,7 +93,9 @@ class SharedHttpTest(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertEqual(bad.status, 403)
                     await console.save_flow.save(
-                        snapshot.version, [{"path": ["web", "enable"], "op": "set", "value": False}], []
+                        snapshot.version,
+                        [{"path": ["plugin_settings", "web", "enable"], "op": "set", "value": False}],
+                        [],
                     )
                     await asyncio.wait_for(business.apply_task, 15)
                     self.assertEqual(business.application["phase"], "applied", business.application)

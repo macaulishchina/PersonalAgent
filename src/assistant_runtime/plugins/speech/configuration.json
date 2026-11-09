@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.voice_disabled",
+  "title": "语音停用",
+  "group": "extensions",
+  "description": "当前语音占位插件由实例功能装配选择。",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "interface": {
+    "links": [
+      {
+        "title": "功能与插件",
+        "section": "plugins"
+      }
+    ]
+  }
+}

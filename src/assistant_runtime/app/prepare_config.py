@@ -101,3 +101,101 @@ def prepare(source, destination):
     except BaseException:
         shutil.rmtree(destination)
         raise
+
+
+def migrate_plugins(source, destination):
+    """Move bundled settings to their owning namespace in an isolated candidate."""
+    import tomlkit
+
+    from assistant_runtime.core.plugin_catalog import metadata
+
+    source = Path(source).expanduser().resolve(strict=True)
+    destination = Path(destination).expanduser().absolute()
+    before = read_config(source)
+    entry = tomllib.loads(source.read_text(encoding="utf-8"))
+    root = (source.parent / Path(before.get("root", source.parent)).expanduser()).resolve()
+    paths = [source, *(source.parent / name for name in entry.get("include", []))]
+    originals = {path.relative_to(source.parent): path.read_text(encoding="utf-8") for path in paths}
+    expected = dict(before)
+    settings = expected.get("plugin_settings", {})
+    if not isinstance(settings, dict):
+        raise ValueError("plugin_settings must be a table")
+    settings = dict(settings)
+    moved = []
+    for owner, module in OWNERS.items():
+        if owner not in before or not module.startswith("assistant_runtime.plugins."):
+            continue
+        descriptor = metadata(owner).with_name("configuration.json")
+        spec = json.loads(descriptor.read_text(encoding="utf-8"))
+        if spec["namespace"] != f"plugin_settings.{owner}":
+            continue
+        if owner in settings:
+            raise ValueError(f"Both old and new settings exist for {owner}")
+        settings[owner] = expected.pop(owner)
+        moved.append(owner)
+    if moved:
+        expected["plugin_settings"] = settings
+    documents = {}
+    for path, original in originals.items():
+        text = original
+        for owner in moved:
+            # Move explicit table headers in place, including disjoint blocks that
+            # tomlkit represents as separate pieces of one logical table.
+            text = re.sub(
+                rf"""(?m)^([ \t]*\[{{1,2}}[ \t]*)({owner}|"{owner}"|'{owner}')(?=[ \t]*[.\]])""",
+                lambda match: match[1] + "plugin_settings." + match[2],
+                text,
+            )
+        document = tomlkit.parse(text)
+        for owner in moved:
+            if owner not in document:
+                continue
+            previous = document.pop(owner)
+            namespaced = document.setdefault("plugin_settings", tomlkit.table())
+            if owner in namespaced:
+                namespaced[owner].update(previous)
+            else:
+                namespaced[owner] = previous
+        documents[path] = document
+    # Keep relative includes intact while retaining the source instance storage.
+    expected["root"] = str(root)
+    for path, document in documents.items():
+        if path != Path(source.name) and "root" in document:
+            del document["root"]
+    documents[Path(source.name)]["root"] = str(root)
+    if any(path.parts[0] == "original" for path in originals):
+        raise ValueError("The candidate backup name 'original' conflicts with a source include")
+    destination.mkdir(parents=True, mode=0o700, exist_ok=False)
+    try:
+        system.private(destination, directory=True)
+        for path, document in documents.items():
+            for base, text in (
+                (destination, tomlkit.dumps(document)),
+                (destination / "original", originals[path]),
+            ):
+                output = base / path
+                output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                with output.open("x", encoding="utf-8") as stream:
+                    system.private(output)
+                    stream.write(text)
+        target = destination / source.name
+        if read_config(target) != expected:
+            raise ValueError("Candidate changes unrelated configuration")
+        from assistant_runtime.core.configuration.validation import validate_candidate
+
+        validate_candidate(
+            source.name,
+            {path.as_posix(): (destination / path).read_bytes() for path in documents},
+            root=root,
+            entry_directory=destination,
+        )
+        return {
+            "config": str(target),
+            "original": str(destination / "original"),
+            "migrated_plugins": moved,
+            "root": str(root),
+            "applied": False,
+        }
+    except BaseException:
+        shutil.rmtree(destination)
+        raise

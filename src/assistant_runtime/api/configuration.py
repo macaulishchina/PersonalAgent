@@ -71,6 +71,10 @@ class ConfigurationError(ValueError):
         return {"path": self.path, "code": self.code, "message": self.message}
 
 
+class ConfigurationActionRejected(ConfigurationError):
+    """The owner confirmed its requested management operation was not applied."""
+
+
 @dataclass(frozen=True)
 class ConfigurationSpec:
     """Schema describes stored values; the owner validator remains authoritative."""

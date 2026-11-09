@@ -22,7 +22,6 @@ DECLARATION = PluginDefinition(
     supported_platforms=plugin_platforms(Path(__file__).parent),
     configuration=configuration_spec(__file__),
     create=create,
-    config_key="ai_passport",
     validate=validate,
     resources=("http_frontend",),
     uses=(ConversationRequest, ConversationInputRequest, SpeechRequest, TerminalNotifications),

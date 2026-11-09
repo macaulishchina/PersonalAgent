@@ -7,7 +7,7 @@ def release_data(name="sample", **changes):
         "id": name,
         "version": "1.0.0",
         "api_version": 2,
-        "requires_core": ">=0.4.0,<0.5.0",
+        "requires_core": ">=0.5.1,<0.6.0",
         "requires": {},
         "optional": {},
         "critical": False,

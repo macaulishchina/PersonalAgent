@@ -327,23 +327,23 @@ The explicit live acceptance script supports `--alias`, `--platform`, `--sources
 Enable `media` alongside `notifications`. Minimal instance example:
 
 ```toml
-[media]
+[plugin_settings.media]
 search_url = "http://127.0.0.1:8888"
 openlist_url = "http://192.168.1.10:5244"
 timeout_seconds = 15
 queue_capacity = 128
 max_operations = 10000
 
-[media.accounts.aliyun]
+[plugin_settings.media.accounts.aliyun]
 provider = "aliyun"
 
-[media.targets.movies]
+[plugin_settings.media.targets.movies]
 account = "aliyun"
 drive_id = "RESOURCE_DRIVE_ID"
 folder_id = "MOVIES_FOLDER_ID"
 openlist_path = "/阿里云盘/影视/电影"
 
-[media.local_targets.movies]
+[plugin_settings.media.local_targets.movies]
 path = "/mnt/P/openlist/media/电影"
 staging_path = "/mnt/P/openlist/temp/media-downloads"
 mount_path = "/mnt/P"

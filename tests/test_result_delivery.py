@@ -275,12 +275,16 @@ class NativeResultDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 return sse_text_reply("final-" + str(step), final)
 
             gateway = FakeResponsesGateway(model)
+            initial = Config.load(initialize(root / "instance", preset="standard"))
             config = replace(
-                Config.load(initialize(root / "instance", preset="standard")),
+                initial,
                 model_api=configuration(gateway.base_url),
                 main_model="model-a",
                 main_reasoning_effort="low",
-                web={"enable": False},
+                plugin_settings={
+                    **initial.plugin_settings,
+                    "web": {"enable": False},
+                },
             )
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             host = AssistantService(config)

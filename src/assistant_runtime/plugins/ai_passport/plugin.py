@@ -4,9 +4,10 @@ import asyncio
 import hmac
 import re
 import time
+from contextlib import suppress
 from aiohttp import web
 from assistant_runtime.api.conversation import ConversationRequest
-from assistant_runtime.api.configuration import ConfigurationUpdate
+from assistant_runtime.api.configuration import ConfigurationActionRejected, ConfigurationUpdate
 from .declaration import DECLARATION
 from .repository import Devices
 from .settings import desired, DEVICE_FIELDS, NETWORK_FIELDS
@@ -33,7 +34,6 @@ class AiPassportPlugin:
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         self.frontend.publish("127.0.0.1", port)
-        self.frontend.register_management(self.manage)
         context.spawn(self.changes(context.subscribe(capacity=64)), "passport-changes")
 
     async def changes(self, queue):
@@ -60,48 +60,52 @@ class AiPassportPlugin:
         except (ValueError, KeyError, TypeError):
             raise web.HTTPBadRequest(text="invalid_device_request") from None
 
-    async def manage(self, action, arguments):
+    async def configuration_action(self, action, arguments):
         if action == "list":
             return {
                 "devices": [
                     {
-                        **d,
+                        "device_id": d["device_id"],
+                        "name": d["name"],
+                        "session_id": d["session_id"],
                         "connected": d["device_id"] in self.connections,
                         "configuration": self.devices.configuration_state(d["device_id"]),
                     }
                     for d in self.devices.list()
+                    if d["paired"] and not d["revoked"]
                 ]
             }
         if action == "pair":
             now = time.monotonic()
             self.pair_attempts = [t for t in self.pair_attempts if now - t < 60]
             if len(self.pair_attempts) >= 10:
-                raise ValueError("配对尝试过于频繁，请一分钟后重试")
+                raise ConfigurationActionRejected([], "pair_rate_limited", "配对尝试过于频繁，请一分钟后再试")
             self.pair_attempts.append(now)
-            name = arguments.get("name", "PP")
-            if not isinstance(name, str) or not 1 <= len(name.strip()) <= 48:
-                raise ValueError("设备名称须为 1—48 个字符")
-            code = arguments.get("code")
-            if not isinstance(code, str) or len(code) != 8 or not code.isascii() or not code.isdigit():
-                raise ValueError("请输入设备屏幕上的八位配对数字")
+            name, code = arguments["name"].strip(), arguments["code"]
             try:
                 ident = self.devices.challenge(code)
             except PermissionError:
-                raise ValueError("配对码无效或已过期，请核对设备屏幕") from None
+                raise ConfigurationActionRejected(
+                    [], "pair_code_expired", "配对码无效或已过期，请核对设备屏幕"
+                ) from None
             result = await self.context.invoke(
                 ConversationRequest(
                     "create", {"title": name, "request_id": ident, "policy": {"capture_memory": True}}
                 )
             )
             try:
-                return self.devices.activate(code, name.strip(), result["id"])
+                return self.devices.activate(code, name, result["id"])
             except PermissionError:
-                raise ValueError("配对码已失效，请在设备刷新后重试") from None
+                raise ConfigurationActionRejected(
+                    [], "pair_code_expired", "设备未配对，请刷新设备配对码后再试"
+                ) from None
         if action == "revoke":
             ident = arguments["device_id"]
             self.devices.revoke(ident)
             if ident in self.connections:
-                await self.connections[ident].close()
+                # Revocation is durable before the transport is closed.
+                with suppress(ConnectionError):
+                    await self.connections[ident].close()
             return {"revoked": True}
         raise ValueError("Unsupported terminal management action")
 

@@ -56,7 +56,11 @@ class ReportingTest(unittest.IsolatedAsyncioTestCase):
             assistant=None,
             runtime=self.runtime,
             config=SimpleNamespace(
-                root=self.root, state_dir=self.root / "state", events={"queue_size": 8}, plugin_backends={}
+                root=self.root,
+                state_dir=self.root / "state",
+                events={"queue_size": 8},
+                plugin_backends={},
+                plugin_settings={},
             ),
         )
         self.events = EventsPlugin(self.host)

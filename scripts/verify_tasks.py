@@ -86,11 +86,11 @@ async def verify(config):
         await asyncio.sleep(4)
         await call("supplement", run_id=r["id"], text="验收补充：结束后只回答等待已结束，不要增加任何操作。")
         evidence["checks"]["supplement"] = True
-        if config.web.get("enable"):
+        if config.plugin_settings["web"].get("enable"):
             import aiohttp
             from assistant_runtime.plugins.web.settings import WebSettings
 
-            ws = WebSettings.parse(config.web)
+            ws = WebSettings.parse(config.plugin_settings["web"])
             from assistant_runtime.core.configuration.settings import ManagementSettings
 
             management = ManagementSettings.load(config.root / "management.toml")

@@ -18,7 +18,7 @@ ai_usage 等声明依赖。tasks、notifications、memory 是可选能力，不�
 max_streams = 2
 max_recording_seconds = 60
 
-[aliyun_speech]
+[plugin_settings.aliyun_speech]
 api_key_env = "DASHSCOPE_API_KEY"
 capabilities = ["recognize", "synthesize"]
 recognition_model = "fun-asr-realtime"
@@ -26,7 +26,7 @@ synthesis_model = "cosyvoice-v3-flash"
 voice = "longanyang"
 rate = 1.0
 
-[ai_passport]
+[plugin_settings.ai_passport]
 volume = 45
 brightness = 65
 text_size = 16 # 正文支持 16 / 18，状态栏与菜单不变
@@ -46,6 +46,13 @@ max_connections = 2
 修改配置后统一点击“保存并生效”。Wi-Fi 最多五套，用优先级 1—5 依次尝试；密码单独编辑并脱敏，其他字段修改不会
 丢失已保存密码。设备按字段版本应用配置，本地音量、引导／排队、保持在线不会因重连重置。
 音色、语速和播报模式在一次播报开始时取快照，不在句子中途突然换音色。
+
+管理页面源码位于本插件的 `ui/`，配置、配对和撤销都通过通用管理 SDK。源码构建命令为
+`python scripts/build_plugin_pages.py ai_passport`。构建产物随 PA wheel 安装。
+
+升级已有实例时，执行 `pa --config /private/instance/config/config.toml migrate-plugin-config /private/candidate`。
+候选目录保留 include 关系、默认值覆盖、设备设置与 Wi-Fi 密码。配对记录和会话仍由原实例数据库管理。
+迁移和切换步骤见[发布与切换](../../../../docs/development/release.md)。
 
 ## 正式交互目标
 

@@ -36,7 +36,7 @@ Use the separate `config/decisions.toml` included by the root configuration. Cha
 require restart; `decisions reload` reloads credentials only, not policy. Defaults:
 
 ```toml
-[decisions]
+[plugin_settings.decisions]
 enabled = true
 external_data_consent = false
 mode = "active"
@@ -53,11 +53,11 @@ warmup_enabled = true
 keepalive_seconds = 120
 dns_cache_seconds = 300
 
-[decisions.thresholds]
+[plugin_settings.decisions.thresholds]
 model_review = 0.2
 
 # Optional overrides, not required for each scene:
-# [decisions.scenes.voice_intent]
+# [plugin_settings.decisions.scenes.voice_intent]
 # enabled = true
 # mode = "parallel" # shadow / parallel / direct
 # threshold = 0.6

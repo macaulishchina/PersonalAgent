@@ -1,7 +1,6 @@
 """Instance configuration. Hardware identities never belong in code defaults."""
 
 from assistant_runtime.api.configuration import configuration_default
-from assistant_runtime.core.plugin_catalog import metadata
 from .presets import default_plugins
 from .configuration_fields import ModuleSettings
 
@@ -104,17 +103,9 @@ class Config(ModuleSettings):
         default_factory=lambda: configuration_default(__file__, "main_reasoning_effort")
     )
     speech_io: dict = field(default_factory=dict)
-    aliyun_speech: dict = field(default_factory=dict)
-    ai_passport: dict = field(default_factory=dict)
-    web: dict = field(default_factory=dict)
-    apple_home: dict = field(default_factory=dict)
     events: dict = field(default_factory=dict)
-    decisions: dict = field(default_factory=dict)
     ai_usage: dict = field(default_factory=dict)
     model_api: dict = field(default_factory=dict)
-    media: dict = field(default_factory=dict)
-    search: dict = field(default_factory=dict)
-    hid_buttons: dict = field(default_factory=lambda: configuration_default(metadata("hid_buttons")))
     notifications: dict = field(default_factory=dict)
     tasks: dict = field(default_factory=dict)
     execution: dict = field(default_factory=dict)
@@ -177,7 +168,7 @@ class Config(ModuleSettings):
         for section, key in (
             (self.work_files, "root"),
             (self.external_mcp, "registry_path"),
-            (self.web, "token_file"),
+            (self.plugin_settings.get("web", {}), "token_file"),
         ):
             if section.get(key):
                 section[key] = str((self.root / Path(section[key]).expanduser()).resolve())
@@ -209,7 +200,7 @@ class Config(ModuleSettings):
             spec = declaration(name)
             if spec.validate and spec.config_key:
                 spec.validate(getattr(self, spec.config_key))
-        if "search" in self.plugins and not self.search.get("providers"):
+        if "search" in self.plugins and not self.plugin_settings.get("search", {}).get("providers"):
             raise ValueError("Search plugin requires a configured provider")
         if "assistant" in self.enabled_plugins and self.quiet_hours != {}:
             from assistant_runtime.core.speech.quiet import QuietHours

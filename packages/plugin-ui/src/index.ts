@@ -25,6 +25,7 @@ export type Field = {
   loaded_value?: unknown;
   source: string;
   explicit: boolean;
+  modified?: boolean;
   files: string[];
 };
 export type Resource = {
@@ -47,6 +48,7 @@ export type Operation = {
 };
 export type State = {
   owner: string;
+  enabled?: boolean;
   version: string;
   loadedVersion?: string;
   schema: Schema;

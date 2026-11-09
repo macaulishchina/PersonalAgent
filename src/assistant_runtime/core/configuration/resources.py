@@ -28,7 +28,7 @@ class Resources:
         from assistant_runtime.plugins.web.configuration_resources import registered as web_resources
 
         result.extend(integration_resources(self.root, data))
-        result.extend(web_resources(self.root, data.get("web", {})))
+        result.extend(web_resources(self.root, data.get("plugin_settings", {}).get("web", {})))
         from assistant_runtime.core.models.presentation import registered as model_resources
 
         result.extend(model_resources(self.root, data))
@@ -280,7 +280,11 @@ class Resources:
 
         resource = self.registered(contents)["web_access"]
         if not resource.read_only:
-            provision(self.path(resource), data.get("web", {}), "web" in data.get("plugins", []))
+            provision(
+                self.path(resource),
+                data.get("plugin_settings", {}).get("web", {}),
+                "web" in data.get("plugins", []),
+            )
 
     def prepare_defaults(self, contents, values, touched):
         from .fields import merge
@@ -299,7 +303,7 @@ class Resources:
             values.get("web_access"),
             "web_access" in touched,
             not resource.read_only,
-            data.get("web", {}),
+            data.get("plugin_settings", {}).get("web", {}),
             "web" in data.get("plugins", []),
         )
         if value != values.get("web_access"):
@@ -320,7 +324,9 @@ class Resources:
             validate_candidate as validate_integrations,
         )
 
-        validate_web(config.web, "web" in config.enabled_plugins, values.get("web_access"))
+        validate_web(
+            config.plugin_settings.get("web", {}), "web" in config.enabled_plugins, values.get("web_access")
+        )
         validate_integrations(config, values)
         raw = values.get("management")
         if raw is not None:

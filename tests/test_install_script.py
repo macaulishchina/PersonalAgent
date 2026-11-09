@@ -31,11 +31,12 @@ class InstallTest(unittest.TestCase):
         )
         self.assertEqual(target, self.root / "custom env")
         self.assertEqual(options["preset"], "slim")
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][1:], ["scripts/build_plugin_pages.py"])
+        self.assertEqual(len(commands), 2)
         self.assertIn("--inexact", commands[-1])
         _, options, commands = installer.plan(self.root, args, {}, "linux")
         self.assertEqual(options["preset"], "standard")
-        self.assertEqual([c[0] for c in commands], ["npm", "npm", "uv"])
+        self.assertEqual([c[0] for c in commands[1:]], ["npm", "npm", "uv"])
 
     def test_preview_does_not_execute_or_create_environment(self):
         run = Mock(side_effect=AssertionError("preview performed installation"))
@@ -78,7 +79,7 @@ class InstallTest(unittest.TestCase):
         receipt = environment / "pa-install.json"
         previous = '{"schema_version":1,"preset":"slim","extras":[]}'
         receipt.write_text(previous)
-        for index in (0, 1, 2):
+        for index in range(4):
             with self.subTest(index=index):
                 run = Mock(side_effect=[None] * index + [subprocess.CalledProcessError(7, "failed")])
                 with patch.object(installer.shutil, "which", return_value="tool"):
@@ -115,4 +116,4 @@ class InstallTest(unittest.TestCase):
         _, _, commands = installer.plan(
             self.root, installer.arguments(["--preset", "slim", "--extra", "web"]), {}, "linux"
         )
-        self.assertEqual([c[0] for c in commands], ["npm", "npm", "uv"])
+        self.assertEqual([c[0] for c in commands[1:]], ["npm", "npm", "uv"])

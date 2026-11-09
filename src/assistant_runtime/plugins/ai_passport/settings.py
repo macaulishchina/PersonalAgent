@@ -30,7 +30,9 @@ def desired(settings, device):
 
 def validate(settings):
     def reject(device, field, message):
-        raise ConfigurationError(["ai_passport", "devices", device, field], "value", message)
+        raise ConfigurationError(
+            ["plugin_settings", "ai_passport", "devices", device, field], "value", message
+        )
 
     for device, values in settings.get("devices", {}).items():
         seen = set()

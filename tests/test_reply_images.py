@@ -93,7 +93,9 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.host = fixture(Path(self.temp.name))
-        self.host.config = replace(self.host.config, web={"enable": True})
+        self.host.config = replace(
+            self.host.config, plugin_settings={**self.host.config.plugin_settings, "web": {"enable": True}}
+        )
         self.context = Owned()
         await self.host.conversation.start(self.context)
 
@@ -189,7 +191,9 @@ class ReplyImageTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_shared_conversation_retains_tool_images_without_a_web_configuration(self):
         c = self.host.conversation
-        self.host.config = replace(self.host.config, web={})
+        self.host.config = replace(
+            self.host.config, plugin_settings={**self.host.config.plugin_settings, "web": {}}
+        )
         c.provider_event(task_event("activity.completed", provider_item([picture()])))
         await asyncio.wait_for(c.image_queue.join(), 2)
         message = c.store.get("task:session:image-tool")

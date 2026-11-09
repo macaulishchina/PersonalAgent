@@ -241,7 +241,10 @@ class ConversationMemoryNativeTest(unittest.IsolatedAsyncioTestCase):
                 main_model="model-a",
                 main_reasoning_effort="low",
                 model_api=configuration(gateway.base_url),
-                web={"enable": True, "host": "127.0.0.1", "port": 0},
+                plugin_settings={
+                    **base.plugin_settings,
+                    "web": {"enable": True, "host": "127.0.0.1", "port": 0},
+                },
             )
             (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
             extractions = []
