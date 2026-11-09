@@ -33,6 +33,17 @@ async def main():
                     await page.goto(origin + "/config/")
                     await page.locator("#token").fill((business.state / "admin-token").read_text().strip())
                     await page.locator("#login button").click()
+                    await expect(page.locator("#editor")).to_be_visible()
+                    await page.reload()
+                    await expect(page.locator("#health")).to_have_text("业务已停止")
+                    # An authenticated reload fetches status twice before starting the poll.
+                    status_reads = """() => performance.getEntriesByName(
+                        new URL("/api/status", location.href).href
+                    ).length"""
+                    await page.wait_for_function(f"() => ({status_reads})() >= 2")
+                    await expect(page.locator("#notice")).to_be_empty()
+                    await page.wait_for_function(f"() => ({status_reads})() >= 3", timeout=8000)
+                    await expect(page.locator("#health")).to_have_text("业务已停止")
                     catalog = await (await page.request.get(origin + "/api/catalog")).json()
                     owners = {ident for ident, module in OWNERS.items() if ".plugins." in module}
                     for plugin in catalog["plugins"]:

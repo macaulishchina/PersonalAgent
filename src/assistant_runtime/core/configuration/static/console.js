@@ -1419,7 +1419,7 @@ async function applicationStatus() {
     }[status.state] || status.state;
   $("health").dataset.state = status.state;
   renderPluginHealth(status);
-  renderChatShortcut();
+  refreshPluginLinks();
   if (!applicationTimer)
     applicationTimer = setInterval(async () => {
       if (statusPolling || $("editor").hidden) return;

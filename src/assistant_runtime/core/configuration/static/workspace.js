@@ -92,13 +92,8 @@ function renderPluginToolbar(owner, fields, enabled) {
       items.push(button(link.title, () => moveTo(link.section)));
       continue;
     }
-    const running = ["running", "degraded"].includes($("health").dataset.state);
-    const prefix = owner.configuration.namespace.split(".");
-    const applied = fieldAt(["plugins"])?.loaded_value?.includes(owner.id);
-    const fieldEnabled = !link.enabled_field || fieldAt([...prefix, link.enabled_field])?.loaded_value;
     const open = button(link.title, () => window.open(link.href, "_blank", "noopener,noreferrer"));
-    open.disabled = link.requires_running && (!running || !applied || !fieldEnabled);
-    if (open.disabled) open.title = "此入口尚未生效";
+    if (link.requires_running) open.dataset.runtimeEntry = link.enabled_field || "";
     items.push(open);
   }
   if (page?.presentation === "link") {
@@ -114,6 +109,21 @@ function renderPluginToolbar(owner, fields, enabled) {
     toolbar.append(actions);
   }
   $("documents").append(toolbar);
+  refreshPluginLinks();
+}
+function refreshPluginLinks() {
+  const entries = $("documents").querySelectorAll("[data-runtime-entry]");
+  if (!entries.length) return;
+  const owner = inventory.plugins.find((plugin) => plugin.page === selected);
+  const prefix = owner.configuration.namespace.split(".");
+  const running = ["running", "degraded"].includes($("health").dataset.state);
+  const applied = fieldAt(["plugins"])?.loaded_value?.includes(owner.id);
+  for (const entry of entries) {
+    const field = entry.dataset.runtimeEntry;
+    const enabled = !field || fieldAt([...prefix, field])?.loaded_value;
+    entry.disabled = !running || !applied || !enabled;
+    entry.title = entry.disabled ? "此入口尚未生效" : "";
+  }
 }
 function moveTo(page, tab) {
   // Drafts belong to the management session, not the currently displayed page.
