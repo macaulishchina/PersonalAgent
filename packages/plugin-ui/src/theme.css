@@ -1,0 +1,90 @@
+:root {
+  color-scheme: light;
+  --pa-bg: #f6f8f5;
+  --pa-surface: #fff;
+  --pa-text: #24372f;
+  --pa-muted: #67766d;
+  --pa-accent: #28634f;
+  --pa-border: #dbe3da;
+  --pa-radius: 12px;
+  font:
+    14px/1.6 system-ui,
+    sans-serif;
+  color: var(--pa-text);
+  background: var(--pa-bg);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+.pa-panel {
+  background: var(--pa-surface);
+  border: 1px solid var(--pa-border);
+  border-radius: var(--pa-radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+p,
+small {
+  color: var(--pa-muted);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button {
+  background: white;
+  border: 1px solid var(--pa-border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: var(--pa-accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+input,
+textarea,
+select {
+  border: 1px solid var(--pa-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  min-width: 0;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 2px;
+}
+.pa-field {
+  display: grid;
+  grid-template-columns: 180px minmax(150px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 16px 0;
+}
+.pa-field small {
+  grid-column: 2;
+}
+[role="alert"] {
+  color: #a54525;
+}
+.pa-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+textarea {
+  width: 100%;
+  min-height: 100px;
+}

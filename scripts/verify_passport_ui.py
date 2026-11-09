@@ -3,11 +3,14 @@
 import argparse
 import asyncio
 import ast
+import json
 import re
 from pathlib import Path
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from playwright.async_api import async_playwright, expect
+
+from assistant_runtime.core.configuration.fields import described_schema, public_rule
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "src/assistant_runtime/core/configuration/static"
@@ -25,14 +28,75 @@ async def verify(screenshot=None):
     app = web.Application()
     submitted = []
 
-    async def home(_):
-        return web.Response(
-            text="<!doctype html><html><head><link rel='stylesheet' href='/console.css'></head><body><main id='content'></main></body></html>",
-            content_type="text/html",
+    descriptor = json.loads(
+        (ROOT / "src/assistant_runtime/plugins/ai_passport/configuration.json").read_text()
+    )
+    device_id = "test-device"
+    devices = [
+        {
+            "name": "PP-Preview-1",
+            "device_id": device_id,
+            "session_id": "test-session",
+            "paired": True,
+            "connected": True,
+            "configuration": {"volume": {"desired": 2, "applied": 1}},
+        },
+        {"name": "旧设备", "device_id": "revoked", "paired": True, "revoked": True},
+        {"name": "尚未配对", "device_id": "unpaired", "paired": False},
+    ]
+    operations, saved = [], []
+    fields = [{"path": ["plugins"], "schema": {}, "value": ["ai_passport"], "group": "plugins"}]
+    for name, rule in described_schema(descriptor)["properties"].items():
+        fields.append(
+            {
+                "path": ["ai_passport", name],
+                "schema": public_rule(rule),
+                "page": "plugin:ai_passport",
+                "owner_id": "ai_passport",
+                "files": ["passport.toml"],
+                "value": {} if name == "devices" else rule.get("default"),
+                "explicit": False,
+            }
         )
 
+    async def status(_):
+        return web.json_response({"loaded_version": "test-version", "state": "running"})
+
+    async def catalog(_):
+        return web.json_response(
+            {
+                "pages": [{"id": "plugin:ai_passport", "title": "AI Passport"}],
+                "plugins": [{"id": "ai_passport", "page": "plugin:ai_passport", "configuration": descriptor}],
+            }
+        )
+
+    async def configuration(request):
+        if request.method == "POST":
+            saved.append(await request.json())
+            return web.json_response({"version": "test-version"})
+        return web.json_response({"fields": fields, "resources": [], "version": "test-version"})
+
+    async def entrance(request):
+        body = await request.json()
+        operations.append(body)
+        if body["action"] == "list":
+            return web.json_response({"devices": devices})
+        if body["action"] == "revoke":
+            devices[0]["revoked"] = True
+        return web.json_response({})
+
+    async def home(_):
+        return web.FileResponse(STATIC / "index.html")
+
+    async def setup(_):
+        return web.Response(text=provisioning_html(), content_type="text/html")
+
     app.router.add_get("/", home)
-    app.router.add_get("/setup", lambda _: web.Response(text=provisioning_html(), content_type="text/html"))
+    app.router.add_get("/setup", setup)
+    app.router.add_get("/api/status", status)
+    app.router.add_get("/api/catalog", catalog)
+    app.router.add_route("*", "/api/configuration", configuration)
+    app.router.add_post("/api/entrances/ai_passport", entrance)
 
     async def configure(request):
         submitted.append(await request.json())
@@ -51,54 +115,54 @@ async def verify(screenshot=None):
                 page.on("pageerror", lambda e: errors.append(str(e)))
                 page.on("dialog", lambda d: asyncio.create_task(d.accept()))
                 await page.goto(str(server.make_url("/")))
-                await page.evaluate("""() => {
-                  window.node=(tag,text,cls)=>{const e=document.createElement(tag); if(text)e.textContent=text;if(cls)e.className=cls;return e};
-                  window.dirty=()=>false;window.failures=[];window.operations=[];
-                  window.key=path=>JSON.stringify(path);window.openEntries=new Set();
-                  window.snapshot={fields:[{path:['ai_passport','devices'],value:{}}]};
-                  window.currentValue=field=>field.value;window.changes=[];
-                  window.changed=(path,op,value)=>changes.push({path,op,value});window.render=()=>{};
-                  window.action=async fn=>{try{await fn()}catch(e){failures.push(e.message)}};
-                  window.api=async(url,body)=>{operations.push(body);return body.action==='list'?{devices:[{name:'PP',device_id:'test-device',session_id:'test-session',paired:true,connected:true}]}:{paired:true}};
-                }""")
-                source = (
-                    (STATIC / "console.js")
-                    .read_text()
-                    .split("function drawTerminalDevices(", 1)[1]
-                    .split("\nfunction ", 1)[0]
-                )
-                await page.evaluate(
-                    "(() => { function drawTerminalDevices("
-                    + source
-                    + "; window.drawTerminalDevices=drawTerminalDevices; })()"
-                )
-                await page.evaluate(
-                    "drawTerminalDevices({id:'ai_passport'},document.querySelector('#content'))"
-                )
-                await page.get_by_role("button", name="刷新设备").click()
-                await expect(page.get_by_text("设备 test-device · 会话 test-session")).to_be_visible()
-                await page.get_by_role("button", name="设备配置", exact=True).click()
-                assert await page.evaluate("changes") == [
-                    {"path": ["ai_passport", "devices", "test-device"], "op": "create", "value": {}}
-                ]
-                await page.get_by_label("设备名称", exact=True).fill("客厅 PP")
-                await page.get_by_label("八位配对码", exact=True).fill("123")
-                await page.get_by_role("button", name="配对设备", exact=True).click()
-                assert not [x for x in await page.evaluate("operations") if x["action"] == "pair"]
-                assert "八位" in (await page.evaluate("failures"))[-1]
-                await page.get_by_label("八位配对码", exact=True).fill("00123456")
-                await page.get_by_role("button", name="配对设备", exact=True).click()
-                await expect(page.get_by_text("配对成功，设备会自动连接。")).to_be_visible()
-                pair = [x for x in await page.evaluate("operations") if x["action"] == "pair"]
-                assert pair == [{"action": "pair", "arguments": {"name": "客厅 PP", "code": "00123456"}}]
-                assert not await page.get_by_label("八位配对码", exact=True).input_value()
-                await page.get_by_role("button", name="撤销配对").click()
-                assert any(x["action"] == "revoke" for x in await page.evaluate("operations"))
-                assert await page.evaluate("localStorage.length + sessionStorage.length") == 0
-                assert not errors, errors
+                await page.get_by_role("button", name="AI Passport", exact=True).click()
+                await expect(page.get_by_text("PP-Preview-1")).to_be_visible()
+                await expect(page.get_by_text("1 项待设备确认")).to_be_visible()
+                await expect(page.get_by_text("旧设备")).to_have_count(0)
+                await expect(page.get_by_text("尚未配对")).to_have_count(0)
+                await expect(page.get_by_label("配对码", exact=True)).to_be_hidden()
                 if screenshot:
                     screenshot.parent.mkdir(parents=True, exist_ok=True)
                     await page.screenshot(path=str(screenshot), full_page=True)
+
+                await page.get_by_role("button", name="默认设置", exact=True).click()
+                await expect(page.get_by_label("初始音量", exact=True)).to_have_value("45")
+                await page.get_by_label("初始音量", exact=True).fill("60")
+                await page.get_by_role("button", name="设备", exact=True).click()
+                await page.get_by_role("button", name="设备配置", exact=True).click()
+                volume = page.get_by_label("初始音量", exact=True)
+                await expect(volume).to_have_value("60")
+                await expect(page.locator("#count")).to_have_text("1 项未保存")
+                await expect(page.get_by_text("设备 test-device", exact=True)).to_be_hidden()
+                await volume.fill("85")
+                await expect(page.locator("#count")).to_have_text("2 项未保存")
+                await page.locator("#save").click()
+                await expect(page.locator("#save")).to_be_disabled()
+                assert saved[0]["patches"] == [
+                    {"path": ["ai_passport", "volume"], "op": "set", "value": 60},
+                    {"path": ["ai_passport", "devices", device_id, "volume"], "op": "set", "value": 85},
+                ]
+
+                await page.get_by_role("button", name="返回设备").click()
+                await page.get_by_role("button", name="配对新设备", exact=True).click()
+                await page.get_by_label("设备名称", exact=True).fill("客厅 PP")
+                await page.get_by_label("配对码", exact=True).fill("123")
+                await page.get_by_role("button", name="确认配对", exact=True).click()
+                assert not [x for x in operations if x["action"] == "pair"]
+                await page.get_by_label("配对码", exact=True).fill("00123456")
+                await page.get_by_role("button", name="确认配对", exact=True).click()
+                await expect(page.get_by_text("配对成功，设备会自动连接。")).to_be_visible()
+                pair = [x for x in operations if x["action"] == "pair"]
+                assert pair == [{"action": "pair", "arguments": {"name": "客厅 PP", "code": "00123456"}}]
+                await expect(page.get_by_label("配对码", exact=True)).to_have_value("")
+                await page.get_by_role("button", name="设备配置", exact=True).click()
+                await page.get_by_role("button", name="撤销配对").click()
+                await expect(page.get_by_text("还没有配对设备。", exact=False)).to_be_visible()
+                assert [x for x in operations if x["action"] == "revoke"] == [
+                    {"action": "revoke", "arguments": {"device_id": device_id}}
+                ]
+                assert await page.evaluate("localStorage.length + sessionStorage.length") == 0
+                assert not errors, errors
                 await page.goto(str(server.make_url("/setup")))
                 await page.get_by_label("Wi-Fi 名称", exact=True).fill("Synthetic Home")
                 await page.get_by_label("Wi-Fi 密码", exact=True).fill("synthetic-password")

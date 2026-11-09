@@ -1,7 +1,6 @@
 """Task-oriented presentation, independent of storage layout and runtime imports."""
 
 from copy import deepcopy
-from assistant_runtime.api.configuration import ConfigurationError
 
 PAGES = (
     ("models", "模型与账号", "连接供应商，选择模型，再指定对话及辅助用途。"),
@@ -79,8 +78,8 @@ LABELS = {
 WIDGETS = {"auto", "text", "secret", "select", "list", "connection", "model", "status"}
 
 
-def validate_interface(ui):
-    from .schema import validator
+def validate_interface(ui, spec=None):
+    from .schema import expand, validator
     import json
 
     if (
@@ -110,8 +109,14 @@ def validate_interface(ui):
     for operation in ui.get("actions", {}).values():
         if not isinstance(operation, dict) or not isinstance(operation.get("output"), dict):
             raise ValueError("Action requires an output schema")
-        validator(json.dumps(operation["output"]))
-        validator(json.dumps(operation.get("input", {"type": "object"})))
+        if "read_only" in operation and type(operation["read_only"]) is not bool:
+            raise ValueError("Action read_only must be boolean")
+        validator(json.dumps(expand(operation["output"])))
+        validator(json.dumps(expand(operation.get("input", {"type": "object"}))))
+    if "page" in ui:
+        from .pages import validate_page
+
+        validate_page(ui["page"])
 
 
 def describe(inventory):
@@ -125,31 +130,32 @@ def describe(inventory):
             continue
         ui = spec.get("interface", {})
         try:
-            validate_interface(ui)
+            validate_interface(ui, spec)
             from .policies import MODES
 
             if not isinstance(spec.get("application", {}), dict) or any(
                 mode not in MODES for mode in spec.get("application", {}).values()
             ):
                 raise ValueError("Invalid application policy")
-        except (ValueError, TypeError, SchemaError):
+        except (ValueError, TypeError, KeyError, AttributeError, SchemaError):
             inventory.setdefault("issues", []).append({"id": owner["id"], "error": "invalid_interface"})
             ui = spec["interface"] = {}
             spec["application"] = {}
-        page = OWNER_PAGES.get(owner["id"], "plugin:" + owner["id"])
+        page = (
+            ("plugin:" + owner["id"])
+            if ui.get("page")
+            else OWNER_PAGES.get(owner["id"], "plugin:" + owner["id"])
+        )
         owner["page"] = page
         if page.startswith("plugin:"):
             pages.append(
                 {
                     "id": page,
-                    "title": ui.get("title", spec.get("title", owner["id"])),
+                    "title": ui.get("page", {}).get("title", ui.get("title", spec.get("title", owner["id"]))),
                     "description": ui.get("description", spec.get("description", "")),
                     "owner": owner["id"],
                 }
             )
-        for name, field in ui.get("fields", {}).items():
-            if not isinstance(field, dict) or field.get("widget", "auto") not in WIDGETS:
-                raise ConfigurationError([owner["id"], "interface", name], "widget", "Unsupported component")
     return pages
 
 
@@ -167,5 +173,5 @@ def field_interface(spec, key, rule, inventory):
     ui.setdefault("title", LABELS.get(key, rule.get("title", key)))
     ui.setdefault("advanced", rule.get("x-advanced", False))
     ui.setdefault("widget", "auto")
-    ui.setdefault("order", list(spec["schema"].get("properties", {})).index(key))
+    ui.setdefault("order", list(spec["schema"].get("properties", {})).index(key) if key else 0)
     return {"owner_id": ident, "page": page, "interface": ui, "application": application_for(spec, [key])}

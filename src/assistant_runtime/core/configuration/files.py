@@ -315,6 +315,10 @@ class ConfigurationFiles:
 
     def validate_all(self, contents, values, touched=()):
         config = self.validate(contents)
+        from .owners import validate_changed
+
+        if config is not None:
+            validate_changed(contents, {name: self.path(name).read_bytes() for name in contents})
         if self.resources:
             for ident, resource in self.resources.registered(contents).items():
                 raw = values.get(ident)

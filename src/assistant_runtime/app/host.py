@@ -137,7 +137,11 @@ class AssistantService:
                 if d.get("execution_session"):
                     raise ValueError("Configuration control is operator-only")
                 result = await self.configuration.action(
-                    d["owner"], d["action"], d.get("arguments", {}), d.get("confirmed", False)
+                    d["owner"],
+                    d["action"],
+                    d.get("arguments", {}),
+                    d.get("confirmed", False),
+                    d.get("version"),
                 )
                 writer.write((json.dumps({"ok": True, "result": result}) + "\n").encode())
                 await writer.drain()

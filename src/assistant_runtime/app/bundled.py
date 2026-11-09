@@ -33,7 +33,9 @@ RESOURCE_OWNERS = {
 
 
 def settings_for(config, name, spec):
-    raw = getattr(config, spec.config_key) if spec.config_key else {}
+    from .configuration_resources import settings as scoped_settings
+
+    raw = scoped_settings(config, name, spec)
     settings = spec.validate(raw) if spec.validate else raw
     if spec.config_fields or name in {"airplay", "go2rtc", "v4l2"}:
         values = {key: deepcopy(getattr(config, key)) for key in spec.config_fields}

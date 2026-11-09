@@ -45,14 +45,17 @@ def declared_fields(inventory=None):
         namespace = spec.get("namespace", "")
         prefix = namespace.split(".") if namespace else []
         schema = described_schema(spec)
-        for key, rule in schema.get("properties", {}).items():
+        properties = schema.get("properties", {})
+        if prefix and not properties and isinstance(schema.get("additionalProperties"), dict):
+            properties = {"": {**schema, "title": schema.get("title", spec.get("title", namespace))}}
+        for key, rule in properties.items():
             if rule is False:
                 continue
             rule = rule if isinstance(rule, dict) else {}
             fields.append(
                 {
                     **field_interface(spec, key, rule, inventory),
-                    "path": [*prefix, key],
+                    "path": [*prefix, key] if key else prefix,
                     "schema": rule,
                     "group": rule.get("x-group", spec.get("group", "extensions")),
                     "owner": spec.get("title", namespace),

@@ -2,8 +2,7 @@
 
 // Product views compose the shared typed editor; persistence remains in console.js.
 let modelTab = "connections",
-  activeEditor = null,
-  pendingNavigation = null;
+  activeEditor = null;
 const collectionQueries = new Map();
 const pageCopy = {
   overview: ["概览", "从一个可用模型开始，按需要扩展你的工作空间。"],
@@ -95,16 +94,7 @@ function renderChatShortcut() {
     entry.onclick = () => window.open(address, "_blank", "noopener,noreferrer");
 }
 function moveTo(page, tab) {
-  if (page !== selected && hasLocalChanges()) {
-    pendingNavigation = { page, tab };
-    $("leave-description").textContent = invalid.size
-      ? "当前页面有格式错误。可以继续修正，或放弃修改后切换。"
-      : "当前页面有未保存的修改。选择保存并生效，或放弃这些修改。";
-    $("leave-save").disabled = Boolean(invalid.size);
-    showDialog("leave-dialog");
-    $("leave-stay").focus();
-    return;
-  }
+  // Drafts belong to the management session, not the currently displayed page.
   navigateTo(page, tab);
 }
 function navigateTo(page, tab) {
@@ -113,29 +103,6 @@ function navigateTo(page, tab) {
   render();
   window.scrollTo(0, 0);
   $("page-title").focus({ preventScroll: true });
-}
-async function leavePage(save) {
-  const target = pendingNavigation;
-  if (!target || saving) return;
-  $("leave-dialog")
-    .querySelectorAll("button")
-    .forEach((b) => (b.disabled = true));
-  try {
-    if (save) await saveChanges();
-    else {
-      for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
-      for (const patch of pendingRestart?.patches || [])
-        edits.set(key(patch.path), patch);
-    }
-    $("leave-dialog").close();
-    pendingNavigation = null;
-    navigateTo(target.page, target.tab);
-  } finally {
-    $("leave-dialog")
-      .querySelectorAll("button")
-      .forEach((b) => (b.disabled = false));
-    $("leave-save").disabled = Boolean(invalid.size);
-  }
 }
 function surface(title, detail, cls = "") {
   const panel = node("article", undefined, "settings-panel " + cls);
@@ -182,6 +149,7 @@ function prettyField(field) {
   };
 }
 function workspaceRender() {
+  pluginPages.dispose();
   const docs = $("documents"),
     navigation = $("navigation");
   docs.replaceChildren();
@@ -210,7 +178,7 @@ function workspaceRender() {
   const plugins = inventory.plugins.filter(
     (p) =>
       p.page?.startsWith("plugin:") &&
-      (enabled.includes(p.id) || selected === p.page),
+      (enabled.includes(p.id) || selected === p.page || p.configuration?.interface?.page),
   );
   if (plugins.length) navigation.append(node("p", "插件设置", "nav-label"));
   for (const plugin of plugins) {
@@ -781,6 +749,14 @@ function renderSettingsPage() {
   const owner = inventory.plugins.find(
     (p) => p.page === selected && selected.startsWith("plugin:"),
   );
+  if (owner?.configuration?.interface?.page) {
+    pluginPages.mount(owner, $("documents"));
+    return;
+  }
+  if (owner?.configuration?.interface?.terminal_management) {
+    drawTerminalDevices(owner, $("documents"), fields, enabled.includes(owner.id));
+    return;
+  }
   if (selected.startsWith("plugin:")) {
     const plugin = inventory.plugins.find((p) => p.id === selected.slice(7));
     if (!enabled.includes(plugin?.id))

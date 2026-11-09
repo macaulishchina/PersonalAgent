@@ -113,8 +113,14 @@ class ConfigurationRuntime:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
 
-    async def action(self, owner, action, arguments, confirmed=False):
+    async def action(self, owner, action, arguments, confirmed=False, version=None):
         async with self.operation:
+            if version is not None and version != os.environ.get("PERSONAL_AGENT_CONFIGURATION_VERSION"):
+                from assistant_runtime.api.configuration import ConfigurationError
+
+                raise ConfigurationError(
+                    [owner], "version_conflict", "配置尚未生效或版本已改变，请刷新后核对"
+                )
             return await self._action(owner, action, arguments, confirmed)
 
     async def _action(self, owner, action, arguments, confirmed=False):
@@ -130,6 +136,11 @@ class ConfigurationRuntime:
         operation = actions.get(action)
         if not operation:
             raise ConfigurationError([owner, action], "undeclared", "此管理操作未声明")
+        if type(operation.get("read_only", False)) is not bool:
+            raise ConfigurationError([owner, action], "invalid_declaration", "操作声明不正确")
+        context = getattr(self.host.runtime, "contexts", {}).get(owner)
+        if context is not None and (context.state != "ready" or context.cancelled.is_set()):
+            raise ConfigurationError([owner], "unavailable", "插件当前未就绪，配置仍可编辑")
         if not operation.get("read_only", False) and confirmed is not True:
             raise ConfigurationError([owner, action], "confirmation", "此操作需要明确确认")
         value = resolve(
@@ -138,10 +149,27 @@ class ConfigurationRuntime:
             ),
             arguments,
         )
-        result = await plugin.configuration_action(action, value)
-        schema = operation["output"]
-        checked = resolve(ConfigurationSpec(schema=schema), result)
-        return redact_declared(checked, schema)
+        callback = getattr(plugin, "configuration_action", None)
+        if callback is None:
+            raise ConfigurationError([owner, action], "unavailable", "插件没有提供此管理操作")
+        try:
+            result = await callback(action, value)
+            from assistant_runtime.core.configuration.schema import expand
+            import json
+
+            schema = expand(operation["output"])
+            checked = resolve(ConfigurationSpec(schema=schema), result)
+            public = redact_declared(checked, schema)
+            if len(json.dumps(public).encode()) > 1024 * 1024:
+                raise ValueError("Management result exceeds limit")
+            return public
+        except Exception:
+            # Dispatch or presentation failure cannot prove an external write did not happen.
+            raise ConfigurationError(
+                [owner, action],
+                "outcome_unknown",
+                "操作已派发但结果未确认，请通过状态查询核对，不要直接重复操作",
+            ) from None
 
     def plan(self, candidate, resources=()):
         current = self.host.config

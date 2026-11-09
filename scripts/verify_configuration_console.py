@@ -351,8 +351,8 @@ default_reasoning_effort = "none"
                 await expect(page.locator(".field-error:visible")).to_contain_text("1")
                 await capture(page, "configuration-desktop-validation.png")
                 await page.get_by_role("button", name="实例管理", exact=True).click()
-                await expect(page.locator("#leave-save")).to_be_disabled()
-                await page.get_by_role("button", name="继续编辑", exact=True).click()
+                await expect(page.locator("#save")).to_be_disabled()
+                await page.get_by_role("button", name="示例笔记", exact=True).click()
                 await expect(maximum).to_have_value("0")
                 await maximum.fill("1200")
                 await page.get_by_label("报告风格", exact=True).select_option("detailed")
@@ -836,27 +836,24 @@ default_reasoning_effort = "none"
                 assert saved["entries"]["primary"]["provider"] == "LeiHuo-OpenAI"
                 assert "fallbacks" not in saved["entries"]["primary"]
                 assert saved["entries"]["primary"]["reasoning_efforts"] == ["none", "medium"]
-                # Explicit leave actions retain drafts on failure and save before navigation.
+                # Session drafts survive navigation and a failed save.
                 await page.get_by_label("主对话模型", exact=True).select_option("primary")
                 await page.get_by_role("button", name="对话与执行", exact=True).click()
-                await expect(page.locator("#leave-dialog")).to_be_visible()
+                await expect(page.locator("#count")).to_contain_text("未保存")
                 await capture(page, "configuration-desktop-unsaved.png")
 
                 async def fail_save(route):
                     await route.fulfill(status=409, json={"error": "synthetic conflict: reload required"})
 
                 await page.route("**/api/configuration", fail_save, times=1)
-                await page.get_by_role("button", name="保存并切换", exact=True).click()
-                await expect(page.locator("#leave-dialog .dialog-notice")).to_contain_text(
-                    "synthetic conflict"
-                )
-                await expect(page.locator("#leave-dialog")).to_be_visible()
-                await page.get_by_role("button", name="继续编辑", exact=True).click()
+                await page.locator("#save").click()
+                await expect(page.locator("#notice")).to_contain_text("synthetic conflict")
+                await page.get_by_role("button", name="模型与账号", exact=True).click()
                 await expect(page.get_by_label("主对话模型", exact=True)).to_have_value("primary")
                 await page.get_by_role("button", name="对话与执行", exact=True).click()
-                await page.get_by_role("button", name="保存并切换", exact=True).click()
+                await page.locator("#save").click()
+                await expect(page.locator("#count")).to_have_text("没有未保存的修改", timeout=30000)
                 await expect(page.locator("#page-title")).to_have_text("对话与执行")
-                await expect(page.locator("#leave-dialog")).not_to_be_visible()
                 await expect(page.get_by_label("共享工作额度", exact=True)).not_to_be_visible()
                 fraction = page.get_by_label("用量预警比例", exact=True)
                 await expect(fraction).to_have_value("50")
@@ -880,7 +877,7 @@ default_reasoning_effort = "none"
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
                 await page.get_by_label("主对话模型", exact=True).select_option("fast")
                 await page.get_by_role("button", name="实例管理", exact=True).click()
-                await page.get_by_role("button", name="放弃并切换", exact=True).click()
+                await page.get_by_role("button", name="放弃修改", exact=True).click()
                 await page.get_by_role("button", name="模型与账号", exact=True).click()
                 await expect(page.get_by_label("主对话模型", exact=True)).to_have_value("primary")
                 for width, height in [(1024, 768), (1280, 800), (1366, 768), (1440, 900), (1920, 1080)]:

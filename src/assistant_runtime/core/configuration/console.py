@@ -49,6 +49,9 @@ class Console:
         from .permissions import Permissions
 
         self.permissions = Permissions(business)
+        from .page_service import PageService
+
+        self.plugin_pages = PageService(self)
 
     @web.middleware
     async def guard(self, request, handler):
@@ -134,7 +137,9 @@ class Console:
         response.headers.update(
             {
                 "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
+                "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors "
+                + ("'self'" if request.path.startswith("/api/plugin-pages/") else "'none'")
+                + "; base-uri 'none'",
             }
         )
         return response
@@ -154,6 +159,10 @@ class Console:
                 web.route("*", "/chat/{path:.*}", self.chat_gateway.forward),
                 web.get("/console.js", self.javascript),
                 web.get("/workspace.js", self.workspace_javascript),
+                web.get("/plugin-pages.js", self.plugin_pages_javascript),
+                web.get("/api/plugin-pages/{owner}/assets/{path:.*}", self.plugin_pages.asset),
+                web.post("/api/plugin-pages/{owner}/validate", self.plugin_pages.validate_patch),
+                web.post("/api/plugin-pages/{owner}/action", self.plugin_pages.action),
                 web.get("/model-editor.js", self.model_javascript),
                 web.get("/task-models.js", self.task_models_javascript),
                 web.get("/connections.js", self.connections_javascript),
@@ -293,6 +302,9 @@ class Console:
     async def workspace_javascript(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "workspace.js")
 
+    async def plugin_pages_javascript(self, request):
+        return web.FileResponse(Path(__file__).with_name("static") / "plugin-pages.js")
+
     async def styles(self, request):
         return web.FileResponse(Path(__file__).with_name("static") / "console.css")
 
@@ -404,6 +416,12 @@ class Console:
         ]:
             if description and "schema" in description:
                 description["schema"] = public_rule(described_schema(description))
+                from .schema import expand
+
+                for operation in description.get("interface", {}).get("actions", {}).values():
+                    for key in ("input", "output"):
+                        if key in operation:
+                            operation[key] = public_rule(expand(operation[key]))
         return web.json_response(inventory)
 
     async def save(self, request):

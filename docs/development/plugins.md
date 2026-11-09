@@ -546,3 +546,9 @@ plugin instances or tables. This is optional for API 2 plugins. Missing observat
 never imply business success. Declare readiness checks with `PluginContext.available`
 only for capabilities in `uses`; optional notification/task capabilities need no hard
 dependency. See the [contract and media example](../guides/business-operation-results.md).
+
+## 插件自主管理页面
+
+新增独立页面使用 [管理页面规范](plugin-management-pages.md)：插件拥有 React/TypeScript/Vite 页面，
+框架负责 iframe 外壳、身份、草稿、保存与生效。开发模板见 `examples/configuration-plugin`；
+使用 `pa plugin-ui-check` 检查声明和打包资源。现有业务页面迁移独立安排。

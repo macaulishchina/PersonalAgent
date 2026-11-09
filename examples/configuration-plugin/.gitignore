@@ -1,0 +1,5 @@
+ui/node_modules/
+src/pa_configuration_demo/management/
+*.egg-info/
+build/
+dist/

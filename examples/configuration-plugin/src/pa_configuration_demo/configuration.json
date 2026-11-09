@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "namespace": "plugin_settings.configuration_demo",
+  "title": "页面开发示例",
+  "description": "独立 React 页面，复用配置草稿及保存流程。",
+  "group": "extensions",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "type": "string",
+        "title": "显示名称",
+        "default": "我的插件",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "enabled": {
+        "type": "boolean",
+        "title": "启用演示能力",
+        "default": true
+      },
+      "mode": {
+        "type": "string",
+        "title": "连接类型",
+        "enum": ["local", "remote"],
+        "default": "local"
+      },
+      "endpoint": { "type": "string", "title": "远端地址", "default": "" },
+      "secret": {
+        "type": "string",
+        "title": "私有口令",
+        "writeOnly": true,
+        "default": ""
+      },
+      "targets": {
+        "type": "object",
+        "title": "命名目标",
+        "default": {},
+        "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,31}$" },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "priority": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 1
+            }
+          },
+          "required": ["name"]
+        }
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": { "mode": { "const": "remote" } },
+          "required": ["mode"]
+        },
+        "then": { "properties": { "endpoint": { "minLength": 1 } } }
+      }
+    ]
+  },
+  "application": { "*": "immediate" },
+  "resources": [
+    { "id": "notes", "path": "notes.txt", "kind": "text", "title": "说明文档" },
+    {
+      "id": "policy",
+      "path": "policy.json",
+      "kind": "json",
+      "title": "规则",
+      "schema": {
+        "type": "object",
+        "additionalProperties": { "type": "boolean" }
+      }
+    },
+    {
+      "id": "token",
+      "path": "token.txt",
+      "kind": "credential",
+      "title": "资源凭据"
+    }
+  ],
+  "interface": {
+    "page": {
+      "version": 1,
+      "root": "management",
+      "entry": "index.html",
+      "title": "页面开发示例"
+    },
+    "actions": {
+      "status": {
+        "title": "查询演示状态",
+        "read_only": true,
+        "input": { "type": "object", "additionalProperties": false },
+        "output": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" },
+            "registered": { "type": "boolean" }
+          },
+          "required": ["label", "registered"],
+          "additionalProperties": false
+        }
+      },
+      "register": {
+        "title": "完成演示登记",
+        "read_only": false,
+        "confirmation": "登记一个合成设备，仅写入本示例插件的状态。",
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 80 }
+          },
+          "required": ["name"],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": { "registered": { "type": "boolean" } },
+          "required": ["registered"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

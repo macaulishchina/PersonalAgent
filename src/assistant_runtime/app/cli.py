@@ -119,6 +119,7 @@ def main():
         "arguments",
         help="JSON arguments: put uses name/data/kind; result_read uses id/version/path/offset/length",
     )
+    sub.add_parser("plugin-ui-check", help="Validate installed management page declarations and resources")
     management = sub.add_parser("configuration", help="Independent operator configuration console")
     management.add_argument("action", choices=["serve", "token", "reset-token", "check", "apply", "status"])
     management.add_argument("--management", required=True, help="Independent management.toml path")
@@ -318,7 +319,7 @@ def main():
                 raise ValueError("Use pa use <instance>, without --config")
             print(f"Selected {select(args.instance)}\nRun pa to chat.")
             return
-        if args.command not in {"init", "install-pi", "configuration"}:
+        if args.command not in {"init", "install-pi", "configuration", "plugin-ui-check"}:
             entry = resolve(
                 args.config, required=not (args.command == "model-accounts" and args.action == "providers")
             )
@@ -371,6 +372,10 @@ def main():
                 )
             )
             return
+        if args.command == "plugin-ui-check":
+            from assistant_runtime.core.configuration.pages import main as check_pages
+
+            raise SystemExit(check_pages())
         if args.command == "init":
             from .initialize import initialize
 

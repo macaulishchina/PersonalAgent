@@ -160,7 +160,6 @@ description="synthetic"
                 await expect(page.get_by_label("主对话模型", exact=True)).to_have_value("model-a")
                 # Same generic renderer supports task auto mode and recommendation drawers.
                 await page.evaluate('showInactive = true; moveTo("tasks")')
-                await page.get_by_role("button", name="放弃并切换", exact=True).click()
                 defaults = page.get_by_label("默认任务模型", exact=True)
                 await expect(defaults).to_have_value("auto")
                 await defaults.click()

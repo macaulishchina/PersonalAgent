@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "personal-agent-configuration-demo"
+version = "1.0.0"
+requires-python = ">=3.12"
+[project.entry-points."personal_agent.plugins"]
+configuration_demo = "pa_configuration_demo:definition"
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.setuptools.package-data]
+pa_configuration_demo = ["configuration.json", "plugin.json", "management/*", "management/assets/*"]

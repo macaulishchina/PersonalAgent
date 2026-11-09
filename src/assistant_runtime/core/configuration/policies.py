@@ -35,6 +35,12 @@ def field_policy(inventory, path):
     for spec in specifications(inventory):
         prefix = spec.get("namespace", "").split(".") if spec.get("namespace") else []
         relative = path[len(prefix) :]
-        if path[: len(prefix)] == prefix and relative and relative[0] in spec["schema"].get("properties", {}):
+        schema = spec["schema"]
+        dynamic = (
+            prefix and isinstance(schema.get("additionalProperties"), dict) and not schema.get("properties")
+        )
+        if path[: len(prefix)] == prefix and (
+            dynamic or relative and relative[0] in schema.get("properties", {})
+        ):
             return application_for(spec, relative)
     return "restart"

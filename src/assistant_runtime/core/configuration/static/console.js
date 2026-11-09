@@ -47,6 +47,7 @@ let configurationBusy = false,
   needsRetry = false,
   pendingRestart = null;
 let showInactive = false;
+let passportDefaults = false, passportDevice = null;
 const openEntries = new Set();
 const resourceEdits = new Map();
 const dirty = () =>
@@ -82,10 +83,13 @@ const node = (tag, text, cls) => {
   return e;
 };
 function signedOut() {
+  pluginPages.dispose();
   activeEditor?.dispose?.();
   activeEditor = null;
   pendingRestart = null;
   needsRetry = false;
+  passportDefaults = false;
+  passportDevice = null;
   for (const map of [edits, invalid, drafts, resourceEdits]) map.clear();
   $("login-screen").hidden = false;
   $("login").hidden = false;
@@ -124,6 +128,7 @@ async function api(path, body, signal) {
   if (!response.ok)
     throw Object.assign(Error(data.error || "请求失败"), {
       issues: data.issues || [],
+      code: data.code || data.issues?.[0]?.code,
     });
   return data;
 }
@@ -166,6 +171,7 @@ async function action(fn) {
     await fn();
   } catch (error) {
     showNotice(error.message);
+    pluginPages.errors(error.issues || []);
     for (const issue of error.issues || []) {
       const input = document.getElementById(key(issue.path));
       if (input) {
@@ -243,7 +249,6 @@ function interfaceVisible(field) {
   );
 }
 function drawActions(plugin, section) {
-  if (plugin?.configuration?.interface?.terminal_management) drawTerminalDevices(plugin, section);
   for (const [id, operation] of Object.entries(
     plugin?.configuration?.interface?.actions || {},
   )) {
@@ -314,6 +319,7 @@ function drawActions(plugin, section) {
   }
 }
 function updateSaveBar() {
+  pluginPages.notify();
   $("count").textContent = invalid.size
     ? `${invalid.size} 项格式需要修正`
     : dirty()
@@ -352,7 +358,9 @@ function currentValue(field) {
   const path = field.path,
     edit = edits.get(key(path));
   let value =
-    edit?.op === "default"
+    edit?.op === "clear_secret"
+      ? ""
+      : edit?.op === "default"
       ? field.schema.default
       : edit && Object.hasOwn(edit, "value")
         ? edit.value
@@ -1063,6 +1071,7 @@ async function load({ discardLocal = false } = {}) {
   resourceEdits.clear();
   snapshot = config;
   inventory = catalogInfo;
+  pluginPages.errors([]);
   for (const name of Object.keys(groups)) delete groups[name];
   for (const page of inventory.pages || []) {
     groups[page.id] = page.title;
@@ -1333,14 +1342,6 @@ window.addEventListener("beforeunload", (e) => {
 });
 $("entry-cancel").addEventListener("click", () => finishEntity(true));
 $("entry-done").addEventListener("click", () => finishEntity());
-$("leave-stay").addEventListener("click", () => $("leave-dialog").close());
-$("leave-discard").addEventListener("click", () =>
-  action(() => leavePage(false)),
-);
-$("leave-save").addEventListener("click", () => action(() => leavePage(true)));
-$("leave-dialog").addEventListener("cancel", (event) => {
-  if (saving) event.preventDefault();
-});
 $("entry-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
   finishEntity(true);
@@ -1873,65 +1874,219 @@ function displayProperties(rule, current) {
   return props;
 }
 
+const passportSettings = [
+  ["播报", ["speech_mode", "volume", "voice", "rate"]],
+  ["屏幕与缓存", ["brightness", "text_size", "show_images", "offline_cache"]],
+  ["输入与休眠", ["input_mode", "keep_online", "sleep_seconds"]],
+  ["连接", ["wifi_networks", "server_url", "trusted_ca", "max_connections"]],
+];
 
-function drawTerminalDevices(plugin, section) {
-  const panel = node("section", undefined, "owner-action"),
-    name = node("input"), code = node("input"), list = node("div"), status = node("p", "", "hint"),
-    refresh = node("button", "刷新设备", "secondary"),
-    pair = node("button", "配对设备", "secondary");
-  name.placeholder = "设备名称";
-  name.setAttribute("aria-label", "设备名称");
-  name.maxLength = 48;
-  code.placeholder = "设备屏幕上的八位配对码";
-  code.setAttribute("aria-label", "八位配对码");
-  code.inputMode = "numeric"; code.maxLength = 8; code.autocomplete = "off";
-  panel.append(node("h3", "终端设备"), node("p", "先在 PP 热点页面配置 Wi-Fi 和 PA 地址，再输入设备屏幕上的八位数字。配对码十分钟有效，只能使用一次。", "hint"), name, code, pair, refresh, status, list);
-  async function operation(actionName, args = {}) {
-    return api("/api/entrances/" + encodeURIComponent(plugin.id), {action: actionName, arguments: args});
-  }
-  async function reload() {
-    const reply = await operation("list");
-    list.replaceChildren();
-    for (const device of reply.devices) {
-      const row = node("div", undefined, "owner-action"),
-        revoke = node("button", "撤销配对", "secondary"),
-        configure = node("button", "设备配置", "secondary");
-      row.append(node("strong", device.name), node("span", device.revoked ? "已撤销" : device.connected ? "在线" : device.paired ? "离线" : "待配对"), node("small", "设备 " + device.device_id + " · 会话 " + device.session_id));
-      revoke.disabled = Boolean(device.revoked);
-      revoke.onclick = () => action(async () => {
-        if (!confirm("撤销后，该设备将立即断开且不能重新连接。已接受的任务继续执行。确定？")) return;
-        await operation("revoke", {device_id: device.device_id});
-        await reload();
-      });
-      const fields = Object.values(device.configuration || {}),
-        pending = fields.filter(f => f.desired !== f.applied).length;
-      if (fields.length) row.append(node("small", pending ? `${pending} 项配置等待设备确认` : "设备配置已确认"));
-      configure.disabled = Boolean(device.revoked);
-      configure.onclick = () => {
-        const field = snapshot.fields.find(f => key(f.path) === key(["ai_passport", "devices"]));
-        if (!field) throw Error("设备配置声明不可用，请刷新配置页面");
-        const path = [...field.path, device.device_id];
-        if (!Object.hasOwn(currentValue(field) || {}, device.device_id)) changed(path, "create", {});
-        openEntries.add(key(path));
-        render();
-        requestAnimationFrame(() => document.querySelector(`[data-field-path="${CSS.escape(key(path))}"]`)?.scrollIntoView({block: "center", behavior: "smooth"}));
-      };
-      row.append(configure, revoke); list.append(row);
+function drawPassportSettings(section, fields) {
+  const remaining = new Map(fields.map(field => [field.path.at(-1), field]));
+  for (const [title, names] of [...passportSettings, ["其他设置", [...remaining.keys()]]]) {
+    const panel = surface(title);
+    const advanced = advancedGroup("passport:" + key(fields[0]?.path.slice(0, -1)) + title);
+    for (const name of names) {
+      const field = remaining.get(name);
+      if (!field) continue;
+      remaining.delete(name);
+      const target = field.schema["x-advanced"] ? advanced : panel;
+      target.append(drawField(field));
     }
-    if (!reply.devices.length) list.append(node("p", "尚无配对设备", "hint"));
+    if (advanced.children.length > 1) panel.append(advanced);
+    if (panel.children.length > 1) section.append(panel);
   }
-  refresh.onclick = () => action(reload);
-  pair.onclick = () => action(async () => {
-    if (dirty()) throw Error("请先保存当前配置草稿，再配对设备。");
-    if (!name.value.trim()) throw Error("请填写设备名称");
-    if (!/^\d{8}$/.test(code.value.trim())) throw Error("请输入设备屏幕上的八位数字");
-    pair.disabled = true;
-    try {
-      await operation("pair", {name: name.value.trim(), code: code.value.trim()});
-      code.value = "";
-      status.textContent = "配对成功，设备会自动连接。";
-      await reload();
-    } finally { pair.disabled = false; }
-  });
+}
+
+function drawTerminalDevices(plugin, section, fields, enabled) {
+  const devices = fields.find(field => field.path.at(-1) === "devices"),
+    defaults = fields.filter(field => field !== devices),
+    tabs = node("div", undefined, "passport-tabs");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "AI Passport 设置范围");
+  for (const [label, isDefault] of [["设备", false], ["默认设置", true]]) {
+    const tab = button(label, () => {
+      passportDefaults = isDefault;
+      passportDevice = null;
+      render();
+      document.querySelector('.passport-tabs [aria-pressed="true"]')?.focus();
+    }, "text-button");
+    tab.setAttribute("aria-pressed", String(passportDefaults === isDefault));
+    tabs.append(tab);
+  }
+  section.append(tabs);
+  if (!enabled)
+    section.append(node("p", "AI Passport 未启用。启用后可配对和管理设备。", "inline-note"));
+  if (passportDefaults) {
+    section.append(node("p", "这些设置适用于所有配对设备。单台设备有专属设置时，该项优先使用专属值。", "inline-note"));
+    drawPassportSettings(section, defaults);
+    return;
+  }
+
+  const endpoint = "/api/entrances/" + encodeURIComponent(plugin.id);
+  const operation = (action, args = {}) => api(endpoint, {action, arguments: args});
+  const status = (device) => node("span", device.connected ? "在线" : "离线",
+    device.connected ? "badge configured" : "badge");
+  const syncLabel = (device) => {
+    const configuration = Object.values(device.configuration || {});
+    const pending = configuration.filter(field => field.desired !== field.applied).length;
+    return pending ? `${pending} 项待设备确认`
+      : configuration.length ? "配置已同步" : "尚未同步配置";
+  };
+
+  if (passportDevice && enabled) {
+    const device = passportDevice,
+      panel = surface(device.name, "只影响这台 PP。未覆盖的项目沿用默认设置。", "passport-panel"),
+      actions = node("div", undefined, "passport-actions"),
+      info = node("details", undefined, "passport-info");
+    const back = button("← 返回设备", () => {
+      passportDevice = null;
+      render();
+    }, "text-button");
+    back.dataset.passportBack = "";
+    const revoke = button("撤销配对", () => action(async () => {
+      if (dirty() || invalid.size) throw Error("请先处理配置草稿，再撤销配对。");
+      if (!confirm(`撤销「${device.name}」的配对？设备将断开，重新使用时需要再次配对。`)) return;
+      revoke.disabled = true;
+      try {
+        await operation("revoke", {device_id: device.device_id});
+        passportDevice = null;
+        render();
+        showNotice("已撤销配对。", 5000);
+      } finally {
+        revoke.disabled = false;
+      }
+    }), "text-button passport-revoke");
+    actions.append(revoke);
+    info.append(node("summary", "设备标识"),
+      node("p", "设备 " + device.device_id), node("p", "会话 " + device.session_id));
+    panel.append(actions, info);
+    section.append(back, panel);
+    const values = devices?.value?.[device.device_id] || {};
+    const inherited = new Map(defaults.map(field => [field.path.at(-1), currentValue(field)]));
+    const overrides = Object.entries(devices?.schema.additionalProperties?.properties || {}).map(
+      ([name, rule]) => ({
+        ...devices,
+        path: [...devices.path, device.device_id, name],
+        schema: {
+          ...rule,
+          ...(inherited.has(name) ? {default: inherited.get(name)} : {}),
+          ...(rule.type === "object" ? {"x-removable": true} : {}),
+        },
+        value: values[name],
+        loaded_value: devices.loaded_value?.[device.device_id]?.[name],
+        explicit: Object.hasOwn(values, name),
+      }),
+    );
+    drawPassportSettings(section, overrides);
+    return;
+  }
+
+  const panel = surface("已配对设备", "选择设备查看连接状态与专属设置。", "passport-panel"),
+    header = panel.firstElementChild,
+    actions = node("div", undefined, "passport-actions"),
+    form = node("form", undefined, "passport-pair"),
+    name = node("input"),
+    code = node("input"),
+    submit = node("button", "确认配对", "primary"),
+    list = node("div", undefined, "passport-list"),
+    feedback = node("p", "", "passport-feedback");
+  feedback.setAttribute("role", "status");
+  const showPairing = (open) => {
+    form.hidden = !open;
+    pair.setAttribute("aria-expanded", String(open));
+    if (open) name.focus();
+    else {
+      form.reset();
+      pair.focus();
+    }
+  };
+  const refresh = button("刷新", () => reload()),
+    pair = button("配对新设备", () => showPairing(form.hidden), "primary"),
+    cancel = button("取消", () => showPairing(false), "secondary");
+  pair.setAttribute("aria-expanded", "false");
+  pair.setAttribute("aria-controls", "passport-pair-form");
+  form.id = "passport-pair-form";
+  form.hidden = true;
+  name.required = true;
+  name.maxLength = 48;
+  name.placeholder = "例如 客厅 PP";
+  code.required = true;
+  code.pattern = "[0-9]{8}";
+  code.inputMode = "numeric";
+  code.maxLength = 8;
+  code.autocomplete = "off";
+  code.placeholder = "8 位数字";
+  const inputs = node("div", undefined, "passport-pair-inputs");
+  for (const [label, input] of [["设备名称", name], ["配对码", code]]) {
+    const wrapper = node("label", label);
+    wrapper.append(input);
+    inputs.append(wrapper);
+  }
+  const formActions = node("div", undefined, "passport-actions");
+  formActions.append(submit, cancel);
+  form.append(node("h3", "配对新设备"), node("p", "先在 PP 的热点页面配置 Wi-Fi 和 PA 地址，再输入屏幕上的配对码。配对码十分钟内有效。", "hint"), inputs, formActions);
+  actions.append(refresh, pair);
+  header.append(actions);
+  panel.append(form, feedback, list);
   section.append(panel);
+
+  async function reload() {
+    refresh.disabled = true;
+    if (!list.childElementCount) list.append(node("p", "正在读取设备…", "empty-state"));
+    try {
+      const reply = await operation("list");
+      const active = reply.devices.filter(device => device.paired && !device.revoked);
+      list.replaceChildren();
+      for (const device of active) {
+        const row = node("div", undefined, "passport-row"),
+          description = node("div", undefined, "passport-device-label"),
+          configure = button("设备配置", () => {
+            passportDevice = device;
+            render();
+            document.querySelector("[data-passport-back]")?.focus();
+          });
+        description.append(node("strong", device.name), status(device));
+        row.append(description, node("span", syncLabel(device), "hint"), configure);
+        list.append(row);
+      }
+      if (!active.length) list.append(node("p", "还没有配对设备。请使用上方的「配对新设备」开始。", "empty-state"));
+    } catch (error) {
+      list.replaceChildren(node("p", "无法读取设备列表：" + error.message, "empty-state"));
+    } finally {
+      refresh.disabled = false;
+    }
+  }
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (submit.disabled || refresh.disabled) return;
+    if (dirty() || invalid.size) {
+      feedback.textContent = "请先处理配置草稿，再配对设备。";
+      return;
+    }
+    if (!name.value.trim()) {
+      feedback.textContent = "请填写设备名称。";
+      name.focus();
+      return;
+    }
+    submit.disabled = cancel.disabled = pair.disabled = refresh.disabled = true;
+    feedback.textContent = "正在配对…";
+    try {
+      await operation("pair", {name: name.value.trim(), code: code.value});
+    } catch (error) {
+      feedback.textContent = error.message;
+      return;
+    } finally {
+      submit.disabled = cancel.disabled = pair.disabled = refresh.disabled = false;
+    }
+    showPairing(false);
+    feedback.textContent = "配对成功，设备会自动连接。";
+    await reload();
+  };
+  if (enabled) reload();
+  else {
+    refresh.disabled = pair.disabled = true;
+    list.append(node("p", "启用插件后可查看设备列表。", "empty-state"));
+  }
 }

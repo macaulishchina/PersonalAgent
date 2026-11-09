@@ -60,16 +60,6 @@ def scoped_update(update, context, value):
     return ConfigurationUpdate(commit, rollback, update.release)
 
 
-@dataclass(frozen=True)
-class ConfigurationPage:
-    """Static UI mapping. Widget names refer to host-owned components, never scripts."""
-
-    id: str
-    title: str
-    fields: tuple[Mapping[str, Any], ...] = ()
-    actions: tuple[Mapping[str, Any], ...] = ()
-
-
 class ConfigurationError(ValueError):
     """Safe field diagnostics; never include supplied values or provider exceptions."""
 

@@ -228,9 +228,9 @@ m.run(transport="stdio",show_banner=False)
                 await page.get_by_role("button", name="保留修改", exact=True).click()
                 await expect(remote).to_contain_text("未保存")
                 await page.get_by_role("button", name="实例管理", exact=True).click()
-                await expect(page.locator("#leave-dialog")).to_be_visible()
-                await page.get_by_role("button", name="保存并切换", exact=True).click()
-                await expect(page.locator("#leave-dialog")).not_to_be_visible(timeout=30000)
+                await expect(page.locator("#count")).to_contain_text("未保存")
+                await page.locator("#save").click()
+                await expect(page.locator("#count")).to_have_text("没有未保存的修改", timeout=30000)
                 assert (
                     json.loads(registry_path.read_text())["servers"]["remote"]["definition"]["transport"]
                     == original["servers"]["remote"]["definition"]["transport"]

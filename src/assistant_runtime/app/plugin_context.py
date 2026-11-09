@@ -101,7 +101,13 @@ def environment(
             raise ValueError("Undeclared capability provider")
         box[0].register(kind, handler, timeout=timeout)
 
+    from .configuration_resources import resource_path
+    from assistant_runtime.core.plugin_catalog import declaration
+
+    spec = declaration(name)
+    declared_resources = spec.configuration.resources if spec.configuration else ()
     public = PluginContext(
+        configuration_resource=lambda key: resource_path(root, name, declared_resources, key),
         available=lambda request: runtime().available(request),
         platform=runtime().platform,
         backend=backend,
@@ -153,7 +159,9 @@ class BoundExtension:
                 from assistant_runtime.api.configuration import scoped_update
 
                 spec = declaration(self.manifest.name)
-                value = resolve_definition(spec, getattr(config, spec.config_key))
+                from .configuration_resources import settings
+
+                value = resolve_definition(spec, settings(config, self.manifest.name, spec))
                 return scoped_update(await callback(value), self.public, value)
 
             return prepare

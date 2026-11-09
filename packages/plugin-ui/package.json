@@ -1,0 +1,9 @@
+{
+  "name": "@personal-agent/plugin-ui",
+  "version": "1.0.0",
+  "type": "module",
+  "files": ["src"],
+  "exports": {".": "./src/index.ts", "./react": "./src/react.tsx", "./theme.css": "./src/theme.css"},
+  "peerDependencies": {"react": ">=19 <20"},
+  "peerDependenciesMeta": {"react": {"optional": true}}
+}

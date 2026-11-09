@@ -53,7 +53,9 @@ def validate_candidate(entry_name, contents, *, root, management=None, entry_dir
         for name, spec in specs.items():
             graph.add(SimpleNamespace(manifest=spec.manifest))
             if spec.validate or spec.configuration:
-                if spec.config_key:
+                if spec.configuration and spec.configuration.namespace == "plugin_settings." + name:
+                    value = config.plugin_settings.get(name, {})
+                elif spec.config_key:
                     value = getattr(config, spec.config_key)
                 elif name not in OWNERS:
                     value = config.plugin_settings.get(name, {})

@@ -48,10 +48,12 @@ class Resources:
                         relative = asset.relative_to(skill).as_posix()
                         result.append(Resource("asset:" + name + ":" + relative, asset, "asset", relative))
         # External descriptions can register static text/JSON resources inside their private config area.
-        from .catalog import installed_descriptions
+        from .catalog import catalog
 
-        for item in installed_descriptions():
-            if item["id"] not in set(data.get("plugins", [])) | set(data.get("plugin_settings", {})):
+        for item in catalog()["plugins"]:
+            if item["id"] not in set(data.get("plugins", [])) | set(data.get("plugin_settings", {})) and not (
+                item.get("configuration") or {}
+            ).get("interface", {}).get("page"):
                 continue
             if not re.fullmatch("[a-z][a-z0-9_]{0,63}", item["id"]):
                 raise ValueError("Invalid installed plugin resource owner")
@@ -65,7 +67,7 @@ class Resources:
                 relative = Path(spec.get("path", ""))
                 base = self.root / "config/plugins" / item["id"]
                 path = base / relative
-                if relative.is_absolute() or not path.resolve().is_relative_to(base):
+                if not relative.parts or relative.is_absolute() or not path.resolve().is_relative_to(base):
                     raise ValueError("Plugin resource escapes private configuration")
                 result.append(
                     Resource(
@@ -73,10 +75,12 @@ class Resources:
                         path,
                         spec["kind"],
                         spec.get("title", name),
-                        spec.get("sensitive", False),
+                        spec["kind"] == "credential" or spec.get("sensitive", False),
                         schema=spec.get("schema"),
                     )
                 )
+        if len({r.id for r in result}) != len(result) or len({r.path for r in result}) != len(result):
+            raise ValueError("Duplicate configuration resource")
         return {
             r.id: Resource(
                 r.id,

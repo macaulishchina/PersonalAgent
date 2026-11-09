@@ -95,8 +95,7 @@ ordered reference lists and structured JSON keep their original value types.
 `workspace.js` composes these first-party views over the shared typed editor and transaction
 client in `console.js`; extension pages still use packaged interface declarations. Technical field/file/default
 information is available on demand. Apply/restart, history, repair and password changes
-open separate dialogs instead of occupying the main form. Page navigation offers stay, discard, or save-and-switch; a failed save keeps the page and
-draft. Malformed inputs show local accessible errors and block saving. Percentage presentation
+open separate dialogs instead of occupying the main form. Page navigation retains all session drafts; refreshing or leaving the console prompts before discarding them. A failed save keeps the draft. Malformed inputs show local accessible errors and block saving. Percentage presentation
 converts to the original stored fraction; saved files remain separate from loaded values.
 
 **Edit → save and apply → inspect the outcome.** Save preserves comments,
@@ -125,7 +124,7 @@ until the operator explicitly confirms them. Manual edits are detected but never
 Application and owner `ConfigurationSpec` descriptions cover all current Config fields.
 The public API and initialization/settings code share the shipped defaults. Startup and
 save use the same owner semantic validators in addition to JSON Schema. Local schema
-references are bounded and acyclic; remote references and frontend code are unsupported.
+references are bounded and acyclic; remote schema references are unsupported. Packaged independent frontend pages use the v1 SDK below.
 
 Registered resources include `.env`, management bootstrap, web access
 credential, revisioned MCP registry, explicitly selected instance skills and their bounded
@@ -276,3 +275,11 @@ python scripts/verify_mcp_permissions.py
 worker and real local MCP fixture, covers create/edit/verify/save/apply/remove with Chinese
 and space-containing paths, and asserts that no model inference or business tool runs.
 It never uses production configuration, credentials, accounts, media or devices.
+
+## 插件独立页面（SDK v1）
+
+插件可声明随包 React/TypeScript/Vite 页面，通过管理员认证的 iframe 嵌入。
+页面使用公共 SDK 编辑自身草稿，统一保存栏负责文件事务和生效；切页保留草稿。
+静态资源发现不启动插件，业务停止时仍可配置。
+公开规范见 [插件管理页面](../../../../docs/development/plugin-management-pages.md)，
+开发及验收模板见 `examples/configuration-plugin`。当前 PP 等业务页面暂不迁移。

@@ -387,19 +387,10 @@ class InstalledPlugin:
             context.register(kind, handler, timeout=timeout)
 
         def configuration_resource(name):
-            from assistant_runtime.api.configuration_io import configuration_path
+            from .configuration_resources import resource_path
 
             specs = self.definition.configuration.resources if self.definition.configuration else ()
-            resource = next((r for r in specs if r["id"] == name), None)
-            if resource is None:
-                raise ValueError("Undeclared configuration resource")
-            base = self.root / "config/plugins" / self.manifest.name
-            path = base / resource["path"]
-            if not path.resolve().is_relative_to(base.resolve()) or any(
-                p.is_symlink() for p in [path, *path.parents]
-            ):
-                raise ValueError("Invalid configuration resource path")
-            return configuration_path(path)
+            return resource_path(self.root, self.manifest.name, specs, name)
 
         from assistant_runtime.api.backends import select_backend
 

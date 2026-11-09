@@ -276,8 +276,11 @@ async def check(args):
         ("lint", [sys.executable, "-m", "ruff", "check", "src", "tests", "scripts"]),
         ("types", [sys.executable, "-m", "mypy"]),
         ("release declarations", [sys.executable, "scripts/check_release.py"]),
+        ("plugin management pages", [sys.executable, "-m", "assistant_runtime.core.configuration.pages"]),
     ):
-        result = await execute(name, command, ROOT, args.timeout)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(ROOT / "src"), env.get("PYTHONPATH"))))
+        result = await execute(name, command, ROOT, args.timeout, env)
         display(result, args.verbose)
         if result.code:
             return 1
