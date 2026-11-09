@@ -17,6 +17,55 @@ def obj(properties, required=()):
     }
 
 
+LIST_TASKS = obj(
+    {
+        "query": {"type": "string", "maxLength": 500, "default": ""},
+        "state": {"enum": ["enabled", "paused", "archived", "terminated", None], "default": None},
+        "view": {
+            "type": "string",
+            "enum": ["all", "planned", "temporary"],
+            "default": "all",
+            "description": "Choose planned for active plans, or planned/temporary for archived tasks.",
+        },
+        "include_archived": {
+            "type": "boolean",
+            "default": False,
+            "description": "include_archived=true requires view=planned or view=temporary.",
+        },
+        "active_only": {
+            "type": "boolean",
+            "default": False,
+            "description": "active_only=true requires view=planned.",
+        },
+        "before": {**nullable({"type": "string", "maxLength": 2048}), "default": None},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+    }
+)
+LIST_TASKS["allOf"] = [
+    {
+        "if": {
+            "not": {
+                "properties": {"view": {"enum": views}},
+                "required": ["view"],
+            }
+        },
+        "then": {
+            "properties": {
+                field: {
+                    "const": False,
+                    "description": LIST_TASKS["properties"][field]["description"],
+                }
+            }
+        },
+    }
+    for field, views in (("active_only", ["planned"]), ("include_archived", ["planned", "temporary"]))
+]
+LIST_TASKS["description"] = " ".join(
+    LIST_TASKS["properties"][field]["description"] for field in ("active_only", "include_archived")
+)
+LIST_TASKS["examples"] = [{}, {"view": "planned", "active_only": True}]
+
+
 ASSESSMENT = obj(
     {
         "acceptance": text(),

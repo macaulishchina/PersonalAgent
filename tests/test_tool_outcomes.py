@@ -339,6 +339,36 @@ class OutcomeTest(unittest.IsolatedAsyncioTestCase):
             await registry.invoke("absent", {}, identity=CallIdentity("request", "work"))
         self.assertEqual(missing.exception.outcome.dispatch, "not_dispatched")
 
+    async def test_task_list_conditions_reach_mcp_and_reject_without_dispatch(self):
+        from types import SimpleNamespace
+        from assistant_runtime.core.tasks.tools import create_server
+
+        handler = SimpleNamespace(invoke=AsyncMock(return_value={"tasks": []}))
+        server = create_server(handler)
+        server.add_middleware(ToolOutcomes())
+        async with Client(server) as client:
+            tools = {tool.name: tool for tool in await client.list_tools()}
+            self.assertIn("allOf", tools["list_tasks"].input_schema)
+            for field, args, repair in (
+                ("active_only", {"view": "all", "active_only": True}, "view=planned"),
+                ("active_only", {"active_only": True}, "view=planned"),
+                ("include_archived", {"view": "all", "include_archived": True}, "view=temporary"),
+            ):
+                with self.subTest(args=args):
+                    result = await client.call_tool("list_tasks", args, raise_on_error=False)
+                    outcome = result.structured_content["tool_outcome"]
+                    self.assertTrue(result.is_error)
+                    self.assertEqual(outcome["code"], "invalid_arguments")
+                    self.assertEqual(outcome["field"], field)
+                    self.assertEqual(outcome["dispatch"], "not_dispatched")
+                    self.assertEqual(outcome["next_action"], "correct_arguments")
+                    self.assertFalse(outcome["retryable"])
+                    self.assertIn(repair, outcome["message"])
+            handler.invoke.assert_not_awaited()
+            result = await client.call_tool("list_tasks", {"view": "planned", "active_only": True})
+            self.assertEqual(result.structured_content["tasks"], [])
+            handler.invoke.assert_awaited_once()
+
     async def test_task_mcp_declares_nested_schema_before_handler_dispatch(self):
         from types import SimpleNamespace
         from assistant_runtime.core.tasks.tools import create_server

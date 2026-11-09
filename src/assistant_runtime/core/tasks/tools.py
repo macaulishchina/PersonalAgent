@@ -2,9 +2,19 @@
 
 from assistant_runtime.mcp.contracts import checked
 from fastmcp import FastMCP
+from fastmcp.tools import FunctionTool
 from typing import Annotated, Literal
 from pydantic import Field, WithJsonSchema
-from .tool_contracts import EXECUTION, TRIGGER, CHANGES, SELF_SCHEDULE, SELF_COMPLETION, CHECKPOINT, CONTEXT
+from .tool_contracts import (
+    LIST_TASKS,
+    EXECUTION,
+    TRIGGER,
+    CHANGES,
+    SELF_SCHEDULE,
+    SELF_COMPLETION,
+    CHECKPOINT,
+    CONTEXT,
+)
 from assistant_runtime.api.contracts import TaskRequest
 from assistant_runtime.api.annotations import READ, WRITE
 
@@ -104,7 +114,6 @@ def create_server(client, caller_run=None):
             spec["workspace"] = workspace
         return await call("create", request_id=request_id, spec=spec, feedback_owner=feedback_owner)
 
-    @server.tool(annotations=READ)
     async def list_tasks(
         query: str = "",
         state: str | None = None,
@@ -114,7 +123,7 @@ def create_server(client, caller_run=None):
         before: str | None = None,
         limit: int = 20,
     ) -> dict:
-        """Search a bounded page of definitions and latest/unfinished execution summaries. view: all/temporary/planned. Temporary defaults to unfinished non-archived work; include_archived=true includes all temporary results. Planned defaults to non-archived plans, including paused and terminated; include_archived=true also includes archived plans. active_only=true selects enabled plans with future triggers, event listening or unfinished executions. Paused/archived/terminated plans and ended one-shots are inactive. Pass the returned before cursor for older tasks (limit 1–50); get_task provides complete results."""
+        """Search a bounded page of definitions and latest/unfinished execution summaries. view: all/temporary/planned. Temporary defaults to unfinished non-archived work; include_archived=true includes all temporary results. Planned defaults to non-archived plans, including paused and terminated; include_archived=true also includes archived plans. include_archived=true requires view=planned or temporary. active_only=true requires view=planned and selects enabled plans with future triggers, event listening or unfinished executions. Paused/archived/terminated plans and ended one-shots are inactive. Pass the returned before cursor for older tasks (limit 1–50); get_task provides complete results."""
         return await call(
             "list",
             query=query,
@@ -125,6 +134,10 @@ def create_server(client, caller_run=None):
             before=before,
             limit=limit,
         )
+
+    server.add_tool(
+        FunctionTool.from_function(list_tasks, annotations=READ).model_copy(update={"parameters": LIST_TASKS})
+    )
 
     @server.tool(annotations=READ)
     async def get_task(task_id: str, before: str | None = None, limit: int = 20) -> dict:

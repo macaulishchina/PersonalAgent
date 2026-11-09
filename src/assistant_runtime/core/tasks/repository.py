@@ -7,6 +7,10 @@ import re
 import time
 import uuid
 
+from assistant_runtime.api.tool_calls import invalid_arguments
+from assistant_runtime.mcp.contracts import validate
+from .tool_contracts import LIST_TASKS
+
 ACTIVE = {"queued", "dispatching", "running", "waiting_user", "paused", "unknown"}
 TERMINAL = {"completed", "failed", "canceled", "missed"}
 
@@ -126,7 +130,7 @@ class TaskRepository:
     def page_options(args, scope):
         limit = args.get("limit", 20)
         if type(limit) is not int or not 1 <= limit <= 50:
-            raise ValueError("Page limit must be between 1 and 50")
+            raise invalid_arguments("Page limit must be an integer between 1 and 50", "limit")
         before = args.get("before")
         if before is None:
             return limit, None
@@ -144,7 +148,7 @@ class TaskRepository:
             if not isinstance(ident, str) or not re.fullmatch(r"[a-f0-9]{32}", ident):
                 raise ValueError()
         except (ValueError, TypeError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError("Invalid page cursor for this query") from exc
+            raise invalid_arguments("Invalid page cursor for this query", "before") from exc
         return limit, (created, ident)
 
     @staticmethod
@@ -158,22 +162,14 @@ class TaskRepository:
         return [row[0] for row in rows], before
 
     def definition_page(self, args):
+        validate({key: args[key] for key in LIST_TASKS["properties"] if key in args}, LIST_TASKS, "")
         view = args.get("view", "all")
-        if view not in {"all", "planned", "temporary"}:
-            raise ValueError("Unknown task view")
         query, state = args.get("query", ""), args.get("state")
-        if not isinstance(query, str) or len(query) > 500:
-            raise ValueError("Task query must be at most 500 characters")
-        if state is not None and state not in {"enabled", "paused", "archived", "terminated"}:
-            raise ValueError("Unknown task state")
         include_archived = args.get("include_archived", False)
         active_only = args.get("active_only", False)
-        if type(include_archived) is not bool or type(active_only) is not bool:
-            raise ValueError("Task filters must be boolean")
-        if (include_archived and view == "all") or (active_only and view != "planned"):
-            raise ValueError("Filter does not apply to this task category")
         scope = ["tasks", view, query, state, include_archived, active_only]
         limit, cursor = self.page_options(args, scope)
+        known = self.known_ids(args)
         where, values = [], []
         temporary = "(json_extract(spec,'$.trigger.kind')='immediate' AND NOT coalesce(json_extract(spec,'$.long_term'),0))"
         unfinished = "EXISTS (SELECT 1 FROM job_runs WHERE task_id=job_definitions.id AND state IN ('queued','dispatching','running','waiting_user','paused','unknown'))"
@@ -201,7 +197,6 @@ class TaskRepository:
                 "instr(lower(json_extract(spec,'$.title') || ' ' || json_extract(spec,'$.prompt')),lower(?))>0"
             )
             values.append(query)
-        known = self.known_ids(args)
         removed = []
         if known:
             filters = " AND ".join(where) or "1"
@@ -236,7 +231,7 @@ class TaskRepository:
             or len(known) > 50
             or any(not isinstance(ident, str) or not re.fullmatch(r"[a-f0-9]{32}", ident) for ident in known)
         ):
-            raise ValueError("Expected at most 50 known IDs")
+            raise invalid_arguments("Expected at most 50 known IDs", "known")
         return known
 
     def run_page(self, ident, args):

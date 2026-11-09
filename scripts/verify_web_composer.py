@@ -489,6 +489,53 @@ async def main():
             await expect(page.locator(".model-avatar")).to_have_count(0)
             assert not model_requests, model_requests
             await page.screenshot(path=str(output / "assistant-headers.png"))
+            # Two calls for the same read share one row. A separate action-required
+            # notification still uses its own channel; an empty inbox is routine.
+            answer = fixture_messages[0]
+            fixture_messages[:1] = [
+                {
+                    **answer,
+                    "id": "notice-check",
+                    "kind": "detail",
+                    "text": "调用工具\nmcp__notifications__list_notifications",
+                    "presentation": {"phase": "tool"},
+                },
+                *[
+                    {
+                        **answer,
+                        "id": f"read-attempt-{number}",
+                        "kind": "detail",
+                        "status": "failed",
+                        "text": "调用工具\nmcp__tasks__list_tasks",
+                        "presentation": {"phase": "tool"},
+                        "tool_summary": {
+                            "kind": "tool",
+                            "outcome": "failed",
+                            "error_code": "tool_read_failed",
+                            "retry_group": "same-call",
+                        },
+                    }
+                    for number in (1, 2)
+                ],
+                {**answer, "text": "没有未读通知。任务列表暂时没查到。"},
+            ]
+            await page.reload()
+            process = page.locator(".execution-process")
+            await expect(process.locator("summary").first).to_contain_text("2 项操作")
+            await expect(process.locator("summary").first).not_to_contain_text("需关注")
+            await expect(process).not_to_have_attribute("open", "")
+            await process.locator("summary").first.click()
+            retry = process.locator(".tool-retries")
+            await expect(retry.locator("summary").first).to_contain_text("2 次尝试")
+            await expect(retry.locator("summary").first).to_contain_text("调用失败")
+            await retry.locator("summary").first.click()
+            await expect(retry.get_by_text("查看原因", exact=True)).to_have_count(2)
+            await expect(page.locator(".message-meta .source-badge").get_by_text("需要关注")).to_be_visible()
+            fixture_messages[2]["status"] = "complete"
+            fixture_messages[2]["tool_summary"]["outcome"] = "completed"
+            await page.reload()
+            await process.locator("summary").first.click()
+            await expect(retry.locator("summary").first).to_contain_text("调用完成")
             assert not errors, errors
             await browser.close()
     finally:

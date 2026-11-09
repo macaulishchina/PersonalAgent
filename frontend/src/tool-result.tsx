@@ -21,6 +21,7 @@ export type ToolSummary = {
   error_message?: string;
   next_action?: string;
   retryable?: boolean;
+  retry_group?: string;
   dispatch?: string;
   result_state?: string;
   stage?: string;
@@ -42,6 +43,7 @@ export function toolOutcome(value: ToolSummary): string {
 }
 
 const errors: Record<string, string> = {
+  tool_read_failed: "未能读取结果。",
   invalid_arguments: "参数不符合工具要求，操作未执行。",
   revision_conflict: "任务已更新，请读取最新版本后再修改；本次修改未执行。",
   task_run_conflict: "任务已有未结束的执行，本次未重复创建。请先查看现有执行。",
@@ -79,7 +81,8 @@ export function ToolResult({
     return (
       <details className="tool-result">
         <summary>查看原因</summary>
-        {value.error_message ||
+        {(value.error_code === "tool_read_failed" && errors.tool_read_failed) ||
+          value.error_message ||
           errors[value.error_code || ""] ||
           "未取得有效结果，可查看助手的后续说明。"}
         {value.error_code && (

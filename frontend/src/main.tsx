@@ -50,6 +50,7 @@ import {
   needsAttention,
   reportTask,
   groupMessages,
+  groupToolRetries,
   isExecutionStep,
   replySections,
   replySettled,
@@ -583,22 +584,40 @@ function ConversationGroup({
         </ReportCollection>
       ) : (
         sections.map((section) => {
-          const steps = section.messages.filter(isExecutionStep);
-          if (!section.process || !steps.length)
+          const entries = groupToolRetries(section.messages);
+          const count = entries.filter(([m]) => isExecutionStep(m)).length;
+          if (!section.process || !count)
             return section.messages.map((m) => entry(m));
-          const attention = steps.filter(
-            (m) =>
-              ["failed", "unknown", "interrupted"].includes(m.status) ||
-              m.tool_summary?.result_state === "unknown",
-          ).length;
           return (
             <React.Fragment key={section.id}>
-              <ExecutionProcess
-                settled={settled}
-                count={steps.length}
-                attention={attention}
-              >
-                {section.messages.map((m) => entry(m, false))}
+              <ExecutionProcess settled={settled} count={count}>
+                {entries.map((attempts) => {
+                  const latest = attempts.at(-1)!;
+                  const detail = messageDetail(latest);
+                  if (attempts.length === 1 || !detail)
+                    return attempts.map((m) => entry(m, false));
+                  return (
+                    <details
+                      className="tool-retries detail"
+                      key={attempts[0].id}
+                    >
+                      <summary>
+                        <ToolActivity
+                          message={latest}
+                          name={detail.name}
+                          label={detail.label}
+                        />
+                        <span className="execution-process-count">
+                          {attempts.length} 次尝试
+                        </span>
+                        <ChevronDown size={14} aria-hidden="true" />
+                      </summary>
+                      <div className="execution-process-content">
+                        {attempts.map((m) => entry(m, false))}
+                      </div>
+                    </details>
+                  );
+                })}
               </ExecutionProcess>
             </React.Fragment>
           );

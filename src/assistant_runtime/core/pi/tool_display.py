@@ -47,10 +47,17 @@ def tool_display(item):
         or mapping(mapping(item.get("result")).get("details")).get("tool_outcome")
         or {}
     )
+    retry_group = outcome.get("retry_group")
+    retry = (
+        {"retry_group": retry_group}
+        if isinstance(retry_group, str) and re.fullmatch(r"[a-f0-9]{64}", retry_group)
+        else {}
+    )
     if outcome.get("outcome") in {"failed", "unknown", "cancelled"}:
         display = {
             "kind": "tool",
             "outcome": "failed",
+            **retry,
             "error_code": short(outcome.get("code")),
             "error_message": short(outcome.get("message"), 800),
             "next_action": short(outcome.get("next_action"), 80),
@@ -64,22 +71,29 @@ def tool_display(item):
         if server == "tasks" and re.fullmatch(r"[a-f0-9]{32}", short(receipt.get("task_id"))):
             display["task_id"] = receipt["task_id"]
         return display
+    fallback = {"kind": "tool", "outcome": "completed", **retry} if retry else None
     if (server, tool) not in {("tasks", "create_task"), ("tasks", "get_task"), ("search", "fetch_webpage")}:
-        return None
+        return fallback
     result = mapping(item.get("result"))
     data = payload(result)
     failed = item.get("status") in ("failed", "declined") or result.get("isError") is True
     if failed:
-        return {"kind": tool, "outcome": "failed"}
+        return {"kind": tool, "outcome": "failed", **retry}
     if not data:
-        return None
+        return fallback
     if server == "tasks":
         task = data if tool == "create_task" else mapping(data.get("task"))
         ident = task.get("id")
         if not isinstance(ident, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", ident):
-            return None
+            return fallback
         spec = mapping(task.get("spec"))
-        display = {"kind": tool, "outcome": "completed", "task_id": ident, "title": short(spec.get("title"))}
+        display = {
+            "kind": tool,
+            "outcome": "completed",
+            **retry,
+            "task_id": ident,
+            "title": short(spec.get("title")),
+        }
         if tool == "create_task":
             execution = mapping(spec.get("execution"))
             display.update(
@@ -99,8 +113,8 @@ def tool_display(item):
         return display
     state = data.get("state")
     if state not in ("completed", "failed"):
-        return None
-    display = {"kind": tool, "outcome": state, "provider": short(data.get("provider"), 80)}
+        return fallback
+    display = {"kind": tool, "outcome": state, **retry, "provider": short(data.get("provider"), 80)}
     elapsed = data.get("elapsed_ms")
     if type(elapsed) in (int, float) and math.isfinite(elapsed) and 0 <= elapsed <= 3_600_000:
         display["elapsed_ms"] = round(elapsed)

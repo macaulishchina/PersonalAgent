@@ -52,6 +52,29 @@ export function replySections<T extends MessageOrigin>(messages: T[]) {
   return sections;
 }
 
+/** Retry identity is supplied by the tool lifecycle; labels alone prove no relation. */
+export function groupToolRetries<
+  T extends MessageOrigin & { tool_summary?: { retry_group?: string } | null },
+>(messages: T[]) {
+  const entries: T[][] = [];
+  const retries = new Map<string, T[]>();
+  for (const message of messages) {
+    const group = message.tool_summary?.retry_group;
+    const key =
+      group && message.turn_id && isExecutionStep(message)
+        ? JSON.stringify([message.turn_id, group])
+        : null;
+    const previous = key ? retries.get(key) : undefined;
+    if (previous) previous.push(message);
+    else {
+      const entry = [message];
+      entries.push(entry);
+      if (key) retries.set(key, entry);
+    }
+  }
+  return entries;
+}
+
 /** Media belongs to the reply turn; tool records retain their original evidence. */
 export function replyMedia<A extends { id: string }>(
   groups: {

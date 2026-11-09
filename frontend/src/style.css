@@ -193,9 +193,6 @@ p {
 .execution-process-count {
   opacity: 0.7;
 }
-.execution-process-attention {
-  color: #df8e85;
-}
 .execution-process-content {
   margin-top: 10px;
   padding-left: 16px;

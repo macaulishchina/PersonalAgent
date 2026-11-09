@@ -5,12 +5,10 @@ import { ChevronDown } from "lucide-react";
 export function ExecutionProcess({
   settled,
   count,
-  attention,
   children,
 }: {
   settled: boolean;
   count: number;
-  attention: number;
   children: ReactNode;
 }) {
   const [choice, setChoice] = useState<{
@@ -29,11 +27,6 @@ export function ExecutionProcess({
         <ChevronDown size={13} aria-hidden="true" />
         <span>执行过程</span>
         <span className="execution-process-count">{count} 项操作</span>
-        {attention > 0 && (
-          <span className="execution-process-attention">
-            {attention} 项需关注
-          </span>
-        )}
       </summary>
       <div className="execution-process-content">{children}</div>
     </details>

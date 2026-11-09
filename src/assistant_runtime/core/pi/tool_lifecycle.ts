@@ -180,10 +180,15 @@ export function registerToolLifecycle(
         ? ownerOutcome(event.result)
         : undefined;
     if (!outcome && event.durationMs === undefined) {
+      const declared = pi
+        .getAllTools()
+        .find((tool: any) => tool.name === event.toolName);
+      const schemaHelp =
+        internal.includes(server) && declared?.parameters?.description;
       outcome = entry?.refusal || {
         code: truncated
           ? "incomplete_tool_arguments"
-          : pi.getAllTools().some((t: any) => t.name === event.toolName)
+          : declared
             ? "invalid_arguments"
             : "tool_unavailable",
         stage: "validation",
@@ -191,8 +196,14 @@ export function registerToolLifecycle(
         outcome: "failed",
         message: truncated
           ? "Model output was truncated; no operation was dispatched."
-          : "Tool was not executed. Inspect its current definition and availability before correcting the call.",
-        next_action: "inspect_definition",
+          : declared
+            ? "Tool arguments were rejected. " +
+              (typeof schemaHelp === "string"
+                ? schemaHelp.slice(0, 500)
+                : "Check the validation details and correct the arguments.")
+            : "Tool was not executed. Inspect its current definition and availability before correcting the call.",
+        next_action: declared ? "correct_arguments" : "inspect_definition",
+        retryable: false,
       };
     }
     if (!outcome)
@@ -220,6 +231,17 @@ export function registerToolLifecycle(
             : "inspect_operation"
           : "use_result",
       };
+    if (entry?.readOnly) {
+      const previous =
+        readFailures.get(entry.key)?.outcome ||
+        rejected.get(entry.key)?.outcome;
+      const retryGroup =
+        previous?.retry_group ||
+        (outcome.outcome === "failed"
+          ? randomBytes(32).toString("hex")
+          : undefined);
+      if (retryGroup) outcome = { ...outcome, retry_group: retryGroup };
+    }
     if (
       entry?.readOnly &&
       outcome.outcome === "failed" &&

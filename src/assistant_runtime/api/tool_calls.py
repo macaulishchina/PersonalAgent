@@ -39,6 +39,7 @@ def invalid_arguments(message, field=None):
             message,
             field=field,
             next_action="correct_arguments",
+            retryable=False,
         )
     )
 

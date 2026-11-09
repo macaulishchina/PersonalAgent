@@ -57,6 +57,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
         )
         result = await self.completed()
         self.assertEqual(result["status"], "completed", result)
+        return result
 
     async def test_invalid_policy_cannot_silently_drop_extension_guards(self):
         from assistant_runtime.core.pi.rpc import RpcError
@@ -334,8 +335,60 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                     return sse_text_reply("done", "Read recovered")
 
                 self.gateway.script_fn = script
-                await self.run_prompt(ident)
+                run = await self.run_prompt(ident)
                 self.assertEqual(len(attempts), 2)
+                from assistant_runtime.core.pi.tool_display import tool_display
+
+                steps = [tool_display(item) for item in run["items"] if item.get("tool") == "observe"]
+                self.assertEqual([step["outcome"] for step in steps], ["failed", "completed"])
+                self.assertRegex(steps[0]["retry_group"], r"^[a-f0-9]{64}$")
+                self.assertEqual(steps[0]["retry_group"], steps[1]["retry_group"])
+
+    async def test_task_filter_validation_gives_repair_hint_before_dispatch(self):
+        from assistant_runtime.core.pi.mcp import server_config
+        from assistant_runtime.platforms.ipc import serve
+
+        path = self.root / "task-list.sock"
+        dispatched = []
+
+        async def reply(reader, writer):
+            try:
+                request = json.loads(await reader.readline())
+                if request["command"] == "plugin-tools":
+                    writer.write(b'{"ok":true,"result":{"tools":[]}}\n')
+                else:
+                    dispatched.append(request["arguments"])
+                    writer.write(b'{"ok":true,"result":{"tasks":[]}}\n')
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        listener = await serve(path, reply)
+        self.addAsyncCleanup(listener.wait_closed)
+        self.addCleanup(listener.close)
+        ident = await self.session(
+            config={"mcp_servers": server_config(path, plugins=("tasks",))},
+        )
+        tool = "mcp__tasks__list_tasks"
+
+        def script(step, body):
+            if step == 1:
+                return sse_tool_call("find", "tool_search", {"query": "list_tasks", "limit": 1})
+            if step == 2:
+                return sse_tool_call("invalid", tool, {"view": "all", "active_only": True})
+            if step == 3:
+                self.assertIn("invalid_arguments; not_dispatched; next=correct_arguments", str(body))
+                self.assertIn("active_only=true requires view=planned", str(body))
+                return sse_tool_call("valid", tool, {"view": "planned", "active_only": True})
+            return sse_text_reply("done", "Task list checked")
+
+        self.gateway.script_fn = script
+        run = await self.run_prompt(ident)
+        self.assertEqual([(item["view"], item["active_only"]) for item in dispatched], [("planned", True)])
+        outcomes = [item["tool_outcome"] for item in run["items"] if item.get("tool") == "list_tasks"]
+        self.assertEqual([item["outcome"] for item in outcomes], ["failed", "success"])
+        self.assertFalse(outcomes[0]["retryable"])
 
     async def test_permanent_read_failure_is_not_sent_again_and_transient_attempts_are_bounded(self):
         for mode, limit in (("permanent", 3), ("exhaust", 3), ("unknown_exhaust", 3), ("exhaust", 1)):
