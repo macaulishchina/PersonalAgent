@@ -1127,9 +1127,9 @@ class PiClient:
 
     def _binding(self, model):
         entry = self.settings.entry(model)
-        provider = self.settings.providers[entry["provider"]]
+        provider = self.settings.provider_for(entry)
         return {
-            "provider": entry["provider"],
+            "provider": self.settings.route_identity(entry),
             "model": entry["model"],
             "protocol": provider["protocol"],
             **(

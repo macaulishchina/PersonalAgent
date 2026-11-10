@@ -1,7 +1,13 @@
 "use strict";
 
 // Capability facts are route-bound snapshots. Explicit fields are operator overrides.
-async function describeModel(providerName, model, reference = "", observed) {
+async function describeModel(
+  providerName,
+  model,
+  reference = "",
+  observed,
+  protocol,
+) {
   const provider = valueAt(["model_api", "providers"], {})[providerName];
   const account = provider?.account
     ? valueAt(["model_api", "accounts"], {})[provider.account]
@@ -13,6 +19,7 @@ async function describeModel(providerName, model, reference = "", observed) {
     model,
     reference,
     observed,
+    ...(protocol ? { protocol } : {}),
     version: snapshot.version,
   });
   const current = valueAt(["model_api", "providers"], {})[providerName];
@@ -103,13 +110,23 @@ function renderModelEditor(field) {
     if (busy) return;
     busy = true;
     status.textContent = "正在读取模型资料…";
-    const identity = [current().provider, current().model];
+    const route = () => [
+      current().provider,
+      current().model,
+      current().protocol,
+    ];
+    const identity = route();
     try {
-      const value = await describeModel(...identity, reference, observed);
+      const value = await describeModel(
+        identity[0],
+        identity[1],
+        reference,
+        observed,
+        identity[2],
+      );
       if (
         !root.contains(summary) ||
-        JSON.stringify(identity) !==
-          JSON.stringify([current().provider, current().model])
+        JSON.stringify(identity) !== JSON.stringify(route())
       )
         return;
       const values = modelCapabilityValues(value);
@@ -144,7 +161,9 @@ function renderModelEditor(field) {
   const picker = renderCapabilityPicker(initial, refresh);
   summary.append(source, picker, status);
   const values = { ...modelCapabilityValues(cap), ...initial };
-  function input(name) {
+  // Use the shared field row for model settings, including conditional fields.
+  // Set choices, hints, and read-only state in props so drawer columns stay aligned.
+  function fieldRow(name) {
     return drawField({
       ...field,
       path: [...path, name],
@@ -155,16 +174,35 @@ function renderModelEditor(field) {
     });
   }
   const basic = node("section", undefined, "model-basic");
-  for (const name of ["provider", "model"]) basic.append(input(name));
+  for (const name of ["provider", "model"]) basic.append(fieldRow(name));
+  const provider = valueAt(["model_api", "providers"], {})[initial.provider];
+  const protocols = connectionProtocols(provider);
+  const needsProtocolSelection =
+    protocols.length > 1 ||
+    (protocols.length === 1 &&
+      initial.protocol &&
+      !protocols.includes(initial.protocol));
+  const protocolId = key([...path, "protocol"]);
+  if (protocols.length) {
+    props.protocol = {
+      ...props.protocol,
+      enum: protocols,
+      "x-labels": protocolLabels,
+      ...(needsProtocolSelection
+        ? { description: "切换后使用对应的接口。" }
+        : { readOnly: true, default: protocols[0], description: "由所选连接决定。" }),
+    };
+    basic.append(fieldRow("protocol"));
+  }
   const parameters = node("div", undefined, "model-parameter-inputs");
   for (const name of ["context_window", "output_limit", "images", "structured"])
-    parameters.append(input(name));
+    parameters.append(fieldRow(name));
   summary.append(parameters);
   const thinking = node("section", undefined, "model-thinking");
   thinking.append(
     node("h3", "思考设置"),
-    input("reasoning_efforts"),
-    input("default_reasoning_effort"),
+    fieldRow("reasoning_efforts"),
+    fieldRow("default_reasoning_effort"),
   );
   const advanced = node("details", undefined, "advanced-fields model-budget");
   advanced.append(
@@ -172,7 +210,7 @@ function renderModelEditor(field) {
     node("p", "可选的单次输出限制。0 表示由供应商／Pi 默认处理，与模型规格及累计用量限制独立。", "hint"),
   );
   for (const name of ["max_output_tokens", "execution_max_output_tokens"])
-    advanced.append(input(name));
+    advanced.append(fieldRow(name));
   root.replaceChildren(basic, renderModelPresentation(path, initial.presentation || {}), summary, thinking, advanced);
   // Generic controls commit and rebuild on input, before a later change event.
   // Reconcile dependent fields during capture so the rebuild sees one coherent draft.
@@ -197,6 +235,9 @@ function renderModelEditor(field) {
         );
       }
       if (row?.dataset.fieldPath === key([...path, "provider"])) {
+        changed([...path, "protocol"], "default");
+        changed([...path, "capabilities"], "default");
+      } else if (row?.dataset.fieldPath === protocolId) {
         changed([...path, "capabilities"], "default");
       }
     },
@@ -218,9 +259,18 @@ function renderModelEditor(field) {
     { signal: editorInputController.signal },
   );
   activeEditor.validate = () => {
-    const value = current(),
-      supported =
-        value.reasoning_efforts ?? value.capabilities?.reasoning_efforts ?? [];
+    const value = current();
+    if (needsProtocolSelection && !protocols.includes(value.protocol)) {
+      const selector = $(protocolId);
+      const error = $(protocolId + "-error");
+      selector.setAttribute("aria-invalid", "true");
+      error.textContent = "请选择此模型使用的接口协议。";
+      error.hidden = false;
+      selector.focus();
+      return false;
+    }
+    const supported =
+      value.reasoning_efforts ?? value.capabilities?.reasoning_efforts ?? [];
     const effort = value.default_reasoning_effort || "auto";
     if (effort !== "auto" && !supported.includes(effort)) {
       status.textContent = "请启用对应思考档位，或将默认思考模式改为自动。";

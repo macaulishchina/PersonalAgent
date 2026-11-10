@@ -6,6 +6,8 @@ const providerLabels = {
   claude: "Anthropic",
   gemini: "Google Gemini",
   deepseek: "DeepSeek",
+  opencode: "OpenCode Console",
+  opencode_go: "OpenCode Go",
   opencode_responses: "OpenCode Console · OpenAI Responses",
   opencode_chat: "OpenCode Console · Chat Completions",
   opencode_anthropic: "OpenCode Console · Anthropic",
@@ -162,6 +164,20 @@ function stageConnectionSecret(previous, current, secret) {
   else if (current && previous === current && credentialUsers(current) <= 1)
     resourceEdits.delete("credentials:" + current);
 }
+function connectionProtocols(provider) {
+  const spec = snapshot.provider_presets?.[provider?.preset] || provider;
+  if (spec?.paths) return Object.keys(spec.paths);
+  return spec?.protocol ? [spec.protocol] : [];
+}
+
+function connectionLabel(id, provider) {
+  return (
+    provider?.presentation?.display_name ||
+    (provider?.preset && providerLabels[provider.preset]) ||
+    id
+  );
+}
+
 function apiConnectionFields(
   container,
   initial = {},
@@ -177,7 +193,13 @@ function apiConnectionFields(
   const type = formInput(box, prefix + "-type", "接口类型", {
     choices: [
       ["custom", "自定义 / OpenAI 兼容接口"],
-      ...Object.keys(presets).map((k) => [k, providerLabels[k] || k]),
+      ...Object.keys(presets)
+        .filter(
+          (k) =>
+            !/^opencode_(?:go_)?(?:responses|chat|anthropic|gemini)$/.test(k) ||
+            k === initial.preset,
+        )
+        .map((k) => [k, providerLabels[k] || k]),
     ],
   });
   type.dataset.connectionField = "preset";
@@ -244,7 +266,33 @@ function apiConnectionFields(
     },
   );
   catalogFormat.dataset.connectionField = "catalog.format";
+  const multi = formInput(advanced, prefix + "-multi", "提供多个协议", {
+    type: "checkbox",
+    hint: "各协议共享根地址和凭据。在模型中选择协议。",
+  });
+  multi.dataset.connectionField = "paths";
+  multi.checked = Boolean(initial.paths);
+  const pathFields = node("div", undefined, "connection-path-fields");
+  const pathControls = Object.entries(protocolLabels).map(([id, label]) => {
+    const row = node("div", undefined, "connection-path-row");
+    const include = formInput(row, prefix + "-use-" + id, label, {
+      type: "checkbox",
+    });
+    include.checked = Object.hasOwn(initial.paths || {}, id);
+    const path = formInput(row, prefix + "-path-" + id, "相对路径", {
+      value: initial.paths?.[id] || "",
+      placeholder: "留空使用根地址",
+      pattern: "/?(?:[A-Za-z0-9_.~\\-]+(?:/[A-Za-z0-9_.~\\-]+)*/?)?",
+    });
+    pathFields.append(row);
+    return { id, include, path };
+  });
+  advanced.append(pathFields);
   box.append(advanced);
+  const presetPaths = node("details", undefined, "connection-protocol-options");
+  const routeList = node("dl", undefined, "connection-route-list");
+  presetPaths.append(node("summary", "接口与协议"), routeList);
+  box.append(presetPaths);
   const enabled = formInput(box, prefix + "-enabled", "启用此连接", {
     type: "checkbox",
   });
@@ -260,8 +308,29 @@ function apiConnectionFields(
   };
   function refresh() {
     const spec = presets[type.value];
-    protocol.closest("label").hidden = Boolean(spec);
-    protocol.disabled = Boolean(spec);
+    protocol.closest("label").hidden = Boolean(spec) || multi.checked;
+    protocol.disabled = Boolean(spec) || multi.checked;
+    multi.disabled = Boolean(spec);
+    multi.setCustomValidity(
+      !spec &&
+        multi.checked &&
+        !pathControls.some(({ include }) => include.checked)
+        ? "请至少启用一种协议。"
+        : "",
+    );
+    pathFields.hidden = Boolean(spec) || !multi.checked;
+    for (const { include, path } of pathControls) {
+      include.disabled = pathFields.hidden;
+      path.disabled = pathFields.hidden || !include.checked;
+    }
+    presetPaths.hidden = !spec?.paths;
+    routeList.replaceChildren();
+    if (spec?.paths)
+      for (const [id, path] of Object.entries(spec.paths))
+        routeList.append(
+          node("dt", protocolLabels[id]),
+          node("dd", spec.base_url + (path ? "/" + path : "")),
+        );
     advanced.hidden = Boolean(spec);
     scheme.disabled =
       header.disabled =
@@ -271,11 +340,13 @@ function apiConnectionFields(
     endpoint.readOnly = Boolean(spec);
     if (spec) {
       endpoint.value = spec.base_url;
-      protocol.value = spec.protocol;
+      if (spec.protocol) protocol.value = spec.protocol;
     }
     presetInfo.textContent = spec
       ? "地址和协议由预设提供。如需修改地址，请选择自定义接口。"
-      : "地址应填写 API 根路径；认证方式按协议自动选择。";
+      : multi.checked
+        ? "填写服务根地址。每个协议的相对路径在高级协议设置中填写。"
+        : "地址应填写 API 根路径；认证方式按协议自动选择。";
   }
   function read() {
     const credential = auth.read();
@@ -286,7 +357,13 @@ function apiConnectionFields(
     };
     if (presets[type.value]) provider.preset = type.value;
     else {
-      provider.protocol = protocol.value;
+      if (multi.checked)
+        provider.paths = Object.fromEntries(
+          pathControls
+            .filter(({ include }) => include.checked)
+            .map(({ id, path }) => [id, path.value.trim()]),
+        );
+      else provider.protocol = protocol.value;
       provider.base_url = endpoint.value.trim();
       if (scheme.value !== "native") provider.auth_scheme = scheme.value;
       if (header.value.trim()) provider.session_header = header.value.trim();
@@ -296,6 +373,12 @@ function apiConnectionFields(
           format: catalogFormat.value,
         };
     }
+    const protocols = connectionProtocols(provider);
+    const routeIds = Object.entries(initial.route_ids || {}).filter(([id]) =>
+      protocols.includes(id),
+    );
+    if (routeIds.length && (provider.paths || presets[provider.preset]?.paths))
+      provider.route_ids = Object.fromEntries(routeIds);
     return { provider, secret: credential.secret };
   }
   function valid() {
@@ -332,7 +415,7 @@ function apiConnectionFields(
           catalogFormat: previous.catalog?.format || "openai",
         };
       }
-      protocol.value = custom.protocol;
+      protocol.value = custom.protocol || "openai_responses";
       endpoint.value = custom.url || before;
       scheme.value = custom.scheme;
       header.value = custom.header;
@@ -358,6 +441,14 @@ function apiConnectionFields(
     enabled,
   ])
     control.addEventListener("input", notify);
+  for (const control of [
+    multi,
+    ...pathControls.flatMap(({ include, path }) => [include, path]),
+  ])
+    control.addEventListener("input", () => {
+      refresh();
+      notify();
+    });
   refresh();
   return { read, valid, element: box };
 }
@@ -424,9 +515,28 @@ function renderProviderEditor(field, name) {
     }
   } else {
     let previousSecret = providerKeyName(current);
+    const affected = node("p", "", "inline-note");
+    affected.setAttribute("role", "status");
+    affected.hidden = true;
     const editor = apiConnectionFields(body, current, {
       onChange(value) {
         const presentation = currentValue(field).presentation;
+        const available = connectionProtocols(value.provider);
+        const previousProtocols = connectionProtocols(current);
+        const unavailable = [];
+        for (const [id, model] of Object.entries(
+          valueAt(["model_api", "entries"], {}),
+        )) {
+          if (model.provider !== name) continue;
+          const protocol =
+            model.protocol ||
+            (previousProtocols.length === 1 ? previousProtocols[0] : undefined);
+          if (!available.includes(protocol)) unavailable.push(id);
+        }
+        affected.hidden = !unavailable.length;
+        affected.textContent = unavailable.length
+          ? "需要重新选择协议的模型：" + unavailable.join("、")
+          : "";
         if (presentation) value.provider.presentation = presentation;
         else delete value.provider.presentation;
         changed(field.path, "set", value.provider);
@@ -439,6 +549,7 @@ function renderProviderEditor(field, name) {
         updateSaveBar();
       },
     });
+    body.append(affected);
     activeEditor.readConnection = () => {
       const value = editor.read();
       const presentation = currentValue(field).presentation;
@@ -449,6 +560,21 @@ function renderProviderEditor(field, name) {
     activeEditor.validate = editor.valid;
     activeEditor.commit = () => {
       const value = activeEditor.readConnection();
+      const previous = connectionProtocols(current);
+      const available = connectionProtocols(value.provider);
+      if (
+        previous.length === 1 &&
+        (available.length !== 1 || available[0] !== previous[0])
+      )
+        for (const [id, model] of Object.entries(
+          valueAt(["model_api", "entries"], {}),
+        ))
+          if (model.provider === name && !model.protocol)
+            changed(
+              ["model_api", "entries", id, "protocol"],
+              "set",
+              previous[0],
+            );
       if (
         JSON.stringify(value.provider) !==
         JSON.stringify(valueAt(["model_api", "providers"], {})[name])

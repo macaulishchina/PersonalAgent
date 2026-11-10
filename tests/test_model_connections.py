@@ -172,6 +172,41 @@ class ConnectionsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.complete(self.payload(), session_id="one"))["text"], "OK")
         self.assertEqual(len(self.requests), 4)
 
+    async def test_one_connection_routes_two_aliases_to_distinct_protocols(self):
+        settings = ModelSettings.parse(
+            {
+                "enabled": True,
+                "providers": {
+                    "gateway": {
+                        "base_url": self.url.removesuffix("/v1"),
+                        "paths": {"openai_responses": "/responses-api/v1", "anthropic": "/messages-api"},
+                        "key_env": "TEST_KEY",
+                        "auth_scheme": "bearer",
+                        "enabled": True,
+                    }
+                },
+                "entries": {
+                    alias: {"provider": "gateway", "protocol": protocol, "model": "synthetic"}
+                    for alias, protocol in (("m", "openai_responses"), ("other", "anthropic"))
+                },
+            }
+        )
+        accounts = NativeAccounts(self.root, settings)
+        client = ModelClient(settings, accounts=accounts)
+        self.clients.append(client)
+        await client.start()
+        for alias, protocol in (("m", "openai_responses"), ("other", "anthropic")):
+            self.protocol = protocol
+            reply = await client.complete({**self.payload(), "model": alias}, session_id="one")
+            self.assertEqual(reply["text"], "OK")
+        self.assertEqual(
+            [row[0] for row in self.requests], ["/responses-api/v1/responses", "/messages-api/v1/messages"]
+        )
+        self.assertTrue(
+            all(row[1].get("Authorization") == "Bearer private-synthetic-key" for row in self.requests)
+        )
+        self.assertEqual(len(accounts.workers), 2)
+
     async def test_default_output_has_no_optional_wire_cap_and_keeps_usage_reservation(self):
         for protocol in ("openai_responses", "openai_chat", "anthropic", "gemini"):
             with self.subTest(protocol=protocol):

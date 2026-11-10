@@ -45,6 +45,28 @@ class PublicRouteTest(unittest.TestCase):
         self.assertIsInstance(caught.exception, ToolFailure)
         self.assertEqual(caught.exception.outcome.public()["dispatch"], "not_dispatched")
 
+    def test_multiple_protocols_require_a_selected_safe_route(self):
+        provider = {
+            "base_url": "https://gateway.example/api",
+            "paths": {"openai_chat": "", "gemini": "google/v1beta"},
+            "key_env": "TEST_KEY",
+            "enabled": True,
+        }
+        raw = {"providers": {"gateway": provider}, "entries": {"m": {"provider": "gateway", "model": "m"}}}
+        with self.assertRaisesRegex(ValueError, "支持的接口协议"):
+            ModelSettings.parse(raw)
+        raw["entries"]["m"]["protocol"] = "gemini"
+        settings = ModelSettings.parse(raw)
+        self.assertEqual(
+            settings.provider_for(settings.entries["m"])["base_url"],
+            "https://gateway.example/api/google/v1beta",
+        )
+        for invalid in ("../another", "//elsewhere.example", "https://elsewhere.example/v1", "%2e%2e"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "relative protocol path"):
+                ModelSettings.parse(
+                    {**raw, "providers": {"gateway": {**provider, "paths": {"gemini": invalid}}}}
+                )
+
     def test_disabled_and_distinct_connections_are_not_interchangeable(self):
         settings = registry()
         settings.providers["other"] = copy.deepcopy(settings.providers["test"])

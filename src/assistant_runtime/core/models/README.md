@@ -25,7 +25,23 @@ committed with the referring configuration. Trusted plugins use `ModelRequest("a
 
 `main_model` and `main_reasoning_effort` select a registered alias and supported effort. Task recommendations reference the same aliases. `model_api.memory` explicitly selects a structured-output model for upstream Mem0; an empty binding leaves extraction unavailable rather than launching another agent. Local embeddings, source validation, corrections and memory history keep their existing owners.
 
-Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets: `openai`, `claude`, `gemini`, `deepseek`. OpenCode Go presets: `opencode_go_responses`, `opencode_go_chat`, `opencode_go_anthropic`, `opencode_go_gemini`, using `OPENCODE_API_KEY`. Custom endpoints declare `protocol`, HTTPS `base_url` and `key_env`; supported protocols are `openai_responses`, `openai_chat`, `anthropic`, `gemini`. Presets cannot silently override their fixed endpoint. A local `enabled` switch does not change the supplier's data policy.
+Configure `[model_api.providers.NAME]` with `preset`, `enabled` and optionally `key_env`. Official presets are
+`openai`, `claude`, `gemini` and `deepseek`. Use `opencode_go` or `opencode` (Console) for a single
+connection with four protocol paths and a shared model catalog. An entry using a multi-protocol
+connection specifies its `protocol`, for example `protocol = "anthropic"`. Connection tests check
+the catalog; a model test checks the chosen route.
+
+A custom API connection can declare `protocol`, `base_url` and `key_env`, or use a service
+`base_url` with a `paths` table keyed by `openai_responses`, `openai_chat`, `anthropic` or
+`gemini`. Paths are relative adapter base paths, with an empty path using the service root.
+The existing adapter appends the operation suffix. Use `catalog` for a shared directory on
+multi-protocol custom connections. Each model resolves to one fixed endpoint before dispatch.
+
+Legacy OpenCode protocol presets can be consolidated with
+`pa --config SOURCE migrate-model-connections DESTINATION`. This writes a private candidate for
+review. It groups equivalent connections and retains original per-protocol route identities,
+model aliases, effective endpoints and capability snapshots. Other credentials and connection
+settings are retained separately.
 
 OpenCode Console presets are `opencode_responses`, `opencode_chat`, `opencode_anthropic` and `opencode_gemini`. Console uses `https://opencode.ai/inference/v1/models`; Go uses `https://opencode.ai/inference/go/v1/models`. All four protocols share their route's OpenAI-shaped directory; inference URLs stay protocol-specific. These public directories do not establish key validity, account quota or inference acceptance. See the [Console API](https://opencode.ai/v2/docs/console/api/inference/) and [Go endpoints](https://opencode.ai/v2/docs/console/go/#endpoints).
 

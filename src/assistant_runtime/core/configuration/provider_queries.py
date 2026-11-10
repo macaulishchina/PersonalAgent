@@ -6,7 +6,7 @@ import tomllib
 
 from assistant_runtime.core.models.catalog import models, query, result
 from assistant_runtime.core.models.credentials import credential
-from assistant_runtime.core.models.settings import ModelSettings
+from assistant_runtime.core.models.settings import ModelSettings, select_provider
 from .fields import merge
 from .files import Conflict
 
@@ -31,6 +31,8 @@ def validation_message(message):
             "base_url",
             "接口地址：请填写完整的 HTTPS 地址；本机测试支持回环 HTTP，地址不能包含密码、查询参数或片段。",
         )
+    if "protocol path" in message:
+        return "paths", "协议路径须为相对于服务根地址的路径；请至少启用一种协议。"
     if "protocol" in message:
         return "protocol", "接口协议：请选择支持的协议。"
     if "preset" in message:
@@ -77,6 +79,10 @@ class ProviderQueries:
                 raise ProbeInput("model", "请先填写模型 ID 和连接。")
             connection = draft.get("connection")
         provider, key, accounts = self.capture(entry.get("provider"), version, connection)
+        try:
+            select_provider(provider, entry.get("protocol"))
+        except ValueError:
+            raise ProbeInput("protocol", "请选择此连接支持的接口协议。") from None
         return {
             "request_id": ident,
             "name": name,
@@ -137,7 +143,7 @@ class ProviderQueries:
                     "accounts": {account_name: account} if account_name and account else {},
                 }
             )
-            provider = settings.providers["probe"]
+            provider = select_provider(settings.providers["probe"], data.get("protocol"))
             model, reference = data.get("model"), data.get("reference", "")
             if not isinstance(model, str) or not 1 <= len(model) <= 200 or any(ord(c) < 32 for c in model):
                 raise ValueError("请填写有效的模型 ID")
@@ -292,7 +298,7 @@ class ProviderQueries:
                         return result(
                             False, "configuration", "无法读取连接配置，请检查配置文件格式。", field="provider"
                         )
-                    if provider["protocol"] == "pi":
+                    if provider.get("protocol") == "pi":
                         data = await self.native_query(provider, key, accounts, action)
                         if action == "test":
                             connected = data.get("connected") is True
@@ -314,6 +320,8 @@ class ProviderQueries:
                                 truncated=len(data) > 500,
                             )
                     else:
+                        if len(provider.get("paths", {})) == 1:
+                            provider = select_provider(provider)
                         response = await query(provider, key)
                     await asyncio.to_thread(self.check_version, version)
                     if action == "test":

@@ -698,7 +698,7 @@ function drawField(field) {
         : value === undefined
           ? "未配置"
           : typeof value === "string"
-            ? value
+            ? rule["x-labels"]?.[value] || value
             : JSON.stringify(value),
       "readonly-value",
     );
@@ -742,7 +742,8 @@ function drawField(field) {
     }
   } else if (rule.enum) {
     input = node("select");
-    if (value === undefined) {
+    const selected = rule.enum.includes(value);
+    if (!selected) {
       const placeholder = node("option", "请选择");
       placeholder.value = "";
       placeholder.disabled = true;
@@ -753,7 +754,7 @@ function drawField(field) {
       option.value = String(v);
       input.append(option);
     }
-    input.value = String(value ?? "");
+    input.value = selected ? String(value) : "";
     read = () => rule.enum.find((v) => String(v) === input.value);
   } else if (rule.type === "boolean") {
     input = node("input");

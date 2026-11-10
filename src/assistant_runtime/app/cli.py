@@ -84,6 +84,9 @@ def main():
         "migrate-plugin-config", help="Convert bundled plugin settings into a private candidate"
     )
     migrate.add_argument("destination")
+    sub.add_parser(
+        "migrate-model-connections", help="Preview consolidation of equivalent OpenCode connections"
+    ).add_argument("destination")
     executions = sub.add_parser("executions", help="Submit and inspect individual agent executions")
     executions.add_argument(
         "action",
@@ -385,12 +388,16 @@ def main():
 
             print(initialize(args.destination, preset=args.preset))
             return
-        if args.command in {"prepare-config", "migrate-plugin-config"}:
-            from .prepare_config import migrate_plugins, prepare
+        if args.command in {"prepare-config", "migrate-plugin-config", "migrate-model-connections"}:
+            from .prepare_config import migrate_model_connections, migrate_plugins, prepare
 
             if not args.config:
                 raise ValueError(f"{args.command} requires an explicit --config source")
-            operation = migrate_plugins if args.command == "migrate-plugin-config" else prepare
+            operation = {
+                "prepare-config": prepare,
+                "migrate-plugin-config": migrate_plugins,
+                "migrate-model-connections": migrate_model_connections,
+            }[args.command]
             print(json.dumps(operation(args.config, args.destination), ensure_ascii=False, indent=2))
             return
         if args.command == "configuration":

@@ -538,6 +538,13 @@ function renderModelCollection(panel, kind) {
       "providers",
       value.provider || "",
     ).display_name;
+    const connection =
+      kind === "providers"
+        ? value
+        : valueAt(["model_api", "providers"], {})[value.provider];
+    const selectedProtocol =
+      value.protocol || connectionProtocols(connection)[0];
+    const route = protocolLabels[selectedProtocol];
     const card = node("section", undefined, "entity-card");
     card.dataset.entity = name;
     card.dataset.search = [
@@ -546,6 +553,8 @@ function renderModelCollection(panel, kind) {
       value.provider,
       value.account,
       value.preset,
+      connectionLabel(kind === "providers" ? name : value.provider, connection),
+      kind === "entries" ? route : "",
       presentation.display_name,
       presentation.description,
       providerName,
@@ -577,7 +586,12 @@ ${item.description}`;
       }
       head.append(identity);
     } else {
-      const title = node("h3", presentation.display_name);
+      const title = node(
+        "h3",
+        kind === "providers" && connectionProtocols(value).length > 1
+          ? connectionLabel(name, value)
+          : presentation.display_name,
+      );
       title.title = name;
       head.append(title);
     }
@@ -599,7 +613,9 @@ ${item.description}`;
             ? (providerAuthentication(value) === "oauth"
                 ? "OAuth 登录 · "
                 : "API Key · ") + value.account
-            : "API 连接 · " + (value.preset || value.protocol || "待配置")
+            : connectionProtocols(value).length > 1
+              ? `${connectionProtocols(value).length} 种协议 · 已关联 ${Object.values(valueAt(["model_api", "entries"], {})).filter((entry) => entry.provider === name).length} 个模型`
+              : "API 连接 · " + (value.preset || value.protocol || "待配置")
           : value.model || "尚未填写模型 ID",
         "entity-description",
       ),
@@ -612,7 +628,14 @@ ${item.description}`;
         );
     if (kind === "entries") {
       const chips = node("div", undefined, "entity-tags");
-      const providerBadge = node("span", providerName || "未选择连接", "badge");
+      const providerBadge = node(
+        "span",
+        providerName
+          ? connectionLabel(value.provider, connection) +
+              (route ? " · " + route : "")
+          : "未选择连接",
+        "badge",
+      );
       providerBadge.title = value.provider || "";
       chips.append(providerBadge);
       if (value.images) chips.append(node("span", "图片", "badge"));
@@ -628,13 +651,27 @@ ${item.description}`;
     actions.append(button("编辑", () => openEntity(kind, name)));
     if (kind === "providers") {
       const probe = providerTest(name);
-      actions.append(probe.button);
+      actions.append(
+        probe.button,
+        button("添加模型", () => openAddEntity("entries", name)),
+      );
       probeStatus = probe.status;
     }
     actions.append(
       button(
         "移除",
         () => {
+          if (kind === "providers") {
+            const referenced = Object.entries(
+              valueAt(["model_api", "entries"], {}),
+            )
+              .filter(([, entry]) => entry.provider === name)
+              .map(([id]) => id);
+            if (referenced.length) {
+              showNotice("请先改绑这些模型：" + referenced.join("、"));
+              return;
+            }
+          }
           if (
             !confirm(
               "移除 “" +
@@ -1341,6 +1378,8 @@ function wizard(title, detail) {
   showDialog("setup-dialog");
   return form;
 }
+// Stacked controls for setup wizards and explicitly laid-out subforms.
+// For a regular drawer setting alongside other field rows, use drawField().
 function formInput(form, name, title, options = {}) {
   if (options.cards) {
     const group = node("fieldset", undefined, "route-choices");
@@ -1559,6 +1598,15 @@ function modelTest(name) {
       const state = {
         pending: true,
         message: "正在测试文本推理，最长等待 30 秒…",
+        route: (() => {
+          const { provider, protocol } = draft.entry;
+          const connection = draft.connection.provider;
+          const selected = protocol || connectionProtocols(connection)[0];
+          return (
+            connectionLabel(provider, connection) +
+            (selected ? " · " + protocolLabels[selected] : "")
+          );
+        })(),
         ok: null,
       };
       modelTestResults.set(name, state);
@@ -1608,7 +1656,7 @@ function modelTest(name) {
   function show() {
     const state = modelTestResults.get(name);
     status.hidden = !state;
-    status.textContent = state?.message || "";
+    status.textContent = state ? state.route + "：" + state.message : "";
     status.dataset.state = state?.pending
       ? "loading"
       : state?.ok
@@ -1759,7 +1807,7 @@ function searchableSelect(label, filterLabel, identity, signal) {
   return root;
 }
 
-function modelPicker(form, provider, model, name) {
+function modelPicker(form, provider, model, name, chooseProtocol) {
   const box = node("section", undefined, "model-picker");
   box.setAttribute("aria-label", "供应商模型查询");
   const toolbar = node("div", undefined, "model-query-toolbar");
@@ -1816,8 +1864,13 @@ function modelPicker(form, provider, model, name) {
         selected ? "已选中" : "选择",
         () => {
           model.value = row.id;
-          selectedMetadata = { id: row.id, capabilities: row.capabilities };
+          selectedMetadata = {
+            id: row.id,
+            capabilities: row.capabilities,
+            protocol: row.protocol,
+          };
           model.dispatchEvent(new Event("input", { bubbles: true }));
+          chooseProtocol(row.protocol);
           if (!name.value.trim()) {
             let alias = row.id.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
             if (!/^[a-z]/.test(alias)) alias = "model-" + alias;
@@ -1911,13 +1964,17 @@ function modelPicker(form, provider, model, name) {
   });
   toolbar.append(load, fold);
   box.append(toolbar, status, panel);
-  form.insertBefore(box, model.closest("label"));
-  return () =>
-    selectedMetadata?.id === model.value
+  form.insertBefore(
+    box,
+    model.closest(".model-details") || model.closest("label"),
+  );
+  return (protocol) =>
+    selectedMetadata?.id === model.value &&
+    (!protocol || selectedMetadata.protocol === protocol)
       ? selectedMetadata.capabilities
       : undefined;
 }
-function openAddEntity(kind) {
+function openAddEntity(kind, selectedProvider) {
   const form = wizard(
     "添加模型",
     "模型 ID 来自供应商；名称是你在这个实例里选择模型时使用的标识。",
@@ -1942,17 +1999,11 @@ function openAddEntity(kind) {
     required: true,
     choices: providers.map((p) => {
       const item = valueAt(["model_api", "providers"], {})[p];
-      return [
-        p,
-        p +
-          " · " +
-          (providerAuthentication(item) === "oauth"
-            ? "OAuth 登录"
-            : "API Key") +
-          (item.enabled ? "" : "（未启用）"),
-      ];
+      return [p, connectionLabel(p, item) + (item.enabled ? "" : "（未启用）")];
     }),
   });
+  if (selectedProvider && providers.includes(selectedProvider))
+    provider.value = selectedProvider;
   const model = formInput(form, "model", "供应商模型 ID", {
     required: true,
     placeholder: "填写供应商提供的模型 ID",
@@ -1964,10 +2015,64 @@ function openAddEntity(kind) {
     hint: "支持点号，例如 deepseek-v4.1-flash；保持名称稳定，用途绑定会引用它。",
   });
   $("setup-dialog").dataset.mode = "model";
-  const selectedMetadata = modelPicker(form, provider, model, name);
   const details = node("div", undefined, "model-details");
   details.append(model.closest("label"), name.closest("label"));
+  const protocol = formInput(details, "model-protocol", "接口协议", {
+    required: true,
+    choices: [["", "请选择协议"]],
+  });
+  const protocolRow = protocol.closest("label");
+  const protocolHint = node("span", "", "hint");
+  protocolRow.append(protocolHint);
+  const soleProtocol = node("p", "", "hint");
+  details.append(soleProtocol);
+  function refreshProtocol() {
+    const available = connectionProtocols(
+      valueAt(["model_api", "providers"], {})[provider.value],
+    );
+    protocol.replaceChildren(
+      ...[
+        ["", "请选择协议"],
+        ...available.map((id) => [id, protocolLabels[id]]),
+      ].map(([id, label]) => new Option(label, id)),
+    );
+    protocolRow.hidden = available.length < 2;
+    protocol.disabled = protocolRow.hidden;
+    soleProtocol.hidden = available.length !== 1;
+    soleProtocol.textContent =
+      available.length === 1
+        ? "接口协议 · " + protocolLabels[available[0]]
+        : "";
+    protocolHint.textContent = available.length > 1 ? "协议随模型保存。" : "";
+  }
   form.append(details);
+  refreshProtocol();
+  provider.addEventListener("change", refreshProtocol);
+  const selectedMetadata = modelPicker(
+    form,
+    provider,
+    model,
+    name,
+    (recommended) => {
+      if (protocol.disabled) return;
+      const available = [...protocol.options].some(
+        ({ value }) => value && value === recommended,
+      );
+      protocol.value = available ? recommended : "";
+      protocolHint.textContent = available
+        ? "已选用目录推荐的协议，可修改。"
+        : "目录未提供可用协议，请选择。";
+    },
+  );
+  model.addEventListener("input", () => {
+    if (!protocol.disabled) {
+      protocol.value = "";
+      protocolHint.textContent = "请选择此模型使用的协议。";
+    }
+  });
+  protocol.addEventListener("change", () => {
+    protocolHint.textContent = "协议随模型保存。";
+  });
   wizardFooter(form, "添加并完善设置");
   form.onsubmit = async (event) => {
     event.preventDefault();
@@ -1977,17 +2082,27 @@ function openAddEntity(kind) {
       showNotice("此名称已存在。");
       return;
     }
-    const submitted = [provider.value, model.value.trim()];
+    const selectedRoute = () => [
+      provider.value,
+      model.value.trim(),
+      protocol.disabled ? "" : protocol.value,
+    ];
+    const submitted = selectedRoute();
     const submit = form.querySelector('[type="submit"]');
     submit.disabled = true;
     let capabilities;
     try {
-      capabilities = await describeModel(...submitted, "", selectedMetadata());
+      capabilities = await describeModel(
+        submitted[0],
+        submitted[1],
+        "",
+        selectedMetadata(submitted[2]),
+        submitted[2],
+      );
       if (
         !form.isConnected ||
         !$("setup-dialog").open ||
-        JSON.stringify(submitted) !==
-          JSON.stringify([provider.value, model.value.trim()])
+        JSON.stringify(submitted) !== JSON.stringify(selectedRoute())
       )
         return;
     } catch (error) {
@@ -1998,8 +2113,9 @@ function openAddEntity(kind) {
     }
     const checkpoint = draftCheckpoint();
     changed(["model_api", kind, id], "set", {
-      provider: provider.value,
-      model: model.value.trim(),
+      provider: submitted[0],
+      model: submitted[1],
+      ...(submitted[2] ? { protocol: submitted[2] } : {}),
       default_reasoning_effort: "auto",
       ...modelCapabilityValues(capabilities),
       capabilities,
@@ -2105,6 +2221,7 @@ function openConnectionWizard() {
       showNotice("请填写有效的供应商标识。");
       return;
     }
+    if (!useNative && !apiFields.valid()) return;
     const apiValue = apiFields.read();
     const nativeValue = nativeKey.read();
     const env = useNative ? nativeValue.reference : apiValue.provider.key_env;

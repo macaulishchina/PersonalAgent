@@ -55,6 +55,26 @@ class QueryTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private-test-key", json.dumps(result))
         self.assertEqual(len(models([{"id": str(i)} for i in range(600)])), 500)
 
+    async def test_shared_catalog_recommends_an_explicit_protocol_without_importing_addresses(self):
+        self.payload = {
+            "data": [
+                {"id": "one", "api": {"messages": {"base_url": "https://untrusted.example"}}},
+                {"id": "two", "api": {"messages": {}, "responses": {}}},
+                {"id": "three"},
+            ]
+        }
+        provider = {
+            "base_url": str(self.provider.make_url("/service")),
+            "paths": {"anthropic": "anthropic", "openai_responses": "openai/v1"},
+            "catalog": {"url": str(self.provider.make_url("/directory")), "format": "openai"},
+        }
+        result = await query(provider, "private-test-key")
+        self.assertTrue(result["ok"])
+        self.assertEqual([item.get("protocol") for item in result["models"]], ["anthropic", None, None])
+        self.assertNotIn("untrusted.example", json.dumps(result))
+        self.assertEqual([(item[0], item[1]) for item in self.requests], [("GET", "/directory")])
+        self.assertEqual(self.requests[0][2]["Authorization"], "Bearer private-test-key")
+
     async def test_native_protocol_authentication_and_directory_shapes(self):
         self.payload = {"data": [{"id": "claude-example", "display_name": "Example"}], "has_more": True}
         result = await query(self.spec("anthropic"), "private-test-key")

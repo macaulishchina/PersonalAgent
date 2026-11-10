@@ -28,7 +28,7 @@ async def verify(source, models):
     original = ModelSettings.parse(source.model_api)
     for model in models:
         original.require_route({k: original.route(model)[k] for k in ("model", "revision")})
-        if original.providers[original.entries[model]["provider"]]["protocol"] == "pi":
+        if original.provider_for(original.entries[model])["protocol"] == "pi":
             raise ValueError("This acceptance uses API connections; native account acceptance is separate")
     registry = deepcopy(source.model_api)
     registry["entries"] = {model: registry["entries"][model] for model in models}

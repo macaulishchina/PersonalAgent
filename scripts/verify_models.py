@@ -22,7 +22,7 @@ from assistant_runtime.core.pi.accounts import NativeAccounts
 async def verify(config, model, *, case="text", effort=None, max_requests=4, max_tokens=1024):
     settings = ModelSettings.parse(config.model_api)
     entry = settings.entry(model)
-    native = settings.providers[entry["provider"]]["protocol"] == "pi"
+    native = settings.provider_for(entry)["protocol"] == "pi"
     selected_effort = reasoning_effort(entry, effort)
     submitted = 0
     http_statuses = []

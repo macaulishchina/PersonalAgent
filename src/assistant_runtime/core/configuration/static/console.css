@@ -1927,7 +1927,7 @@ dialog.wide-dialog {
     border-bottom: 0;
   }
   .entity-grid[data-kind="providers"] .entity-card {
-    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.4fr) auto;
+    grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.4fr) auto;
   }
   .entity-heading {
     flex-wrap: wrap;
@@ -3068,4 +3068,31 @@ img.entity-avatar,
 .plugin-settings-links a.secondary:hover {
   background: #f0f4ef;
   border-color: #bacabd;
+}
+
+.connection-route-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.connection-route-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.connection-path-fields {
+  padding: 0 14px;
+}
+.connection-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.entity-grid[data-kind="providers"] .entity-actions {
+  flex-wrap: wrap;
 }

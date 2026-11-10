@@ -49,25 +49,58 @@ PRESETS = {
 }
 
 
-# Named third-party presets; never silently substitute their URLs for official ones.
-for _prefix, _root in (
+API_PROTOCOLS = PROTOCOLS - {"pi"}
+OPENCODE_PATHS = {
+    "openai_responses": "openai/v1",
+    "openai_chat": "openai/v1",
+    "anthropic": "anthropic",
+    "gemini": "google/v1beta",
+}
+OPENCODE_SINGLE_PRESETS = {}
+for _family, _root in (
     ("opencode", "https://opencode.ai/inference"),
     ("opencode_go", "https://opencode.ai/inference/go"),
 ):
-    for _suffix, _protocol, _path in (
-        ("responses", "openai_responses", "openai/v1"),
-        ("chat", "openai_chat", "openai/v1"),
-        ("anthropic", "anthropic", "anthropic"),
-        ("gemini", "gemini", "google/v1beta"),
+    _preset = {
+        "base_url": _root,
+        "key_env": "OPENCODE_API_KEY",
+        "auth_scheme": "bearer",
+        "session_header": "x-opencode-session",
+        "catalog": {"url": _root + "/v1/models", "format": "openai"},
+    }
+    PRESETS[_family] = {**_preset, "paths": OPENCODE_PATHS}
+    for _suffix, _protocol in (
+        ("responses", "openai_responses"),
+        ("chat", "openai_chat"),
+        ("anthropic", "anthropic"),
+        ("gemini", "gemini"),
     ):
-        PRESETS[_prefix + "_" + _suffix] = {
+        _ident = _family + "_" + _suffix
+        PRESETS[_ident] = {
+            **_preset,
             "protocol": _protocol,
-            "base_url": _root + "/" + _path,
-            "key_env": "OPENCODE_API_KEY",
-            "auth_scheme": "bearer",
-            "session_header": "x-opencode-session",
-            "catalog": {"url": _root + "/v1/models", "format": "openai"},
+            "base_url": _root + "/" + OPENCODE_PATHS[_protocol],
         }
+        OPENCODE_SINGLE_PRESETS[_ident] = (_family, _protocol)
+
+
+def select_provider(provider, protocol=None):
+    """Resolve a model's declared protocol to the existing single-endpoint contract."""
+    paths = provider.get("paths")
+    if paths is None:
+        if protocol is not None and protocol != provider["protocol"]:
+            raise ValueError("Model protocol is not available on this connection")
+        return provider
+    if protocol is None and len(paths) == 1:
+        protocol = next(iter(paths))
+    if not isinstance(protocol, str) or protocol not in paths:
+        raise ValueError("Select an available model protocol for this connection")
+    relative = paths[protocol]
+    return {
+        **{k: v for k, v in provider.items() if k not in {"paths", "route_ids"}},
+        "protocol": protocol,
+        "base_url": provider["base_url"] + ("/" + relative if relative else ""),
+    }
 
 
 def keys(value, allowed):
@@ -156,7 +189,7 @@ class ModelSettings:
             if preset is not None:
                 if preset not in PRESETS:
                     raise ValueError("Unknown provider preset")
-                keys(provider, {"preset", "key_env", "enabled", "presentation"})
+                keys(provider, {"preset", "key_env", "enabled", "presentation", "route_ids"})
                 providers[ident] = {
                     **deepcopy(PRESETS[preset]),
                     **{k: v for k, v in provider.items() if k != "preset"},
@@ -228,6 +261,7 @@ class ModelSettings:
                     raise ValueError(
                         "ChatGPT subscription requires explicit output_limit='model'; request caps unsupported"
                     )
+        identity_owners = {ident.casefold(): ident for ident in obj.providers}
         for ident, p in obj.providers.items():
             if "presentation" in p:
                 validate_presentation(p["presentation"])
@@ -241,6 +275,8 @@ class ModelSettings:
                 {
                     "protocol",
                     "base_url",
+                    "paths",
+                    "route_ids",
                     "key_env",
                     "enabled",
                     "auth_scheme",
@@ -259,7 +295,27 @@ class ModelSettings:
                 raise ValueError("Invalid provider session header")
             if p.get("session_header") in {"x-api-key", "x-goog-api-key"}:
                 raise ValueError("Session header cannot replace authentication")
-            if p.get("protocol") not in PROTOCOLS:
+            if "paths" in p:
+                paths = p["paths"]
+                if "protocol" in p or not isinstance(paths, dict) or not paths or set(paths) - API_PROTOCOLS:
+                    raise ValueError("Invalid connection protocol paths")
+                for protocol, path in paths.items():
+                    if (
+                        not isinstance(path, str)
+                        or len(path) > 256
+                        or not re.fullmatch(r"/?(?:[A-Za-z0-9_.~-]+(?:/[A-Za-z0-9_.~-]+)*/?)?", path)
+                        or any(segment in {".", ".."} for segment in path.split("/"))
+                    ):
+                        raise ValueError("Invalid relative protocol path")
+                    paths[protocol] = path.strip("/")
+                route_ids = p.get("route_ids", {})
+                if not isinstance(route_ids, dict) or set(route_ids) - set(paths):
+                    raise ValueError("Invalid connection route identities")
+                for route_id in route_ids.values():
+                    name(route_id)
+                    if identity_owners.setdefault(route_id.casefold(), ident) != ident:
+                        raise ValueError("Duplicate connection route identity")
+            elif p.get("protocol") not in API_PROTOCOLS or "route_ids" in p:
                 raise ValueError("Unsupported model protocol")
             p["base_url"] = url(p.get("base_url"))
             if "catalog" in p:
@@ -288,6 +344,7 @@ class ModelSettings:
                 {
                     "provider",
                     "model",
+                    "protocol",
                     "images",
                     "structured",
                     "reasoning_efforts",
@@ -306,7 +363,14 @@ class ModelSettings:
                 raise ValueError("Unknown provider for " + ident)
             if not isinstance(m.get("model"), str) or not 1 <= len(m["model"]) <= 200:
                 raise ValueError("Missing upstream model ID")
-            provider = obj.providers[m["provider"]]
+            try:
+                provider = obj.provider_for(m)
+            except ValueError as exc:
+                raise ConfigurationError(
+                    ["model_api", "entries", ident, "protocol"],
+                    "model_protocol_invalid",
+                    "请选择此连接支持的接口协议。",
+                ) from exc
             try:
                 resolve(m, provider, obj.accounts.get(provider.get("account")))
             except ValueError:
@@ -365,6 +429,16 @@ class ModelSettings:
             raise ValueError("Model provider is disabled")
         return m
 
+    def provider_for(self, entry):
+        return select_provider(self.providers[entry["provider"]], entry.get("protocol"))
+
+    def route_identity(self, entry):
+        provider = self.providers[entry["provider"]]
+        if "paths" in provider:
+            protocol = self.provider_for(entry)["protocol"]
+            return provider.get("route_ids", {}).get(protocol, entry["provider"])
+        return entry["provider"]
+
     def fingerprint(self):
         return hashlib.sha256(json.dumps(self.__dict__, sort_keys=True).encode()).hexdigest()
 
@@ -375,11 +449,11 @@ class ModelSettings:
             raise CapabilityRequestError("model_unavailable", "The registered model is unavailable")
         entry = self.entries[model]
         provider_id = entry["provider"]
-        provider = self.providers[provider_id]
+        provider = self.provider_for(entry)
         account = self.accounts.get(provider.get("account"), {})
         # Never hash credentials, credential references, presentation or defaults.
         identity = {
-            "provider": provider_id,
+            "provider": self.route_identity(entry),
             "model": entry["model"],
             **{k: provider[k] for k in ("protocol", "base_url", "account") if k in provider},
             "native": {k: account[k] for k in ("provider", "auth") if k in account},

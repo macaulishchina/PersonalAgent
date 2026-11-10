@@ -157,6 +157,60 @@ def migrate_plugins(source, destination):
             else:
                 namespaced[owner] = previous
         documents[path] = document
+    return write_candidate(source, destination, root, originals, documents, expected, migrated_plugins=moved)
+
+
+def migrate_model_connections(source, destination):
+    """Write an explicit preview; leave the source instance and its credentials untouched."""
+    import tomlkit
+
+    from assistant_runtime.core.models.migration import consolidate_opencode
+
+    source = Path(source).expanduser().resolve(strict=True)
+    destination = Path(destination).expanduser().absolute()
+    before = read_config(source)
+    registry = before.get("model_api", {})
+    converted, migrated, retained = consolidate_opencode(registry)
+    expected = {**before, **({"model_api": converted} if "model_api" in before else {})}
+    entry = tomllib.loads(source.read_text(encoding="utf-8"))
+    root = (source.parent / Path(before.get("root", source.parent)).expanduser()).resolve()
+    paths = [source, *(source.parent / name for name in entry.get("include", []))]
+    originals = {path.relative_to(source.parent): path.read_text(encoding="utf-8") for path in paths}
+    documents = {path: tomlkit.parse(text) for path, text in originals.items()}
+
+    for group in migrated:
+        owner = None
+        for document in documents.values():
+            settings = document.get("model_api", {})
+            providers = settings.get("providers", {})
+            for ident in group["replaces"]:
+                if ident in providers:
+                    if owner is None:
+                        owner = providers
+                    del providers[ident]
+            for alias in group["models"]:
+                if alias in settings.get("entries", {}):
+                    model = settings["entries"][alias]
+                    model["provider"] = group["connection"]
+                    model["protocol"] = converted["entries"][alias]["protocol"]
+        if owner is None:
+            raise ValueError("Could not locate original connection configuration")
+        owner[group["connection"]] = converted["providers"][group["connection"]]
+    return write_candidate(
+        source,
+        destination,
+        root,
+        originals,
+        documents,
+        expected,
+        merged_connections=migrated,
+        retained=retained,
+    )
+
+
+def write_candidate(source, destination, root, originals, documents, expected, **report):
+    import tomlkit
+
     # Keep relative includes intact while retaining the source instance storage.
     expected["root"] = str(root)
     for path, document in documents.items():
@@ -192,7 +246,7 @@ def migrate_plugins(source, destination):
         return {
             "config": str(target),
             "original": str(destination / "original"),
-            "migrated_plugins": moved,
+            **report,
             "root": str(root),
             "applied": False,
         }

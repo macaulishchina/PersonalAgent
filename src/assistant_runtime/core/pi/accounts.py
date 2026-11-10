@@ -284,11 +284,14 @@ class NativeAccounts:
             if self.settings.providers[entry["provider"]].get("enabled", False):
                 await self.route(alias, entry["default_reasoning_effort"])
 
-    async def connection(self, name):
-        provider = self.settings.providers[name]
+    async def connection(self, name, protocol=None):
+        from assistant_runtime.core.models.settings import select_provider
+
+        connection = self.settings.providers[name]
+        provider = select_provider(connection, protocol)
         if provider["protocol"] == "pi":
             return await self.account(provider["account"])
-        ident = ("connection", name)
+        ident = ("connection", name, provider["protocol"])
         if ident not in self.workers:
             spec = {
                 **provider,
@@ -298,11 +301,14 @@ class NativeAccounts:
                     alias: entry
                     for alias, entry in self.settings.entries.items()
                     if entry["provider"] == name
+                    and self.settings.provider_for(entry)["protocol"] == provider["protocol"]
                 },
             }
             self.workers[ident] = AccountWorker(
                 self.root,
-                self.folder / ".connections" / name,
+                self.folder / ".connections" / name / provider["protocol"]
+                if "paths" in connection
+                else self.folder / ".connections" / name,
                 spec,
                 binary=self.binary,
                 credential_value=self.credentials.get(spec.get("key_env")),
@@ -313,7 +319,7 @@ class NativeAccounts:
 
     async def route(self, alias, effort, *, images=False, schema=None):
         entry = self.settings.entry(alias)
-        worker = await self.connection(entry["provider"])
+        worker = await self.connection(entry["provider"], entry.get("protocol"))
         args = {"model": entry["model"], "alias": alias, "effort": effort, "images": images, "schema": schema}
         validation = await worker.call("validate", args)
         bound = validation["max_output_tokens"]

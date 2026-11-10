@@ -16,6 +16,15 @@ def result(ok, code, message, **values):
     return {"ok": ok, "code": code, "message": message, **values}
 
 
+# OpenCode's public directory identifies the advertised API by key.
+DIRECTORY_APIS = {
+    "responses": "openai_responses",
+    "chat-completions": "openai_chat",
+    "messages": "anthropic",
+    "generate-content": "gemini",
+}
+
+
 def models(rows, *, gemini=False):
     if not isinstance(rows, list):
         raise ValueError("Invalid model directory")
@@ -34,6 +43,18 @@ def models(rows, *, gemini=False):
             continue
         label = row.get("displayName") or row.get("display_name") or ident
         unique[ident] = {"id": ident, "label": label[:200] if isinstance(label, str) else ident}
+        # Only carry an explicit, recognized recommendation from the directory.
+        protocol = row.get("protocol")
+        if protocol not in DIRECTORY_APIS.values():
+            apis = row.get("api")
+            candidates = (
+                [kind for key, kind in DIRECTORY_APIS.items() if key in apis]
+                if isinstance(apis, dict)
+                else []
+            )
+            protocol = candidates[0] if len(candidates) == 1 else None
+        if protocol:
+            unique[ident]["protocol"] = protocol
         metadata = facts(
             {
                 **row,
@@ -55,20 +76,22 @@ def models(rows, *, gemini=False):
 
 
 async def query(provider, key):
-    protocol = provider["protocol"]
+    protocol = provider.get("protocol")
+    catalog = provider.get("catalog", {})
+    if protocol is None and not catalog:
+        return result(False, "catalog_unavailable", "请在连接中填写共享模型目录地址，或手工填写模型 ID。")
     base = provider["base_url"].rstrip("/")
-    endpoint = base + (
+    endpoint = catalog.get("url") or base + (
         "/v1/models" if protocol == "anthropic" and not urlsplit(base).path.endswith("/v1") else "/models"
     )
-    catalog = provider.get("catalog", {})
-    endpoint = catalog.get("url", endpoint)
     format = catalog.get("format", protocol)
+    auth = protocol or format
     headers = {"Accept": "application/json", "User-Agent": "Personal-Agent/model-catalog"}
-    if provider.get("auth_scheme") == "bearer" or protocol in {"openai_chat", "openai_responses"}:
+    if provider.get("auth_scheme") == "bearer" or auth in {"openai", "openai_chat", "openai_responses"}:
         headers["Authorization"] = "Bearer " + key
-    elif protocol == "anthropic":
+    elif auth == "anthropic":
         headers["x-api-key"] = key
-    elif protocol == "gemini":
+    elif auth == "gemini":
         headers["x-goog-api-key"] = key
     else:
         return result(False, "unsupported", "此连接不支持远程模型目录查询，可手工填写模型 ID。")

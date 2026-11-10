@@ -7,7 +7,12 @@ import tempfile
 import unittest
 
 from assistant_runtime.app.config import Config, read_config
-from assistant_runtime.app.prepare_config import migrate_plugins, prepare, set_field
+from assistant_runtime.app.prepare_config import (
+    migrate_model_connections,
+    migrate_plugins,
+    prepare,
+    set_field,
+)
 
 
 class PrepareConfigTest(unittest.TestCase):
@@ -56,6 +61,46 @@ class PrepareConfigTest(unittest.TestCase):
         original = '[plugin_settings.web]\nenable = false\nplugins = ["nested"]\n'
         updated = set_field(original, "plugins", ["pi"])
         self.assertEqual(updated, 'plugins = ["pi"]\n' + original)
+
+    def test_model_connection_preview_preserves_routes_and_unrelated_credentials(self):
+        from assistant_runtime.core.models.settings import ModelSettings
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "config.toml"
+            source.write_text('include = ["models.toml"]\nplugins = []\nmain_model = "fast"\n')
+            models = root / "models.toml"
+            models.write_text("""
+[model_api.providers.go-responses]
+preset = "opencode_go_responses"
+enabled = true
+[model_api.providers.go-messages]
+preset = "opencode_go_anthropic"
+enabled = true
+[model_api.providers.other-key]
+preset = "opencode_go_gemini"
+key_env = "SEPARATE_API_KEY"
+enabled = true
+[model_api.entries.fast]
+provider = "go-responses"
+model = "synthetic"
+[model_api.entries.deep]
+provider = "go-messages"
+model = "other-synthetic"
+""")
+            old_text = models.read_bytes()
+            old = ModelSettings.parse(read_config(source)["model_api"])
+            report = migrate_model_connections(source, root / "candidate")
+            converted = read_config(report["config"])
+            self.assertEqual(report["retained"], ["other-key"])
+            self.assertEqual(converted["main_model"], "fast")
+            new = ModelSettings.parse(converted["model_api"])
+            self.assertEqual(set(new.providers), {"opencode_go", "other-key"})
+            for alias in old.entries:
+                self.assertEqual(new.route(alias)["revision"], old.route(alias)["revision"])
+                self.assertEqual(new.provider_for(new.entries[alias]), old.provider_for(old.entries[alias]))
+                self.assertEqual(new.entries[alias]["capabilities"], old.entries[alias]["capabilities"])
+            self.assertEqual(models.read_bytes(), old_text)
 
     def test_05_migration_preserves_plugin_selection_split_fields_and_secrets(self):
         with tempfile.TemporaryDirectory() as folder:
