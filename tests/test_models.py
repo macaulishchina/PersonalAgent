@@ -39,6 +39,16 @@ def settings(**changes):
     }
 
 
+def preset_settings(**provider_changes):
+    for preset, provider in PRESETS.items():
+        protocols = provider.get("paths") or (provider["protocol"],)
+        for protocol in protocols:
+            raw = settings(providers={"test": {"preset": preset, **provider_changes}})
+            if "paths" in provider:
+                raw["entries"]["test-model"]["protocol"] = protocol
+            yield preset, protocol, raw
+
+
 class SettingsTest(unittest.TestCase):
     def test_context_maintenance_configuration(self):
         settings = ModelSettings.parse({})
@@ -144,11 +154,12 @@ class SettingsTest(unittest.TestCase):
                 ModelSettings.parse(settings(providers={"test": {"preset": "deepseek", **switch}}))
 
     def test_protocol_selection_does_not_change_model_identity(self):
-        for preset in PRESETS:
-            parsed = ModelSettings.parse(settings(providers={"test": {"preset": preset, "enabled": True}}))
-            model = pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]
-            self.assertEqual(model["id"], "test-model")
-            self.assertEqual(model["api"], "assistant-native")
+        for preset, protocol, raw in preset_settings(enabled=True):
+            with self.subTest(preset=preset, protocol=protocol):
+                parsed = ModelSettings.parse(raw)
+                model = pi_models_config(parsed)["providers"]["assistant_api"]["models"][0]
+                self.assertEqual(model["id"], "test-model")
+                self.assertEqual(model["api"], "assistant-native")
 
     def test_gemini_config_retains_supplier_endpoint(self):
         parsed = ModelSettings.parse(settings(providers={"test": {"preset": "gemini", "enabled": True}}))
@@ -188,14 +199,25 @@ class SettingsTest(unittest.TestCase):
                 ModelSettings.parse(settings(providers={"test": {**provider, "catalog": invalid}}))
 
     def test_official_presets_and_custom_protocol(self):
-        for preset in PRESETS:
-            raw = settings(providers={"test": {"preset": preset}})
-            parsed = ModelSettings.parse(raw)
-            self.assertEqual(parsed.providers["test"], PRESETS[preset])
-            self.assertIn("preset", raw["providers"]["test"])
-            self.assertFalse(parsed.catalog()[0]["available"])
-            with self.assertRaisesRegex(ValueError, "provider is disabled"):
-                parsed.entry("test-model")
+        from assistant_runtime.api.configuration import ConfigurationError
+
+        for preset, protocol, raw in preset_settings():
+            with self.subTest(preset=preset, protocol=protocol):
+                parsed = ModelSettings.parse(raw)
+                self.assertEqual(parsed.providers["test"], PRESETS[preset])
+                self.assertEqual(parsed.provider_for(parsed.entries["test-model"])["protocol"], protocol)
+                self.assertIn("preset", raw["providers"]["test"])
+                self.assertFalse(parsed.catalog()[0]["available"])
+                with self.assertRaisesRegex(ValueError, "provider is disabled"):
+                    parsed.entry("test-model")
+                if "paths" in PRESETS[preset]:
+                    del raw["entries"]["test-model"]["protocol"]
+                    with self.assertRaises(ConfigurationError) as caught:
+                        ModelSettings.parse(raw)
+                    self.assertEqual(caught.exception.code, "model_protocol_invalid")
+                    self.assertEqual(
+                        caught.exception.path, ["model_api", "entries", "test-model", "protocol"]
+                    )
         raw = settings(
             providers={
                 "test": {
@@ -233,12 +255,15 @@ class SettingsTest(unittest.TestCase):
             )
 
     def test_four_protocol_routes_share_metered_pi_transport(self):
-        self.assertEqual(len({p["protocol"] for p in PRESETS.values()}), 4)
-        for preset in PRESETS:
-            parsed = ModelSettings.parse(settings(providers={"test": {"preset": preset, "enabled": True}}))
-            config = pi_models_config(parsed, transport_url="http://127.0.0.1:1234/v1")
-            self.assertEqual(config["providers"]["assistant_api"]["baseUrl"], "http://127.0.0.1:1234/v1")
-            self.assertNotIn(parsed.providers["test"]["key_env"], json.dumps(config))
+        protocols = set()
+        for preset, protocol, raw in preset_settings(enabled=True):
+            with self.subTest(preset=preset, protocol=protocol):
+                parsed = ModelSettings.parse(raw)
+                protocols.add(parsed.provider_for(parsed.entries["test-model"])["protocol"])
+                config = pi_models_config(parsed, transport_url="http://127.0.0.1:1234/v1")
+                self.assertEqual(config["providers"]["assistant_api"]["baseUrl"], "http://127.0.0.1:1234/v1")
+                self.assertNotIn(parsed.providers["test"]["key_env"], json.dumps(config))
+        self.assertEqual(protocols, {"openai_responses", "openai_chat", "anthropic", "gemini"})
 
 
 class ModelsTest(unittest.IsolatedAsyncioTestCase):
