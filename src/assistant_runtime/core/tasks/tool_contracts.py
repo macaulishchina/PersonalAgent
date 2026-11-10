@@ -119,17 +119,24 @@ EVENT = obj(
 TRIGGER = obj(
     {
         "kind": {"enum": ["immediate", "date", "interval", "cron", "event"]},
-        "at": text(100),
-        "seconds": {"type": "number", "minimum": 1, "maximum": 366 * 86400},
-        "expression": text(100),
+        "at": {**text(100), "description": "Scheduled time."},
+        "seconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 366 * 86400,
+            "description": "Interval length in seconds.",
+        },
+        "expression": {**text(100), "description": "Cron expression."},
         "timezone": text(100),
-        "event": EVENT,
+        "event": {**EVENT, "description": "Event filter."},
     }
 )
-TRIGGER["allOf"] = [
-    {"if": {"properties": {"kind": {"const": kind}}, "required": ["kind"]}, "then": {"required": [field]}}
-    for kind, field in (("date", "at"), ("interval", "seconds"), ("cron", "expression"), ("event", "event"))
-]
+TRIGGER["allOf"] = []
+for kind, field in (("date", "at"), ("interval", "seconds"), ("cron", "expression"), ("event", "event")):
+    TRIGGER["properties"][field]["description"] += f" Required when kind={kind}."
+    TRIGGER["allOf"].append(
+        {"if": {"properties": {"kind": {"const": kind}}, "required": ["kind"]}, "then": {"required": [field]}}
+    )
 SELF_COMPLETION = obj({"condition": text(1000)}, ["condition"])
 SELF_SCHEDULE = obj(
     {

@@ -7,6 +7,7 @@ import { findPackageJSON } from "node:module";
 import { pathToFileURL } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
 import { OutputPhases } from "./output_delivery.mjs";
+import { projectResponsesTools } from "./tool_schema.mjs";
 import {
   observeFetch,
   observeError,
@@ -280,6 +281,7 @@ async function runAttempt(id, args, signal, evidence) {
     },
     onPayload: async (payload) => {
       if (signal.aborted) throw new Error("native_cancelled");
+      if (model.api === "openai-responses") projectResponsesTools(payload);
       if (spec.entries && args.effort === "auto") {
         delete payload.reasoning;
         delete payload.reasoning_effort;

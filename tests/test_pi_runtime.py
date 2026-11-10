@@ -232,6 +232,8 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
             counts = {}
             background_done = threading.Event()
             task_request = str(uuid.uuid4())
+            invalid_request = str(uuid.uuid4())
+            create_tool = "mcp__tasks__create_task"
 
             def script(step, body):
                 model = body["model"]
@@ -240,12 +242,32 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                     return sse_tool_call(
                         "discover",
                         "tool_search",
-                        {"query": "create task request_id title prompt", "limit": 8},
+                        {"query": create_tool + " mcp__tasks__list_task_models", "limit": 8},
                     )
+                if model == "model-a":
+                    declaration = next((t for t in body.get("tools", []) if t["name"] == create_tool), {})
+                    schema = declaration.get("parameters", {})
+                    if not schema or any(f'"{key}":' in json.dumps(schema) for key in ("if", "then")):
+                        return 400, {
+                            "error": {"code": "invalid_json_schema", "message": "Unsupported tool schema"},
+                        }
                 if model == "model-a" and counts[model] == 2:
+                    return sse_tool_call("models", "mcp__tasks__list_task_models", {})
+                if model == "model-a" and counts[model] == 3:
+                    return sse_tool_call(
+                        "invalid-schedule",
+                        create_tool,
+                        {
+                            "request_id": invalid_request,
+                            "title": "Incomplete schedule",
+                            "prompt": "This task must not be created",
+                            "trigger": {"kind": "date"},
+                        },
+                    )
+                if model == "model-a" and counts[model] == 4:
                     return sse_tool_call(
                         "delegate",
-                        "mcp__tasks__create_task",
+                        create_tool,
                         {
                             "request_id": task_request,
                             "feedback_owner": "conversation",
@@ -355,7 +377,26 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
                     host.store.db.execute("SELECT COUNT(*) FROM chat_result_receipts").fetchone()[0], 1
                 )
                 self.assertEqual(host.notifications.repo.unread_count(), 0)
-                self.assertEqual(counts, {"model-a": 3, "model-b": 2})
+                self.assertEqual(counts, {"model-a": 5, "model-b": 2})
+                declarations = [
+                    t for body in gateway.requests for t in body.get("tools", []) if t["name"] == create_tool
+                ]
+                self.assertTrue(declarations)
+                for tool in declarations:
+                    self.assertIs(tool["strict"], False)
+                    self.assertEqual(tool["parameters"]["required"], ["request_id", "title", "prompt"])
+                    trigger = tool["parameters"]["properties"]["trigger"]["anyOf"][0]
+                    self.assertNotIn("allOf", trigger)
+                    self.assertIn("Required when kind=date", trigger["properties"]["at"]["description"])
+                outputs = {
+                    item["call_id"]: item["output"]
+                    for body in gateway.requests
+                    for item in body["input"]
+                    if item.get("type") == "function_call_output"
+                }
+                self.assertIn("model-b", outputs["models"])
+                self.assertIn("[invalid_arguments; not_dispatched;", outputs["invalid-schedule"])
+                self.assertIn("trigger", outputs["invalid-schedule"])
                 child_scope = await host.ai_usage.service.binding(jobs[0]["id"])
                 self.assertEqual(child_scope.work_id, host.backend.client.last_work_id)
                 summary = await host.ai_usage.service.snapshot(child_scope.work_id)
