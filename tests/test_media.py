@@ -529,7 +529,7 @@ class MediaEngineTest(unittest.IsolatedAsyncioTestCase):
             task_run="run",
             plugins=["memory", "devices", "ai_usage"] + (["media"] if True else []),
         )
-        self.assertIn("--task-run", configs["media"]["args"])
+        self.assertEqual(configs["media"]["task_run"], "run")
         self.assertFalse(
             server_config(
                 "/tmp/socket",

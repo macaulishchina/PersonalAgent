@@ -553,7 +553,7 @@ class ExecutionIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 try:
                     scoped = host.runtime.plugins["execution"].servers()
                     self.assertFalse(scoped["external_sample"]["enabled"])
-                    self.assertIn("--task-run", scoped["tasks"]["args"])
+                    self.assertNotIn("tasks", scoped)  # The slim instance has no tasks owner.
                 finally:
                     current_call.reset(token)
                 execution = await host.runtime.invoke(

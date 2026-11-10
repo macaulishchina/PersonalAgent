@@ -250,7 +250,10 @@ class McpTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(not x["enabled"] for x in server_config("/tmp/private.sock", enabled=False).values())
         )
-        self.assertNotEqual(cfg["memory"]["args"], cfg["device"]["args"])
+        self.assertEqual(
+            {name: spec["local_service"] for name, spec in cfg.items()}, {name: name for name in cfg}
+        )
+        self.assertTrue(all("command" not in spec for spec in cfg.values()))
 
 
 if __name__ == "__main__":

@@ -312,7 +312,7 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
             plugins=["memory", "devices", "ai_usage"] + (["search"] if True else []),
         )
         self.assertIn("search", settings)
-        self.assertIn("run", settings["search"]["args"])
+        self.assertEqual(settings["search"]["task_run"], "run")
         self.assertNotIn("search", server_config("/tmp/test"))
         self.assertFalse(
             server_config(

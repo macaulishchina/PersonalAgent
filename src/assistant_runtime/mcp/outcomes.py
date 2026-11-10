@@ -11,10 +11,15 @@ log = logging.getLogger(__name__)
 
 
 class ToolOutcomes(Middleware):
+    def __init__(self, admit=None):
+        self.admit = admit
+
     async def on_call_tool(self, context, call_next):
         dispatched = False
         read_only = False
         try:
+            if self.admit:
+                self.admit(context.message.name)
             # Validate the published owner schema before invoking any handler. Do not
             # classify an arbitrary exception *inside* a handler as non-dispatch.
             if context.fastmcp_context is not None:
@@ -32,7 +37,7 @@ class ToolOutcomes(Middleware):
                     )
                 validate(context.message.arguments or {}, tool.parameters, "")
                 hints = tool.annotations
-                read_only = bool(hints and hints.readOnlyHint is True and hints.destructiveHint is False)
+                read_only = bool(hints and hints.read_only_hint is True and hints.destructive_hint is False)
             dispatched = True
             return await call_next(context)
         except Exception as exc:

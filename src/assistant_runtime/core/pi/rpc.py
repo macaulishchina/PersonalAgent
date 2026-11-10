@@ -19,7 +19,7 @@ import uuid
 
 from assistant_runtime.api.execution import Command
 from assistant_runtime.core.pi.catalog import write_pi_models
-from assistant_runtime.core.pi.mcp import to_pi_mcp_json
+from assistant_runtime.core.pi.mcp import normalize_services, service_owner, to_pi_mcp_json
 from assistant_runtime.core.pi.conversation import retained_native_media_item
 
 log = logging.getLogger(__name__)
@@ -124,6 +124,11 @@ class PiSessionWorker:
         env.update(self.parent.environment)
         for k, v in (self.meta.get("shell_env") or {}).items():
             env[str(k)] = str(v)
+        tool_token = await self.parent.prepare_tools(self)
+        if tool_token:
+            env["PA_SHARED_TOOL_TOKEN"] = tool_token
+        else:
+            env.pop("PA_SHARED_TOOL_TOKEN", None)
         env["PI_CODING_AGENT_DIR"] = str(agent_dir)
         env["PI_CODING_AGENT_SESSION_DIR"] = str(session_dir)
         env["PI_OFFLINE"] = "1"
@@ -137,11 +142,7 @@ class PiSessionWorker:
         env["ASSISTANT_INVALID_TOOL_CALL_LIMIT"] = str(self.parent.settings.invalid_tool_call_limit)
         env["ASSISTANT_TOOL_READ_ATTEMPT_LIMIT"] = str(self.parent.settings.tool_read_attempt_limit)
         env["ASSISTANT_INTERNAL_MCP_SERVERS"] = json.dumps(
-            [
-                name
-                for name, spec in self.meta.get("mcp_servers", {}).items()
-                if spec.get("args", [])[:2] == ["-m", "assistant_runtime.mcp"]
-            ]
+            [name for name, spec in self.meta.get("mcp_servers", {}).items() if spec.get("local_service")]
         )
         env["ASSISTANT_STABLE_EXECUTION_PROMPT"] = "1" if self.meta.get("stable_execution_prompt") else "0"
         env["ASSISTANT_PI_DISCOVERY"] = "1" if self.meta.get("mcp_enabled", True) else "0"
@@ -263,6 +264,7 @@ class PiSessionWorker:
             )
         finally:
             self.compacting = False
+            self.parent.revoke_tools(self)
             for fut in list(self.pending.values()):
                 if not fut.done():
                     fut.set_exception(RpcError("Pi session connection closed"))
@@ -699,6 +701,8 @@ class PiSessionWorker:
 
     async def _finalize_turn(self, turn_id, status, error=None):
         self.compacting = False
+        if self.parent.shared_tools:
+            self.parent.shared_tools.cancel(self)
         # Pi's dialog settles on abort; discard the host correlation too, so a
         # late answer cannot address an ended turn or a later turn's question.
         for ident, (worker, _, _) in list(self.parent.ui_requests.items()):
@@ -827,6 +831,7 @@ class PiSessionWorker:
     async def close(self):
         # A full host event queue must not prevent process/pipes from settling.
         self.compacting = False
+        self.parent.revoke_tools(self)
         for task in self.readers:
             task.cancel()
         await asyncio.gather(*self.readers, return_exceptions=True)
@@ -865,6 +870,7 @@ class PiClient:
         skill_paths=(),
         accounts=None,
         shell="auto",
+        tool_plugins=None,
     ):
         self.pi_binary = binary
         self.shell = shell
@@ -896,6 +902,8 @@ class PiClient:
         self.accounts = accounts or NativeAccounts(Path(cwd), settings, binary=self.pi_binary)
         self.environment["PA_EXECUTION_TOKEN"] = secrets.token_urlsafe(32)
         self.transport = ExecutionTransport(self)
+        self.shared_tools = None
+        self.tool_plugins = tool_plugins
 
     async def start(self):
         pi_command(self.pi_binary)
@@ -1156,6 +1164,7 @@ class PiClient:
         if previous != folder and instructions is None and (previous / "SYSTEM.md").is_file():
             instructions = (previous / "SYSTEM.md").read_text(encoding="utf-8")
         meta["agent_dir"] = str(folder)
+        meta["mcp_servers"] = normalize_services(meta["mcp_servers"])
         meta["mcp_enabled"] = any(spec.get("enabled", True) for spec in meta["mcp_servers"].values())
         meta["policy"] = {
             "allowed_tools": meta.get("allowed_tools"),
@@ -1172,27 +1181,8 @@ class PiClient:
                 for name, spec in meta["mcp_servers"].items()
             },
         }
-        # The host binds internal MCP processes to this execution session. It is
-        # never a tool argument, and is resolved against the active worker on IPC.
-        for spec in meta.get("mcp_servers", {}).values():
-            args = spec.get("args", [])
-            if (
-                len(args) > 2
-                and args[:2] == ["-m", "assistant_runtime.mcp"]
-                and "--execution-session" not in args
-            ):
-                spec["args"] = [*args, "--execution-session", meta["id"]]
         write_pi_models(folder, self.settings, session_id=meta["id"], transport_url=self.transport.url)
         for name, data in (
-            (
-                "mcp.json",
-                to_pi_mcp_json(
-                    meta["mcp_servers"],
-                    preload=meta.get("stable_execution_prompt", False),
-                    allowed=meta.get("allowed_tools"),
-                    limit=self.settings.max_loaded_tools,
-                ),
-            ),
             (
                 "settings.json",
                 {
@@ -1217,6 +1207,42 @@ class PiClient:
             path = folder / "SYSTEM.md"
             path.write_text(instructions, encoding="utf-8")
             system.private(path)
+
+    async def prepare_tools(self, worker, *, inspect=False):
+        meta = worker.meta
+        servers = meta["mcp_servers"] = normalize_services(meta["mcp_servers"])
+        if self.tool_plugins is not None:
+            enabled = set(self.tool_plugins())
+            for name, spec in list(servers.items()):
+                if name != "extensions" and spec.get("local_service") and service_owner(name) not in enabled:
+                    servers[name] = {**spec, "enabled": False}
+            meta["mcp_enabled"] = any(spec.get("enabled", True) for spec in servers.values())
+        names = [
+            name for name, spec in servers.items() if spec.get("local_service") and spec.get("enabled", True)
+        ]
+        token = None
+        if names:
+            from assistant_runtime.core.pi.shared_tools import SharedTools
+
+            if self.shared_tools is None:
+                self.shared_tools = SharedTools(self)
+            await self.shared_tools.prepare(names)
+            token = self.shared_tools.issue(worker)
+        if not inspect:
+            path = Path(meta["agent_dir"]) / "mcp.json"
+            config = to_pi_mcp_json(
+                servers,
+                preload=meta.get("stable_execution_prompt", False),
+                allowed=meta.get("allowed_tools"),
+                limit=self.settings.max_loaded_tools,
+                shared_url=self.shared_tools.url if token else None,
+            )
+            system.atomic_write(path, json.dumps(config).encode("utf-8"))
+        return token
+
+    def revoke_tools(self, worker):
+        if self.shared_tools:
+            self.shared_tools.revoke(worker)
 
     def _session_reply(self, meta, active=False):
         return {
@@ -1540,6 +1566,9 @@ class PiClient:
             if meta.get("input_checkpoint"):
                 meta["input_checkpoint"]["state"] = "canceled"
                 self._save_meta(ident)
+            w.turn_aborted = True
+            if self.shared_tools:
+                self.shared_tools.cancel(w)
             await w.command({"type": "clear_queue"}, timeout=5)
             await w.command({"type": "abort_bash"}, timeout=5)
             await w.command({"type": "abort"}, timeout=10)
@@ -1554,6 +1583,7 @@ class PiClient:
     async def _inspect(self, worker, server):
         from fastmcp import Client
 
+        token = await self.prepare_tools(worker, inspect=True)
         rows = []
         for name, spec in worker.meta["mcp_servers"].items():
             if server and name != server:
@@ -1561,7 +1591,9 @@ class PiClient:
             if not spec.get("enabled", True):
                 rows.append({"name": name, "runtimeStatus": "disabled", "tools": {}})
                 continue
-            entry = to_pi_mcp_json({name: spec})["mcpServers"][name]
+            entry = to_pi_mcp_json({name: spec}, shared_url=self.shared_tools.url if token else None)[
+                "mcpServers"
+            ][name]
             transport = {
                 k: v for k, v in entry.items() if k in {"command", "args", "cwd", "env", "url", "headers"}
             }
@@ -1569,6 +1601,8 @@ class PiClient:
                 transport["env"] = {**os.environ, **self.environment, **transport.get("env", {})}
             if "headers" in transport:
                 environment = {**os.environ, **self.environment}
+                if spec.get("local_service"):
+                    environment["PA_SHARED_TOOL_TOKEN"] = token
                 for header, value in transport["headers"].items():
                     for key, secret in environment.items():
                         value = value.replace("${" + key + "}", secret)
@@ -1609,4 +1643,8 @@ class PiClient:
         await asyncio.gather(*(w.close() for w in list(self.workers.values())), return_exceptions=True)
         self.workers.clear()
         self.ui_requests.clear()
-        await self.transport.close()
+        try:
+            if self.shared_tools:
+                await self.shared_tools.close()
+        finally:
+            await self.transport.close()

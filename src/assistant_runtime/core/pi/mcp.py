@@ -1,9 +1,12 @@
 """Agent-specific MCP registration; MCP services themselves do not import provider code."""
 
-import sys
 from assistant_runtime.api.deadlines import LOCAL_TRANSPORT_SECONDS
 
 from assistant_runtime.core.plugin_catalog import services
+
+
+def service_owner(name):
+    return "devices" if name == "device" else name
 
 
 def server_config(
@@ -15,22 +18,12 @@ def server_config(
     manage_integrations=False,
 ):
     selected = set(plugins)
-    if task_run:
-        selected.add("tasks")
     result = {}
     for name, descriptor in services(selected).items():
-        owner = "devices" if name == "device" else name
-        if owner not in selected:
-            continue
         result[name] = {
-            "command": sys.executable,
-            "args": ["-m", "assistant_runtime.mcp", name, "--socket", str(socket)]
-            + (["--task-run", task_run] if descriptor.task_context and task_run else [])
-            + (
-                ["--manage-integrations"]
-                if name == "integrations" and task_run and manage_integrations
-                else []
-            ),
+            "local_service": name,
+            "socket": str(socket),
+            **({"task_run": task_run} if descriptor.task_context and task_run else {}),
             "enabled": enabled,
             **(
                 {"enabled_tools": list(descriptor.background_tools)}
@@ -42,8 +35,8 @@ def server_config(
             "tool_timeout_sec": LOCAL_TRANSPORT_SECONDS,
         }
     result["extensions"] = {
-        "command": sys.executable,
-        "args": ["-m", "assistant_runtime.mcp", "extensions", "--socket", str(socket)],
+        "local_service": "extensions",
+        "socket": str(socket),
         "enabled": enabled,
         "default_tools_approval_mode": "approve",
         "startup_timeout_sec": 60,
@@ -52,7 +45,23 @@ def server_config(
     return result
 
 
-def to_pi_mcp_json(mcp_servers, *, preload=False, allowed=None, limit=12):
+def normalize_services(servers):
+    """Convert the generated transport in older saved execution metadata."""
+    result = {}
+    for name, spec in servers.items():
+        args = spec.get("args", [])
+        if not name.startswith("external_") and args[:2] == ["-m", "assistant_runtime.mcp"]:
+            if len(args) < 5 or args[2:4] != [name, "--socket"]:
+                raise ValueError("Invalid saved internal MCP service")
+            spec = {k: v for k, v in spec.items() if k not in {"command", "args"}}
+            spec.update(local_service=name, socket=args[4])
+            if "--task-run" in args[5:]:
+                spec["task_run"] = args[args.index("--task-run", 5) + 1]
+        result[name] = spec
+    return result
+
+
+def to_pi_mcp_json(mcp_servers, *, preload=False, allowed=None, limit=12, shared_url=None):
     """Translate internal mcp_servers dict to Pi's mcp.json schema."""
     selected = [name for name in (allowed or []) if name.startswith("mcp__")]
     eager = preload and 0 < len(selected) <= min(4, limit)
@@ -66,7 +75,14 @@ def to_pi_mcp_json(mcp_servers, *, preload=False, allowed=None, limit=12):
             "exposure": "deferred",
             "timeout": int(spec.get("tool_timeout_sec") or spec.get("startup_timeout_sec") or 600),
         }
-        if "command" in spec:
+        if spec.get("local_service"):
+            if not enabled:
+                continue
+            if not shared_url:
+                raise ValueError("Internal MCP transport is not running")
+            entry["url"] = f"{shared_url}/{name}"
+            entry["headers"] = {"Authorization": "Bearer ${PA_SHARED_TOOL_TOKEN}"}
+        elif "command" in spec:
             entry["command"] = spec["command"]
             if spec.get("args"):
                 entry["args"] = list(spec["args"])

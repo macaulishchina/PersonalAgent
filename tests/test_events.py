@@ -415,7 +415,7 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
                 plugins=["memory", "devices", "ai_usage"] + (["events"] if True else []),
             )
             self.assertNotIn("enabled_tools", config["events"])
-            self.assertEqual("--task-run" in config["events"]["args"], run is not None)
+            self.assertEqual(config["events"].get("task_run"), run)
         self.assertNotIn("events", server_config("/tmp/test.sock"))
 
     async def test_ipc_wire_routes_request_and_task_identity(self):

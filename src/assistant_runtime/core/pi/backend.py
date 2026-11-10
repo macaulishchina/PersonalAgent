@@ -48,6 +48,7 @@ class PiBackend:
             usage=usage,
             accounts=accounts,
             shell=getattr(config, "pi_shell", "auto"),
+            tool_plugins=lambda: self.config.enabled_plugins,
         )
         self.integrations = None
         if mcp_registry:

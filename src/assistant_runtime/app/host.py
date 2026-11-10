@@ -87,6 +87,8 @@ class AssistantService:
         return await self._operation_for_client(reader, operation())
 
     async def _operation_for_client(self, reader, operation):
+        if reader is None:
+            return await operation
         work = asyncio.create_task(operation, name="requested-capability")
         disconnected = asyncio.create_task(reader.read(1), name="capability-caller")
         try:
@@ -118,10 +120,17 @@ class AssistantService:
                 except (OSError, ConnectionError):
                     pass
 
-    async def _connection_body(self, reader, writer):
+    async def _connection_body(self, reader, writer, *, payload=None):
         action = None
         try:
-            d = json.loads(await asyncio.wait_for(reader.readline(), 5))
+            d = payload if payload is not None else json.loads(await asyncio.wait_for(reader.readline(), 5))
+            if reader is not None and "execution_turn" in d:
+                # One disconnect watcher covers the whole shared tool call. Nested
+                # capability handlers reuse it instead of reading the socket again.
+                await self._operation_for_client(
+                    reader, AssistantService._connection_body(self, None, writer, payload=d)
+                )
+                return
             action = d["command"]
             if action == "model-test":
                 if d.get("execution_session"):
@@ -253,11 +262,19 @@ class AssistantService:
                 worker = self.backend.client.workers.get(d["execution_session"])
                 if not worker or not worker.active_turn or not worker.meta.get("budget_id"):
                     raise UsageError("usage_inactive_execution")
+                if "execution_turn" in d and (
+                    d["execution_turn"] != worker.active_turn or worker.turn_aborted
+                ):
+                    raise UsageError("usage_inactive_execution")
                 scope = await self.ai_usage.service.binding(
                     worker.meta.get("budget_scope") or worker.meta["budget_id"]
                 )
                 if scope is None:
                     raise UsageError("usage_unknown_execution")
+                if "execution_turn" in d and (
+                    d["execution_turn"] != worker.active_turn or worker.turn_aborted
+                ):
+                    raise UsageError("usage_inactive_execution")
                 if (
                     worker.meta.get("budget_scope")
                     and d.get("caller_run") is not None

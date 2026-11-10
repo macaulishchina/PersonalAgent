@@ -487,7 +487,8 @@ class AdapterTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("enabled_tools", item)
             else:
                 self.assertEqual(set(item["enabled_tools"]), set(INTEGRATION_TOOLS[:3]))
-            self.assertEqual("--manage-integrations" in item["args"], manage)
+            self.assertEqual(item["task_run"], "run")
+            self.assertNotIn("command", item)
 
 
 class ManagementTest(unittest.IsolatedAsyncioTestCase):

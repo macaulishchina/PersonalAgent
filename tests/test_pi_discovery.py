@@ -478,8 +478,8 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                     "allowed_tools": ["mcp__extensions__submit"],
                     "mcp_servers": {
                         "extensions": {
-                            "command": sys.executable,
-                            "args": ["-m", "assistant_runtime.mcp", "extensions", "--socket", str(path)],
+                            "local_service": "extensions",
+                            "socket": str(path),
                         }
                     },
                 },
@@ -579,14 +579,8 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                             "allowed_tools": ["mcp__extensions__sample"],
                             "mcp_servers": {
                                 "extensions": {
-                                    "command": sys.executable,
-                                    "args": [
-                                        "-m",
-                                        "assistant_runtime.mcp",
-                                        "extensions",
-                                        "--socket",
-                                        str(path),
-                                    ],
+                                    "local_service": "extensions",
+                                    "socket": str(path),
                                 }
                             },
                         },

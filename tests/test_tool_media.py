@@ -242,6 +242,105 @@ console.log('OK');
 
 
 class NativeToolMediaTest(unittest.IsolatedAsyncioTestCase):
+    async def test_slim_pi_receives_shared_device_image_and_retains_large_result(self):
+        import re
+        import time
+
+        from assistant_runtime.api.contracts import DeviceQuery, VideoCapture, VideoFrame
+        from assistant_runtime.app.config import Config
+        from assistant_runtime.app.host import AssistantService
+        from assistant_runtime.app.initialize import initialize
+        from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
+        from test_pi_skeleton import configuration
+
+        image = io.BytesIO()
+        Image.new("RGB", (8, 8), "blue").save(image, format="JPEG")
+        raw = image.getvalue()
+        tools = ["mcp__device__list_devices", "mcp__device__capture_image"]
+        marker = "MIDDLE_OF_LARGE_INVENTORY"
+        calls = []
+
+        def model(step, body):
+            if step == 1:
+                return sse_tool_call("inventory", tools[0], {})
+            if step == 2:
+                output = next(
+                    entry["output"]
+                    for entry in body["input"]
+                    if entry.get("call_id") == "inventory" and entry.get("type") == "function_call_output"
+                )
+                reference = re.search(r'"reference":\{"id":"([0-9a-f]{32})"', output)
+                if reference:
+                    return sse_tool_call(
+                        "retained",
+                        "read_result",
+                        {
+                            "id": reference[1],
+                            "format": "text",
+                            "path": "/structured/structuredContent/devices/0",
+                            "offset": 50000,
+                            "length": 60,
+                        },
+                    )
+                return sse_text_reply("missing", "RESULT_NOT_RETAINED")
+            if step == 3:
+                return sse_tool_call("picture", tools[1], {"device_id": "sample"})
+            return sse_text_reply("done", "IMAGE_READY")
+
+        gateway = FakeResponsesGateway(model)
+        self.addAsyncCleanup(gateway.aclose)
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config = Config.load(initialize(root / "instance", preset="slim"))
+        config = replace(
+            config,
+            plugins=[*config.enabled_plugins, "devices"],
+            model_api=configuration(gateway.base_url),
+            main_model="model-a",
+            main_reasoning_effort="low",
+        )
+        (config.root / ".env").write_text("TEST_KEY=synthetic-key\n")
+        host = AssistantService(config)
+        running = asyncio.create_task(host.run())
+        try:
+            await asyncio.wait_for(host.runtime.ready.wait(), 20)
+            invoke = host.runtime.invoke
+
+            async def synthetic(request, **kwargs):
+                if isinstance(request, DeviceQuery):
+                    calls.append("list")
+                    return {"devices": ["x" * 50000 + marker + "x" * 50000]}
+                if isinstance(request, VideoCapture):
+                    calls.append("capture")
+                    return VideoFrame("sample", raw, 8, 8, time.time(), 1)
+                return await invoke(request, **kwargs)
+
+            with patch.object(host.runtime, "invoke", side_effect=synthetic):
+                execution = await invoke(
+                    ExecutionRequest(
+                        "submit",
+                        {
+                            "request_id": uuid.uuid4().hex,
+                            "text": "Synthetic device report",
+                            "tools": [*tools, "read_result"],
+                        },
+                    )
+                )
+                async with asyncio.timeout(30):
+                    while execution["state"] not in {"completed", "failed", "unknown"}:
+                        await asyncio.sleep(0.025)
+                        execution = await invoke(ExecutionRequest("get", {"id": execution["id"]}))
+            self.assertEqual(execution["state"], "completed", execution)
+            self.assertEqual(calls, ["list", "capture"])
+            self.assertEqual(len(gateway.requests), 4)
+            self.assertNotIn(marker, json.dumps(gateway.requests[1]))
+            self.assertIn(marker, json.dumps(gateway.requests[2]))
+            self.assertIn("data:image/jpeg;base64,", json.dumps(gateway.requests[3]))
+            self.assertEqual(Path(execution["attachments"][0]["path"]).read_bytes(), raw)
+            self.assertEqual(set(host.backend.client.shared_tools.apps), {"device"})
+        finally:
+            host.stop_event.set()
+            await asyncio.wait_for(running, 15)
+
     async def test_real_pi_mcp_image_retained_before_next_model_request(self):
         from assistant_runtime.app.config import Config
         from assistant_runtime.app.initialize import initialize

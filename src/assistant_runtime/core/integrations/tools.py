@@ -56,7 +56,7 @@ def create_server(client, caller_run=None, can_manage=False):
         return await call(
             "verify",
             name=name,
-            context=context or ("background" if caller_run else "foreground"),
+            context=context or ("background" if getattr(client, "caller_run", caller_run) else "foreground"),
             include_schemas=include_schemas,
         )
 

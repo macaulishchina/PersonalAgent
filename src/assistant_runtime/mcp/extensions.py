@@ -28,14 +28,23 @@ def create_server(registry, identity):
 
 
 def create_remote_server(client):
-    """Refresh enabled tools at discovery; never import extension packages in an agent helper."""
+    """Project the live registry without importing or instantiating extension owners."""
     from fastmcp.server.providers import Provider
 
     class RemoteTools(Provider):
+        catalog = None
+        tools = ()
+
+        async def get_tasks(self):
+            # These tools return ordinary MCP results. Lifespan setup has no caller identity.
+            return []
+
         async def _list_tools(self):
-            metadata = await client.request({"command": "plugin-tools"})
+            catalog = (await client.request({"command": "plugin-tools"}))["tools"]
+            if self.catalog == catalog:
+                return self.tools
             tools = []
-            for spec in metadata["tools"]:
+            for spec in catalog:
 
                 def bind(name):
                     async def invoke(**arguments):
@@ -55,7 +64,9 @@ def create_remote_server(client):
                         fn=bind(spec["name"]),
                     )
                 )
-            return tools
+            self.catalog = catalog
+            self.tools = tuple(tools)
+            return self.tools
 
         async def _get_tool(self, name, version=None):
             return next((tool for tool in await self._list_tools() if tool.name == name), None)

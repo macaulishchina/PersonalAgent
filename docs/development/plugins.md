@@ -377,6 +377,10 @@ API 2 的可信服务插件使用 `execution_control` 注入资源；必须声�
 `assistant_runtime.api.tool_calls.invalid_arguments(message, field)`。
 直接调用与内部 MCP 保留同一结构；MCP 使用标准 content/structuredContent/isError。
 
+内置 MCP 和扩展工具由 PA 的实例级服务提供。工具实现使用当前调用的公开身份和上下文，
+避免在工具对象或模块变量上保存“当前任务”。独立调用可以交错，确需互斥时由插件按
+实际业务对象加锁。等待中的调用应响应取消，并为已派发的外部操作保留可核对的回执。
+
 操作返回后输出 Schema 不匹配时，注册表保留可序列化的 received_result，标记结果未知，
 不得通过重新调用修复展示。插件应返回稳定操作 ID、真实状态及查询方式；submitted
 不等于 completed。取消、重启和超时不能代替回执核查。并发资源锁和业务幂等由插件负责。
