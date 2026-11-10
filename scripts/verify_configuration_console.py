@@ -139,7 +139,57 @@ def arguments():
     )
     parser.add_argument("--browser", help="Optional Chromium executable")
     parser.add_argument("--artifacts", type=Path, help="Optional directory for synthetic screenshots")
+    parser.add_argument(
+        "--navigation-only", action="store_true", help="Only verify plugin navigation and draft preservation"
+    )
     return parser.parse_args()
+
+
+async def verify_navigation(page, origin):
+    navigation = page.locator("#navigation")
+    web_link = navigation.get_by_role("button", name="聊天网页", exact=True)
+    await expect(web_link).to_have_count(1)
+    await navigation.get_by_role("button", name="功能与插件", exact=True).click()
+    card = page.locator('.plugin-option:has(input[value="web"])')
+    await card.get_by_role("switch").uncheck()
+    await expect(web_link).to_have_count(0)
+    await card.get_by_role("button", name="配置", exact=True).click()
+    await expect(page.locator("#page-title")).to_have_text("聊天网页")
+    await expect(web_link).to_have_count(0)  # Selected/configurable does not mean enabled.
+    enabled = page.locator(selector(["plugin_settings", "web", "enable"])).locator('input[type="checkbox"]')
+    next_value = not await enabled.is_checked()
+    await enabled.set_checked(next_value)
+    await page.get_by_role("button", name="返回功能与插件", exact=True).click()
+    await card.get_by_role("button", name="配置", exact=True).click()
+    await expect(enabled).to_be_checked(checked=next_value)
+    await expect(web_link).to_have_count(0)
+    await page.get_by_role("button", name="放弃修改", exact=True).click()
+    await expect(web_link).to_have_count(1)
+    await navigation.get_by_role("button", name="功能与插件", exact=True).click()
+    await card.get_by_role("switch").uncheck()
+    await card.get_by_role("switch").check()
+    await expect(web_link).to_have_count(1)
+    await page.get_by_role("button", name="放弃修改", exact=True).click()
+
+    async def unsupported(route):
+        response = await route.fetch()
+        catalogue = await response.json()
+        next(p for p in catalogue["plugins"] if p["id"] == "web")["platform_supported"] = False
+        await route.fulfill(response=response, json=catalogue)
+
+    # Simulate a saved selection whose platform metadata no longer supports this host.
+    await page.route("**/api/catalog", unsupported)
+    await page.reload()
+    await expect(page.locator("#editor")).to_be_visible()
+    await expect(web_link).to_have_count(0)
+    await navigation.get_by_role("button", name="功能与插件", exact=True).click()
+    await expect(card.get_by_role("switch")).to_be_checked()
+    await expect(card.get_by_role("button", name="配置", exact=True)).to_be_visible()
+    await page.unroute("**/api/catalog", unsupported)
+    await page.reload()
+    await expect(web_link).to_have_count(1)
+    configuration = await (await page.request.get(origin + "/api/configuration")).json()
+    assert "web" in next(f["value"] for f in configuration["fields"] if f["path"] == ["plugins"])
 
 
 async def main():
@@ -191,6 +241,8 @@ async def main():
         import tomlkit
 
         document = tomlkit.parse(entry.read_text())
+        if args.navigation_only and "web" not in document["plugins"]:
+            document["plugins"].append("web")
         if sys.platform == "linux":
             document["plugins"].append("sample")
         else:
@@ -272,6 +324,12 @@ default_reasoning_effort = "none"
                 await page.get_by_role("button", name="登录", exact=True).click()
                 await expect(page.locator("#editor")).to_be_visible()
                 await expect(page.get_by_role("button", name="模型与账号", exact=True)).to_be_visible()
+                if args.navigation_only:
+                    await verify_navigation(page, origin)
+                    assert not errors, errors
+                    await capture(page, "configuration-navigation.png")
+                    print(json.dumps({"plugin_navigation": "passed", "javascript_errors": errors}))
+                    return
                 async with asyncio.timeout(25):
                     while (initial := await (await page.request.get(origin + "/api/status")).json())[
                         "state"

@@ -214,7 +214,8 @@ function workspaceRender() {
   const plugins = inventory.plugins.filter(
     (p) =>
       p.page?.startsWith("plugin:") &&
-      (enabled.includes(p.id) || selected === p.page || p.configuration?.interface?.page),
+      enabled.includes(p.id) &&
+      p.platform_supported === true,
   );
   if (plugins.length) navigation.append(node("p", "插件设置", "nav-label"));
   for (const plugin of plugins) {
