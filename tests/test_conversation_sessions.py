@@ -142,6 +142,50 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
             any(row["session_id"] == first["id"] for row in self.store.transcripts.completed_inputs(0))
         )
 
+    async def test_configure_policy_preserves_identity_and_creation_receipt(self):
+        key = str(uuid.uuid4())
+        original = {"tools": ["read_tool"], "capture_memory": False}
+        session = (await self.call("create", title="scoped", request_id=key, policy=original))["id"]
+        policy = {**original, "tools": ["read_tool", "write_tool"]}
+        result = await self.call("configure", session_id=session, policy=policy)
+        self.assertEqual(result, {"session_id": session, "policy": policy})
+        self.assertEqual(self.registry.sessions.policy(session), policy)
+        self.assertEqual(
+            (await self.call("create", title="scoped", request_id=key, policy=original))["id"], session
+        )
+        await self.registry.get(session)
+        self.assertEqual(await self.call("configure", session_id=session, policy=policy), result)
+        with self.assertRaisesRegex(ValueError, "before.*opened"):
+            await self.call("configure", session_id=session, policy=original)
+        self.assertEqual(self.registry.sessions.policy(session), policy)
+
+    async def test_model_execution_cannot_reconfigure_conversation(self):
+        from assistant_runtime.api.ai_usage import current_usage
+
+        session = (await self.call("create"))["id"]
+        usage = current_usage.set(object())
+        bound = current_conversation.set(session)
+        try:
+            with self.assertRaisesRegex(ValueError, "outside"):
+                await self.call("configure", session_id=session, policy={"tools": []})
+        finally:
+            current_conversation.reset(bound)
+            current_usage.reset(usage)
+        self.assertEqual(self.registry.sessions.policy(session), {})
+
+    async def test_invalid_configuration_never_changes_policy(self):
+        session = (await self.call("create"))["id"]
+        for policy in (
+            None,
+            {"tools": "tool"},
+            {"capture_memory": 1},
+            {"secret": "invalid"},
+            {"instructions": "x" * 4001},
+        ):
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                await self.call("configure", session_id=session, policy=policy)
+        self.assertEqual(self.registry.sessions.policy(session), {})
+
     async def send(self, session, text, ident=None):
         ident = ident or str(uuid.uuid4())
         return ident, await self.call("submit", session_id=session, request_id=ident, text=text)
@@ -533,9 +577,11 @@ class MigrationTest(unittest.TestCase):
             try:
                 store.set("session_id", "retained")
                 store.db.set_authorizer(
-                    lambda action, table, *args: sqlite3.SQLITE_DENY
-                    if action == sqlite3.SQLITE_INSERT and table == "conversation_bindings"
-                    else sqlite3.SQLITE_OK
+                    lambda action, table, *args: (
+                        sqlite3.SQLITE_DENY
+                        if action == sqlite3.SQLITE_INSERT and table == "conversation_bindings"
+                        else sqlite3.SQLITE_OK
+                    )
                 )
                 with self.assertRaises(sqlite3.DatabaseError):
                     Sessions(store)

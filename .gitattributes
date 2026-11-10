@@ -1,3 +1,5 @@
 
 # Shell entry points must remain executable by Linux shells.
 *.sh text eol=lf
+# Vendored driver digests are defined over upstream LF bytes on every platform.
+src/assistant_runtime/plugins/ai_passport/firmware/components/bsp/** text eol=lf

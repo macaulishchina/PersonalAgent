@@ -282,7 +282,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         from PIL import Image
 
         c = self.host.conversation
-        self.host.config.plugin_settings["web"]["enable"] = False
+        self.host.config.plugin_settings.setdefault("web", {})["enable"] = False
         data = io.BytesIO()
         Image.new("RGB", (4, 4), "red").save(data, format="PNG")
         c.provider_event(

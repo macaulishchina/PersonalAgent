@@ -80,20 +80,7 @@ class Sessions:
         if not isinstance(title, str) or not title.strip() or len(title) > 120:
             raise ValueError("Conversation title must be 1..120 characters")
         policy = policy or {}
-        if not isinstance(policy, dict) or set(policy) - {"tools", "instructions", "capture_memory"}:
-            raise ValueError("Invalid conversation policy")
-        if "tools" in policy and (
-            not isinstance(policy["tools"], list)
-            or len(policy["tools"]) > 64
-            or any(not isinstance(t, str) or not 0 < len(t) <= 160 for t in policy["tools"])
-        ):
-            raise ValueError("Expected bounded tool names")
-        if "instructions" in policy and (
-            not isinstance(policy["instructions"], str) or len(policy["instructions"]) > 4000
-        ):
-            raise ValueError("Expected bounded conversation instructions")
-        if "capture_memory" in policy and type(policy["capture_memory"]) is not bool:
-            raise ValueError("Expected memory capture flag")
+        self.validate_policy(policy)
         fingerprint = json.dumps([title, policy], sort_keys=True, ensure_ascii=False)
         if request_id is not None:
             request_id = str(uuid.UUID(request_id))
@@ -115,6 +102,39 @@ class Sessions:
                     (request_id, fingerprint, ident),
                 )
         return self.get(ident)
+
+    @staticmethod
+    def validate_policy(policy):
+        if not isinstance(policy, dict) or set(policy) - {"tools", "instructions", "capture_memory"}:
+            raise ValueError("Invalid conversation policy")
+        if "tools" in policy and (
+            not isinstance(policy["tools"], list)
+            or len(policy["tools"]) > 64
+            or any(not isinstance(t, str) or not 0 < len(t) <= 160 for t in policy["tools"])
+        ):
+            raise ValueError("Expected bounded tool names")
+        if "instructions" in policy and (
+            not isinstance(policy["instructions"], str) or len(policy["instructions"]) > 4000
+        ):
+            raise ValueError("Expected bounded conversation instructions")
+        if "capture_memory" in policy and type(policy["capture_memory"]) is not bool:
+            raise ValueError("Expected memory capture flag")
+
+    def policy(self, ident):
+        self.get(ident)
+        row = self.db.execute(
+            "SELECT data FROM conversation_policies WHERE session_id=?", (ident,)
+        ).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def configure(self, ident, policy):
+        self.get(ident)
+        self.validate_policy(policy)
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO conversation_policies VALUES(?,?)", (ident, json.dumps(policy))
+            )
+        return {"session_id": ident, "policy": policy}
 
     def list(self, before=None, limit=50):
         if type(limit) is not int or not 1 <= limit <= 100:

@@ -10,6 +10,7 @@ Software clients cannot establish physical button, display or acoustic acceptanc
 
 import argparse
 import asyncio
+from contextlib import closing
 import json
 import math
 import os
@@ -36,7 +37,7 @@ from assistant_runtime.core.ai_usage.settings import UsageSettings  # noqa: E402
 
 def speech_cost(path):
     """Operator-only accounting; count unresolved reservations, never clear them."""
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         rows = db.execute(
             "SELECT state,cost,reserved_cost FROM calls WHERE provider='aliyun_speech'"
         ).fetchall()

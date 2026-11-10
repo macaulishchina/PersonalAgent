@@ -7,6 +7,7 @@ import logging
 import math
 import json
 import time
+from itertools import count
 
 from assistant_runtime.api.contracts import (
     DeviceQuery,
@@ -32,6 +33,7 @@ class DeviceDirectory:
         self.reading_clocks = {}
         self.observation_order = {}
         self.probe_order = ContextVar("device_probe_order", default=None)
+        self.order = count(1)
 
     def register(self, owner, device_id, capabilities, probe):
         spec = self.config[device_id]
@@ -79,7 +81,7 @@ class DeviceDirectory:
         # A probe inherits its start order. Push updates and snapshots assembled
         # from the adapter's current state use publication order instead.
         probe = self.probe_order.get()
-        order = probe[1] if not live and probe and probe[0] == device_id else time.monotonic_ns()
+        order = probe[1] if not live and probe and probe[0] == device_id else next(self.order)
         if order < self.observation_order.get(device_id, 0):
             return
         data = json.loads(payload)
@@ -172,7 +174,7 @@ class DeviceDirectory:
         if request.action != "inspect" or request.device_id not in self.entries:
             raise ValueError("Unknown device query or device ID")
         ident = request.device_id
-        token = self.probe_order.set((ident, time.monotonic_ns()))
+        token = self.probe_order.set((ident, next(self.order)))
         try:
             await self.probes[ident]()
         except Exception as exc:

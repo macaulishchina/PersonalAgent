@@ -1,5 +1,12 @@
 # Public conversations
 
+Since 0.5.3, trusted entrances can call `configure` with `session_id` and a complete
+`policy` (`tools`, `instructions`, `capture_memory`) before opening the session.
+It preserves history, identity and original creation receipts. Repeating the same
+policy is safe, including after opening; changing an opened session is rejected.
+Model/tool executions cannot configure a conversation. Apply policy upgrades before
+opening any view or submitting work; restarting does not replay prior requests.
+
 Since 0.4.17, `snapshot`, `snapshot_receipt`, and `snapshot_inputs` expose immutable
 complete checkpoints and paged source-input coverage. Capture never waits for the
 active round or invokes a model; unproven legacy coverage is explicit. See the

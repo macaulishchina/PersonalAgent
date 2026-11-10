@@ -97,7 +97,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
             (
                 Path(__file__).resolve().parents[1]
                 / "src/assistant_runtime/plugins/aliyun_speech/configuration.json"
-            ).read_text()
+            ).read_text(encoding="utf-8")
         )["schema"]["properties"]
         settings = {k: v["default"] for k, v in config.items()}
         settings["endpoint"] = str(self.server.make_url("/speech")).replace("http:", "ws:")
@@ -1271,6 +1271,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages[-1]["type"], "playback.stop")
 
 
+@unittest.skipUnless(__import__("sys").platform == "linux", "Requires Linux-certified speech_io")
 class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
     async def test_real_pi_with_synthetic_voice_and_duplicate_input(self):
         import tempfile

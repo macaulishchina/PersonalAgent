@@ -82,6 +82,7 @@ class Conversations:
         action, args = request.action, request.arguments
         allowed = {
             "create": {"title", "request_id", "policy"},
+            "configure": {"session_id", "policy"},
             "list": {"before", "limit"},
             "open": {"operator", "session_id"},
             "history": {"session_id", "before"},
@@ -109,7 +110,7 @@ class Conversations:
             raise ValueError("Invalid conversation operation")
         bound = current_conversation.get()
         if current_usage.get() is not None and (
-            not bound or action in {"create", "list", "open"} or args.get("session_id") != bound
+            not bound or action in {"create", "configure", "list", "open"} or args.get("session_id") != bound
         ):
             raise ValueError("Conversation operation is outside the bound execution")
         if action == "create":
@@ -130,6 +131,13 @@ class Conversations:
             return self.sessions.get(ident)
         ident = args.get("session_id")
         self.sessions.get(ident)
+        if action == "configure":
+            policy = args.get("policy")
+            self.sessions.validate_policy(policy)
+            async with self.opening:
+                if ident in self.opened and self.sessions.policy(ident) != policy:
+                    raise ValueError("Conversation policy can only change before the session is opened")
+                return self.sessions.configure(ident, policy)
         if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:
             return await self.snapshots.request(action, args)
         store = self.main.store

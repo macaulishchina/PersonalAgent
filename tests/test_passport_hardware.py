@@ -83,6 +83,7 @@ class AllowanceTest(unittest.IsolatedAsyncioTestCase):
                 SpeechAllowance(Path(directory), Path(directory) / "missing.sqlite3")
 
 
+@unittest.skipUnless(sys.platform == "linux", "Requires Linux-certified speech_io")
 class RigTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_then_task_completion_through_real_pi_and_bounded_terminal_protocol(self):
         with tempfile.TemporaryDirectory(prefix="pp-rig-") as directory:
