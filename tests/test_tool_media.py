@@ -163,9 +163,11 @@ assert.equal(projection(text).state,'ready');
 assert.equal(projection(text).media,undefined);
 assert.ok(!/images|attached|export|save/i.test(text.content[0].text));
 const native = IMAGES.map(i=>({type:'image',mimeType:i.mime_type,data:i.data}));
-receipt = {state:'partial',reference:{id:'partial',state:'ready'},media:{state:'partial',attachments:[{id:'a'}],issues:[{index:1,code:'tool_media_invalid_image'}]}};
+const imageId = 'a'.repeat(32);
+receipt = {state:'partial',reference:{id:'partial',state:'ready'},media:{state:'partial',attachments:[{id:imageId,path:'/private/internal-image'}],issues:[{index:1,code:'tool_media_invalid_image'}]}};
 const partial = await hook({toolName:'capture',toolCallId:'partial',isError:false,content:native});
-assert.deepEqual(projection(partial).media,{state:'partial',received_count:2,available_count:1});
+assert.deepEqual(projection(partial).media,{state:'partial',received_count:2,available_count:1,references:['attachment:'+imageId]});
+assert.ok(!partial.content[0].text.includes('/private/internal-image'));
 assert.equal(projection(partial).business_is_error,false);
 assert.ok(partial.content[0].text.includes('do not claim all returned images were delivered'));
 assert.ok(partial.content[0].text.includes('1 of 2'));
@@ -173,7 +175,7 @@ assert.ok(!partial.content[0].text.includes('already attached'));
 assert.deepEqual(partial.content.slice(1),native);
 receipt = {state:'failed',media:{state:'failed',attachments:[],issues:[{code:'tool_media_storage_unavailable'}]}};
 const failed = await hook({toolName:'capture',toolCallId:'failed',content:native});
-assert.deepEqual(projection(failed).media,{state:'failed',received_count:2,available_count:0});
+assert.deepEqual(projection(failed).media,{state:'failed',received_count:2,available_count:0,references:[]});
 assert.ok(!failed.content[0].text.includes('No additional save'));
 assert.ok(failed.content[0].text.includes('Do not repeat the operation'));
 assert.deepEqual(failed.content.slice(1),native);
@@ -416,6 +418,7 @@ class NativeToolMediaTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("data:image/png;base64,", following)
                 self.assertEqual(len(execution["attachments"]), 1, execution)
                 ref = execution["attachments"][0]
+                self.assertIn("attachment:" + ref["id"], following)
                 self.assertEqual(Path(ref["path"]).read_bytes(), raw)
                 self.assertEqual(ref["bytes"], len(raw))
                 self.assertEqual(ref["sha256"], hashlib.sha256(raw).hexdigest())

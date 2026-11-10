@@ -210,6 +210,16 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
           available_count: Array.isArray(receipt.media?.attachments)
             ? receipt.media.attachments.length
             : 0,
+          references: Array.isArray(receipt.media?.attachments)
+            ? receipt.media.attachments
+                .slice(0, 4)
+                .flatMap((item: any) =>
+                  typeof item?.id === "string" &&
+                  /^[a-f0-9]{32}$/.test(item.id)
+                    ? ["attachment:" + item.id]
+                    : [],
+                )
+            : [],
         }
       : undefined;
     const ready = retained && (!media || media.state === "ready");
@@ -239,7 +249,7 @@ export function registerResultDelivery(pi: any, allowed?: string[]) {
           ? " Received content retained."
           : " Content retention is incomplete; original business outcome is unchanged.") +
         (media?.available_count
-          ? ` ${media.available_count} of ${media.received_count} received images are registered reply resources. The caller controls their inline presentation; registration does not confirm the user has viewed them. No additional save/export is needed for these registered images.`
+          ? ` ${media.available_count} of ${media.received_count} received images are registered reply resources. Where supported, place an image with ![caption](attachment:<id>) using its exact reference above. The caller controls presentation; no additional save/export is needed.`
           : "") +
         (media && media.state !== "ready"
           ? " Image retention is incomplete; do not claim all returned images were delivered."

@@ -9,6 +9,31 @@ export type Attachment = {
   url?: string;
 };
 
+export function MessageImage({
+  attachment,
+  caption,
+  className,
+  onOpen,
+}: {
+  attachment: Attachment;
+  caption?: string;
+  className?: string;
+  onOpen: (url: string) => void;
+}) {
+  const url = chatPath("api/uploads/" + attachment.id);
+  const name = caption || attachment.name;
+  return (
+    <button
+      type="button"
+      className={className}
+      aria-label={"查看图片 " + name}
+      onClick={() => onOpen(url)}
+    >
+      <img src={url} alt={name} loading="lazy" />
+    </button>
+  );
+}
+
 export function ImagePreview({
   url,
   onClose,
@@ -83,17 +108,7 @@ export function MessageMedia({
             </figcaption>
           </figure>
         ) : (
-          <button
-            key={a.id}
-            aria-label={"查看图片 " + a.name}
-            onClick={() => onOpen(chatPath("api/uploads/" + a.id))}
-          >
-            <img
-              src={chatPath("api/uploads/" + a.id)}
-              alt={a.name}
-              loading="lazy"
-            />
-          </button>
+          <MessageImage key={a.id} attachment={a} onOpen={onOpen} />
         ),
       )}
     </div>

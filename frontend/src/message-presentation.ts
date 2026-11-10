@@ -75,6 +75,15 @@ export function groupToolRetries<
   return entries;
 }
 
+export function isReplyBody(message: MessageOrigin) {
+  return (
+    message.role === "assistant" &&
+    message.kind === "message" &&
+    message.presentation?.phase !== "commentary" &&
+    Boolean(message.text?.trim() || message.attachments?.length)
+  );
+}
+
 /** Media belongs to the reply turn; tool records retain their original evidence. */
 export function replyMedia<A extends { id: string }>(
   groups: {
@@ -101,11 +110,7 @@ export function replyMedia<A extends { id: string }>(
         reply = { group: group.id, answered: false, references: new Map() };
         replies.set(key, reply);
       }
-      if (
-        message.kind === "message" &&
-        message.presentation?.phase !== "commentary" &&
-        (message.text?.trim() || message.attachments?.length)
-      ) {
+      if (isReplyBody(message)) {
         reply.group = group.id;
         reply.answered = true;
       } else if (message.attachments?.length && !reply.answered)
@@ -116,7 +121,10 @@ export function replyMedia<A extends { id: string }>(
     }
   }
   const galleries = new Map<string, A[]>();
-  for (const reply of replies.values()) {
+  const byTurn = new Map<string, ReadonlySet<string>>();
+  for (const [key, reply] of replies) {
+    if (key.startsWith("turn:"))
+      byTurn.set(key.slice("turn:".length), new Set(reply.references.keys()));
     const previous = galleries.get(reply.group) || [];
     galleries.set(reply.group, [
       ...new Map(
@@ -124,7 +132,7 @@ export function replyMedia<A extends { id: string }>(
       ).values(),
     ]);
   }
-  return galleries;
+  return { galleries, byTurn };
 }
 
 export function replySettled(

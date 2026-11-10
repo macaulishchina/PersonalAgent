@@ -43,6 +43,7 @@ import {
 import "./style.css";
 import { ActivityPanel, type PanelSection } from "./activity";
 import { MessageMedia, ImagePreview, type Attachment } from "./message-media";
+import { ReplyMarkdown } from "./reply-markdown";
 import { ToolResult, toolOutcome, type ToolSummary } from "./tool-result";
 import {
   isReport,
@@ -55,11 +56,12 @@ import {
   replySections,
   replySettled,
   replyMedia,
+  isReplyBody,
   type MessageOrigin,
 } from "./message-presentation";
 import { TaskReport, ReportCollection } from "./task-report";
 
-type Message = MessageOrigin & {
+type Message = Omit<MessageOrigin, "attachments"> & {
   id: string;
   ordinal: number;
   role: string;
@@ -304,6 +306,8 @@ function MessageEntry({
   onRetry,
   retryDisabled,
   showMedia = true,
+  replyAttachments,
+  inlineImageIds,
 }: {
   message: Message;
   onOpen: (url: string) => void;
@@ -313,6 +317,8 @@ function MessageEntry({
   onRetry: (turn: string, requestId: string) => Promise<void>;
   retryDisabled: boolean;
   showMedia?: boolean;
+  replyAttachments?: Attachment[];
+  inlineImageIds: ReadonlySet<string>;
 }) {
   const detail = messageDetail(m);
   const statuses: Record<string, string> = {
@@ -418,14 +424,25 @@ function MessageEntry({
               text={m.text}
               reference={m.result_ref}
               presentation={m.presentation}
-              render={(text) => (
-                <Markdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                >
-                  {text}
-                </Markdown>
-              )}
+              render={(text) =>
+                replyAttachments &&
+                (replyAttachments.length || text.includes("attachment:")) ? (
+                  <ReplyMarkdown
+                    text={text}
+                    attachments={replyAttachments}
+                    inlineIds={inlineImageIds}
+                    onOpen={onOpen}
+                    components={markdownComponents}
+                  />
+                ) : (
+                  <Markdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {text}
+                  </Markdown>
+                )
+              }
             />
             {m.status === "streaming" && !m.text && (
               <span className="thinking">
@@ -460,9 +477,11 @@ function ConversationGroup({
   retryDisabled,
   settled,
   media,
+  mediaByTurn,
 }: {
   group: MessageGroup;
   media: Attachment[];
+  mediaByTurn: ReadonlyMap<string, ReadonlySet<string>>;
   onRetry: (turn: string, requestId: string) => Promise<void>;
   retryDisabled: boolean;
   settled: boolean;
@@ -474,6 +493,14 @@ function ConversationGroup({
 }) {
   const user = group.role === "user";
   const sharedMedia = !user && !group.messages.some(isReport);
+  const replyBody = sharedMedia
+    ? group.messages.filter((m) => isReplyBody(m) && !m.failure).at(-1)
+    : undefined;
+  // Legacy messages grouped by display order may share a gallery but cannot
+  // grant inline placement to a different message or known turn.
+  const inlineImageIds =
+    (replyBody?.turn_id && mediaByTurn.get(replyBody.turn_id)) ||
+    new Set(replyBody?.attachments.map((a) => a.id));
   const [resolvedTask, setResolvedTask] = useState<string | null>(null);
   const latest = isReport(group.messages[0])
     ? group.messages.at(-1)!
@@ -497,6 +524,8 @@ function ConversationGroup({
       onRetry={onRetry}
       retryDisabled={retryDisabled}
       showMedia={showMedia && !sharedMedia}
+      replyAttachments={m === replyBody ? media : undefined}
+      inlineImageIds={inlineImageIds}
       onOpen={onOpen}
       onOpenTask={onOpenTask}
       onResolvedTask={setResolvedTask}
@@ -623,7 +652,7 @@ function ConversationGroup({
           );
         })
       )}
-      {sharedMedia && (
+      {sharedMedia && !replyBody && (
         <MessageMedia attachments={media} onOpen={onOpen} label="回复媒体" />
       )}
     </section>
@@ -727,7 +756,7 @@ function App() {
     .filter((message) => message.role === "user")
     .at(-1);
   const groups = groupMessages(displayedMessages);
-  const galleries = replyMedia<Attachment>(groups);
+  const { galleries, byTurn } = replyMedia<Attachment>(groups);
   const pendingDispatch = latestUser?.status === "sending";
   const foregroundBusy =
     sending ||
@@ -1251,6 +1280,7 @@ function App() {
                 key={group.id}
                 group={group}
                 media={galleries.get(group.id) || []}
+                mediaByTurn={byTurn}
                 settled={replySettled(
                   group.messages,
                   state.active_turn_id,

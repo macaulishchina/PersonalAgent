@@ -16,6 +16,12 @@ without model avatars, names or descriptions. Loading the conversation does not 
 the model catalog or avatar assets. Model IDs and route revisions remain the execution
 identity; configuration model presentation and explicit task model details are separate.
 
+Reply Markdown can place a registered image with `![caption](attachment:<id>)`.
+Only images owned by that reply turn can be placed. Each placed image appears once
+and opens through the conversation's existing authenticated media endpoint.
+Other attachments stay in the reply gallery. External Markdown images use text
+placeholders. Code blocks preserve literal syntax.
+
 ## Composer delivery
 
 The same compact composer is used before and during execution. While an execution is

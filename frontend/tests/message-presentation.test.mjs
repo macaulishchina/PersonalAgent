@@ -372,7 +372,7 @@ test("reply media follows its answer across process and notification groups with
   ];
   const original = JSON.stringify(rows);
   const groups = groupMessages(rows);
-  const galleries = replyMedia(groups);
+  const { galleries } = replyMedia(groups);
   const answer = groups.find((g) => g.messages.some((m) => m.id === "answer"));
   const first = groups.find((g) => g.messages.some((m) => m.id === "capture"));
   assert.deepEqual(galleries.get(answer.id), [image, video]);
@@ -395,7 +395,7 @@ test("media remains visible while running or after failure, and late media joins
     text: "调用工具\ncapture",
     attachments: [{ id: "a" }],
   };
-  assert.deepEqual(replyMedia(groupMessages([tool])).get("tool"), [
+  assert.deepEqual(replyMedia(groupMessages([tool])).galleries.get("tool"), [
     { id: "a" },
   ]);
   const failed = {
@@ -407,9 +407,11 @@ test("media remains visible while running or after failure, and late media joins
     attachments: [],
   };
   const rows = [tool, failed];
-  assert.deepEqual(replyMedia(groupMessages(rows)).get("tool"), [{ id: "a" }]);
+  assert.deepEqual(replyMedia(groupMessages(rows)).galleries.get("tool"), [
+    { id: "a" },
+  ]);
   tool.attachments.push({ id: "late" });
-  assert.deepEqual(replyMedia(groupMessages(rows)).get("tool"), [
+  assert.deepEqual(replyMedia(groupMessages(rows)).galleries.get("tool"), [
     { id: "a" },
     { id: "late" },
   ]);
@@ -429,7 +431,7 @@ test("user media and messages without a turn identity never transfer into anothe
     updated: 1,
     attachments: [{ id }],
   });
-  const galleries = replyMedia(
+  const { galleries } = replyMedia(
     groupMessages([
       row("input", "user"),
       row("reply", "assistant"),
@@ -440,4 +442,40 @@ test("user media and messages without a turn identity never transfer into anothe
   assert.deepEqual([...galleries.keys()], ["reply", "reply2"]);
   assert.deepEqual(galleries.get("reply"), [{ id: "reply" }]);
   assert.deepEqual(galleries.get("reply2"), [{ id: "reply2" }]);
+});
+
+test("legacy attachments near a known turn share the gallery without granting inline placement", () => {
+  const tool = {
+    id: "old",
+    role: "assistant",
+    source: "task",
+    kind: "detail",
+    text: "调用工具\n旧记录",
+    updated: 1,
+    attachments: [{ id: "legacy" }],
+  };
+  const rows = [
+    tool,
+    {
+      ...tool,
+      id: "new",
+      updated: 2,
+      turn_id: "turn",
+      attachments: [{ id: "registered" }],
+    },
+    {
+      ...tool,
+      id: "answer",
+      updated: 3,
+      turn_id: "turn",
+      kind: "message",
+      attachments: [],
+    },
+  ];
+  const { galleries, byTurn } = replyMedia(groupMessages(rows));
+  assert.deepEqual(galleries.get("old"), [
+    { id: "legacy" },
+    { id: "registered" },
+  ]);
+  assert.deepEqual(byTurn.get("turn"), new Set(["registered"]));
 });
