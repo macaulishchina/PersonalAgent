@@ -50,14 +50,15 @@ class DeviceRegistration:
                     self.__directory.probes,
                     self.__directory.observations,
                     self.__directory.reading_clocks,
+                    self.__directory.observation_order,
                 ):
                     values.pop(ident, None)
         self.__registered.clear()
 
-    def observe(self, owner, device_id, observation):
+    def observe(self, owner, device_id, observation, *, live=False):
         if owner != self.__owner:
             raise ValueError("Device observation owner mismatch")
-        return self.__directory.observe(owner, device_id, observation)
+        return self.__directory.observe(owner, device_id, observation, live=live)
 
 
 def environment(

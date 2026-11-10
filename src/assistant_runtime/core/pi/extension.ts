@@ -116,18 +116,19 @@ export default function (pi: any) {
           tool.name.startsWith("mcp__") && slash > 0
             ? tool.label.slice(0, slash)
             : undefined;
+        const readOnly =
+          tool.annotations?.readOnlyHint === true &&
+          tool.annotations?.destructiveHint === false;
         if (server)
           origins.set(tool.name, {
             server,
             tool: tool.label.slice(slash + 1),
-            readOnly:
-              tool.annotations?.readOnlyHint === true &&
-              tool.annotations?.destructiveHint === false,
+            readOnly,
           });
         pi.registerTool({
           ...tool,
           executionMode:
-            internal.includes(server) && tool.annotations?.readOnlyHint === true
+            internal.includes(server) && readOnly
               ? "parallel"
               : "sequential",
         });

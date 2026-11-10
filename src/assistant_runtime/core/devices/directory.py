@@ -1,8 +1,8 @@
 """One owner for device queries, with bounded adapter snapshots and freshness."""
 
 from dataclasses import asdict
+from contextvars import ContextVar
 import copy
-import asyncio
 import logging
 import math
 import json
@@ -10,6 +10,7 @@ import time
 
 from assistant_runtime.api.contracts import (
     DeviceQuery,
+    DeviceObservation,
     VideoCapture,
     SensorReading,
     CameraMotion,
@@ -29,6 +30,8 @@ class DeviceDirectory:
         self.probes = {}
         self.observations = {}
         self.reading_clocks = {}
+        self.observation_order = {}
+        self.probe_order = ContextVar("device_probe_order", default=None)
 
     def register(self, owner, device_id, capabilities, probe):
         spec = self.config[device_id]
@@ -57,7 +60,7 @@ class DeviceDirectory:
         }
         self.probes[device_id] = probe
 
-    def observe(self, owner, device_id, observation):
+    def observe(self, owner, device_id, observation, *, live=False):
         if self.entries[device_id]["adapter"] != owner:
             raise ValueError("Observation owner mismatch")
         if observation.state not in {"available", "unavailable", "error"}:
@@ -73,6 +76,12 @@ class DeviceDirectory:
         payload = json.dumps(asdict(observation), ensure_ascii=False, allow_nan=False)
         if len(payload.encode()) > 8192:
             raise ValueError("Device snapshot exceeds 8 KiB")
+        # A probe inherits its start order. Push updates and snapshots assembled
+        # from the adapter's current state use publication order instead.
+        probe = self.probe_order.get()
+        order = probe[1] if not live and probe and probe[0] == device_id else time.monotonic_ns()
+        if order < self.observation_order.get(device_id, 0):
+            return
         data = json.loads(payload)
         clocks = self.reading_clocks.setdefault(device_id, {})
         for metric, reading in data["readings"].items():
@@ -87,6 +96,7 @@ class DeviceDirectory:
         for metric in set(clocks) - data["readings"].keys():
             del clocks[metric]
         self.observations[device_id] = (data, time.monotonic())
+        self.observation_order[device_id] = order
 
     def snapshot(self, device_id):
         if device_id not in self.entries:
@@ -162,24 +172,16 @@ class DeviceDirectory:
         if request.action != "inspect" or request.device_id not in self.entries:
             raise ValueError("Unknown device query or device ID")
         ident = request.device_id
+        token = self.probe_order.set((ident, time.monotonic_ns()))
         try:
             await self.probes[ident]()
-        except asyncio.CancelledError:
-            from assistant_runtime.api.contracts import DeviceObservation
-
-            self.observe(
-                self.entries[ident]["adapter"],
-                ident,
-                DeviceObservation("error", error="Probe interrupted; availability unconfirmed"),
-            )
-            raise
         except Exception as exc:
             # A failed probe cannot make an older available reading look current.
-            from assistant_runtime.api.contracts import DeviceObservation
-
             self.observe(
                 self.entries[ident]["adapter"], ident, DeviceObservation("error", error=str(exc)[:200])
             )
+        finally:
+            self.probe_order.reset(token)
         return {"device": self.snapshot(ident)}
 
 

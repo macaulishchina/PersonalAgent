@@ -336,9 +336,24 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(OSError):
                 await self.downloads.process(item)
         self.repo.recover()
+        self.repo.request_cancel(item["id"])
+        self.calls.clear()
         await self.downloads.process(self.repo.get(item["id"]))
         self.assertEqual(len(self.ranges), 1)
+        self.assertEqual(self.calls, [])
         self.assertEqual(self.repo.get(item["id"])["state"], "completed")
+
+    async def test_unconfirmed_publication_does_not_publish_again_after_restart(self):
+        item = self.create()
+        with patch.object(LocalFiles, "publish", side_effect=OSError("lost publication result")) as publish:
+            with self.assertRaises(OSError):
+                await self.downloads.process(item)
+            self.repo.recover()
+            with self.assertRaisesRegex(MediaError, "download_publication_unconfirmed"):
+                await self.downloads.process(self.repo.get(item["id"]))
+            publish.assert_called_once()
+        self.assertEqual(len(self.ranges), 1)
+        self.assertFalse((self.library / self.file["name"]).exists())
 
     async def test_shutdown_retains_partial_and_cancel_removes_it_without_auth(self):
         item = self.create()

@@ -37,6 +37,8 @@ MESSAGES = {
     "share_password_invalid": "分享提取码无效，需核对提取码。",
     "library_content_changed": "删除后的对象身份或内容核验不一致，系统已保留回执并停止后续步骤。",
     "library_write_unconfirmed": "网盘已接受操作，但当前证据不足以确认结果。",
+    "download_publication_unconfirmed": "本地文件发布结果未确认。系统会保留记录供核对，避免重复发布。",
+    "media_file_busy": "同一媒体目标仍有操作在途或待核实，请先查看现有操作。",
     "directory_copy_receipt_unconfirmed": "整目录转存已提交，但尚未取得可信的目标目录回执；不会重新提交。",
     "directory_copy_unconfirmed": "目标目录与源目录清单尚不一致，系统保留回执等待核验。",
     "directory_restore_unconfirmed": "恢复后的目录清单尚未通过核验。",

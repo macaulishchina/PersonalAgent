@@ -54,8 +54,8 @@ class SearchPlugin:
 
     def maintenance_pending(self):
         return [
-            {"state": "running", "id": key}
-            for key, flight in self.flights.items()
+            {"state": "running", "id": flight["metrics"]["upstream_request_id"]}
+            for flight in self.flights.values()
             if not flight["task"].done()
         ]
 
@@ -182,7 +182,7 @@ class SearchPlugin:
         self.last_error[provider] = code
         return {"state": "failed", "error": {"code": code}, **metrics}
 
-    async def lookup(self, provider, action, payload, maximum, refresh, deadline, trace, scope):
+    async def lookup(self, provider, action, payload, maximum, refresh, trace, scope):
         key = hashlib.sha256(
             json.dumps([provider, action, payload, maximum], sort_keys=True).encode()
         ).hexdigest()
@@ -194,11 +194,15 @@ class SearchPlugin:
             self.forget(key)
         if key in self.cache:
             self.cache.move_to_end(key)
-            return {**copy.deepcopy(self.cache[key][1]), "cached": True, "coalesced": False}
-        flight = self.flights.get(key)
+            cached = copy.deepcopy(self.cache[key][1])
+            cached.pop("usage_call_ids", None)
+            return {**cached, "cached": True, "coalesced": False, "upstream_attempts": 0}
+        flight_key = (key, scope)
+        flight = self.flights.get(flight_key)
         coalesced = flight is not None
         if flight is None:
             metrics = {"upstream_request_id": uuid.uuid4().hex, "upstream_attempts": 0}
+            deadline = time.monotonic() + self.settings.timeout_seconds
             flight = {
                 "metrics": metrics,
                 "task": self.context.spawn(
@@ -206,7 +210,7 @@ class SearchPlugin:
                 ),
                 "waiters": 0,
             }
-            self.flights[key] = flight
+            self.flights[flight_key] = flight
         flight["waiters"] += 1
         try:
             result = await asyncio.shield(flight["task"])
@@ -218,11 +222,11 @@ class SearchPlugin:
             trace["coalesced"] = coalesced
             flight["waiters"] -= 1
             if not flight["waiters"]:
+                if self.flights.get(flight_key) is flight:
+                    del self.flights[flight_key]
                 if not flight["task"].done():
                     flight["task"].cancel()
                     await asyncio.gather(flight["task"], return_exceptions=True)
-                if self.flights.get(key) is flight:
-                    del self.flights[key]
 
     async def request(self, request):
         if not self.accepting:
@@ -290,9 +294,7 @@ class SearchPlugin:
                         raise SearchError("invalid_page_content_limit")
                     payload = {"url": public_url(args.get("url"))}
                 scope = await self.api.resource("usage").scope(request.caller_run)
-                result = await self.lookup(
-                    provider, action, payload, maximum, refresh, deadline, trace, scope
-                )
+                result = await self.lookup(provider, action, payload, maximum, refresh, trace, scope)
                 # A stopped execution may not receive newly fetched/cached information.
                 await self.authorize(request.caller_run)
         except TimeoutError:

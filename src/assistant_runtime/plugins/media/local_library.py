@@ -188,12 +188,7 @@ class LocalLibrary:
         return self.p.settings.local_targets[target]
 
     def busy(self, target):
-        if self.db.execute(
-            """SELECT 1 FROM media_operations WHERE state NOT IN ('completed','failed','cancelled')
-                AND json_extract(data,'$.intent.target')=? AND json_extract(data,'$.intent.kind')='download'
-                LIMIT 1""",
-            (target,),
-        ).fetchone():
+        if self.p.repo.local_busy(self.binding(target), "download"):
             raise MediaError("local_library_busy")
 
     async def listing(self, target, path="", marker=""):
@@ -296,8 +291,10 @@ class LocalLibrary:
             if step["state"] == "submitted" and step["action"] == "mkdir":
                 # Existing name cannot prove our unacknowledged mkdir created it.
                 raise MediaError("mkdir_identity_unconfirmed", uncertain=True)
-            step["state"] = "submitted"
-            self.p.repo.change(ident, "submitting", steps=steps, submitted=True)
+            if step["state"] != "submitted":
+                step["state"] = "submitted"
+                if not self.p.repo.begin_write(ident, steps=steps):
+                    return
             result = await disk(local_call, binding, "change", step)
             extra = {"location": "local", "trashed": step["action"] == "trash"}
             if step["action"] == "trash":

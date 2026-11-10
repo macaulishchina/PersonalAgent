@@ -181,9 +181,9 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_query_coalesces_and_one_cancel_does_not_kill_other_waiter(self):
         self.release = asyncio.Event()
-        first = asyncio.create_task(self.call(query="coalesce"))
+        first = asyncio.create_task(self.call(run="run", query="coalesce"))
         await self.entered.wait()
-        second = asyncio.create_task(self.call(query="coalesce"))
+        second = asyncio.create_task(self.call(run="run", query="coalesce"))
         await asyncio.sleep(0.03)
         first.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -195,6 +195,55 @@ class SearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.seen), 1)
         self.assertEqual(self.plugin.pending, 0)
         self.assertFalse(self.plugin.flights)
+
+    async def test_new_waiter_never_joins_a_flight_still_settling_after_cancel(self):
+        started, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        original = self.plugin.work
+
+        async def work(*args):
+            if not started.is_set():
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    settling.set()
+                    await release.wait()
+            return await original(*args)
+
+        with patch.object(self.plugin, "work", side_effect=work):
+            first = asyncio.create_task(self.call(run="run", query="replacement"))
+            try:
+                await asyncio.wait_for(started.wait(), 2)
+                first.cancel()
+                await asyncio.wait_for(settling.wait(), 2)
+                second = await self.call(run="run", query="replacement")
+                self.assertEqual(second["state"], "completed")
+                self.assertFalse(second["coalesced"])
+                self.assertEqual(len(self.seen), 1)
+            finally:
+                release.set()
+                await asyncio.gather(first, return_exceptions=True)
+
+    async def test_concurrent_searches_with_different_work_admit_independently(self):
+        self.calls.runs["another"] = {"state": "running"}
+        self.release = asyncio.Event()
+        a = asyncio.create_task(self.call(run="run", query="same across work"))
+        b = asyncio.create_task(self.call(run="another", query="same across work"))
+        try:
+            async with asyncio.timeout(2):
+                while len(self.seen) < 2:
+                    await asyncio.sleep(0)
+            self.release.set()
+            left, right = await asyncio.gather(a, b)
+        finally:
+            self.release.set()
+            await asyncio.gather(a, b, return_exceptions=True)
+        self.assertNotEqual(left["upstream_request_id"], right["upstream_request_id"])
+        cached = await self.call(query="same across work")
+        self.assertTrue(cached["cached"])
+        self.assertEqual(cached["upstream_attempts"], 0)
+        self.assertNotIn("usage_call_ids", cached)
+        self.assertEqual(len(self.seen), 2)
 
     async def test_cancel_all_and_shutdown_release_owned_work_without_poisoning_plugin(self):
         self.release = asyncio.Event()

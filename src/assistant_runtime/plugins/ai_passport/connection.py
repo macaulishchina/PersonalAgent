@@ -28,6 +28,9 @@ class Connection:
         self.generation = 0
         self.playing = None
         self.closed = False
+        self.closing = None
+        self.frame_done = asyncio.Event()
+        self.frame_done.set()
         self.cursor = 0
         self.started = time.time()
         self.send_lock = asyncio.Lock()
@@ -96,11 +99,14 @@ class Connection:
         # Reconnection displays history without replaying historical speech.
         for message in history["items"]:
             await self.restore_message(message)
+        if self.closed:
+            return
         self.watch_task = self.spawn(self.watch(), "state")
         self.spawn(self.watch_notices(), "notifications")
         async for frame in self.ws:
-            if frame.type not in {WSMsgType.TEXT, WSMsgType.BINARY}:
+            if self.closed or frame.type not in {WSMsgType.TEXT, WSMsgType.BINARY}:
                 break
+            self.frame_done.clear()
             operation = None
             try:
                 if frame.type == WSMsgType.BINARY:
@@ -148,6 +154,8 @@ class Connection:
                         )
                     await self.abort_input()
                 await self.error(exc, request_id=ident, operation=operation)
+            finally:
+                self.frame_done.set()
 
     async def error(self, exc, request_id=None, operation=None):
         code = exc.code if isinstance(exc, SpeechError) else "terminal_request_failed"
@@ -951,9 +959,14 @@ class Connection:
                     await self.start_playback(notice)
 
     async def close(self):
-        if self.closed:
-            return
-        self.closed = True
+        if self.closing is None:
+            self.closed = True
+            self.closing = asyncio.create_task(self._close())
+        await asyncio.shield(self.closing)
+
+    async def _close(self):
+        # Let an already accepted frame finish before touching its input receipt.
+        await self.frame_done.wait()
         self.thumbnail = None
         try:
             for task in tuple(self.tasks):

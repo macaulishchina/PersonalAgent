@@ -126,11 +126,11 @@ class Downloads:
     def cancelled(self, ident):
         return self.repo.get(ident)["data"].get("cancel_requested", False)
 
-    async def digest(self, fd, algorithm, ident):
+    async def digest(self, fd, algorithm, ident, *, observe=False):
         await disk(os.lseek, fd, 0, os.SEEK_SET)
         digest = hashlib.new(algorithm)
         while True:
-            if self.cancelled(ident):
+            if not observe and self.cancelled(ident):
                 raise MediaError("download_cancelled")
             block = await disk(os.read, fd, 2 * 1024**2)
             if not block:
@@ -155,8 +155,11 @@ class Downloads:
             )
             if dest != intent["destination"] or parts != intent["relative_parts"]:
                 raise MediaError("download_path_changed")
-        if self.cancelled(ident):
-            previous = item["data"].get("file")
+        publishing = item["data"].get("submitted", False)
+        previous = item["data"].get("file")
+        if not publishing and (
+            self.cancelled(ident) or self.repo.batch_cancelled(item["data"].get("batch_id"))
+        ):
             if previous:
                 files = LocalFiles(local_destination, ident, previous["name"], 0)
                 try:
@@ -170,20 +173,25 @@ class Downloads:
         backend = intent.get("file_backend", "native")
         if backend != self.settings.files_for(intent["destination"]["account"]):
             raise MediaError("target_configuration_changed")
-        if backend == "openlist":
+        download = None
+        if publishing:
+            metadata = previous
+        elif backend == "openlist":
             from .openlist_library import OpenListLibrary
 
             library = OpenListLibrary(self.plugin.library)
             if library.binding(intent["target"]) != intent["backend_binding"]:
                 raise MediaError("target_configuration_changed")
             download = await library.files(intent["target"]).download(intent["path"])
+            metadata = download["file"]
         else:
             download = await self.plugin.provider.call(
                 "download_url", {**intent["destination"], "file_id": intent["file_id"]}
             )
-        metadata = download["file"]
+            metadata = download["file"]
         if (
-            metadata.get("type") != "file"
+            not metadata
+            or metadata.get("type") != "file"
             or metadata.get("category") != "video"
             or type(metadata.get("size")) is not int
             or metadata["size"] <= 0
@@ -194,20 +202,19 @@ class Downloads:
         widths = {"md5": 32, "sha1": 40, "sha256": 64}
         if algorithm not in widths or not re.fullmatch("[0-9a-f]{%d}" % widths[algorithm], expected):
             raise MediaError("download_checksum_unavailable")
-        previous = item["data"].get("file")
         if previous and metadata != previous:
             raise MediaError("download_source_changed")
         self.repo.change(ident, "checking", file=metadata)
         files = LocalFiles(local_destination, ident, metadata["name"], self.settings.download_min_free_bytes)
         try:
             offset = await disk(files.open)
-            if self.cancelled(ident):
+            if not publishing and self.cancelled(ident):
                 raise MediaError("download_cancelled")
             final = await disk(files.final_descriptor)
             if final is not None:
                 try:
                     if (await disk(os.fstat, final)).st_size != metadata["size"] or await self.digest(
-                        final, algorithm, ident
+                        final, algorithm, ident, observe=publishing
                     ) != expected:
                         raise MediaError("destination_name_conflict")
                 finally:
@@ -215,20 +222,22 @@ class Downloads:
                 await disk(files.remove_partial)
                 self.complete(ident, metadata)
                 return
+            if publishing:
+                raise MediaError("download_publication_unconfirmed", uncertain=True)
             if offset > metadata["size"]:
                 raise MediaError("download_partial_invalid")
             if (await disk(os.fstat, files.fd)).st_nlink != 1:
                 raise MediaError("unsafe_download_partial")
             await disk(files.space, metadata["size"] - offset)
             await disk(os.lseek, files.fd, offset, os.SEEK_SET)
-            if offset < metadata["size"]:
+            if download and offset < metadata["size"]:
                 await self.receive(ident, download, metadata, files, offset)
             self.repo.change(ident, "verifying")
             if await self.digest(files.fd, algorithm, ident) != expected:
                 # Never resume corrupted bytes or expose them in the library.
                 await disk(files.remove_partial)
                 raise MediaError("download_checksum_mismatch")
-            if self.cancelled(ident):
+            if not self.repo.begin_write(ident, "verifying", cancel_in_worker=True):
                 raise MediaError("download_cancelled")
             await disk(files.publish)
             self.complete(ident, metadata)
@@ -250,6 +259,7 @@ class Downloads:
         self.repo.change(
             ident,
             "completed",
+            submitted=False,
             verification="content_hash",
             local_path=path,
             progress={
@@ -410,7 +420,9 @@ class Downloads:
                 current = self.repo.get(item["id"])
                 attempts = current["data"].get("attempts", 0) + 1
                 state = "failed"
-                if code == "download_cancelled":
+                if current["data"].get("submitted"):
+                    state = "uncertain"
+                elif code == "download_cancelled":
                     state = "cancelled"
                 elif code == "auth_required":
                     state = "waiting_auth"

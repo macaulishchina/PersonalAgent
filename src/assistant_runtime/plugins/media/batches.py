@@ -127,6 +127,8 @@ class Batches:
         result = self.get(ident)
         if owner != "assistant" and result["owner"] != owner:
             raise ValueError("Batch belongs to another task")
+        if result["state"] in {"completed", "partial", "failed", "cancelled"}:
+            return result
         row = self.db.execute("SELECT data FROM media_batches WHERE id=?", (ident,)).fetchone()
         data = json.loads(row[0])
         data["cancel_requested"] = True
@@ -134,6 +136,11 @@ class Batches:
             self.db.execute(
                 "UPDATE media_batches SET state=?,data=? WHERE id=?", ("running", canonical(data), ident)
             )
+        for entry in data["items"]:
+            if entry.get("operation_id"):
+                operation = self.p.repo.get(entry["operation_id"])
+                if operation["data"].get("batch_id") == ident:
+                    self.p.repo.request_cancel(operation["id"])
         return self.get(ident)
 
     def save(self, ident, state, data):
@@ -224,8 +231,9 @@ class Batches:
                     except (ValueError, RuntimeError) as exc:
                         # Do not expose SDK strings or account details.
                         auth = isinstance(exc, MediaError) and exc.code == "auth_required"
+                        cancelled = isinstance(exc, MediaError) and exc.code == "media_batch_cancelled"
                         entry.update(
-                            state="waiting_auth" if auth else "failed",
+                            state="cancelled" if cancelled else "waiting_auth" if auth else "failed",
                             error=exc.code if isinstance(exc, MediaError) else "invalid_batch_item",
                         )
                     finally:

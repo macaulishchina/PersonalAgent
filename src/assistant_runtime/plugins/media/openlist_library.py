@@ -120,7 +120,7 @@ class OpenListLibrary:
         if self.binding(target) != intent["backend_binding"]:
             raise MediaError("target_configuration_changed")
         files, steps = self.files(target), item["data"]["steps"]
-        # Downloads wait; two queued library plans are serialized by Library.lock.
+        # Downloads and library changes on this target must not overlap.
         if self.repo.db.execute(
             """SELECT 1 FROM media_operations WHERE state NOT IN ('completed','failed','cancelled')
             AND json_extract(data,'$.intent.target')=? AND json_extract(data,'$.intent.kind')='download'""",
@@ -139,8 +139,14 @@ class OpenListLibrary:
                 if before != (None if action == "mkdir" else await files.stat(step["path"])):
                     raise MediaError("library_precondition_changed")
                 await files.absent(step["destination"])
+                self.library.protect_destination(
+                    intent["destination"],
+                    set(),
+                    paths=(files.path(step["path"]), files.path(step["destination"])),
+                )
                 step["state"] = "submitted"
-                self.repo.change(ident, "submitting", steps=steps, submitted=True)
+                if not self.repo.begin_write(ident, steps=steps):
+                    return
                 try:
                     step["receipt"] = await files.change(action, step["path"], step["destination"])
                 except MediaError as exc:
@@ -212,5 +218,7 @@ class OpenListLibrary:
         file = (await self.files(target).download(path))["file"]
         if file["category"] != "video":
             raise MediaError("source_must_be_a_verifiable_video_file")
+        if self.repo.local_busy(intent["local_destination"], "library"):
+            raise MediaError("local_library_busy")
         item = self.repo.create(args.get("request_id"), intent, owner, caller, initial={"file": file})
         return self.repo.public(item)

@@ -29,6 +29,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.received = []
         self.fault = None
+        self.run_gate = None
 
         async def ws_handler(request):
             ws = web.WebSocketResponse()
@@ -51,6 +52,8 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
                 action = command["header"]["action"]
                 self.received.append(action)
                 if action == "run-task":
+                    if self.run_gate:
+                        await self.run_gate.wait()
                     self.asr = command["payload"]["task"] == "asr"
                     if self.fault:
                         await ws.send_json(
@@ -190,6 +193,37 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.usage.admit.await_count, 200)
         self.assertEqual(self.usage.settle.await_count, 200)
 
+    async def test_four_opening_streams_each_reserve_one_slot_and_cancellation_releases_it(self):
+        self.run_gate = asyncio.Event()
+        request = SynthesisRequest(self.scope, "测试")
+        opening = [asyncio.create_task(self.provider.request(request)) for _ in range(4)]
+        try:
+            async with asyncio.timeout(2):
+                while self.received.count("run-task") < 4:
+                    await asyncio.sleep(0)
+            with self.assertRaisesRegex(SpeechError, "speech_busy"):
+                await self.provider.request(request)
+            opening[0].cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await opening[0]
+            replacement = asyncio.create_task(self.provider.request(request))
+            opening.append(replacement)
+            async with asyncio.timeout(2):
+                while self.received.count("run-task") < 5:
+                    await asyncio.sleep(0)
+            self.run_gate.set()
+            streams = await asyncio.gather(*opening[1:])
+            self.assertEqual(len(self.provider.streams), 4)
+            self.assertFalse(self.provider.opening)
+            await asyncio.gather(*(stream.aclose() for stream in streams))
+            self.assertFalse(self.provider.streams)
+        finally:
+            self.run_gate.set()
+            for task in opening:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*opening, return_exceptions=True)
+
 
 class ConnectionLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -289,6 +323,52 @@ class ConnectionLifecycleTest(unittest.IsolatedAsyncioTestCase):
             await self.connect()
         self.assertEqual(revoked.exception.status, 401)
         await third.close()
+
+    async def test_repeated_reconnect_waits_for_previous_cleanup_without_blocking_other_device(self):
+        self.plugin.settings["max_connections"] = 2
+        first = await self.connect()
+        await first.receive_json()
+        old = self.plugin.connections[self.ident]
+        entered, release = asyncio.Event(), asyncio.Event()
+        frame_entered, frame_release = asyncio.Event(), asyncio.Event()
+
+        async def command(data):
+            frame_entered.set()
+            await frame_release.wait()
+
+        async def abort(**kwargs):
+            entered.set()
+            await release.wait()
+
+        old.command = AsyncMock(side_effect=command)
+        old.abort_input = abort
+        await first.send_json({"type": "test.frame"})
+        await asyncio.wait_for(frame_entered.wait(), 2)
+        replacement = asyncio.create_task(self.connect())
+        try:
+            async with asyncio.timeout(2):
+                while not old.closed:
+                    await asyncio.sleep(0)
+            self.assertFalse(entered.is_set())
+            await first.send_json({"type": "test.late_frame"})
+            with self.assertRaises(WSServerHandshakeError) as rejected:
+                await self.connect()
+            self.assertEqual(rejected.exception.status, 409)
+            other = "e" * 32
+            code = self.devices.begin(other, self.credential)["code"]
+            self.devices.activate(code, "Other", "persistent-session")
+            independent = await asyncio.wait_for(self.connect(ident=other), 2)
+            self.assertEqual((await independent.receive_json())["type"], "hello")
+            self.assertFalse(replacement.done())
+            frame_release.set()
+            await asyncio.wait_for(entered.wait(), 2)
+            old.command.assert_awaited_once()
+        finally:
+            frame_release.set()
+            release.set()
+            result = await asyncio.gather(replacement, return_exceptions=True)
+        self.assertEqual((await result[0].receive_json())["type"], "hello")
+        self.assertTrue(old.ws.closed)
 
 
 class EntranceReceiptTest(unittest.IsolatedAsyncioTestCase):

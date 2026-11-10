@@ -530,9 +530,17 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
     async def test_native_batch_parallelizes_internal_reads_but_serializes_writes(self):
         from assistant_runtime.platforms.ipc import serve
 
-        for read_only in (True, False):
-            with self.subTest(read_only=read_only):
-                path = self.root / f"batch-{read_only}.sock"
+        for annotations, parallel in (
+            ({"readOnlyHint": True, "destructiveHint": False}, True),
+            ({"readOnlyHint": False, "destructiveHint": False}, False),
+            ({"readOnlyHint": True, "destructiveHint": True}, False),
+            ({"readOnlyHint": True}, False),
+        ):
+            with self.subTest(annotations=annotations):
+                path = (
+                    self.root
+                    / f"batch-{annotations['readOnlyHint']}-{annotations.get('destructiveHint')}.sock"
+                )
                 activity = []
                 entered = asyncio.Event()
 
@@ -551,7 +559,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                                             "required": ["id"],
                                         },
                                         "output_schema": {"type": "object"},
-                                        "annotations": {"readOnlyHint": read_only},
+                                        "annotations": annotations,
                                     }
                                 ]
                             }
@@ -560,7 +568,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                             activity.append(("start", ident))
                             if ident == 2:
                                 entered.set()
-                            if read_only:
+                            if parallel:
                                 await asyncio.wait_for(entered.wait(), 5)
                             else:
                                 await asyncio.sleep(0.05)
@@ -593,7 +601,7 @@ class DiscoveryTest(unittest.IsolatedAsyncioTestCase):
                         else sse_text_reply("done", "verified")
                     )
                     await self.run_prompt(ident)
-                    if read_only:
+                    if parallel:
                         self.assertEqual(activity[:2], [("start", 1), ("start", 2)])
                         self.assertEqual(sorted(activity[2:]), [("end", 1), ("end", 2)])
                     else:

@@ -42,12 +42,9 @@ async def process(plugin, item, *, observe_only=False):
             raise MediaError("capacity_unconfirmed")
         if capacity["total"] - capacity["used"] < needed:
             raise MediaError("capacity_exhausted")
-        if repo.get(ident)["data"].get("cancel_requested"):
-            repo.change(ident, "cancelled")
+        plugin.library.protect_destination(destination, {root["name"]}, excluding=ident)
+        if not repo.begin_write(ident, submitted_at=time.time(), file=root, manifest=manifest):
             return
-        repo.change(
-            ident, "submitting", submitted=True, submitted_at=time.time(), file=root, manifest=manifest
-        )
         # Persist submission intent before the only write. A lost reply never reaches this branch again.
         try:
             receipt = await plugin.provider.call("copy", {**intent, **destination})
@@ -108,7 +105,7 @@ async def process(plugin, item, *, observe_only=False):
 
 async def reconcile(plugin, item):
     """Read existing receipts only; a later missing object does not erase prior completion."""
-    async with plugin.library.lock:
+    async with plugin.library.write_lock(item):
         current = plugin.repo.get(item["id"])
         try:
             await process(plugin, current, observe_only=True)

@@ -144,6 +144,7 @@ class AppleHomePlugin:
                 error=error,
                 readings=self.readings[ident],
             ),
+            live=True,
         )
 
     async def receive(self, request):

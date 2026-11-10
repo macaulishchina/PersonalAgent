@@ -6,8 +6,10 @@ import json
 import time
 import uuid
 from contextvars import ContextVar
+from pathlib import Path
 
 from .openlist_sync import track
+from .errors import MediaError
 
 CURRENT_BATCH = ContextVar("media_batch", default=None)
 
@@ -126,6 +128,9 @@ class MediaRepository:
         ).fetchone()
         if prior:
             return self.get(prior[0])
+        batch = CURRENT_BATCH.get()
+        if self.batch_cancelled(batch):
+            raise MediaError("media_batch_cancelled")
         count = self.db.execute("SELECT count(*) FROM media_operations").fetchone()[0]
         pending = self.db.execute(
             "SELECT count(*) FROM media_operations WHERE state NOT IN ('completed','failed','cancelled')"
@@ -140,7 +145,7 @@ class MediaRepository:
             "attempts": 0,
             "created_at": now,
             "stages": [],
-            "batch_id": CURRENT_BATCH.get(),
+            "batch_id": batch,
             **(initial or {}),
         }
         with self.db:
@@ -164,7 +169,9 @@ class MediaRepository:
         if state not in STATES:
             raise ValueError("Invalid media state")
         item, now = self.get(ident), time.time()
-        if state not in {"failed", "cancelled"} and item["state"] in {"failed", "cancelled"}:
+        if item["state"] == "cancelled" and state != "cancelled":
+            return item
+        if state not in {"failed", "cancelled"} and item["state"] == "failed":
             newer = self.db.execute(
                 "SELECT id FROM media_operations WHERE identity=(SELECT identity FROM media_operations WHERE id=?) "
                 "AND id!=? AND state NOT IN ('failed','cancelled')",
@@ -226,6 +233,54 @@ class MediaRepository:
                     report_with_task=bool(data.get("caller_run")),
                 )
         return self.get(ident)
+
+    def request_cancel(self, ident):
+        item = self.get(ident)
+        if item["state"] in TERMINAL:
+            return item
+        state, data = item["state"], item["data"]
+        if data["intent"].get("kind") == "download":
+            if state not in {"checking", "downloading", "verifying"}:
+                state = "queued"  # The download worker owns partial-file cleanup.
+        elif not data.get("submitted") and state != "checking":
+            state = "cancelled"
+        return self.change(ident, state, cancel_requested=True)
+
+    def begin_write(self, ident, state="submitting", *, cancel_in_worker=False, **changes):
+        """Claim one write on the repository's event-loop owner before awaiting it."""
+        item = self.get(ident)
+        if item["state"] in TERMINAL:
+            return False
+        if item["data"].get("cancel_requested") or self.batch_cancelled(item["data"].get("batch_id")):
+            if not cancel_in_worker:
+                self.change(ident, "cancelled", cancel_requested=True, submitted=False)
+            return False
+        self.change(ident, state, submitted=True, **changes)
+        return True
+
+    def batch_cancelled(self, batch):
+        return bool(
+            batch
+            and self.db.execute(
+                "SELECT 1 FROM media_batches WHERE id=? AND json_extract(data,'$.cancel_requested')=1",
+                (batch,),
+            ).fetchone()
+        )
+
+    def local_busy(self, binding, kind):
+        root = Path(binding["path"])
+        for (value,) in self.db.execute(
+            """SELECT coalesce(json_extract(data,'$.intent.local_binding.path'),
+                               json_extract(data,'$.intent.local_destination.path'))
+            FROM media_operations WHERE state NOT IN ('completed','failed','cancelled')
+            AND json_extract(data,'$.intent.kind')=?""",
+            (kind,),
+        ):
+            if value:
+                other = Path(value)
+                if root.is_relative_to(other) or other.is_relative_to(root):
+                    return True
+        return False
 
     def recover(self):
         # A process may have died after the server accepted copy but before the reply.
@@ -314,7 +369,10 @@ class MediaRepository:
             "state": item["state"],
             "outcome": "partial"
             if item["state"] in {"failed", "cancelled"}
-            and any(step["state"] == "completed" for step in data.get("steps", []))
+            and (
+                data.get("saved_file_id")
+                or any(step["state"] == "completed" for step in data.get("steps", []))
+            )
             else item["state"],
             "created_at": item["created_at"],
             "updated_at": item["updated_at"],

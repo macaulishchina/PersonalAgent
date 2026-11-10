@@ -587,8 +587,13 @@ identity and the intended location, never blindly repeat the write. An interrupt
 mkdir without a returned identity stays uncertain; a matching name alone does not
 prove ownership. Resume explicitly to recheck an uncertain write. Cancellation stops
 later steps and reports already completed steps; it does not roll them back. A partly
-applied failed/cancelled plan reports `outcome=partial`. Download reservations prevent
-conflicting cloud changes; local management waits for target downloads to end.
+applied failed/cancelled plan reports `outcome=partial`. Cancellation and submission
+share the same repository boundary. Cloud transfer and organization writers coordinate
+per account, and submitted receipts protect overlapping destinations while verification
+is pending. Local management and downloads check overlapping library roots.
+Interrupted local file publication uses the saved checksum to inspect the final path,
+including after cancellation. Without a confirmed final file, it retains the receipt
+for verification instead of publishing it again.
 
 Local changes use no-follow directory descriptors, require the configured mount, and
 stay on that filesystem. Files move using no-clobber link/unlink with inode/size/mtime

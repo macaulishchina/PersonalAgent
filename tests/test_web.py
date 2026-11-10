@@ -6,7 +6,9 @@ import io
 from pathlib import Path
 import socket
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import ClientSession, CookieJar, FormData, web
 from PIL import Image
@@ -22,6 +24,66 @@ def with_timeout(handler):
         return await handler(request)
 
     return invoke
+
+
+class IngressConcurrencyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_sse_handshake_reserves_capacity_and_disconnect_releases_it(self):
+        plugin = WebPlugin(SimpleNamespace(config=SimpleNamespace(enable=False), resource=lambda _: None))
+        request = SimpleNamespace(headers={}, query={})
+        ready, release = asyncio.Event(), asyncio.Event()
+        started = 0
+
+        async def prepare(_):
+            nonlocal started
+            started += 1
+            if started == 12:
+                ready.set()
+            await release.wait()
+
+        with patch.object(web.StreamResponse, "prepare", side_effect=prepare):
+            tasks = [asyncio.create_task(plugin.events(request)) for _ in range(12)]
+            try:
+                await asyncio.wait_for(ready.wait(), 2)
+                with self.assertRaises(web.HTTPServiceUnavailable):
+                    await plugin.events(request)
+                tasks[0].cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await tasks[0]
+                release.set()
+                await plugin.events(request)
+            finally:
+                release.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        self.assertEqual(started, 13)
+        self.assertFalse(plugin.streams)
+
+    async def test_slow_upload_does_not_hold_commit_lock_or_starve_another_upload(self):
+        plugin = WebPlugin(SimpleNamespace(config=SimpleNamespace(), resource=lambda _: None))
+        upload = AsyncMock(return_value={"id": "image", "name": "image.png"})
+        plugin.view = lambda _: SimpleNamespace(upload=upload)
+        entered = asyncio.Event()
+
+        async def stalled():
+            entered.set()
+            await asyncio.Event().wait()
+
+        class Request(dict):
+            def __init__(self, read):
+                self.field = SimpleNamespace(name="image", filename="image.png", read_chunk=read)
+
+            async def multipart(self):
+                return SimpleNamespace(next=AsyncMock(return_value=self.field))
+
+        slow = asyncio.create_task(plugin.upload(Request(stalled)))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            fast = Request(AsyncMock(side_effect=[b"image", b""]))
+            self.assertEqual((await asyncio.wait_for(plugin.upload(fast), 2)).status, 201)
+            upload.assert_awaited_once()
+        finally:
+            slow.cancel()
+            await asyncio.gather(slow, return_exceptions=True)
+        self.assertEqual(plugin.active_uploads, 0)
 
 
 class WebTest(unittest.IsolatedAsyncioTestCase):

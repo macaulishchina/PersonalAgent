@@ -17,6 +17,7 @@ from PIL import UnidentifiedImageError
 from .auth import AuthRepository
 
 COOKIE = "personal_agent_session"
+MAX_UPLOADS = 4
 
 
 class WebPlugin:
@@ -28,6 +29,7 @@ class WebPlugin:
         self.runner = None
         self.streams = set()
         self.upload_lock = asyncio.Lock()
+        self.active_uploads = 0
         self.frontend = api.resource("http_frontend")
 
     def maintenance_pending(self):
@@ -455,9 +457,9 @@ class WebPlugin:
                 "X-Accel-Buffering": "no",
             }
         )
-        await response.prepare(request)
         self.streams.add(response)
         try:
+            await response.prepare(request)
             while self.settings.enable and self.scoped.valid(request):
                 events = self.view(request).changes(cursor)
                 if events is None:
@@ -484,18 +486,25 @@ class WebPlugin:
         return response
 
     async def upload(self, request):
-        async with self.upload_lock:
-            reader = await request.multipart()
-            field = await reader.next()
-            if not field or field.name != "image":
-                raise ValueError("请选择图片")
-            data = bytearray()
-            while chunk := await field.read_chunk():
-                data.extend(chunk)
-                if len(data) > 10 * 1024 * 1024:
-                    raise ValueError("单张图片不能超过 10 MB")
-
-            media = await self.view(request).upload(data, field.filename)
+        if self.active_uploads >= MAX_UPLOADS:
+            raise web.HTTPServiceUnavailable(text="上传数量已达上限，请稍后再试")
+        self.active_uploads += 1
+        try:
+            try:
+                async with asyncio.timeout(90):
+                    reader = await request.multipart()
+                    field = await reader.next()
+                    if not field or field.name != "image":
+                        raise ValueError("请选择图片")
+                    data = bytearray()
+                    while chunk := await field.read_chunk():
+                        data.extend(chunk)
+                        if len(data) > 10 * 1024 * 1024:
+                            raise ValueError("单张图片不能超过 10 MB")
+            except TimeoutError:
+                raise web.HTTPRequestTimeout(text="上传超时，请重新发送图片") from None
+            async with self.upload_lock:
+                media = await self.view(request).upload(data, field.filename)
             ident = media["id"]
             return web.json_response(
                 {
@@ -513,6 +522,8 @@ class WebPlugin:
                 },
                 status=201,
             )
+        finally:
+            self.active_uploads -= 1
 
     async def attachment(self, request):
         ident = request.match_info["id"]

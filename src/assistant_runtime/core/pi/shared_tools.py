@@ -97,6 +97,7 @@ class LoopbackServer(uvicorn.Server):
 
 class SharedTools:
     MAX_REQUESTS = 256
+    MAX_REQUESTS_PER_WORKER = 32
     MAX_BODY = 128 * 1024
 
     def __init__(self, client):
@@ -110,6 +111,7 @@ class SharedTools:
         self.stopping = asyncio.Event()
         self.server = self.listener = self.task = None
         self.pending = 0
+        self.pending_by_worker = {}
 
     async def prepare(self, names):
         if not names:
@@ -220,16 +222,22 @@ class SharedTools:
         ):
             await Response(status_code=404)(scope, receive, send)
             return
-        if self.pending >= self.MAX_REQUESTS:
+        owned = self.pending_by_worker.get(worker, 0)
+        if self.pending >= self.MAX_REQUESTS or owned >= self.MAX_REQUESTS_PER_WORKER:
             await Response(status_code=503)(scope, receive, send)
             return
 
         access = Access(worker, spec, worker.active_turn)
         self.pending += 1
+        self.pending_by_worker[worker] = owned + 1
         try:
             await self._request(request, scope, receive, send, access, key, self.apps[name])
         finally:
             self.pending -= 1
+            if self.pending_by_worker[worker] == 1:
+                del self.pending_by_worker[worker]
+            else:
+                self.pending_by_worker[worker] -= 1
 
     async def _request(self, request, scope, receive, send, access, key, application):
         try:

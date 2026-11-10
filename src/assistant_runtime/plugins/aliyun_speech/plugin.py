@@ -222,7 +222,8 @@ class AliyunSpeech:
         self.streams = set()
         self.client = None
         self.key = ""
-        self.opening = 0
+        self.opening = set()
+        self.closing = False
 
     async def start(self, context):
         self.key = self.context.credential("DASHSCOPE_API_KEY") or ""
@@ -247,9 +248,10 @@ class AliyunSpeech:
             raise SpeechError("speech_input_limit")
         if request.action == "synthesize" and (not request.text.strip() or len(request.text) > 200):
             raise SpeechError("speech_invalid_text")
-        if len(self.streams) + self.opening >= 4:
+        if self.closing or len(self.streams) + len(self.opening) >= 4:
             raise SpeechError("speech_busy")
-        self.opening += 1
+        opening = asyncio.current_task()
+        self.opening.add(opening)
         stream = None
         try:
             is_asr = request.action == "recognize"
@@ -265,8 +267,8 @@ class AliyunSpeech:
                 bounds=bounds,
             )
             stream = Duplex(self, request, ticket)
-            self.streams.add(stream)
             await stream.open()
+            self.streams.add(stream)
             return stream if is_asr else Synthesis(stream)
         except WSServerHandshakeError as exc:
             if stream:
@@ -279,9 +281,14 @@ class AliyunSpeech:
                 await stream.close()
             raise
         finally:
-            self.opening -= 1
+            self.opening.discard(opening)
 
     async def close(self):
+        self.closing = True
+        opening = tuple(self.opening)
+        for task in opening:
+            task.cancel()
+        await asyncio.gather(*opening, return_exceptions=True)
         await asyncio.gather(*(s.close() for s in tuple(self.streams)), return_exceptions=True)
         if self.client:
             await self.client.close()

@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 import uuid
+from collections import defaultdict
 from pathlib import PurePosixPath
 
 from .errors import MediaError
@@ -42,7 +43,7 @@ class Library:
     def __init__(self, plugin):
         self.p, self.repo = plugin, plugin.repo
         self.db = self.repo.db
-        self.lock = asyncio.Lock()
+        self.write_locks = defaultdict(asyncio.Lock)
         self.db.executescript("""
           CREATE TABLE IF NOT EXISTS media_assets (
             id TEXT PRIMARY KEY, target TEXT NOT NULL, file_id TEXT NOT NULL,
@@ -53,6 +54,63 @@ class Library:
           CREATE TABLE IF NOT EXISTS media_collections (
             id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
         """)
+
+    def write_lock(self, item):
+        intent = item["data"]["intent"]
+        # A folder move/trash affects descendants, including those registered
+        # under a different target name. Account scope also covers path backends.
+        key = ("local",) if intent.get("location") == "local" else ("cloud", intent["destination"]["account"])
+        return self.write_locks[key]
+
+    def pending_writes(self, destination, excluding=None, *, libraries=False):
+        for (raw,) in self.db.execute(
+            """SELECT data FROM media_operations
+            WHERE id IS NOT ? AND state NOT IN ('completed','failed','cancelled')
+            AND json_extract(data,'$.submitted')=1
+            AND (coalesce(json_extract(data,'$.intent.kind'),'transfer') IN ('transfer','directory')
+              OR (? AND json_extract(data,'$.intent.kind')='library'
+                AND coalesce(json_extract(data,'$.intent.location'),'cloud')='cloud'))
+            AND json_extract(data,'$.intent.destination.account')=?""",
+            (excluding, libraries, destination["account"]),
+        ):
+            yield json.loads(raw)
+
+    def protect_destination(self, destination, names, *, excluding=None, paths=()):
+        for data in self.pending_writes(destination, excluding, libraries=True):
+            intent = data["intent"]
+            other = intent["destination"]
+            same_drive = destination.get("drive_id") == other.get("drive_id")
+            if intent.get("kind") == "library":
+                for step in data.get("steps", ()):
+                    if step["state"] != "submitted":
+                        continue
+                    pending = step.get("destination")
+                    if isinstance(pending, list) and same_drive and pending[0] == destination["folder_id"]:
+                        if pending[1] in names:
+                            raise MediaError("media_file_busy")
+                    if step.get("object_type") == "folder" and step["action"] in {"move", "trash"}:
+                        if same_drive and destination["folder_id"] in {
+                            step.get("file_id"),
+                            *[r["file_id"] for r in step["manifest"]["entries"]],
+                        }:
+                            raise MediaError("media_file_busy")
+                    if isinstance(pending, str):
+                        requested = paths or {
+                            str(PurePosixPath(destination["openlist_path"], n)) for n in names if n
+                        }
+                        if str(PurePosixPath(other["openlist_path"], pending)) in requested:
+                            raise MediaError("media_file_busy")
+            else:
+                pending_names = {(data.get("file") or {}).get("name"), intent.get("desired_name")} - {None}
+                if (
+                    same_drive and destination["folder_id"] == other["folder_id"] and names & pending_names
+                ) or (
+                    paths
+                    and any(
+                        str(PurePosixPath(other["openlist_path"], name)) in paths for name in pending_names
+                    )
+                ):
+                    raise MediaError("media_file_busy")
 
     def asset_id(self, target, file_id):
         binding = self.p.target(target)
@@ -327,6 +385,10 @@ class Library:
         if not existing and time.time() - row[1] > 3600:
             raise ValueError("Change plan expired; preview current state again")
         if not existing:
+            if intent.get("location") == "local" and self.repo.local_busy(
+                intent["local_binding"], "download"
+            ):
+                raise MediaError("local_library_busy")
             for step in data["steps"]:
                 for fid in {
                     step.get("file_id"),
@@ -390,11 +452,27 @@ class Library:
                         manifest = await snapshot(self.p.provider, before, intent["destination"])
                         if manifest["digest"] != step["manifest"]["digest"]:
                             raise MediaError("library_precondition_changed")
+                        folders = {
+                            fid,
+                            *(entry["file_id"] for entry in manifest["entries"] if entry["type"] == "folder"),
+                        }
+                        root = intent["destination"]
+                        if any(
+                            data["intent"]["destination"]["folder_id"] in folders
+                            and data["intent"]["destination"].get("drive_id") == root.get("drive_id")
+                            for data in self.pending_writes(root, ident)
+                        ):
+                            raise MediaError("media_file_busy")
                 if action != "trash":
                     await self.conflict(target, *step["destination"], fid)
+                    folder_id, name = step["destination"]
+                    self.protect_destination(
+                        {**intent["destination"], "folder_id": folder_id}, {name}, excluding=ident
+                    )
                 step["state"] = "submitted"
                 step["submitted_at"] = time.time()
-                self.repo.change(ident, "submitting", steps=steps, submitted=True)
+                if not self.repo.begin_write(ident, steps=steps):
+                    return
                 arguments = {
                     **intent["destination"],
                     **{k: v for k, v in step.items() if k in {"file_id", "folder_id", "name"}},
@@ -480,8 +558,10 @@ class Library:
         """Observe submitted steps only. Querying never dispatches remaining writes."""
         if item["state"] in {"completed", "cancelled"}:
             return self.repo.public(item)
-        async with self.lock:
+        async with self.write_lock(item):
             current = self.repo.get(item["id"])
+            if current["state"] in {"completed", "cancelled"}:
+                return self.repo.public(current)
             if (
                 current["data"].get("intent", {}).get("file_backend", "native") != "native"
                 or current["data"]["intent"].get("location") == "local"
@@ -519,8 +599,10 @@ class Library:
                     continue
             if item:
                 try:
-                    async with self.lock:
-                        await self.process(item)
+                    async with self.write_lock(item):
+                        current = self.repo.get(item["id"])
+                        if current["state"] in {"queued", "verifying"}:
+                            await self.process(current)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

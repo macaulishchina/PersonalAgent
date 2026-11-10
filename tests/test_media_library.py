@@ -188,6 +188,57 @@ class LibraryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["data"]["steps"][0]["state"], "completed")
         self.assertEqual(self.provider.calls.count("rename"), 1)
 
+    async def test_cancel_during_last_precondition_never_dispatches_or_resurrects(self):
+        item = await self.plan({"action": "mkdir", "folder_id": "root-folder", "name": "new"})
+        ident = item["operation_id"]
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def conflict(*args):
+            entered.set()
+            await release.wait()
+
+        with patch.object(self.library, "conflict", side_effect=conflict):
+            task = asyncio.create_task(self.library.process(self.repo.get(ident)))
+            await asyncio.wait_for(entered.wait(), 2)
+            self.assertEqual(self.repo.request_cancel(ident)["state"], "cancelled")
+            release.set()
+            await task
+        self.repo.change(ident, "failed", error="late_callback")
+        stored = self.repo.get(ident)
+        self.assertEqual(stored["state"], "cancelled")
+        self.assertEqual(stored["data"]["steps"][0]["state"], "pending")
+        self.assertNotIn("mkdir", self.provider.calls)
+
+    async def test_pending_copy_protects_same_destination_across_target_names_and_restart(self):
+        plan = await self.plan({"action": "mkdir", "folder_id": "root-folder", "name": "pending"})
+        copy_id = self.repo.create(
+            str(uuid.uuid4()),
+            {"kind": "directory", "target": "alias", "destination": ROOT, "file_id": "x", "share_id": "y"},
+            "assistant",
+        )["id"]
+        self.assertTrue(self.repo.begin_write(copy_id, file={"name": "pending"}))
+        self.repo.recover()
+        item = self.repo.get(plan["operation_id"])
+        self.assertIs(self.library.write_lock(item), self.library.write_lock(self.repo.get(copy_id)))
+        with self.assertRaisesRegex(MediaError, "media_file_busy"):
+            await self.library.process(item)
+        self.assertNotIn("mkdir", self.provider.calls)
+        await self.library.process(
+            self.repo.get(
+                (await self.plan({"action": "mkdir", "folder_id": "root-folder", "name": "independent"}))[
+                    "operation_id"
+                ]
+            )
+        )
+        self.assertEqual(self.provider.calls.count("mkdir"), 1)
+        blocked = await self.plan({"action": "mkdir", "folder_id": "root-folder", "name": "other"})
+        blocked_id = blocked["operation_id"]
+        steps = self.repo.get(blocked_id)["data"]["steps"]
+        steps[0]["state"] = "submitted"
+        self.assertTrue(self.repo.begin_write(blocked_id, steps=steps))
+        with self.assertRaisesRegex(MediaError, "media_file_busy"):
+            self.library.protect_destination(ROOT, {"other"})
+
     async def test_recycle_identity_is_bound_and_lost_restore_reply_only_observed(self):
         original = self.provider.call
         records = []
@@ -496,3 +547,34 @@ class BatchTest(unittest.IsolatedAsyncioTestCase):
         result = self.plugin.batches.get(ident)
         self.assertEqual(result["state"], "running")
         self.assertEqual(result["items"][0]["state"], "pending")
+
+    async def test_cancelled_batch_cannot_accept_a_child_finishing_preparation(self):
+        args = {
+            "request_id": str(uuid.uuid4()),
+            "target": "movies",
+            "action": "transfer",
+            "items": [{"share_url": "https://www.alipan.com/s/testshare", "file_id": "video"}],
+        }
+        ident = self.plugin.batches.create(args, "assistant", None)["batch_id"]
+        data = json.loads(
+            self.store.db.execute("SELECT data FROM media_batches WHERE id=?", (ident,)).fetchone()[0]
+        )
+        original = self.plugin._request
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def request(value):
+            if value.action == "transfer":
+                entered.set()
+                await release.wait()
+            return await original(value)
+
+        with patch.object(self.plugin, "_request", side_effect=request):
+            task = asyncio.create_task(self.plugin.batches.tick(ident, "assistant", data))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                self.plugin.batches.cancel(ident, "assistant")
+            finally:
+                release.set()
+                await task
+        self.assertEqual(self.plugin.batches.get(ident)["state"], "cancelled")
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM media_operations").fetchone()[0], 0)

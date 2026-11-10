@@ -149,6 +149,23 @@ class SharedToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["result"]["isError"])
         self.assertEqual(len(self.observed), 1)
 
+    async def test_one_worker_cannot_consume_another_workers_request_allowance(self):
+        self.tools.MAX_REQUESTS_PER_WORKER = 2
+        calls = [asyncio.create_task(self.call(self.a)) for _ in range(2)]
+        try:
+            async with asyncio.timeout(5):
+                while len(self.observed) < 2:
+                    await asyncio.sleep(0)
+                self.assertEqual((await self.call(self.a))[0], 503)
+                self.assertEqual((await self.request(self.b, "tools/list"))[0], 200)
+                self.release.set()
+                self.assertEqual([status for status, _ in await asyncio.gather(*calls)], [200, 200])
+        finally:
+            self.release.set()
+            await asyncio.gather(*calls, return_exceptions=True)
+        self.assertEqual((await self.call(self.a))[0], 200)
+        self.assertFalse(self.tools.pending_by_worker)
+
     async def test_restart_revokes_old_credentials_and_startup_failure_cleans_up(self):
         previous = self.keys[self.a]
         await self.tools.close()

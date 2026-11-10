@@ -19,6 +19,8 @@ class AiPassportPlugin:
     def __init__(self, context):
         self.context, self.settings = context, context.config
         self.connections = {}
+        self.connecting = set()
+        self.stopping = False
         self.runner = None
         self.pair_attempts = []
 
@@ -166,38 +168,59 @@ class AiPassportPlugin:
         ident = request.headers.get("X-Device-Id", "")
         credential = request.headers.get("Authorization", "").removeprefix("Bearer ")
         session = self.devices.authenticate(ident, credential)
+        if self.stopping:
+            raise web.HTTPServiceUnavailable(text="terminal_stopping")
+        if ident in self.connecting:
+            raise web.HTTPConflict(text="device_connection_superseded")
         previous = self.connections.get(ident)
-        if previous is None and len(self.connections) >= self.settings["max_connections"]:
+        if (
+            previous is None
+            and len(self.connections.keys() | self.connecting) >= self.settings["max_connections"]
+        ):
             raise web.HTTPServiceUnavailable(text="terminal_capacity")
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=15)
         connection = Connection(self, ident, session, ws)
-        self.connections[ident] = connection
+        self.connecting.add(ident)
+
+        def release_connection(_=None):
+            if self.connections.get(ident) is connection:
+                self.connections.pop(ident, None)
+
         try:
             # Only this device's authenticated credential can supersede its
             # transport. Pairing/session/accepted work remain unchanged.
-            if previous:
-                try:
-                    await previous.close()
-                except Exception as exc:
-                    self.context.log.warning(
-                        "passport_previous_connection_cleanup_failed device=%s type=%s",
-                        ident,
-                        type(exc).__name__,
-                    )
-            if self.connections.get(ident) is not connection or connection.closed:
-                raise web.HTTPConflict(text="device_connection_superseded")
-            await ws.prepare(request)
-            await connection.run()
+            try:
+                if previous:
+                    try:
+                        await previous.close()
+                    except Exception as exc:
+                        self.context.log.warning(
+                            "passport_previous_connection_cleanup_failed device=%s type=%s",
+                            ident,
+                            type(exc).__name__,
+                        )
+                if self.stopping:
+                    raise web.HTTPServiceUnavailable(text="terminal_stopping")
+                self.devices.authenticate(ident, credential)
+                self.connections[ident] = connection
+                await ws.prepare(request)
+            finally:
+                self.connecting.discard(ident)
+            if not connection.closed:
+                await connection.run()
         finally:
             try:
                 await connection.close()
             finally:
                 # Old handler completion must never remove its replacement.
-                if self.connections.get(ident) is connection:
-                    self.connections.pop(ident, None)
+                if connection.closing and not connection.closing.done():
+                    connection.closing.add_done_callback(release_connection)
+                else:
+                    release_connection()
         return ws
 
     async def close(self):
+        self.stopping = True
         self.frontend.withdraw()
         await asyncio.gather(*(c.close() for c in tuple(self.connections.values())), return_exceptions=True)
         if self.runner:

@@ -56,6 +56,35 @@ class DirectoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["device"]["state"], "error")
         self.assertIn("offline", result["device"]["error"])
 
+    async def test_cancelled_and_late_probes_cannot_overwrite_newer_state(self):
+        old_started, release = asyncio.Event(), asyncio.Event()
+
+        async def old_probe():
+            old_started.set()
+            await release.wait()
+            self.directory.observe("pipewire", "living", DeviceObservation("unavailable"))
+
+        async def fresh_probe():
+            self.directory.observe("pipewire", "living", DeviceObservation("available"))
+
+        request = DeviceQuery("inspect", "living")
+        for cancel in (True, False):
+            old_started.clear()
+            release.clear()
+            self.directory.probes["living"] = old_probe
+            older = asyncio.create_task(self.directory.handle(request))
+            await asyncio.wait_for(old_started.wait(), 2)
+            self.directory.probes["living"] = fresh_probe
+            await self.directory.handle(request)
+            if cancel:
+                older.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await older
+            else:
+                release.set()
+                await older
+            self.assertEqual(self.directory.snapshot("living")["state"], "available")
+
     async def test_unknown_query_and_device_fail_closed(self):
         for request in (DeviceQuery("inspect", "missing"), DeviceQuery("execute", "living")):
             with self.assertRaises(ValueError):
@@ -83,7 +112,7 @@ class DirectoryTest(unittest.IsolatedAsyncioTestCase):
             self.directory.probes["living"] = blocked
             with self.assertRaises(TimeoutError):
                 await runtime.invoke(DeviceQuery("inspect", "living"), timeout=0.01)
-            self.assertEqual(self.directory.snapshot("living")["state"], "error")
+            self.assertEqual(self.directory.snapshot("living")["state"], "unknown")
             await runtime.close()
             store.db.close()
 

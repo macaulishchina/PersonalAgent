@@ -438,6 +438,8 @@ class MediaPlugin:
                 (target_id, intent["file_id"]),
             ).fetchone():
                 raise MediaError("media_file_busy")
+            if self.repo.local_busy(intent["local_destination"], "library"):
+                raise MediaError("local_library_busy")
             item = self.repo.create(args.get("request_id"), intent, owner, request.caller_run)
             return self.repo.public(item)
         if action == "list":
@@ -460,6 +462,11 @@ class MediaPlugin:
                 from .directory_transfer import reconcile
 
                 return await reconcile(self, item)
+            if item["data"]["intent"].get("kind") == "download" and item["state"] == "uncertain":
+                if item["data"].get("submitted"):
+                    # This state only reads and verifies the local destination.
+                    item = self.repo.change(item["id"], "verifying")
+                return self.repo.public(item)
             self.openlist_sync.retry(item["id"])
             if item["state"] != "completed":
                 return self.repo.public(self.repo.get(item["id"]))
@@ -478,21 +485,9 @@ class MediaPlugin:
         if request.caller_run and item["data"]["owner"] != owner:
             raise ValueError("Background tasks may manage only their own media operations")
         if action == "cancel":
-            if item["state"] not in TERMINAL:
-                if item["data"]["intent"].get("kind") == "download":
-                    self.repo.change(
-                        item["id"],
-                        item["state"]
-                        if item["state"] in {"checking", "downloading", "verifying"}
-                        else "queued",
-                        cancel_requested=True,
-                    )
-                    return self.repo.public(self.repo.get(item["id"]))
-                cancel_now = not item["data"].get("submitted") and item["state"] != "checking"
-                self.repo.change(
-                    item["id"], "cancelled" if cancel_now else item["state"], cancel_requested=True
-                )
+            return self.repo.public(self.repo.request_cancel(item["id"]))
         elif action == "resume":
+            item = self.repo.get(item["id"])
             if item["state"] in {"uncertain", "failed", "waiting_auth"}:
                 self.repo.change(
                     item["id"], "verifying" if item["data"].get("submitted") else "queued", attempts=0
@@ -612,10 +607,11 @@ class MediaPlugin:
                 raise MediaError("capacity_unconfirmed")
             if capacity["total"] - capacity["used"] < file["size"]:
                 raise MediaError("capacity_exhausted")
-            if self.repo.get(ident)["data"].get("cancel_requested"):
-                self.repo.change(ident, "cancelled")
+            self.library.protect_destination(
+                intent["destination"], {file["name"], intent.get("desired_name")}, excluding=ident
+            )
+            if not self.repo.begin_write(ident, submitted_at=time.time()):
                 return
-            self.repo.change(ident, "submitting", submitted=True, submitted_at=time.time())
             try:
                 result = await self.provider.call("copy", {**intent, **intent["destination"]})
             except MediaError as exc:
@@ -667,7 +663,12 @@ class MediaPlugin:
         )
         if intent.get("desired_name"):
             self.repo.change(
-                ident, "verifying", organization_file_id=file["file_id"], verification=file["verification"]
+                ident,
+                "verifying",
+                organization_file_id=file["file_id"],
+                verification=file["verification"],
+                saved_file_id=file["file_id"],
+                cloud_verification=evidence,
             )
             if actual["name"] != intent["desired_name"]:
                 if item["data"].get("rename_submitted"):
@@ -678,7 +679,11 @@ class MediaPlugin:
                     intent["desired_name"],
                     file["file_id"],
                 )
-                self.repo.change(ident, "verifying", rename_submitted=True)
+                self.library.protect_destination(
+                    intent["destination"], {intent["desired_name"]}, excluding=ident
+                )
+                if not self.repo.begin_write(ident, "verifying", rename_submitted=True):
+                    return
                 try:
                     await self.provider.call(
                         "rename",
@@ -764,13 +769,16 @@ class MediaPlugin:
                     continue
             if item:
                 try:
-                    if item["data"]["intent"].get("kind") == "directory":
-                        from .directory_transfer import process
+                    async with self.library.write_lock(item):
+                        item = self.repo.get(item["id"])
+                        if item["state"] in TERMINAL:
+                            continue
+                        if item["data"]["intent"].get("kind") == "directory":
+                            from .directory_transfer import process
 
-                        async with self.library.lock:
                             await process(self, item)
-                    else:
-                        await self.process(item)
+                        else:
+                            await self.process(item)
                 except MediaError as exc:
                     current = self.repo.get(item["id"])
                     if exc.code == "auth_required":

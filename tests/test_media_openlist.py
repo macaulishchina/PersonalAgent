@@ -1,6 +1,7 @@
 """Real HTTP filesystem protocol, durable recovery, routing and scope checks."""
 
 import copy
+import asyncio
 import hashlib
 from pathlib import Path, PurePosixPath
 import sqlite3
@@ -321,6 +322,25 @@ class OpenListTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(MediaError, "unconfirmed"):
             await self.library.process(self.repo.get(item["id"]))
         self.assertEqual(len(self.mutations()), 1)
+
+    async def test_cancel_while_openlist_checks_destination_never_writes(self):
+        item = await self.operation([{"action": "mkdir", "path": "new"}])
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def absent(*args):
+            entered.set()
+            await release.wait()
+
+        with patch.object(OpenListFiles, "absent", side_effect=absent):
+            task = asyncio.create_task(self.library.process(item))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                self.assertEqual(self.repo.request_cancel(item["id"])["state"], "cancelled")
+            finally:
+                release.set()
+                await task
+        self.assertFalse(self.mutations())
+        self.assertEqual(self.repo.get(item["id"])["state"], "cancelled")
 
     async def test_configuration_changed_blocks_saved_plans(self):
         item = await self.operation([{"action": "mkdir", "path": "new"}])
