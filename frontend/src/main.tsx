@@ -47,8 +47,10 @@ import { ReplyMarkdown } from "./reply-markdown";
 import { ToolResult, toolOutcome, type ToolSummary } from "./tool-result";
 import {
   isReport,
+  isTaskReply,
   messageChannel,
   needsAttention,
+  reportContent,
   reportTask,
   groupMessages,
   groupToolRetries,
@@ -321,6 +323,7 @@ function MessageEntry({
   inlineImageIds: ReadonlySet<string>;
 }) {
   const detail = messageDetail(m);
+  const taskReply = isTaskReply(m);
   const statuses: Record<string, string> = {
     sending: "正在发送",
     queued: "排队中",
@@ -351,6 +354,7 @@ function MessageEntry({
       ) : isReport(m) ? (
         <TaskReport
           message={m}
+          canOpenTask={!scopedConversation}
           showSource={showReportSource}
           onOpenTask={onOpenTask}
           onResolvedTask={onResolvedTask}
@@ -367,18 +371,28 @@ function MessageEntry({
               presentation={m.presentation}
               render={(body) => (
                 <div className="message-body">
-                  <Markdown
-                    remarkPlugins={[remarkGfm]}
-                    components={markdownComponents}
-                  >
-                    {body}
-                  </Markdown>
+                  {taskReply ? (
+                    <ReplyMarkdown
+                      text={body}
+                      attachments={m.attachments}
+                      inlineIds={new Set(m.attachments.map((a) => a.id))}
+                      onOpen={onOpen}
+                      components={markdownComponents}
+                    />
+                  ) : (
+                    <Markdown
+                      remarkPlugins={[remarkGfm]}
+                      components={markdownComponents}
+                    >
+                      {body}
+                    </Markdown>
+                  )}
                 </div>
               )}
             />
           )}
         >
-          {showMedia && (
+          {showMedia && !taskReply && (
             <MessageMedia attachments={m.attachments} onOpen={onOpen} />
           )}
         </TaskReport>
@@ -505,16 +519,20 @@ function ConversationGroup({
   const latest = isReport(group.messages[0])
     ? group.messages.at(-1)!
     : group.messages[0];
-  const channel = group.messages.some(needsAttention)
-    ? "attention"
-    : !latest.report_group?.kind && (resolvedTask || reportTask(latest))
-      ? "report"
-      : messageChannel(latest);
+  const taskReplies = group.messages.filter(isTaskReply);
+  const reports = group.messages.filter((m) => isReport(m) && !isTaskReply(m));
+  const channel = taskReplies.length
+    ? "task-reply"
+    : group.messages.some(needsAttention)
+      ? "attention"
+      : !latest.report_group?.kind && (resolvedTask || reportTask(latest))
+        ? "report"
+        : messageChannel(latest);
   const speaker = user ? "你" : name;
   const date = new Date(latest.updated * 1000);
-  const text = group.messages
+  const text = (taskReplies.length ? taskReplies : group.messages)
     .filter((m) => !messageDetail(m))
-    .map((m) => m.text)
+    .map((m) => (isTaskReply(m) ? reportContent(m.text).body : m.text))
     .filter(Boolean)
     .join("\n\n");
   const entry = (m: Message, showMedia = true) => (
@@ -532,7 +550,6 @@ function ConversationGroup({
       showReportSource={group.messages.length === 1}
     />
   );
-  const entries = group.messages.map((m) => entry(m));
   const sections = replySections(group.messages);
   return (
     <section
@@ -551,7 +568,7 @@ function ConversationGroup({
           >
             {channel === "voice" ? (
               <AudioLines size={12} />
-            ) : channel === "report" ? (
+            ) : channel === "report" || channel === "task-reply" ? (
               <ListTodo size={12} />
             ) : channel === "notification" || channel === "attention" ? (
               <Bell size={12} />
@@ -563,6 +580,7 @@ function ConversationGroup({
                 voice: "语音",
                 text: "文字",
                 report: "任务报告",
+                "task-reply": "任务回复",
                 notification: "通知",
                 attention: "需要关注",
                 legacy: "历史记录",
@@ -607,10 +625,21 @@ function ConversationGroup({
           </button>
         )}
       </div>
-      {group.messages.length > 1 && isReport(group.messages[0]) ? (
-        <ReportCollection messages={group.messages} onOpenTask={onOpenTask}>
-          {entries}
-        </ReportCollection>
+      {isReport(group.messages[0]) ? (
+        <>
+          {taskReplies.map((m) => entry(m))}
+          {reports.length > 1 ? (
+            <ReportCollection
+              messages={reports}
+              canOpenTask={!scopedConversation}
+              onOpenTask={onOpenTask}
+            >
+              {reports.map((m) => entry(m))}
+            </ReportCollection>
+          ) : (
+            reports.map((m) => entry(m))
+          )}
+        </>
       ) : (
         sections.map((section) => {
           const entries = groupToolRetries(section.messages);

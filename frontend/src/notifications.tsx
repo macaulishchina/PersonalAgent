@@ -11,6 +11,7 @@ import { RUN_LABELS } from "./task-presentation";
 import { formatDuration } from "./duration";
 import { PanelHeader } from "./panel-header";
 import { NotificationGroup, type NoticeGroup } from "./notification-group";
+import { NotificationBody } from "./notification-body";
 
 export type Notice = {
   id: string;
@@ -235,7 +236,7 @@ export function NotificationPanel({
       setBusy(false);
     }
   };
-  const renderNotice = (item: Notice, compact = false) => (
+  const renderNotice = (item: Notice) => (
     <article
       className={`notification-card ${item.unread ? "unread" : ""}`}
       key={item.id}
@@ -266,11 +267,7 @@ export function NotificationPanel({
         </span>
         {item.payload.title}
       </h3>
-      <p
-        className={`notification-body ${compact ? "notification-preview" : ""}`}
-      >
-        {item.payload.body}
-      </p>
+      <NotificationBody key={item.revision} text={item.payload.body} />
       {item.payload.url && (
         <a
           className="notification-source"

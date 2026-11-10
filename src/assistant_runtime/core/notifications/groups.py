@@ -82,17 +82,18 @@ class Groups:
 
     def project_chat(self, messages):
         """Enrich a bounded timeline page without rewriting messages or delivery state."""
+        from assistant_runtime.core.tasks.access import completion_identity
+
         references = {}
         for message in messages:
             # Conversation-owned results are an alternate projection of the same execution.
-            match = re.fullmatch(r"task-result:([a-f0-9]{32}):[0-9]+", message.get("turn_id") or "")
             if (
                 message.get("role") == "assistant"
                 and message.get("kind") == "task"
-                and match
                 and message.get("task_id")
+                and (completion := completion_identity(message.get("turn_id")))
             ):
-                task, run = message["task_id"], match[1]
+                task, run = message["task_id"], completion[0]
                 title = message.get("text", "").split("\n", 1)[0]
                 group, _ = association("task:" + task, "", {"title": title, "origin": {"run_id": run}})
                 message["report_group"] = {
@@ -113,14 +114,15 @@ class Groups:
             return
         placeholders = ",".join("?" for _ in references)
         rows = self.db.execute(
-            f"SELECT id,source,group_id,group_title,payload FROM notifications WHERE id IN ({placeholders})",
+            f"SELECT id,source,event_key,group_id,group_title,payload FROM notifications WHERE id IN ({placeholders})",
             tuple(references),
         ).fetchall()
-        for ident, source, group_id, title, raw in rows:
+        for ident, source, event_key, group_id, title, raw in rows:
             payload = json.loads(raw)
             origin = payload.get("origin", {})
             task = origin.get("task_id")
             trusted_task = task if task and source == "task:" + task else None
+            completion = completion_identity(event_key)
             for message in references[ident]:
                 message["report_group"] = {
                     "id": group_id,
@@ -132,6 +134,16 @@ class Groups:
                 }
                 if trusted_task:
                     message["task_id"] = trusted_task
+                    if (
+                        completion
+                        and completion[0] == origin.get("run_id")
+                        and origin.get("conversation_id")
+                        and origin["conversation_id"] == message.get("session_id")
+                        and payload.get("kind") == "result"
+                        and not payload.get("report_with_task")
+                        and not message["report_group"]["important"]
+                    ):
+                        message["report_group"]["completion_round"] = completion[1]
 
     def list(self, unread=False, before=None, limit=20):
         if type(unread) is not bool:

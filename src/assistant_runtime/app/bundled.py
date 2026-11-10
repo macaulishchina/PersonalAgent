@@ -87,6 +87,17 @@ def dependencies(host, name):
     )
 
 
+def project_chat(host, messages):
+    from assistant_runtime.api.contracts import TaskRequest
+
+    if getattr(host, "notifications", None):
+        host.notifications.project_chat(messages)
+    if TaskRequest in host.runtime.handlers:
+        from assistant_runtime.core.tasks.access import project_conversation_results
+
+        project_conversation_results(host.store.db, messages)
+
+
 def resources_for(host, name, keys):
     resources = {}
     for key in keys:
@@ -127,7 +138,10 @@ def resources_for(host, name, keys):
             async def open_view(ident):
                 chat = await host.conversations.get(ident)
                 return ConversationAccess(
-                    lambda: chat, title=host.conversations.sessions.get(ident)["title"], controls={"cancel"}
+                    lambda: chat,
+                    lambda messages: project_chat(host, messages),
+                    title=host.conversations.sessions.get(ident)["title"],
+                    controls={"cancel"},
                 )
 
             resources[key] = ConversationViews(open_view)
@@ -136,9 +150,7 @@ def resources_for(host, name, keys):
 
             resources[key] = ConversationAccess(
                 lambda: host.conversation,
-                lambda messages: host.notifications.project_chat(messages)
-                if getattr(host, "notifications", None)
-                else None,
+                lambda messages: project_chat(host, messages),
             )
         elif key in {"notifications_enabled", "tasks_enabled"}:
             resources[key] = key.removesuffix("_enabled") in host.config.plugins

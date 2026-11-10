@@ -7,6 +7,7 @@ export type MessageOrigin = {
     turn_status?: string;
     result_offset?: number;
     result_length?: number;
+    task_reply?: boolean;
   } | null;
   id: string;
   role: string;
@@ -257,6 +258,10 @@ export function isReport(message: MessageOrigin) {
   );
 }
 
+export function isTaskReply(message: MessageOrigin) {
+  return isReport(message) && message.presentation?.task_reply === true;
+}
+
 export function reportTask(message: MessageOrigin): string | null {
   if (!isReport(message)) return null;
   if (message.task_id) return message.task_id;
@@ -268,6 +273,7 @@ export function reportTask(message: MessageOrigin): string | null {
 
 export function messageChannel(message: MessageOrigin) {
   if (isReport(message)) {
+    if (isTaskReply(message)) return "task-reply";
     if (message.report_group?.kind === "attention") return "attention";
     return reportTask(message) ||
       message.kind === "task" ||

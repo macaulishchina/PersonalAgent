@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, ChevronDown } from "lucide-react";
 import {
+  isTaskReply,
   needsAttention,
   reportContent,
   reportTask,
@@ -13,10 +14,12 @@ export function ReportCollection({
   messages,
   children,
   onOpenTask,
+  canOpenTask,
 }: {
   messages: (MessageOrigin & { text: string })[];
   children: ReactNode;
   onOpenTask: (id: string) => void;
+  canOpenTask: boolean;
 }) {
   const latest = messages.at(-1)!;
   const important = messages.filter(needsAttention);
@@ -39,7 +42,7 @@ export function ReportCollection({
         <ChevronDown size={14} aria-hidden="true" />
       </summary>
       <div className="task-report-content">
-        {taskId && (
+        {taskId && canOpenTask && (
           <button
             className="tool-result-link task-report-link"
             onClick={() => onOpenTask(taskId)}
@@ -61,6 +64,7 @@ export function TaskReport({
   onOpenTask,
   onResolvedTask,
   showSource = false,
+  canOpenTask,
 }: {
   message: MessageOrigin & { text: string };
   renderBody: (text: string) => ReactNode;
@@ -69,6 +73,7 @@ export function TaskReport({
   onOpenTask: (id: string) => void;
   onResolvedTask: (id: string) => void;
   showSource?: boolean;
+  canOpenTask: boolean;
 }) {
   const { title, body } = reportContent(message.text);
   const source = showSource ? message.report_group?.title : undefined;
@@ -89,7 +94,7 @@ export function TaskReport({
     };
   }, []);
   const resolve = async (open: boolean) => {
-    if (!open || taskId || attempted.current) return;
+    if (!canOpenTask || !open || taskId || attempted.current) return;
     attempted.current = true;
     const noticeId = message.turn_id?.match(
       /^notification:([A-Za-z0-9_-]{1,128})$/,
@@ -114,6 +119,23 @@ export function TaskReport({
       if (mounted.current) setLoading(false);
     }
   };
+  if (isTaskReply(message)) {
+    return (
+      <>
+        {renderBody(body)}
+        {taskId && canOpenTask && (
+          <button
+            type="button"
+            className="tool-result-link task-report-link"
+            title={title}
+            onClick={() => onOpenTask(taskId)}
+          >
+            查看对应任务 <ArrowUpRight size={14} aria-hidden="true" />
+          </button>
+        )}
+      </>
+    );
+  }
   return (
     <details
       className="task-report"
@@ -135,7 +157,7 @@ export function TaskReport({
       <div className="task-report-content">
         {body && renderBody(body)}
         {children}
-        {taskId ? (
+        {taskId && canOpenTask ? (
           <button
             className="tool-result-link task-report-link"
             onClick={() => onOpenTask(taskId)}

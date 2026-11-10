@@ -6,6 +6,7 @@ import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
 import test_tasks as tasks
+from assistant_runtime.app.bundled import project_chat
 from assistant_runtime.core.speech.conversation import AssistantConversation as Conversation
 from assistant_runtime.api.contracts import ConversationFeedbackRequest, TaskRequest
 from assistant_runtime.core.notifications.channels import ChatChannel
@@ -25,7 +26,7 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         self.runtime.register("conversation", ConversationFeedbackRequest, self.c.task_replies.request)
         self.c.feedback.bind("foreground", "main", 1, 0, "web")
 
-    async def new_run(self, owner="background", **spec):
+    async def new_run(self, owner="background", *, caller_run=None, **spec):
         definition = await self.plugin.request(
             TaskRequest(
                 "create",
@@ -34,6 +35,7 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
                     "feedback_owner": owner,
                     "spec": {"title": "test", "prompt": "authorized task", **spec},
                 },
+                caller_run,
             )
         )
         if self.plugin.scheduler.get_job(definition["id"]):
@@ -105,7 +107,11 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item["payload"]["origin"]["conversation_id"], "cli-origin")
         await ChatChannel(self.host).deliver(item)
         self.host.conversations.get.assert_awaited_with("cli-origin")
-        self.assertTrue(target.store.history("cli-origin"))
+        message = target.store.history("cli-origin")[0]
+        raw = dict(message["presentation"])
+        project_chat(self.host, [message])
+        self.assertTrue(message["presentation"]["task_reply"])
+        self.assertEqual(target.store.get(message["id"])["presentation"], raw)
         self.assertFalse(self.c.store.history("main"))
 
     async def test_explicit_conversation_result_is_immediate_without_model_reply(self):
@@ -116,8 +122,55 @@ class TaskFeedbackTest(unittest.IsolatedAsyncioTestCase):
         message = self.c.store.get(receipt["message_id"])
         self.assertEqual(message["task_id"], run["task_id"])
         self.assertIn("Verified task result", message["text"])
+        with patch.object(self.host, "notifications", None):
+            project_chat(self.host, [message])
+        self.assertTrue(message["presentation"]["task_reply"])
         self.assertEqual(self.host.notifications.repo.unread_count(), 0)
         self.assertEqual(self.host.notifications.repo.list()["items"], [])
+
+    async def test_only_the_completed_handoff_is_projected_as_a_reply(self):
+        from types import SimpleNamespace
+        from assistant_runtime.api.conversation import current_conversation
+        from assistant_runtime.api.contracts import NotificationRequest
+
+        self.host.conversations = SimpleNamespace(get=AsyncMock(return_value=self.c))
+        cursor = self.c.store.cursor()
+        token = current_conversation.set("main")
+        try:
+            immediate = await self.new_run()
+            nested = self.complete(await self.new_run(caller_run=immediate["id"]))
+            immediate = self.complete(immediate)
+            scheduled = self.complete(await self.new_run(trigger={"kind": "interval", "seconds": 3600}))
+            failed = await self.new_run()
+            failed = self.plugin.repo.update_run(failed["id"], "failed", progress="Failure")
+        finally:
+            current_conversation.reset(token)
+        for run in (immediate, scheduled, failed, nested):
+            await self.settled(run)
+        operation = await self.host.notifications.request(
+            NotificationRequest(
+                "publish",
+                {"event_key": "operation", "title": "Operation", "body": "Done", "kind": "result"},
+                immediate["id"],
+            )
+        )
+        for item in self.host.notifications.repo.list()["items"]:
+            await ChatChannel(self.host).deliver(item)
+        from assistant_runtime.core.conversation.access import ConversationAccess
+
+        view = ConversationAccess(lambda: self.c, lambda messages: project_chat(self.host, messages))
+        with patch.object(self.c, "state", return_value={}):
+            messages = view.history(None)["messages"]
+        changed = {e["data"]["id"]: e["data"] for e in view.changes(cursor) if e["kind"] == "message"}
+        self.assertEqual(len(messages), 5)
+        self.assertEqual(
+            [m["task_id"] for m in messages if m["presentation"].get("task_reply")], [immediate["task_id"]]
+        )
+        self.assertEqual(
+            [changed[m["id"]]["presentation"] for m in messages], [m["presentation"] for m in messages]
+        )
+        operation_message = next(m for m in messages if m["turn_id"] == "notification:" + operation["id"])
+        self.assertEqual(operation_message["report_group"]["run_id"], immediate["id"])
 
     async def test_take_back_then_hand_off_and_stale_transfer_conflict(self):
         run = await self.new_run()

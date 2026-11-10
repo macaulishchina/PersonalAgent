@@ -24,6 +24,14 @@ renders Markdown once, and keeps raw JSON inspection inside tool details. Consec
 entries remain open during execution and default closed when the turn settles; manual reopening
 survives later updates. Final answers, media and failure notices remain visible outside that fold.
 
+Foreground agents decide whether to delegate. A request that can be completed with the
+tools and context of the current turn stays there by default, including multi-step lookup
+and synthesis. Independent work, recurring work and explicit background requests use tasks.
+Successful one-shot agent results delivered back to the conversation appear as replies with
+their body and attachments visible. The link to the task is secondary. Scheduled results and
+operational updates retain the compact report presentation. The existing feedback owner
+determines which route delivers the result.
+
 Web media presentation is scoped to the recorded reply turn. Tool and answer references
 share one gallery after the reply text, deduplicated by registered ID; while running,
 received media remains visible. An intervening task notification does not steal the

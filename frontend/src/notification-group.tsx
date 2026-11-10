@@ -24,7 +24,7 @@ export function NotificationGroup({
   api: (path: string, options?: RequestInit) => Promise<any>;
   busy: boolean;
   onRead: () => void;
-  renderNotice: (notice: Notice, compact?: boolean) => ReactNode;
+  renderNotice: (notice: Notice) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [page, setPage] = useState<History>({ items: [], before: null });
@@ -109,7 +109,7 @@ export function NotificationGroup({
           {group.important > 0 && <span> · {group.important} 重要</span>}
         </span>
       </div>
-      {renderNotice(group.latest, !expanded)}
+      {renderNotice(group.latest)}
       <div className="notification-group-controls">
         <button
           className="notification-group-toggle"
@@ -118,11 +118,7 @@ export function NotificationGroup({
           onClick={() => setExpanded(!expanded)}
         >
           <ChevronDown size={14} aria-hidden="true" />
-          {expanded
-            ? "收起记录"
-            : group.total > 1
-              ? `展开 ${group.total} 条记录`
-              : "查看详情"}
+          {expanded ? "收起记录" : `展开 ${group.total} 条记录`}
         </button>
         {group.unread > 0 && (
           <button

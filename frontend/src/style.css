@@ -1575,7 +1575,7 @@ p {
 .notification-group-history .notification-card:last-child {
   border-bottom: 0;
 }
-.notification-card h3 {
+.notification-card > h3 {
   position: relative;
   margin: 0 0 10px;
   font-size: 15px;
@@ -1583,7 +1583,7 @@ p {
   font-weight: 500;
   overflow-wrap: anywhere;
 }
-.notification-card.unread h3 {
+.notification-card.unread > h3 {
   font-weight: 600;
 }
 .notification-unread-dot {
@@ -1596,11 +1596,53 @@ p {
   background: var(--accent);
 }
 .notification-body {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   font-size: 14px;
-  line-height: 1.8;
+  line-height: 1.7;
+}
+.notification-body[data-preview="true"] {
+  max-height: 5.1em;
+  overflow: hidden;
+}
+.notification-body[inert] {
+  mask-image: linear-gradient(#000 72%, transparent);
+}
+.notification-markdown.message-body {
+  font-size: inherit;
+  line-height: inherit;
+}
+.notification-markdown > * {
+  margin: 0 0 0.65em;
+}
+.notification-markdown > :last-child {
+  margin-bottom: 0;
+}
+.notification-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  line-height: inherit;
+}
+.notification-markdown p {
+  white-space: pre-line;
+}
+.notification-markdown :is(ul, ol) {
+  padding-inline-start: 1.35em;
+}
+.notification-markdown :is(td, th, pre) {
+  padding: 6px 10px;
+}
+.notification-body-toggle {
+  min-height: 32px;
+  margin: 2px 0 0 -5px;
+  padding: 0 5px;
+  gap: 5px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 12px;
+}
+.notification-body-toggle:hover {
+  background: var(--bubble);
+}
+.notification-body-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 .notification-card .task-hint {
   margin-top: 8px;
@@ -1755,16 +1797,6 @@ p {
   justify-content: space-between;
   gap: 8px;
 }
-.notification-preview {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-}
-.notification-body {
-  overflow-wrap: anywhere;
-}
-
 .notification-type {
   font-size: 0.75rem;
   font-weight: 400;
