@@ -15,7 +15,7 @@ def ensure_management(root, entry):
                 + json.dumps(str(root))
                 + "\nentry = "
                 + json.dumps(str(entry))
-                + '\nhost = "0.0.0.0"\nport = 8047\n'
+                + '\nhost = "0.0.0.0"\nport = 8047\nscheme = "http"\n'
             ).encode(),
         )
     return path

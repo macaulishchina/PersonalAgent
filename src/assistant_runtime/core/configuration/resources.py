@@ -1,6 +1,7 @@
 """Registered instance resources. No arbitrary filesystem editing or OAuth token backup."""
 
-from assistant_runtime.api.configuration import ConfigurationResource as Resource
+from assistant_runtime.api.configuration import ConfigurationError, ConfigurationResource as Resource
+from dataclasses import replace
 from pathlib import Path
 import json
 import os
@@ -20,7 +21,7 @@ class Resources:
             merge(data, tomllib.loads(raw.decode()))
         result = [
             Resource("credentials", self.root / ".env", "dotenv", "私有环境凭据", True),
-            Resource("management", self.root / "management.toml", "management", "管理服务地址与生命周期"),
+            Resource("management", self.root / "management.toml", "management", "访问协议"),
         ]
         from assistant_runtime.core.integrations.configuration_resources import (
             registered as integration_resources,
@@ -165,23 +166,11 @@ class Resources:
         elif resource.kind == "management":
             from .settings import ManagementSettings
 
-            data = tomllib.loads(text)
-            original = resource.path
-            if original.exists():
-                before = tomllib.loads(original.read_text(encoding="utf-8"))
-                if any(data.get(key) != before.get(key) for key in ("root", "entry")):
-                    raise ValueError("Bootstrap root and entry require local migration")
-            if Path(data.get("root", "")).resolve() != self.root:
-                raise ValueError("Instance root migration is not an online operation")
-            # Validate independently without replacing a live bootstrap.
-            import tempfile
-
-            with tempfile.TemporaryDirectory() as folder:
-                candidate = Path(folder) / original.name
-                candidate.write_text(text, encoding="utf-8")
-                settings = ManagementSettings.load(candidate)
-                if not settings.entry.is_relative_to(self.root):
-                    raise ValueError("Configuration entry migration requires local maintenance")
+            settings = ManagementSettings.from_text(text, directory=self.root)
+            if settings.root != self.root or not settings.entry.is_relative_to(self.root):
+                raise ValueError("Bootstrap root and entry require local migration")
+            settings.server_ssl_context()
+            settings.client_ssl_context()
         elif resource.kind == "credential":
             if resource.id == "web_access":
                 from assistant_runtime.api.passwords import validate_password
@@ -206,7 +195,26 @@ class Resources:
                 "configured": raw is not None,
                 "sensitive": resource.sensitive,
             }
-            if raw is not None and not resource.sensitive and resource.kind not in {"asset", "model_avatar"}:
+            if raw is not None and resource.kind == "management":
+                from .settings import ManagementSettings
+
+                settings = ManagementSettings.from_text(raw.decode(), directory=self.root)
+                item = {
+                    "id": ident,
+                    "kind": resource.kind,
+                    "title": resource.title,
+                    "scheme": settings.scheme,
+                    "read_only": resource.read_only,
+                }
+                https = replace(settings, scheme="https")
+                try:
+                    https.server_ssl_context()
+                    https.client_ssl_context()
+                except ConfigurationError as exc:
+                    item["tls_error"] = exc.message
+            elif (
+                raw is not None and not resource.sensitive and resource.kind not in {"asset", "model_avatar"}
+            ):
                 item["value"] = raw.decode()
             if resource.kind == "dotenv":
                 from dotenv import dotenv_values
@@ -317,7 +325,6 @@ class Resources:
             validate_image(ident, values.get("model-avatar-" + ident))
         from .validation import validate_ports
         from .settings import ManagementSettings
-        import tempfile
 
         from assistant_runtime.plugins.web.configuration_resources import validate_candidate as validate_web
         from assistant_runtime.core.integrations.configuration_resources import (
@@ -330,12 +337,11 @@ class Resources:
         validate_integrations(config, values)
         raw = values.get("management")
         if raw is not None:
-            with tempfile.TemporaryDirectory() as folder:
-                path = Path(folder) / "management.toml"
-                path.write_bytes(raw)
-                validate_ports(config, ManagementSettings.load(path))
+            validate_ports(config, ManagementSettings.from_text(raw.decode(), directory=self.root))
 
     def audit_fields(self, resource, operation):
+        if resource.kind == "management":
+            return ["scheme"]
         if resource.kind == "mcp":
             from assistant_runtime.core.integrations.configuration import audit_fields
 
@@ -358,6 +364,17 @@ class Resources:
         if resource.read_only or resource.kind == "asset":
             raise ValueError("Resource is read-only")
         op = operation.get("op")
+        if resource.kind == "management":
+            import tomlkit
+
+            scheme = operation.get("value")
+            if op != "set_scheme" or scheme not in ("http", "https") or previous is None:
+                raise ConfigurationError(
+                    ["management", "scheme"], "invalid_scheme", "仅可将访问协议设为 HTTP 或 HTTPS。"
+                )
+            document = tomlkit.parse(previous.decode())
+            document["scheme"] = scheme
+            return tomlkit.dumps(document).encode()
         if resource.kind == "dotenv":
             from dotenv import set_key, unset_key
             import tempfile

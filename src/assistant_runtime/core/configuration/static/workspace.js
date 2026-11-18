@@ -4,6 +4,12 @@
 let modelTab = "connections",
   activeEditor = null;
 const collectionQueries = new Map();
+const modelTabs = [
+  ["connections", "连接"],
+  ["library", "模型库"],
+  ["usage", "用途"],
+  ["advanced", "高级"],
+];
 const pageCopy = {
   overview: ["概览", "从一个可用模型开始，按需要扩展你的工作空间。"],
   models: ["模型与账号", "连接模型服务，管理可用模型，再决定在哪里使用。"],
@@ -13,7 +19,8 @@ const pageCopy = {
   permissions: ["权限管理", "管理第三方 MCP 的连接、长期授权和使用范围。"],
   connections: ["连接与设备", "管理已经配置的设备与设备连接。"],
   plugins: ["功能与插件", "按需要开启能力；每项能力都有自己的设置入口。"],
-  access: ["实例管理", "查看运行状态，维护访问入口和实例。"],
+  transport: ["访问入口", "管理 PA 配置后台、聊天和设备共用的连接入口。"],
+  access: ["实例管理", "查看运行状态，维护实例设置。"],
 };
 const pageSections = {
   execution: [
@@ -126,16 +133,50 @@ function refreshPluginLinks() {
   }
 }
 function moveTo(page, tab) {
-  // Drafts belong to the management session, not the currently displayed page.
-  navigateTo(page, tab);
-}
-function navigateTo(page, tab) {
+  const fragment =
+    "#" + (page === "models" ? page + "/" + (tab ?? modelTab) : page);
+  if (location.hash !== fragment) {
+    rememberWorkspacePosition();
+    history.pushState(null, "", fragment);
+  }
   selected = page;
   if (tab) modelTab = tab;
   render();
   window.scrollTo(0, 0);
   $("page-title").focus({ preventScroll: true });
 }
+function rememberWorkspacePosition() {
+  if ($("editor").hidden || !inventory) return;
+  try {
+    sessionStorage.setItem("pa.config.scroll:" + location.hash, String(window.scrollY));
+  } catch {
+    // Navigation still works when browser storage is blocked.
+  }
+}
+function restoreWorkspacePosition(scrollY) {
+  if (scrollY === undefined) {
+    try {
+      scrollY = Number(sessionStorage.getItem("pa.config.scroll:" + location.hash));
+    } catch {
+      scrollY = 0;
+    }
+  }
+  const [page, tab] = location.hash.slice(1).split("/");
+  selected =
+    Object.hasOwn(pageCopy, page) ||
+    inventory.plugins.some((plugin) => plugin.page === page)
+      ? page
+      : "overview";
+  if (selected === "models")
+    modelTab = modelTabs.some(([id]) => id === tab) ? tab : "connections";
+  render();
+  window.scrollTo(0, Number.isFinite(scrollY) ? scrollY : 0);
+}
+history.scrollRestoration = "manual";
+window.addEventListener("pagehide", rememberWorkspacePosition);
+window.addEventListener("popstate", () => {
+  if (inventory && !$("editor").hidden) restoreWorkspacePosition();
+});
 function surface(title, detail, cls = "") {
   const panel = node("article", undefined, "settings-panel " + cls);
   panel.append(cardHeading(title, detail));
@@ -194,7 +235,7 @@ function workspaceRender() {
   for (const [section, pages] of [
     ["开始使用", ["overview", "models"]],
     ["工作空间", ["execution", "tasks", "resources", "connections"]],
-    ["管理", ["permissions", "plugins", "access"]],
+    ["管理", ["transport", "permissions", "plugins", "access"]],
   ]) {
     navigation.append(node("p", section, "nav-label"));
     for (const page of pages) {
@@ -241,7 +282,14 @@ function workspaceRender() {
   else if (selected === "models") renderModels();
   else if (selected === "permissions") renderPermissions();
   else if (selected === "plugins") renderPlugins();
-  else if (!keepPage) renderSettingsPage();
+  else if (selected === "transport") {
+    const management = resourceInventory.find((item) => item.kind === "management");
+    docs.append(
+      management?.scheme
+        ? drawManagementTransport(management, snapshot.management_transport)
+        : emptyState("访问协议暂不可用", "请在服务器检查实例的管理启动配置。"),
+    );
+  } else if (!keepPage) renderSettingsPage();
   if (selected !== "models" || modelTab !== "connections") {
     clearTimeout(accountTimer);
     accountTimer = undefined;
@@ -307,7 +355,7 @@ function renderOverview() {
     ["execution", "控制工作量", "并发、队列与调用额度"],
     ["permissions", "管理权限", "第三方 MCP 连接与工具授权"],
     ["plugins", "扩展能力", "任务、记忆与更多插件"],
-    ["access", "维护实例", "访问入口、备份与恢复"],
+    ["access", "维护实例", "实例设置、备份与恢复"],
   ]) {
     const link = button("", () => moveTo(page), "quick-card");
     link.append(
@@ -327,17 +375,12 @@ function renderModels() {
   const tabs = node("div", undefined, "page-tabs");
   tabs.setAttribute("role", "tablist");
   tabs.setAttribute("aria-label", "模型设置");
-  for (const [id, label] of [
-    ["connections", "连接"],
-    ["library", "模型库"],
-    ["usage", "用途"],
-    ["advanced", "高级"],
-  ]) {
+  for (const [id, label] of modelTabs) {
     const item = button(
       label,
       () => {
-        modelTab = id;
-        render();
+        moveTo("models", id);
+        $("model-tab-" + id).focus({ preventScroll: true });
       },
       modelTab === id ? "active" : "",
     );
@@ -477,8 +520,7 @@ function renderModels() {
       button(
         connections ? "下一步：添加模型 →" : "下一步：指定用途 →",
         () => {
-          modelTab = connections ? "library" : "usage";
-          render();
+          moveTo("models", connections ? "library" : "usage");
           $("model-tab-" + modelTab)?.focus();
         },
         "secondary",
@@ -1989,8 +2031,7 @@ function openAddEntity(kind, selectedProvider) {
         "去连接",
         () => {
           $("setup-dialog").close();
-          modelTab = "connections";
-          render();
+          moveTo("models", "connections");
         },
       ),
     );

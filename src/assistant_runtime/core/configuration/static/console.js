@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const groups = {
-  access: "基础与访问",
+  access: "实例设置",
   models: "模型与账号",
   execution: "执行与用量",
   conversation: "对话与任务",
@@ -13,7 +13,7 @@ const groups = {
   extensions: "扩展插件",
 };
 const descriptions = {
-  access: "管理实例的基础设置与访问入口。",
+  access: "管理实例的基础设置。",
   models: "配置服务供应商、模型别名与用途绑定。",
   execution: "调整执行资源、调用预算与用量保护。",
   conversation: "管理对话体验与后台任务策略。",
@@ -25,6 +25,7 @@ const descriptions = {
   extensions: "按插件管理配置，字段与默认值由插件声明。",
 };
 const navPaths = {
+  transport: "M4 5h16v12H4z M4 9h16 M8 13h3 M14 13h2",
   access:
     "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 3v2 M12 19v2 M3 12h2 M19 12h2 M5.6 5.6l1.4 1.4 M17 17l1.4 1.4 M5.6 18.4l1.4-1.4 M17 7l1.4-1.4",
   models: "M12 3l9 5-9 5-9-5 9-5 M3 12l9 5 9-5 M3 16l9 5 9-5",
@@ -1057,6 +1058,7 @@ async function load({ discardLocal = false } = {}) {
   )
     return;
   const status = await api("/api/status");
+  const scrollY = $("editor").hidden ? undefined : window.scrollY;
   $("login-screen").hidden = true;
   $("login").hidden = true;
   $("editor").hidden = false;
@@ -1105,7 +1107,7 @@ async function load({ discardLocal = false } = {}) {
     }[status.state] || status.state;
   $("health").dataset.state = status.state;
   renderPluginHealth(status);
-  render();
+  restoreWorkspacePosition(scrollY);
   await applicationStatus();
 }
 $("login").addEventListener("submit", (e) => {
@@ -1231,7 +1233,17 @@ async function saveChanges() {
     // Keep the editable candidate for an explicit retry; never resubmit an old revision.
     snapshot.version = saved.version;
     pendingRestart = saved.pending_restart;
-    const applied = saved.application ? await waitForApplication() : {};
+    let applied;
+    try {
+      applied = saved.application ? await waitForApplication() : {};
+    } catch (error) {
+      const transport = resourceEdits.get("management");
+      if (transport && error instanceof TypeError) {
+        resourceEdits.delete("management");
+        throw Error(`协议设置已保存。请用 ${transport.value.toUpperCase()} 重新打开同一端口，查看生效状态。`);
+      }
+      throw error;
+    }
     await load({ discardLocal: true });
     if (pendingRestart) askRestart();
     else
@@ -1486,7 +1498,6 @@ function resourceGroup(resource) {
     {
       credentials: "models",
       mcp: "permissions",
-      management: "access",
       web_access: "plugin:web",
     }[resource.id] ||
     (resource.kind === "skill"
@@ -1496,10 +1507,67 @@ function resourceGroup(resource) {
         : "plugins")
   );
 }
+function drawManagementTransport(resource, active) {
+  const panel = surface(
+    "访问协议",
+    "HTTP 和 HTTPS 使用同一个端口。保存切换后，请用新协议重新打开。",
+  );
+  const row = node("section", undefined, "field"),
+    copy = node("div", undefined, "field-copy"),
+    control = node("div", undefined, "field-control"),
+    label = node("label", "连接方式"),
+    input = node("select");
+  input.id = "management-scheme";
+  label.htmlFor = input.id;
+  const http = node("option", "HTTP（默认）"),
+    https = node("option", "HTTPS");
+  http.value = "http";
+  https.value = "https";
+  https.disabled = Boolean(resource.tls_error);
+  input.append(http, https);
+  input.value = resourceEdits.get(resource.id)?.value ?? resource.scheme;
+  input.disabled = resource.read_only;
+  input.addEventListener("change", () => {
+    if (input.value === resource.scheme) resourceEdits.delete(resource.id);
+    else resourceEdits.set(resource.id, { id: resource.id, op: "set_scheme", value: input.value });
+    updateSaveBar();
+  });
+  copy.append(label);
+  control.append(input);
+  row.append(copy, control);
+
+  const httpsActive = active.scheme === "https",
+    certificate = node("section", undefined, "field"),
+    certificateLabel = node("div", undefined, "field-copy"),
+    details = node("div", undefined, "field-control transport-certificate"),
+    status = node(
+      "span",
+      httpsActive ? "HTTPS 使用中" : resource.tls_error ? "需配置" : "已就绪",
+      resource.tls_error && !httpsActive ? "badge" : "badge configured",
+    );
+  certificateLabel.append(node("span", "HTTPS 证书", "transport-field-label"));
+  status.id = "management-certificate-status";
+  input.setAttribute("aria-describedby", status.id);
+  details.append(status);
+  if (active.ca_download) {
+    const download = node("a", "下载 CA 证书");
+    download.href = active.ca_download;
+    download.download = "";
+    details.append(download);
+  } else if (httpsActive) {
+    details.append(node("p", "当前无可下载的 CA 证书。", "hint"));
+  } else if (resource.tls_error) {
+    details.append(node("p", resource.tls_error, "hint"));
+  }
+  certificate.append(certificateLabel, details);
+  panel.append(row, certificate);
+  return panel;
+}
 function drawResources(target = $("documents"), filter) {
   const resources = resourceInventory.filter(
     (r) =>
       r.kind !== "asset" &&
+      r.kind !== "management" &&
       r.id !== "mcp" &&
       (filter ? filter(r) : resourceGroup(r) === selected),
   );
@@ -1637,14 +1705,6 @@ function drawResources(target = $("documents"), filter) {
           node(
             "p",
             "至少 6 个字符，无需大小写或数字组合；留空保持当前密码。",
-            "hint",
-          ),
-        );
-      if (resource.id === "management")
-        content.append(
-          node(
-            "p",
-            "管理地址变更可能中断当前连接；应用前请记录新地址。绑定失败会保留旧入口。",
             "hint",
           ),
         );

@@ -140,10 +140,10 @@ class ConfigurationUpdateTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_cli_client_uses_operator_authentication_and_saved_revision(self):
         from aiohttp.test_utils import TestServer
-        from types import SimpleNamespace
         from assistant_runtime.core.configuration.console import Console, web
         from assistant_runtime.core.configuration.auth import AdminAccess
         from assistant_runtime.core.configuration.client import operate
+        from assistant_runtime.core.configuration.settings import ManagementSettings
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -167,7 +167,7 @@ class ConfigurationUpdateTest(unittest.IsolatedAsyncioTestCase):
                 ]
             )
             async with TestServer(app) as server:
-                settings = SimpleNamespace(root=root, host="0.0.0.0", port=server.port)
+                settings = ManagementSettings(root, root / "config.toml", port=server.port)
                 self.assertEqual(await operate(settings, "status"), {"version": "saved-revision"})
                 self.assertEqual(await operate(settings, "apply"), {"phase": "preparing"})
 

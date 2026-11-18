@@ -15,7 +15,8 @@ async def operate(settings, action):
         else settings.host
     )
     authority = f"[{host}]" if ":" in host else host
-    origin = f"http://{authority}:{settings.port}"
+    origin = f"{settings.scheme}://{authority}:{settings.port}"
+    tls = settings.client_ssl_context()
     token_path = settings.root / "state/configuration/admin-token"
     try:
         async with ClientSession(
@@ -29,6 +30,7 @@ async def operate(settings, action):
                     json=body,
                     headers={"Origin": origin},
                     allow_redirects=False,
+                    ssl=tls if tls is not None else True,
                 ) as response:
                     if response.status >= 400:
                         raise RuntimeError(

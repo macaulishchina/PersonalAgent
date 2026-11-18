@@ -24,6 +24,25 @@ class ResourceTests(ConfigurationFixture, unittest.TestCase):
     def save_resource(self, operations):
         return self.files.patch(self.files.fields()["version"], [], resource_changes=operations)
 
+    def test_management_resource_exposes_only_transport_and_validates_certificate(self):
+        bootstrap = self.root / "management.toml"
+        before = 'root = "."\nentry = "config/config.toml"\nport = 8047 # local binding\n'
+        bootstrap.write_text(before, encoding="utf-8")
+        snapshot = self.files.snapshot()
+        public = self.resources.public(snapshot.contents, snapshot.resources)
+        management = next(item for item in public if item["id"] == "management")
+        self.assertEqual(management["scheme"], "http")
+        self.assertIn("证书和私钥", management["tls_error"])
+        self.assertNotIn("value", management)
+        self.assertNotIn("file", management)
+        with self.assertRaisesRegex(ValueError, "仅可将访问协议"):
+            self.save_resource([{"id": "management", "op": "set", "value": before + "host='0.0.0.0'"}])
+        with self.assertRaisesRegex(ValueError, "请先在服务器安装"):
+            self.save_resource([{"id": "management", "op": "set_scheme", "value": "https"}])
+        self.assertEqual(bootstrap.read_text(encoding="utf-8"), before)
+        self.save_resource([{"id": "management", "op": "set_scheme", "value": "http"}])
+        self.assertEqual(bootstrap.read_text(encoding="utf-8"), before + 'scheme = "http"\n')
+
     def test_web_password_accepts_six_characters_without_approval(self):
         from assistant_runtime.plugins.web.configuration_resources import validate_candidate
 

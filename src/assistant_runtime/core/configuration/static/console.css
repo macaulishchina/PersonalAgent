@@ -800,7 +800,8 @@ nav svg {
   padding-top: 6px;
   min-width: 0;
 }
-.field-copy > label {
+.field-copy > label,
+.transport-field-label {
   display: block;
   font-size: 14px;
   font-weight: 550;
@@ -812,6 +813,14 @@ nav svg {
 }
 .field-control {
   min-width: 0;
+}
+.transport-certificate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 32px;
+  font-size: 13px;
 }
 .field-control > select,
 .field-control > input {

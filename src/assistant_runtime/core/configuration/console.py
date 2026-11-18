@@ -14,6 +14,7 @@ from assistant_runtime.api.configuration import ConfigurationError
 from assistant_runtime.app.versions import CompatibilityError
 
 COOKIE = "personal_agent_admin"
+TLS_CA_PATH = "/api/configuration/tls-ca"
 log = logging.getLogger(__name__)
 
 
@@ -29,6 +30,7 @@ class Console:
         self.access = AdminAccess(business.state / "admin-token")
         self.runner = None
         self.site = None
+        self.active_ca = b""
         self.business.management_applied = self.reconfigure
         self.writes = asyncio.Lock()
         from .save_flow import SaveFlow
@@ -146,6 +148,8 @@ class Console:
         return response
 
     async def start(self):
+        tls = self.settings.server_ssl_context()
+        ca = self.settings.ca_certificate()
         app = web.Application(middlewares=[self.guard], client_max_size=3 * 1024 * 1024)
         app.add_routes(
             [
@@ -176,6 +180,7 @@ class Console:
                 web.post("/api/admin-password", self.change_password),
                 web.get("/api/status", self.status),
                 web.get("/api/configuration", self.read),
+                web.get(TLS_CA_PATH, self.download_ca),
                 web.post("/api/configuration", self.save),
                 web.post("/api/configuration/discard", self.discard),
                 web.post("/api/configuration/restart", self.restart),
@@ -207,20 +212,49 @@ class Console:
         )
         self.runner = web.AppRunner(app, access_log=None)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, self.settings.host, self.settings.port)
+        self.site = web.TCPSite(self.runner, self.settings.host, self.settings.port, ssl_context=tls)
         await self.site.start()
+        self.active_ca = ca
 
     async def reconfigure(self):
         from .settings import ManagementSettings
 
         settings = ManagementSettings.load(self.settings.root / "management.toml")
-        if (settings.host, settings.port) != (self.settings.host, self.settings.port):
-            site = web.TCPSite(self.runner, settings.host, settings.port)
-            await site.start()  # Bind before retiring the working management endpoint.
-            await self.site.stop()
+        if (settings.host, settings.port, settings.scheme) != (
+            self.settings.host,
+            self.settings.port,
+            self.settings.scheme,
+        ):
+            site = web.TCPSite(
+                self.runner, settings.host, settings.port, ssl_context=settings.server_ssl_context()
+            )
+            ca = settings.ca_certificate()
+            old_site = self.site
+            same_port = settings.port == self.settings.port
+            switching_scheme = settings.scheme != self.settings.scheme
+            connections = self.runner.server.connections if switching_scheme else ()
+            if same_port:
+                await old_site.stop()
+            try:
+                await site.start()
+            except (OSError, asyncio.CancelledError):
+                await site.stop()
+                if same_port:
+                    await old_site.start()
+                raise
+            if not same_port:
+                await old_site.stop()
             self.site = site
+            self.active_ca = ca
+            for connection in connections:
+                connection.force_close()
         self.settings = self.business.settings = settings
-        return {"host": settings.host, "port": settings.port, "public_origin": settings.public_origin}
+        return {
+            "host": settings.host,
+            "port": settings.port,
+            "scheme": settings.scheme,
+            "public_origin": settings.public_origin,
+        }
 
     def writable(self):
         task = getattr(self.business, "apply_task", None)
@@ -354,6 +388,15 @@ class Console:
     async def status(self, request):
         return web.json_response(await self.business.status())
 
+    async def download_ca(self, request):
+        if not request.secure or not self.active_ca:
+            raise web.HTTPNotFound()
+        return web.Response(
+            body=self.active_ca,
+            content_type="application/x-x509-ca-cert",
+            headers={"Content-Disposition": 'attachment; filename="pa-ca.crt"'},
+        )
+
     async def read(self, request):
         from .fields import present
 
@@ -378,6 +421,10 @@ class Console:
 
         result["provider_presets"] = PRESETS
         result["application"] = dict(self.business.application)
+        result["management_transport"] = {
+            "scheme": self.settings.scheme,
+            "ca_download": TLS_CA_PATH if request.secure and self.active_ca else None,
+        }
         loaded = getattr(self.business, "loaded_snapshot", None)
         if loaded:
             applied = present(

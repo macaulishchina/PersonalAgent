@@ -180,11 +180,13 @@ and audit. The business process has no configuration-management model tool.
   Model configuration and credential changes prepare a new local provider adapter, then
   commit or roll back with the other affected owners. No external deployment step is
   required. Provider capability acceptance remains separate from saving settings.
-- Management listener changes bind the new endpoint before retiring the old one. Failed
-  binding preserves the working endpoint and an explicit outstanding step. Root/entry
-  relocation is forbidden. The installer manages one unit and the owned process tree.
+- Management listener changes on the same port release it before rebinding and restore
+  the previous listener if binding fails. Changes to a different port bind before retiring
+  the old listener. The installer manages one unit and the owned process tree.
 
-The bootstrap supports `host`, `port`, `startup_seconds`, `shutdown_seconds`,
+The console edits only the bootstrap `scheme` (`http` by default, or `https`).
+The server reads its TLS certificate and key from the private instance `config/tls/` directory.
+The bootstrap also supports `host`, `port`, `startup_seconds`, `shutdown_seconds`,
 `trusted_proxies` (CIDRs) and `public_origin` (HTTP(S) origin without trailing slash).
 Behind TLS termination, set both the explicit public origin and the proxy networks.
 Untrusted forwarded headers are ignored. Administrator sessions, strict origin checks,
