@@ -275,6 +275,21 @@ class ConnectionLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.sockets.append(ws)
         return ws
 
+    async def test_unicode_is_measured_and_sent_as_the_same_utf8_frame(self):
+        socket = await self.connect()
+        await socket.receive_json()  # Wait until the handshake has completed.
+        connection = self.plugin.connections[self.ident]
+        body = "终" * 5000
+        await connection.send("message", text=body)
+        async with asyncio.timeout(2):
+            while True:
+                text = await socket.receive_str()
+                if json.loads(text).get("text") == body:
+                    break
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        with self.assertRaisesRegex(SpeechError, "terminal_message_limit"):
+            await connection.send("message", text="终" * 5500)
+
     async def test_authenticated_reconnect_takes_ownership_and_old_cleanup_cannot_remove_it(self):
         first = await self.connect()
         self.assertEqual((await first.receive_json())["binding"], "persistent-session")
@@ -670,7 +685,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             {"id": "live", "role": "assistant", "cursor": "c", "status": "streaming", "updated": 3},
         ]
         self.connection.cursor = 7
-        await self.connection.cache_index({"items": items, "cursor": 99})
+        await self.connection.display.cache_index({"items": items, "cursor": 99})
         self.assertEqual(self.connection.cursor, 7)
         index = self.messages[-1]
         self.assertEqual(index["type"], "cache.index")
@@ -678,7 +693,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("preview", index["items"][0])
         self.assertEqual(self.calls, [])
         self.owner.settings["offline_cache"] = False
-        await self.connection.cache_index({"items": items})
+        await self.connection.display.cache_index({"items": items})
         self.assertEqual(len(self.messages), 1)
 
     async def test_cache_prefetch_uses_the_same_owned_read_and_preserves_presentation_metadata(self):
@@ -776,7 +791,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         socket = self.ws
 
         class Frames:
-            send_json = staticmethod(socket.send_json)
+            send_str = staticmethod(socket.send_str)
             send_bytes = staticmethod(socket.send_bytes)
             close = staticmethod(socket.close)
 
@@ -844,8 +859,10 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             "images": [],
             "kind": "message",
         }
-        self.connection.conversation = AsyncMock(return_value=page)
-        await self.connection.restore_message({"id": "prior", "role": "assistant", "status": "complete"})
+        self.context.invoke = AsyncMock(return_value=page)
+        await self.connection.display.restore_message(
+            {"id": "prior", "role": "assistant", "status": "complete"}
+        )
         self.assertTrue(self.messages[-1]["restored"])
         self.assertEqual(self.messages[-1]["text"], "之前的回复。")
         self.assertIsNone(self.connection.play_task)
@@ -859,7 +876,10 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         async def send(value):
             self.messages.append(value)
 
-        self.ws = SimpleNamespace(send_json=send, send_bytes=send, close=AsyncMock())
+        async def send_text(value):
+            await send(json.loads(value))
+
+        self.ws = SimpleNamespace(send_str=send_text, send_bytes=send, close=AsyncMock())
 
         async def invoke(request, **kwargs):
             self.calls.append(request)
@@ -940,7 +960,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
 
         class Frames:
             def __init__(self):
-                self.send_json = socket.send_json
+                self.send_str = socket.send_str
                 self.send_bytes = socket.send_bytes
                 self.close = socket.close
 
@@ -1121,7 +1141,8 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.connection.command({"type": "image.chunk", "version": "stale", "offset": 0})
         await self.connection.command({"type": "image.close"})
-        self.assertIsNone(self.connection.thumbnail)
+        with self.assertRaises(ValueError):
+            await self.connection.command({"type": "image.chunk", "version": "one", "offset": 0})
 
     async def test_over_limit_transcript_waits_for_explicit_confirmation(self):
         async def invoke(request, **kwargs):
@@ -1224,6 +1245,50 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(SpeechError, "terminal_input_identity_mismatch"):
             await self.connection.command({"type": "input.confirm", "request_id": ident})
         self.assertNotIn("commit", [r.action for r in self.calls])
+
+    async def test_cancel_before_recognition_task_starts_releases_the_input_slot(self):
+        upstream = AsyncMock()
+        released = []
+        stream = InputStream(upstream, 1, released.append)
+        await stream.accept(0, b"\0\0")
+        ident = str(uuid.uuid4())
+        self.connection.input, self.connection.input_id = stream, ident
+        await self.connection.command({"type": "input.finish", "request_id": ident, "frames": 1})
+        await self.connection.abort_input()
+        upstream.finish.assert_not_awaited()
+        upstream.close.assert_awaited_once()
+        self.assertEqual(released, [stream])
+        self.assertEqual([r.action for r in self.calls], ["cancel"])
+
+    async def test_radio_disconnect_does_not_cancel_in_flight_commit(self):
+        entered, allow_commit = asyncio.Event(), asyncio.Event()
+
+        async def invoke(request, **kwargs):
+            self.calls.append(request)
+            if request.action == "commit":
+                entered.set()
+                await allow_commit.wait()
+            return {"state": "accepted"}
+
+        self.context.invoke = invoke
+        upstream = AsyncMock()
+        upstream.finish.return_value = "一条新输入"
+        stream = InputStream(upstream, 1, lambda _: None)
+        await stream.accept(0, b"\0\0")
+        ident = str(uuid.uuid4())
+        self.connection.input, self.connection.input_id = stream, ident
+        await self.connection.command({"type": "input.finish", "request_id": ident, "frames": 1})
+        await asyncio.wait_for(entered.wait(), 2)
+        close_task = asyncio.create_task(self.connection.close())
+        try:
+            while self.connection.closing is None:
+                await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertFalse(self.connection.finish_task.cancelling())
+        finally:
+            allow_commit.set()
+            await asyncio.wait_for(close_task, 2)
+        self.assertEqual([r.action for r in self.calls], ["commit", "receipt"])
 
     async def test_cancel_while_finalizing_discards_late_transcript(self):
         upstream = AsyncMock()

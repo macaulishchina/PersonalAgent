@@ -57,6 +57,8 @@ bool pp_input_confirm(pp_input_t *input);
 void pp_input_restore_confirmation(pp_input_t *input);
 bool pp_input_done(pp_input_t *input, uint32_t generation);
 void pp_input_abort(pp_input_t *input);
+/* Returns true when the durable receipt must settle the interrupted input. */
+bool pp_input_disconnect(pp_input_t *input);
 bool pp_input_capturing(const pp_input_t *input);
 bool pp_input_listening(const pp_input_t *input);
 const char *pp_input_name(pp_input_phase_t phase);

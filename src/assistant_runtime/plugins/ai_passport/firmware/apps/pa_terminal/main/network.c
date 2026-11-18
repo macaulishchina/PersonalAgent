@@ -1,4 +1,7 @@
+#include "terminal_limits.h"
 #include "network.h"
+#include "network_model.h"
+#include "esp_system.h"
 #include "settings.h"
 #include "byte_buffer.h"
 #include "provision.h"
@@ -26,11 +29,13 @@ typedef struct {
     void *data;
     size_t bytes;
     bool binary;
+    uint32_t generation;
 } packet_t;
 static esp_websocket_client_handle_t client;
 static QueueHandle_t outgoing;
 static EventGroupHandle_t network;
-static atomic_bool connected, ready, stopped, reconfigure, retry, provision, rejected;
+static pp_link_t ws_link;
+static atomic_bool stopped, reconfigure, retry, provision, rejected, repair;
 #define WIFI_READY BIT0
 #define WIFI_FAILED BIT1
 #define CONTROL BIT2
@@ -49,6 +54,10 @@ static void memory_stage(const char *stage) {
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
 }
 
+static void report_offline(const char *reason) {
+    pp_network_state(false, reason, pp_link_generation(&ws_link));
+}
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
     (void)data;
@@ -58,26 +67,28 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(network, WIFI_READY);
         xEventGroupSetBits(network, WIFI_FAILED);
-        connected = ready = false;
+        pp_link_close(&ws_link, pp_link_generation(&ws_link));
         if (!provision)
-            pp_network_state(false, "网络断开");
+            report_offline("网络断开");
     }
 }
 static void socket_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    (void)arg;
+    uint32_t generation = (uint32_t)(uintptr_t)arg;
     (void)base;
+    if (generation != pp_link_generation(&ws_link))
+        return;
     if (id == WEBSOCKET_EVENT_CONNECTED) {
-        connected = true;
-        ready = false;
+        if (!pp_link_open(&ws_link, generation))
+            return;
         used = 0;
         opcode = 0;
         pp_buffer_free(&received);
         memory_stage("ws_connected");
-        pp_network_state(false, "正在同步会话");
+        pp_network_state(false, "正在同步会话", generation);
         return;
     }
     if (id == WEBSOCKET_EVENT_DISCONNECTED || id == WEBSOCKET_EVENT_ERROR) {
-        connected = ready = false;
+        pp_link_close(&ws_link, generation);
         used = 0;
         opcode = 0;
         pp_buffer_free(&received);
@@ -109,21 +120,22 @@ static void socket_event(void *arg, esp_event_base_t base, int32_t id, void *dat
                 reason = "证书验证失败";
             else if (error.esp_ws_handshake_status_code == 401) {
                 rejected = true;
-                reason = "设备授权失效，请重新配对";
-            } else if (error.esp_ws_handshake_status_code == 403)
-                reason = "接入被拒绝";
-            else if (error.esp_ws_handshake_status_code == 409)
+                reason = "PA 身份验证失败 (401)";
+            } else if (error.esp_ws_handshake_status_code == 403) {
+                rejected = true;
+                reason = "PA 拒绝接入 (403)";
+            } else if (error.esp_ws_handshake_status_code == 409)
                 reason = "设备已有连接，等待重连";
-            pp_network_state(false, reason);
+            pp_network_state(false, reason, generation);
         } else if (!socket_error)
-            pp_network_state(false, "连接断开，正在重连");
+            pp_network_state(false, "连接断开，正在重连", generation);
         return;
     }
-    if (id != WEBSOCKET_EVENT_DATA)
+    if (id != WEBSOCKET_EVENT_DATA || !pp_link_connected(&ws_link, generation))
         return;
     esp_websocket_event_data_t *event = data;
     if (event->op_code == 8) {
-        connected = false;
+        pp_link_close(&ws_link, generation);
         return;
     }
     if (event->op_code != 0 && event->op_code != 1 && event->op_code != 2)
@@ -135,22 +147,22 @@ static void socket_event(void *arg, esp_event_base_t base, int32_t id, void *dat
             received.size = 0;
             opcode = event->op_code;
         } else if (!opcode) {
-            connected = false;
-            pp_network_state(false, "无效消息分片");
+            pp_link_close(&ws_link, generation);
+            pp_network_state(false, "无效消息分片", generation);
             return;
         }
     }
-    if (event->data_len < 0 || event->payload_len < 0 || event->payload_len > 16384 ||
-        event->payload_offset != (int)frame_used || used + event->data_len > 16384) {
-        connected = false;
-        pp_network_state(false, "消息超限");
+    if (event->data_len < 0 || event->payload_len < 0 || (size_t)event->payload_len > PP_WIRE_MESSAGE_BYTES ||
+        event->payload_offset != (int)frame_used || used + event->data_len > PP_WIRE_MESSAGE_BYTES) {
+        pp_link_close(&ws_link, generation);
+        pp_network_state(false, "消息超限", generation);
         return;
     }
-    if (event->data_len && !pp_buffer_append(&received, event->data_ptr, event->data_len, 16384)) {
+    if (event->data_len && !pp_buffer_append(&received, event->data_ptr, event->data_len, PP_WIRE_MESSAGE_BYTES)) {
         socket_error = true;
-        connected = false;
+        pp_link_close(&ws_link, generation);
         pp_buffer_free(&received);
-        pp_network_state(false, "接收缓冲内存不足");
+        pp_network_state(false, "接收缓冲内存不足", generation);
         return;
     }
     used = received.size;
@@ -158,19 +170,19 @@ static void socket_event(void *arg, esp_event_base_t base, int32_t id, void *dat
     if (frame_used != (size_t)event->payload_len || !event->fin)
         return;
     if (opcode == 1) {
-        pp_received(received.data ? received.data : "", used);
-    } else if (opcode == 2 && used >= 6 && used % 2 == 0) {
+        pp_received_frame(&received, generation);
+    } else if (opcode == 2 && pp_link_ready(&ws_link) == generation && used >= 6 && used % 2 == 0) {
         unsigned char *p = (unsigned char *)received.data;
         uint32_t generation =
             ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
         if (!pp_play_pcm(generation, p + 4, used - 4)) {
-            connected = false;
-            pp_network_state(false, "播放缓冲超限");
+            pp_link_close(&ws_link, generation);
+            pp_network_state(false, "播放缓冲超限", generation);
         }
     }
     used = 0;
     received.size = 0;
-    if (received.capacity > 4096)
+    if (received.capacity > PP_NET_REUSE_CAPACITY)
         pp_buffer_free(&received);
     opcode = 0;
 }
@@ -228,7 +240,7 @@ static bool pairing(pp_settings_t *settings) {
         esp_http_client_cleanup(http);
         if (status == 401 || status == 403) {
             rejected = true;
-            pp_network_state(false, "配对已撤销，请恢复出厂后重新配对");
+            report_offline(status == 401 ? "PA 身份验证失败 (401)" : "PA 拒绝接入 (403)");
         }
         if (e == ESP_OK && status == 200 && !response.overflow) {
             cJSON *answer = cJSON_Parse(response.text),
@@ -250,11 +262,11 @@ static bool pairing(pp_settings_t *settings) {
             }
             cJSON_Delete(answer);
         } else if (!rejected)
-            pp_network_state(false, "PA 暂不可达，稍后重连");
+            report_offline("PA 暂不可达，稍后重连");
     }
     memset(raw, 0, strlen(raw));
     free(raw);
-    if (paired && pp_preference("paired", 1) == ESP_OK) {
+    if (paired && pp_preference(PP_PREF_PAIRED, 1, NULL) == ESP_OK) {
         settings->paired = true;
         return true;
     }
@@ -293,7 +305,7 @@ static bool connect_wifi(const pp_settings_t *s) {
         char reason[96];
         snprintf(reason, sizeof(reason), "连接 Wi-Fi %u/%u · 第 %u/3 轮", index + 1, s->wifi_count,
                  round);
-        pp_network_state(false, reason);
+        report_offline(reason);
         esp_err_t e = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
         if (e == ESP_OK)
@@ -334,7 +346,7 @@ static void worker(void *arg) {
     (void)arg;
     pp_settings_t *settings = malloc(sizeof(*settings));
     if (!settings) {
-        pp_network_state(false, "网络配置内存不足");
+        report_offline("网络配置内存不足");
         goto done;
     }
     esp_sntp_config_t timecfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
@@ -343,6 +355,11 @@ static void worker(void *arg) {
     unsigned reconnect = 1000;
     while (!stopped) {
         xEventGroupClearBits(network, CONTROL);
+        if (atomic_exchange(&repair, false) && rejected) {
+            if (pp_settings_new_identity() == ESP_OK)
+                esp_restart();
+            report_offline("配对身份保存失败，请重试");
+        }
         if (atomic_exchange(&retry, false)) {
             exhausted = false;
             rejected = false;
@@ -356,27 +373,27 @@ static void worker(void *arg) {
             }
         }
         if (pp_settings_snapshot(settings) != ESP_OK) {
-            pp_network_state(false, "设置读取失败");
+            report_offline("设置读取失败");
             interruptible_wait(3000);
             continue;
         }
         if (!settings->wifi_count || provision) {
             provision = false;
             rejected = false;
-            pp_network_state(false, "等待手机配网");
+            report_offline("等待手机配网");
             if ((xEventGroupGetBits(network) & WIFI_READY) && !disconnect_wifi()) {
-                pp_network_state(false, "Wi-Fi 未正常断开，请重启");
+                report_offline("Wi-Fi 未正常断开，请重启");
                 break;
             }
             esp_err_t e = pp_provision_start();
             if (e != ESP_OK) {
-                pp_network_state(false, "热点启动失败，请重启");
+                report_offline("热点启动失败，请重启");
                 break;
             }
-            while (!stopped && !pp_provision_complete())
+            while (!stopped && !pp_provision_complete() && !(retry && settings->wifi_count))
                 xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, pdMS_TO_TICKS(250));
             if (pp_provision_stop() != ESP_OK) {
-                pp_network_state(false, "热点未正常关闭，请重启");
+                report_offline("热点未正常关闭，请重启");
                 break;
             }
             exhausted = false;
@@ -384,10 +401,10 @@ static void worker(void *arg) {
         }
         if (rejected || exhausted) {
             if (exhausted)
-                pp_network_state(false, wifi_uncertain
+                report_offline(wifi_uncertain
                                             ? "Wi-Fi 状态未确认，请重试或重启"
                                             : "Wi-Fi 三轮连接失败，请在菜单重试或重新配网");
-            while (!stopped && !retry && !provision && !reconfigure)
+            while (!stopped && !retry && !provision && !reconfigure && !repair)
                 xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
             continue;
         }
@@ -400,12 +417,12 @@ static void worker(void *arg) {
         }
         bool secure = !strncmp(settings->url, "https://", 8);
         if (secure && time(NULL) < 1700000000) {
-            pp_network_state(false, "HTTPS 正在校准时间");
+            report_offline("HTTPS 正在校准时间");
             for (unsigned i = 0;
                  i < 150 && !stopped && !provision && !reconfigure && time(NULL) < 1700000000; i++)
                 vTaskDelay(pdMS_TO_TICKS(100));
             if (time(NULL) < 1700000000) {
-                pp_network_state(false, "NTP 未就绪，HTTPS 暂不可用");
+                report_offline("NTP 未就绪，HTTPS 暂不可用");
                 interruptible_wait(10000);
                 continue;
             }
@@ -418,7 +435,7 @@ static void worker(void *arg) {
         }
         char uri[600], headers[180];
         if (!pp_server_endpoint(settings->url, "stream", true, uri, sizeof(uri))) {
-            pp_network_state(false, "PA 地址无效，请重新配网");
+            report_offline("PA 地址无效，请重新配网");
             exhausted = true;
             continue;
         }
@@ -443,32 +460,39 @@ static void worker(void *arg) {
             .crt_bundle_attach = secure && !settings->ca[0] ? esp_crt_bundle_attach : NULL};
         client = esp_websocket_client_init(&cfg);
         if (!client) {
-            pp_network_state(false, "连接内存不足");
+            report_offline("连接内存不足");
             interruptible_wait(5000);
             continue;
         }
-        esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, socket_event, NULL);
+        uint32_t generation = pp_link_begin(&ws_link);
+        esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, socket_event,
+                                      (void *)(uintptr_t)generation);
         if (esp_websocket_client_start(client) == ESP_OK) {
             for (unsigned n = 0;
-                 n < 150 && !connected && !socket_error && !stopped && !provision && !reconfigure;
+                 n < 150 && !pp_link_connected(&ws_link, generation) && !socket_error && !stopped && !provision && !reconfigure;
                  n++)
                 vTaskDelay(pdMS_TO_TICKS(100));
         }
-        if (connected)
+        if (pp_link_connected(&ws_link, generation))
             reconnect = 1000;
         unsigned draining = 0;
-        while (connected && !stopped && !provision) {
+        while (pp_link_connected(&ws_link, generation) && !stopped && !provision) {
             if (reconfigure && !uxQueueMessagesWaiting(outgoing))
                 break;
             packet_t p;
             if (xQueueReceive(outgoing, &p, pdMS_TO_TICKS(100))) {
+                if (p.generation != generation || pp_link_ready(&ws_link) != generation) {
+                    memset(p.data, 0, p.bytes);
+                    free(p.data);
+                    continue;
+                }
                 int sent = p.binary ? esp_websocket_client_send_bin(client, p.data, p.bytes,
                                                                     pdMS_TO_TICKS(1000))
                                     : esp_websocket_client_send_text(client, p.data, p.bytes,
                                                                      pdMS_TO_TICKS(1000));
                 if (sent != (int)p.bytes) {
-                    connected = ready = false;
-                    pp_network_state(false, "发送中断，等待核对");
+                    pp_link_close(&ws_link, generation);
+                    report_offline("发送中断，等待核对");
                 }
                 memset(p.data, 0, p.bytes);
                 free(p.data);
@@ -476,7 +500,7 @@ static void worker(void *arg) {
             if (reconfigure && ++draining >= 16)
                 break;
         }
-        connected = ready = false;
+        pp_link_close(&ws_link, generation);
         esp_websocket_client_stop(client);
         esp_websocket_client_destroy(client);
         client = NULL;
@@ -494,7 +518,7 @@ static void worker(void *arg) {
 done:
     if (pp_provision_active())
         pp_provision_stop();
-    connected = ready = false;
+    pp_link_close(&ws_link, pp_link_generation(&ws_link));
     esp_wifi_disconnect();
     esp_wifi_stop();
     discard_outgoing();
@@ -504,8 +528,8 @@ done:
 static bool enqueue(void *data, size_t bytes, bool binary) {
     if (!data)
         return false;
-    packet_t p = {data, bytes, binary};
-    if (!connected || !outgoing || bytes > 16384 || xQueueSend(outgoing, &p, 0) != pdTRUE) {
+    packet_t p = {data, bytes, binary, pp_link_ready(&ws_link)};
+    if (!p.generation || !outgoing || bytes > PP_WIRE_MESSAGE_BYTES || xQueueSend(outgoing, &p, 0) != pdTRUE) {
         memset(data, 0, bytes);
         free(data);
         return false;
@@ -530,12 +554,18 @@ bool pp_net_pcm(uint32_t sequence, const void *pcm, size_t bytes) {
     memcpy(data + 4, pcm, bytes);
     return enqueue(data, bytes + 4, true);
 }
-bool pp_net_connected(void) { return ready && connected; }
-bool pp_net_accept_protocol(unsigned protocol) {
-    if (protocol != 2 || !connected)
-        return false;
-    ready = true;
-    return true;
+bool pp_net_connected(void) { return pp_link_ready(&ws_link) != 0; }
+uint32_t pp_net_generation(void) { return pp_link_generation(&ws_link); }
+bool pp_net_current_frame(uint32_t generation) { return pp_link_connected(&ws_link, generation); }
+bool pp_net_accept_protocol(unsigned protocol, uint32_t generation) {
+    return pp_link_accept(&ws_link, generation, protocol);
+}
+bool pp_net_rejected(void) { return rejected; }
+void pp_net_repair(void) {
+    if (network && rejected) {
+        repair = true;
+        xEventGroupSetBits(network, CONTROL);
+    }
 }
 void pp_net_retry(void) {
     retry = true;
@@ -554,7 +584,7 @@ void pp_net_provision(void) {
 }
 bool pp_net_stop(void) {
     stopped = true;
-    ready = connected = false;
+    pp_link_close(&ws_link, pp_link_generation(&ws_link));
     if (!network)
         return true;
     xEventGroupSetBits(network, CONTROL);

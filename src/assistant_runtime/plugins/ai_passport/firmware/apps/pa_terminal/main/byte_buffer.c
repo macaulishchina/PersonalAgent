@@ -16,7 +16,8 @@ bool pp_buffer_append(pp_buffer_t *b, const void *data, size_t bytes, size_t lim
             }
             capacity *= 2;
         }
-        if (capacity > limit + 1)
+        /* Include the terminator when growth reaches the payload limit. */
+        if (capacity >= limit)
             capacity = limit + 1;
         char *next = realloc(b->data, capacity);
         if (!next)

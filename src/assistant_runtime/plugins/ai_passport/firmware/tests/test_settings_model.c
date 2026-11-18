@@ -5,12 +5,40 @@
 static pp_settings_t original, prepared;
 static cJSON *changes, *versions;
 static bool changed, reconnect;
+static const char release_url[] = "https://release.example:8047";
+static const char release_ca[] = "-----BEGIN CERTIFICATE-----\nY2E=\n-----END CERTIFICATE-----\n";
 static bool prepare(const char *text) {
     cJSON_Delete(changes);
     cJSON_Delete(versions);
     changes = cJSON_Parse(text);
     versions = cJSON_CreateObject();
     return pp_settings_prepare_cloud(&original, changes, &prepared, versions, &changed, &reconnect);
+}
+static void test_terminal_snapshot(const pp_settings_t *source) {
+    _Static_assert(sizeof(pp_terminal_settings_t) <= 704,
+                   "Rendering must not duplicate the 4 KiB CA or Wi-Fi credentials");
+    pp_terminal_settings_t view;
+    pp_settings_project(source, 9, &view);
+    assert(view.revision == 9 && !strcmp(view.url, source->url) &&
+           !strcmp(view.device, source->device) && !strcmp(view.binding, source->binding));
+    assert(view.wifi_count == source->wifi_count && view.volume == source->volume &&
+           view.brightness == source->brightness && view.sleep_seconds == source->sleep_seconds &&
+           view.text_size == source->text_size && view.queue == source->queue &&
+           view.keep_online == source->keep_online && view.paired == source->paired &&
+           view.offline_cache == source->offline_cache && view.show_images == source->show_images);
+    pp_settings_t edit = *source;
+    unsigned previous, ignored;
+    assert(pp_settings_edit_preference(&edit, PP_PREF_VOLUME, 70, &previous));
+    assert(previous == source->volume && view.volume == source->volume);
+    assert(pp_settings_edit_preference(&edit, PP_PREF_VOLUME, previous, &ignored));
+    assert(ignored == 70 && !memcmp(&edit, source, sizeof(edit)));
+    assert(!pp_settings_edit_preference(&edit, PP_PREF_VOLUME, 101, &previous));
+    assert(!pp_settings_edit_preference(&edit, PP_PREF_KEEP_ONLINE, 2, &previous));
+    assert(!memcmp(&edit, source, sizeof(edit)));
+    assert(pp_settings_edit_preference(&edit, PP_PREF_PAIRED, !source->paired, &previous));
+    assert(view.paired == source->paired); /* Published views are stable until refreshed. */
+    pp_settings_project(&edit, 10, &view);
+    assert(view.paired == edit.paired && view.revision == 10);
 }
 int main(void) {
     _Static_assert(sizeof(pp_settings_t) < 6144,
@@ -25,20 +53,37 @@ int main(void) {
     original.offline_cache = original.show_images = true;
     assert(pp_settings_valid(&original));
     const pp_settings_t first = original;
-    assert(pp_settings_prepare_bootstrap(
-        &original,
-        "{\"ssid\":\"Home\",\"password\":\"password\",\"server_url\":\"http://host:8047\"}",
-        &prepared));
+    assert(pp_settings_prepare_bootstrap(&original, "{\"ssid\":\"Home\",\"password\":\"password\"}",
+                                         release_url, release_ca, &prepared));
     assert(!memcmp(&original, &first, sizeof(first)));
-    assert(prepared.wifi_count == 1 && !prepared.paired && !prepared.ca[0]);
+    assert(prepared.wifi_count == 1 && !prepared.paired);
+    assert(!strcmp(prepared.url, release_url) && !strcmp(prepared.ca, release_ca));
     assert(!strcmp(prepared.device, original.device) &&
            !strcmp(prepared.credential, original.credential));
+    test_terminal_snapshot(&prepared);
     char *encoded = pp_settings_encode(&prepared);
     assert(encoded && strlen(encoded) < 1024);
     pp_settings_t restored;
     assert(pp_settings_decode(encoded, &restored));
     assert(!memcmp(&prepared, &restored, sizeof(restored)));
     cJSON_free(encoded);
+    restored.paired = true;
+    assert(pp_settings_prepare_bootstrap(&restored, "{\"ssid\":\"Cafe\"}", release_url, release_ca,
+                                         &prepared));
+    assert(prepared.paired && !strcmp(prepared.wifi[0].ssid, "Cafe") &&
+           !strcmp(prepared.credential, restored.credential));
+    assert(pp_settings_prepare_bootstrap(&restored, "{\"ssid\":\"Cafe\"}",
+                                         "https://another.example:8047", release_ca, &prepared));
+    assert(!prepared.paired && !strcmp(prepared.device, restored.device));
+    prepared = restored;
+    strcpy(prepared.binding, "old-session");
+    prepared.versions[0] = 42;
+    pp_settings_forget_binding(&prepared);
+    assert(!prepared.paired && !prepared.binding[0] && !prepared.versions[0]);
+    assert(prepared.wifi_count == restored.wifi_count &&
+           !memcmp(prepared.wifi, restored.wifi, sizeof(prepared.wifi)));
+    assert(!strcmp(prepared.ca, restored.ca) && !strcmp(prepared.url, restored.url));
+    assert(pp_settings_valid(&prepared));
     original = prepared;
     assert(prepare("{\"brightness\":{\"version\":1,\"value\":85},"
                    "\"text_size\":{\"version\":1,\"value\":18}}"));
@@ -98,11 +143,15 @@ int main(void) {
         assert(!prepare(bad[i]));
         assert(!memcmp(&original, &before, sizeof(original)));
     }
+    assert(!pp_settings_prepare_bootstrap(&original, "{\"ssid\":\"Home\",\"password\":\"short\"}",
+                                          release_url, release_ca, &prepared));
     assert(!pp_settings_prepare_bootstrap(
-        &original, "{\"ssid\":\"Home\",\"password\":\"short\",\"server_url\":\"http://host:8047\"}",
-        &prepared));
-    assert(!pp_settings_prepare_bootstrap(
-        &original, "{\"ssid\":\"Home\",\"server_url\":\"http://host\",\"extra\":1}", &prepared));
+        &original, "{\"ssid\":\"Home\",\"server_url\":\"https://other.example\"}", release_url,
+        release_ca, &prepared));
+    assert(!pp_settings_prepare_bootstrap(&original, "{\"ssid\":\"Home\",\"trusted_ca\":\"\"}",
+                                          release_url, release_ca, &prepared));
+    assert(!pp_settings_prepare_bootstrap(&original, "{\"ssid\":\"Home\",\"ssid\":\"Other\"}",
+                                          release_url, release_ca, &prepared));
     cJSON_Delete(changes);
     cJSON_Delete(versions);
     return 0;

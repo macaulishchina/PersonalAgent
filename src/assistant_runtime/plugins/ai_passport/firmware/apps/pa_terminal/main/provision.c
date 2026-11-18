@@ -14,6 +14,11 @@
 
 static httpd_handle_t server;
 static atomic_bool complete, active;
+#if PP_HAS_RELEASE_CA
+extern const char release_ca[] asm("_binary_pp_release_ca_pem_start");
+#else
+static const char release_ca[] = "";
+#endif
 static bool local_request(httpd_req_t *r) {
     struct sockaddr_storage address = {0};
     socklen_t size = sizeof(address);
@@ -39,10 +44,10 @@ static esp_err_t page(httpd_req_t *r) {
         "main{max-width:460px;margin:24px "
         "auto;padding:24px;background:white;border-radius:16px}h1{font-size:24px}"
         "label{display:block;margin:18px 0 "
-        "6px}input,textarea,button{box-sizing:border-box;width:100%;padding:12px;"
+        "6px}input,button{box-sizing:border-box;width:100%;padding:12px;"
         "font:inherit;border:1px solid "
         "#cbd5ce;border-radius:8px}button{background:#285e49;color:white;margin-top:20px}"
-        "small,p{color:#637168;line-height:1.6}details{margin-top:16px}#status{white-space:pre-"
+        "p{color:#637168;line-height:1.6}#status{white-space:pre-"
         "wrap}</style>"
         "<main><h1>连接你的 PP</h1><p>先连接 2.4 GHz Wi-Fi，再到 PA "
         "后台输入设备屏幕上的八位配对数字。</p>"
@@ -50,11 +55,6 @@ static esp_err_t page(httpd_req_t *r) {
         "autocomplete=off>"
         "<label for=password>Wi-Fi 密码</label><input id=password type=password maxlength=64 "
         "autocomplete=new-password>"
-        "<label for=url>PA 业务地址</label><input id=url type=url required "
-        "placeholder='http://服务器地址:8047' autocomplete=off>"
-        "<small>填写业务根地址。固件网站的 9443 端口不用于对话。</small>"
-        "<details><summary>HTTPS 私有 CA（仅需要时填写）</summary><textarea id=ca rows=5 "
-        "placeholder='公开 CA 证书，不是私钥'></textarea></details>"
         "<button id=save>保存并连接</button></form><p id=status role=status></p></main>"
         "<script>const "
         "f=document.querySelector('#f'),b=document.querySelector('#save'),s=document.querySelector("
@@ -64,11 +64,9 @@ static esp_err_t page(httpd_req_t *r) {
         "fetch('/configure',"
         "{method:'POST',headers:{'Content-Type':'application/"
         "json'},body:JSON.stringify({ssid:document.querySelector('#ssid').value,"
-        "password:document.querySelector('#password').value,server_url:document.querySelector('#"
-        "url').value.trim(),"
-        "trusted_ca:document.querySelector('#ca').value.trim()})});if(!r.ok)throw Error(await "
+        "password:document.querySelector('#password').value})});if(!r.ok)throw Error(await "
         "r.text());"
-        "s.textContent='已保存。请查看 PP 屏幕，联网后到 PA 后台输入八位配对码。';f.hidden=true;"
+        "s.textContent='已保存，请查看 PP 屏幕。';f.hidden=true;"
         "document.querySelector('#password').value='';}catch(e){s.textContent='未保存：'+e.message;"
         "b.disabled=false;}};</script></html>";
     httpd_resp_set_type(r, "text/html; charset=utf-8");
@@ -79,7 +77,7 @@ static esp_err_t page(httpd_req_t *r) {
 static esp_err_t configure(httpd_req_t *r) {
     if (!local_request(r))
         return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, "请连接 PP 屏幕显示的热点后重试");
-    if (r->content_len <= 0 || r->content_len > 6144)
+    if (r->content_len <= 0 || r->content_len > PP_WIFI_SETUP_JSON_MAX)
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "内容过长");
     char type[64];
     if (httpd_req_get_hdr_value_str(r, "Content-Type", type, sizeof(type)) != ESP_OK ||
@@ -99,12 +97,12 @@ static esp_err_t configure(httpd_req_t *r) {
         used += n;
     }
     body[used] = 0;
-    esp_err_t e = pp_settings_bootstrap(body);
+    esp_err_t e = pp_settings_bootstrap(body, PP_PA_URL, release_ca);
     memset(body, 0, used);
     free(body);
     if (e != ESP_OK)
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
-                                   "请检查 Wi-Fi、密码、PA 根地址及 CA 证书；配置未保存。");
+                                   "Wi-Fi 设置未保存，请检查名称和密码。");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
     esp_err_t sent = httpd_resp_sendstr(r, "已保存，请查看设备屏幕");
     complete = true; /* Owner stops this server only after the handler returns. */

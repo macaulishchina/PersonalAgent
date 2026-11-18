@@ -88,7 +88,9 @@ def package(build: Path, destination: Path) -> None:
         "LICENSE.folotoy": root / "LICENSE.folotoy",
         **(
             {
+                "LittleFS.LICENSE.txt": app_root / "LittleFS.LICENSE.txt",
                 "docs/acceptance.md": root.parent / "docs/acceptance.md",
+                "docs/architecture.md": root.parent / "docs/architecture.md",
                 "docs/protocol.md": root.parent / "docs/protocol.md",
                 "docs/terminal-rebuild.md": root.parent / "docs/terminal-rebuild.md",
                 "docs/hardware-acceptance.md": root.parent / "docs/hardware-acceptance.md",

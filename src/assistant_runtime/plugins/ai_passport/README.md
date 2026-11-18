@@ -7,6 +7,8 @@ PP 是 PA 的独立入口：每台配对设备有自己的持久会话，与 Web
 0.1.1 证据见 [acceptance.md](docs/acceptance.md)，不能作为新版本验收。
 完整目标、当前进度和硬件约束见 [清单](docs/terminal-rebuild.md) 与 [硬件研究](docs/hardware-platform.md)。
 
+开发入口见 [PP 开发架构](docs/architecture.md)，其中列出了固件、PA 插件和板级适配的状态归属及回归入口。
+
 ## 配置与接入
 
 显式启用 `speech_io`、`aliyun_speech`、`ai_passport`，并满足 conversation、Pi、模型、
@@ -56,7 +58,7 @@ max_connections = 2
 
 ## 正式交互目标
 
-- 通过设备热点页面配置初始 Wi-Fi 和 PA 业务根地址，例如 `http://服务器:8047`。
+- 通过设备热点页面配置初始 Wi-Fi。PA 业务根地址和公开 CA 由固件发布配置提供。
 - Wi-Fi 联网后显示八位配对数字，在 PA 后台填写设备名和数字；不再下载配对文件或 USB 写配置。
 - 业务入口为 8047 的 `/entrances/ai_passport/`；9443 只分发固件。
 - 长按讲话、松开即停，超限等待确认，默认丢弃。短按 OK 结束本条播报，没有继续听。

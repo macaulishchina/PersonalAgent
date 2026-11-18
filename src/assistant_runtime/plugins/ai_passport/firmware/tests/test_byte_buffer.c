@@ -21,8 +21,13 @@ int main(void) {
     assert(b.data == original && b.size == 1 && !strcmp(b.data, "a"));
     reject_allocation = false;
     pp_buffer_free(&b);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 3; i++)
         assert(pp_buffer_append(&b, frame, sizeof(frame), 16384));
+    assert(pp_buffer_append(&b, frame, sizeof(frame) - 1, 16384));
+    /* Even at the payload ceiling, another allocation for the NUL must be unnecessary. */
+    reject_allocation = true;
+    assert(pp_buffer_append(&b, frame, 1, 16384));
+    reject_allocation = false;
     assert(b.size == 16384 && b.data[b.size] == 0);
     assert(!memcmp(b.data, frame, sizeof(frame)));
     assert(!pp_buffer_append(&b, "x", 1, 16384));

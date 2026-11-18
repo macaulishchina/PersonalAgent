@@ -1,20 +1,36 @@
-# PA-Terminal 0.2.0
+# PA-Terminal
 
 AI Passport 的 PA 交互入口。代码与构建已经接通协议 2；真机验收状态以
 [交付清单](../../../docs/terminal-rebuild.md)及[验收记录](../../../docs/acceptance.md)为准。
-PPDemo／PPDemo-Zh 仍是独立的硬件体验程序。
+开发时先看 [PP 开发架构](../../../docs/architecture.md)。PPDemo／PPDemo-Zh 是独立的硬件体验程序。
 
 ## 安装与首次使用
 
 1. 使用现有固件网站安装 PA-Terminal。网页 USB 刷写要求可信 HTTPS；这不表示
    PP 的业务连接也必须使用 HTTPS。使用数据线，选择 USB JTAG/serial 设备。
 2. 首次开机未配置网络时，屏幕显示临时热点、随机密码及 `http://192.168.4.1`。
-   手机连接该热点，在页面填写初始 2.4 GHz Wi-Fi 和 **PA 业务根地址**，例如
-   `http://110.0.0.82:8047`。本地页面不向固件网站上传密码。
-3. 连网后，PP 显示 8 位配对码；在 PA 配置后台的 AI Passport 页面填写设备名称和
+   手机连接该热点，在页面填写初始 2.4 GHz Wi-Fi。设备使用构建时预设的 PA 地址和公开 CA。
+3. 连网后，如 PP 显示 8 位配对码，在 PA 配置后台的 AI Passport 页面填写设备名称和
    配对码。码有效期 10 分钟。配对完成后本机拥有独立的持久会话。
 4. 后续在 PA 后台维护此设备的云端设置及最多 5 套有序 Wi-Fi。PP 菜单可以重载配置、
    重试连接和重新配网；每次连接最多按顺序尝试 3 轮，耗尽后等待明确重试。
+
+### 连接与本地设置
+
+主页随设备状态显示热点信息、八位配对码或连接诊断。此时短按 OK 直接打开设置。
+已配对的日常主页继续用短按 OK 打开操作菜单。长按上键从设置、详情或确认页返回主页。
+配对成功或后台重连时，已经打开的本地页面保留当前位置。
+
+| 现场情况 | 设备上的操作 |
+| --- | --- |
+| 首次配网 | 在主页看热点名、密码和地址，手机提交 Wi-Fi 后回到设备查看配对码 |
+| Wi-Fi 已连接，等待校时或 PA 暂不可达 | 打开设置 → 网络状态查看详情。设备维护 → 重试连接沿用现有身份。有已保存的 Wi-Fi 时也能用此操作退出配网热点 |
+| PA 拒绝身份或接入 | 先核对后台设备记录和接入配置。确认旧配对已撤销后，在提示页按下键，或选设备维护 → 重新配对。默认取消，上下键切换后按 OK 确认 |
+| 重新配对 | 设备保存新身份后重启，保留 Wi-Fi、服务地址、CA 和本地偏好。使用新码在 PA 后台配对，进入独立的新会话。旧任务及其提交回执不转交新身份 |
+| 更换 Wi-Fi | 设备维护 → 重新配网，确认后开启手机热点。提交前可以用重试连接返回原有 Wi-Fi |
+| 清空设备设置 | 设备维护 → 恢复出厂，需要单独确认。此操作会清除本地 Wi-Fi 和配对信息 |
+
+页面名称、父页面和菜单项由 `navigation.c` 声明，`pp_navigation_route` 统一决定按键及画面的归属。维护确认优先，本地页面可在连接状态变化时继续操作。连接状态单独保存，主页与网络详情读取同一份诊断。
 
 8047 的 `/entrances/ai_passport/` 是业务入口，9443 仅分发固件。HTTP/WS 不等 NTP；
 只有明确使用 HTTPS/WSS 时才需要有效时间及可信证书。不能跳过证书校验。
@@ -44,11 +60,11 @@ PPDemo／PPDemo-Zh 仍是独立的硬件体验程序。
 该提示复用状态区，不遮住正文，也不会让正文重新翻页。
 完整句只有在确认属于回答时才播报；不明确的供应商输出等最终确认，文字仍流式显示。
 
-菜单每层最多5项，顺序如下：
+菜单按以下顺序排列。
 
 - 操作菜单：任务消息、音量、取消当前执行、设置、返回主页。
 - 设置：保持在线、网络状态、休眠、设备维护、返回上级。
-- 设备维护：重载配置、重试连接、重新配网、恢复出厂、返回上级。
+- 设备维护：重载配置、重试连接、重新配网、重新配对、恢复出厂、返回上级。
 
 任务列表及详情采用蓝色标记，与绿色聊天区分。任务详情OK返回列表，长按上直达主页。
 返回主页或打开菜单不会取消执行；后台新结果不会抢走正在浏览的页面。
@@ -81,9 +97,13 @@ PPDemo／PPDemo-Zh 仍是独立的硬件体验程序。
 ```sh
 source /home/macaulish/workspace/esp32-toolchain/activate.sh
 cd /home/macaulish/workspace/dell-voice-assistant/src/assistant_runtime/plugins/ai_passport/firmware/apps/pa_terminal
-idf.py build
-python ../../tools/package_firmware.py --build build --output build/pa-terminal-0.2.0.zip
+idf.py -DPP_PA_URL=https://pa.example:8047 -DPP_PA_CA_FILE=/path/to/public-ca.pem build
+python ../../tools/package_firmware.py --build build --output build/pa-terminal.zip
 ```
+
+`PP_PA_URL` 是目标实例的业务根地址，使用系统可信 HTTPS 或显式 HTTP 测试地址时，
+可将 `PP_PA_CA_FILE` 设为空。私有 CA 只接受公开 PEM 证书。刷入新固件时保留已有实例设置，
+第一次填写 Wi-Fi 或主动重新配网后才采用本次发布的 PA 地址和 CA。
 
 PA终端使用本目录`partitions.csv`：NVS/PHY地址不变，应用分区结束于0x780000，
 其后512 KiB为独立缓存分区。首次启用此缓存必须同时更新分区表和应用；仅刷应用不能获得缓存。
@@ -98,4 +118,4 @@ USB 串口 115200 下输入 `pp.status`，返回版本、协议、连接状态�
 
 修改猫形象时，使用 `generate_avatar.py --open <PNG> --blink <PNG>` 离线生成原生资源；
 源文件摘要、尺寸和生成文件摘要见 `main/assets/avatar.json`。日常构建直接使用这些资源，
-不依赖 Demo 仓库、PNG 解码器或图片转换服务。
+不依赖 PP 交互演示仓库、PNG 解码器或图片转换服务。

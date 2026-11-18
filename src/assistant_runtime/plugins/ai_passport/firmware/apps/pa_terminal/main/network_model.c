@@ -84,3 +84,44 @@ bool pp_server_endpoint(const char *root, const char *route, bool websocket, cha
                      authority, route);
     return n > 0 && (size_t)n < cap;
 }
+
+/* The phase shares one atomic word with the generation so a stale callback
+ * cannot change the readiness of a replacement socket. */
+enum { LINK_OFFLINE, LINK_CONNECTING, LINK_CONNECTED, LINK_READY, LINK_PHASE_COUNT };
+#define LINK_PHASE_MASK ((uint32_t)(LINK_PHASE_COUNT - 1))
+
+uint32_t pp_link_generation(const pp_link_t *link) {
+    return atomic_load(&link->state) & ~LINK_PHASE_MASK;
+}
+uint32_t pp_link_begin(pp_link_t *link) {
+    /* Only the network worker creates clients. */
+    uint32_t generation = pp_link_generation(link) + LINK_PHASE_COUNT;
+    if (!generation)
+        generation = LINK_PHASE_COUNT;
+    atomic_store(&link->state, generation | LINK_CONNECTING);
+    return generation;
+}
+bool pp_link_open(pp_link_t *link, uint32_t generation) {
+    uint32_t connecting = generation | LINK_CONNECTING;
+    return generation && atomic_compare_exchange_strong(&link->state, &connecting,
+                                                        generation | LINK_CONNECTED);
+}
+bool pp_link_accept(pp_link_t *link, uint32_t generation, unsigned protocol) {
+    uint32_t handshake = generation | LINK_CONNECTED;
+    return generation && protocol == 2 &&
+           atomic_compare_exchange_strong(&link->state, &handshake, generation | LINK_READY);
+}
+void pp_link_close(pp_link_t *link, uint32_t generation) {
+    uint32_t state = atomic_load(&link->state);
+    while ((state & ~LINK_PHASE_MASK) == generation &&
+           !atomic_compare_exchange_weak(&link->state, &state, generation | LINK_OFFLINE)) {}
+}
+bool pp_link_connected(const pp_link_t *link, uint32_t generation) {
+    uint32_t state = atomic_load(&link->state);
+    return generation && (state & ~LINK_PHASE_MASK) == generation &&
+           (state & LINK_PHASE_MASK) >= LINK_CONNECTED;
+}
+uint32_t pp_link_ready(const pp_link_t *link) {
+    uint32_t state = atomic_load(&link->state);
+    return (state & LINK_PHASE_MASK) == LINK_READY ? state & ~LINK_PHASE_MASK : 0;
+}

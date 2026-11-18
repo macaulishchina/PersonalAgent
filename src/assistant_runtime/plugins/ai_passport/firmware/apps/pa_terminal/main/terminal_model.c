@@ -172,6 +172,14 @@ void pp_input_abort(pp_input_t *s) {
     s->released = true;
     s->limited = false;
 }
+bool pp_input_disconnect(pp_input_t *s) {
+    bool reconcile = s->phase == PP_INPUT_FINALIZING || s->phase == PP_INPUT_CONFIRM ||
+                     s->phase == PP_INPUT_SUBMITTING || s->phase == PP_INPUT_UNKNOWN;
+    pp_input_abort(s);
+    if (reconcile)
+        s->phase = PP_INPUT_UNKNOWN;
+    return reconcile;
+}
 bool pp_input_capturing(const pp_input_t *s) {
     return !s->released && (s->phase == PP_INPUT_PREBUFFER || s->phase == PP_INPUT_OPENING ||
                             s->phase == PP_INPUT_RECORDING);

@@ -1,7 +1,29 @@
 #include "network_model.h"
 #include <assert.h>
 #include <string.h>
+static void test_handshake_and_replacement(void) {
+    pp_link_t link = {0};
+    uint32_t old = pp_link_begin(&link);
+    assert(!pp_link_ready(&link) && !pp_link_accept(&link, old, 2));
+    assert(pp_link_open(&link, old) && !pp_link_ready(&link));
+    assert(!pp_link_accept(&link, old, 1));
+    assert(pp_link_accept(&link, old, 2) && pp_link_ready(&link) == old);
+
+    uint32_t current = pp_link_begin(&link);
+    assert(current != old && !pp_link_connected(&link, old));
+    assert(!pp_link_ready(&link) && !pp_link_open(&link, old));
+    assert(pp_link_open(&link, current));
+    assert(!pp_link_accept(&link, old, 2) && !pp_link_ready(&link));
+    pp_link_close(&link, old);
+    assert(pp_link_connected(&link, current) && !pp_link_ready(&link));
+    assert(pp_link_accept(&link, current, 2) && pp_link_ready(&link) == current);
+    pp_link_close(&link, current);
+    assert(!pp_link_connected(&link, current) && !pp_link_ready(&link));
+    assert(!pp_link_open(&link, current) && !pp_link_accept(&link, current, 2));
+}
+
 int main(void) {
+    test_handshake_and_replacement();
     pp_wifi_plan_t p = {.count = 5};
     unsigned index, round;
     for (unsigned n = 0; n < 15; n++) {

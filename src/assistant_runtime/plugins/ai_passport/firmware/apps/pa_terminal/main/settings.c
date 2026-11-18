@@ -1,20 +1,17 @@
 #include "settings.h"
 #include "bootloader_random.h"
-#include "esp_app_desc.h"
-#include "esp_heap_caps.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
-#include "network.h"
-#include "cache_disk.h"
 #include "nvs.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static const char *space = "pa_terminal_v2";
-static pp_settings_t *current;
+static pp_settings_t stored;
+static atomic_uint revision;
 static SemaphoreHandle_t lock;
 static void random_hex(char *out, size_t bytes) {
     static const char alphabet[] = "0123456789abcdef";
@@ -44,17 +41,14 @@ static esp_err_t save(const pp_settings_t *candidate) {
         free(raw);
     }
     nvs_close(n);
-    if (e == ESP_OK && current != candidate)
-        memcpy(current, candidate, sizeof(*current));
+    if (e == ESP_OK) {
+        if (candidate != &stored)
+            stored = *candidate;
+        ++revision;
+    }
     return e;
 }
-esp_err_t pp_settings_load(pp_settings_t *s) {
-    if (current)
-        return ESP_ERR_INVALID_STATE;
-    lock = xSemaphoreCreateMutex();
-    if (!lock)
-        return ESP_ERR_NO_MEM;
-    current = s;
+static esp_err_t load_record(pp_settings_t *s) {
     nvs_handle_t n;
     esp_err_t e = nvs_open(space, NVS_READWRITE, &n);
     if (e != ESP_OK)
@@ -94,10 +88,34 @@ esp_err_t pp_settings_load(pp_settings_t *s) {
     }
     return e;
 }
+esp_err_t pp_settings_load(pp_terminal_settings_t *view) {
+    if (lock)
+        return ESP_ERR_INVALID_STATE;
+    lock = xSemaphoreCreateMutex();
+    if (!lock)
+        return ESP_ERR_NO_MEM;
+    esp_err_t e = load_record(&stored);
+    if (e == ESP_OK) {
+        revision = 1;
+        pp_settings_project(&stored, revision, view);
+    } else {
+        memset(&stored, 0, sizeof(stored));
+    }
+    return e;
+}
+bool pp_settings_refresh(pp_terminal_settings_t *view) {
+    if (view->revision == atomic_load(&revision))
+        return true;
+    if (xSemaphoreTake(lock, 0) != pdTRUE)
+        return false;
+    pp_settings_project(&stored, revision, view);
+    xSemaphoreGive(lock);
+    return true;
+}
 esp_err_t pp_settings_snapshot(pp_settings_t *s) {
-    if (!current || !lock || !xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
+    if (!lock || !xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
-    memcpy(s, current, sizeof(*s));
+    *s = stored;
     xSemaphoreGive(lock);
     return ESP_OK;
 }
@@ -105,7 +123,7 @@ static pp_settings_t *candidate(void) {
     pp_settings_t *s = malloc(sizeof(*s));
     if (!s)
         return NULL;
-    memcpy(s, current, sizeof(*s));
+    *s = stored;
     return s;
 }
 static void dispose(pp_settings_t *s) {
@@ -114,64 +132,64 @@ static void dispose(pp_settings_t *s) {
         free(s);
     }
 }
-esp_err_t pp_settings_bootstrap(const char *raw) {
+esp_err_t pp_settings_bootstrap(const char *raw, const char *release_url, const char *release_ca) {
     if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
-    pp_settings_t *s = candidate();
-    esp_err_t e =
-        s ? (pp_settings_prepare_bootstrap(current, raw, s) ? save(s) : ESP_ERR_INVALID_ARG)
-          : ESP_ERR_NO_MEM;
+    pp_settings_t *s = malloc(sizeof(*s));
+    esp_err_t e = s ? (pp_settings_prepare_bootstrap(&stored, raw, release_url, release_ca, s)
+                           ? save(s)
+                           : ESP_ERR_INVALID_ARG)
+                    : ESP_ERR_NO_MEM;
     dispose(s);
     xSemaphoreGive(lock);
     return e;
 }
-esp_err_t pp_settings_cloud(const cJSON *changes, cJSON **receipt, bool *reconnect) {
+esp_err_t pp_settings_cloud(const cJSON *changes, cJSON **receipt, bool *reconnect,
+                            pp_terminal_settings_t *view) {
     *receipt = NULL;
     *reconnect = false;
     if (!cJSON_IsObject(changes) || cJSON_GetArraySize(changes) > PP_CONFIG_FIELDS)
         return ESP_ERR_INVALID_ARG;
     if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
-    pp_settings_t *s = candidate();
-    cJSON *r = cJSON_CreateObject(), *versions = cJSON_CreateObject(),
-          *actual = cJSON_CreateObject();
+    pp_settings_t *s = malloc(sizeof(*s));
+    cJSON *r = cJSON_CreateObject();
+    cJSON *versions = r ? cJSON_AddObjectToObject(r, "versions") : NULL;
+    cJSON *actual = r ? cJSON_AddObjectToObject(r, "actual") : NULL;
     esp_err_t e = ESP_ERR_NO_MEM;
     bool changed = false;
     if (s && r && versions && actual) {
-        e = pp_settings_prepare_cloud(current, changes, s, versions, &changed, reconnect)
+        e = pp_settings_prepare_cloud(&stored, changes, s, versions, &changed, reconnect)
                 ? ESP_OK
                 : ESP_ERR_INVALID_ARG;
-        if (e == ESP_OK && changed)
-            e = save(s);
+        /* Construct the entire receipt before committing. Under memory pressure
+         * a failed receipt must not leave new settings applied without notice. */
         if (e == ESP_OK &&
             (!cJSON_AddNumberToObject(actual, "volume", s->volume) ||
              !cJSON_AddStringToObject(actual, "input_mode", s->queue ? "queue" : "steer") ||
-             !cJSON_AddBoolToObject(actual, "keep_online", s->keep_online)))
+             !cJSON_AddBoolToObject(actual, "keep_online", s->keep_online) ||
+             !cJSON_AddStringToObject(r, "type", "configuration.applied")))
             e = ESP_ERR_NO_MEM;
+        if (e == ESP_OK && changed)
+            e = save(s);
         if (e == ESP_OK) {
-            cJSON_AddStringToObject(r, "type", "configuration.applied");
-            cJSON_AddItemToObject(r, "versions", versions);
-            versions = NULL;
-            cJSON_AddItemToObject(r, "actual", actual);
-            actual = NULL;
             *receipt = r;
             r = NULL;
+            pp_settings_project(&stored, revision, view);
         }
     }
     dispose(s);
     cJSON_Delete(r);
-    cJSON_Delete(versions);
-    cJSON_Delete(actual);
     xSemaphoreGive(lock);
     return e;
 }
-esp_err_t pp_settings_binding(const char *binding) {
+esp_err_t pp_settings_binding(const char *binding, pp_terminal_settings_t *view) {
     if (!binding || !binding[0] || strlen(binding) > 64)
         return ESP_ERR_INVALID_ARG;
     if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
     esp_err_t e = ESP_OK;
-    if (strcmp(current->binding, binding)) {
+    if (strcmp(stored.binding, binding)) {
         pp_settings_t *s = candidate();
         if (!s)
             e = ESP_ERR_NO_MEM;
@@ -182,33 +200,59 @@ esp_err_t pp_settings_binding(const char *binding) {
             dispose(s);
         }
     }
+    if (e == ESP_OK)
+        pp_settings_project(&stored, revision, view);
     xSemaphoreGive(lock);
     return e;
 }
-esp_err_t pp_preference(const char *key, unsigned value) {
+esp_err_t pp_preference(pp_preference_t key, unsigned value, pp_terminal_settings_t *view) {
+    if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
+        return ESP_ERR_TIMEOUT;
+    unsigned previous;
+    esp_err_t e = ESP_ERR_INVALID_ARG;
+    if (pp_settings_edit_preference(&stored, key, value, &previous)) {
+        e = previous == value ? ESP_OK : save(&stored);
+        if (e != ESP_OK) {
+            unsigned ignored;
+            pp_settings_edit_preference(&stored, key, previous, &ignored);
+        } else if (view) {
+            pp_settings_project(&stored, revision, view);
+        }
+    }
+    xSemaphoreGive(lock);
+    return e;
+}
+static esp_err_t write_pending(const char *id);
+static esp_err_t read_pending(char *id, unsigned size);
+/* Called by the network worker with the radio running (hardware entropy).
+ * Scope a legacy pending receipt to the old device before replacing its identity.
+ * Power loss before the settings commit leaves the old receipt readable. */
+esp_err_t pp_settings_new_identity(void) {
     if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
     pp_settings_t *s = candidate();
     esp_err_t e = ESP_ERR_NO_MEM;
     if (s) {
-        bool ok = true;
-        if (!strcmp(key, "volume") && value <= 100)
-            s->volume = value;
-        else if (!strcmp(key, "mode") && value <= 1)
-            s->queue = value;
-        else if (!strcmp(key, "online") && value <= 1)
-            s->keep_online = value;
-        else if (!strcmp(key, "paired") && value <= 1)
-            s->paired = value;
-        else
-            ok = false;
-        e = ok ? save(s) : ESP_ERR_INVALID_ARG;
+        char pending_id[37] = "";
+        e = read_pending(pending_id, sizeof(pending_id));
+        if (e == ESP_ERR_NVS_NOT_FOUND)
+            e = ESP_OK;
+        if (e == ESP_OK && pending_id[0])
+            e = write_pending(pending_id);
+        if (e == ESP_OK) {
+            pp_settings_forget_binding(s);
+            random_hex(s->device, 16);
+            random_hex(s->credential, 32);
+            e = save(s);
+        }
         dispose(s);
     }
     xSemaphoreGive(lock);
     return e;
 }
 esp_err_t pp_settings_reset(void) {
+    if (lock && !xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
+        return ESP_ERR_TIMEOUT;
     nvs_handle_t n;
     esp_err_t e = nvs_open(space, NVS_READWRITE, &n);
     if (e == ESP_OK) {
@@ -217,74 +261,68 @@ esp_err_t pp_settings_reset(void) {
             e = nvs_commit(n);
         nvs_close(n);
     }
+    if (lock)
+        xSemaphoreGive(lock);
     return e;
 }
-esp_err_t pp_pending(const char *id) {
+static esp_err_t write_pending(const char *id) {
     if (!id || strlen(id) > 36)
         return ESP_ERR_INVALID_ARG;
     nvs_handle_t n;
     esp_err_t e = nvs_open(space, NVS_READWRITE, &n);
     if (e != ESP_OK)
         return e;
-    e = nvs_set_str(n, "pending", id);
+    char scoped[72];
+    snprintf(scoped, sizeof(scoped), "%s:%s", stored.device, id);
+    e = nvs_set_str(n, "pending", scoped);
     if (e == ESP_OK)
         e = nvs_commit(n);
     nvs_close(n);
     return e;
 }
-esp_err_t pp_pending_read(char *id, unsigned size) {
+static esp_err_t read_pending(char *id, unsigned size) {
     nvs_handle_t n;
     esp_err_t e = nvs_open(space, NVS_READONLY, &n);
     if (e != ESP_OK)
         return e;
-    size_t count = size;
-    e = nvs_get_str(n, "pending", id, &count);
+    char raw[72];
+    size_t count = sizeof(raw);
+    e = nvs_get_str(n, "pending", raw, &count);
+    if (e == ESP_OK) {
+        char *value = strchr(raw, ':');
+        if (value) {
+            *value++ = 0;
+            if (strcmp(raw, stored.device))
+                value = "";
+        } else
+            value = raw;
+        if (strlen(value) >= size)
+            e = ESP_ERR_INVALID_SIZE;
+        else
+            strcpy(id, value);
+    }
     nvs_close(n);
     return e;
 }
-static void usb_task(void *arg) {
-    (void)arg;
-    char line[64];
-    unsigned n = 0;
-    bool overflow = false;
-    for (;;) {
-        int ch = getchar();
-        if (ch == EOF) {
-            clearerr(stdin);
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-        if (ch == '\r' || ch == '\n') {
-            line[n] = 0;
-            if (!overflow && !strcmp(line, "pp.status")) {
-                char device[33] = "";
-                bool offline_cache = false;
-                if (lock && xSemaphoreTake(lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-                    if (current) {
-                        strcpy(device, current->device);
-                        offline_cache = current->offline_cache;
-                    }
-                    xSemaphoreGive(lock);
-                }
-                pp_disk_info_t cache = pp_disk_info();
-                printf("{\"app\":\"PA-Terminal\",\"protocol\":2,\"version\":\"%s\",\"connected\":%"
-                       "s,\"device_id\":\"%s\",\"offline_cache\":%s,\"heap\":%u,\"largest\":%u,"
-                       "\"minimum\":%u,\"cache_ready\":%s,\"cache_hits\":%u,\"cache_misses\":%u,"
-                       "\"cache_write_failures\":%u}\n",
-                       esp_app_get_description()->version, pp_net_connected() ? "true" : "false",
-                       device, offline_cache ? "true" : "false",
-                       (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-                       (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-                       cache.ready ? "true" : "false", cache.hits, cache.misses,
-                       cache.write_failures);
-            }
-            n = 0;
-            overflow = false;
-        } else if (n + 1 < sizeof(line) && !overflow)
-            line[n++] = ch;
-        else
-            overflow = true;
-    }
+esp_err_t pp_pending(const char *id) {
+    if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
+        return ESP_ERR_TIMEOUT;
+    esp_err_t e = write_pending(id);
+    xSemaphoreGive(lock);
+    return e;
 }
-void pp_usb_start(void) { xTaskCreate(usb_task, "pp_usb", 3072, NULL, 2, NULL); }
+esp_err_t pp_pending_read(char *id, unsigned size) {
+    if (!xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
+        return ESP_ERR_TIMEOUT;
+    esp_err_t e = read_pending(id, size);
+    xSemaphoreGive(lock);
+    return e;
+}
+bool pp_settings_device_status(char device[33], bool *offline_cache) {
+    if (!revision || xSemaphoreTake(lock, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    strcpy(device, stored.device);
+    *offline_cache = stored.offline_cache;
+    xSemaphoreGive(lock);
+    return true;
+}

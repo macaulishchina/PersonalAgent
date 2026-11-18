@@ -6,8 +6,7 @@
 #include "bsp_battery.h"
 #include "bsp_button.h"
 #include "bsp_display.h"
-#include "bsp_i2c.h"
-#include "bsp_pins.h"
+#include "pp_board_power.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -176,38 +175,32 @@ static esp_err_t sleep_test(unsigned mode)
     if (mode == 0) {
         esp_err_t e=esp_sleep_enable_timer_wakeup(2000000);
         if (e != ESP_OK) return e;
-        if (audio_state == ESP_OK && (e=bsp_audio_sleep()) != ESP_OK) return e;
-        bsp_display_backlight(0);
-        int64_t start=esp_timer_get_time(); e=esp_light_sleep_start();
-        (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+        int64_t start=esp_timer_get_time();
+        if (audio_state == ESP_OK) e=bsp_audio_sleep();
+        if (e == ESP_OK) {
+            bsp_display_backlight(0);
+            e=esp_light_sleep_start();
+            bsp_display_backlight(75);
+        }
+        /* A failed suspend can leave codec resources partially transitioned.
+         * Restore both the timer and codec before returning to the test menu. */
+        esp_err_t disarm=esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
         esp_err_t wake=audio_state == ESP_OK ? bsp_audio_wake() : ESP_OK;
-        bsp_display_backlight(75);
+        if (disarm != ESP_OK || wake != ESP_OK) {
+            ESP_LOGE("ppdemo", "Light sleep cleanup: timer=%s codec=%s",
+                     esp_err_to_name(disarm), esp_err_to_name(wake));
+            lab_require_restart();
+            if (e == ESP_OK) e=disarm != ESP_OK ? disarm : wake;
+        }
         lab_notice(LAB_TEXT("Light sleep: %s\nElapsed %lld ms\nAudio wake: %s\n\nNo current measurement.", "浅睡: %s\n耗时 %lld ms\n音频唤醒: %s\n\n不测量电流"), esp_err_to_name(e), (long long)((esp_timer_get_time()-start)/1000), esp_err_to_name(wake));
-        return e == ESP_OK ? wake : e;
+        return e;
     }
-    int mv=bsp_button_read_mv();
-    if (mv < BSP_BTN_MV_RELEASED_MIN) return ESP_ERR_INVALID_STATE;
+    if (!pp_board_keys_released()) return ESP_ERR_INVALID_STATE;
     esp_err_t e=esp_sleep_enable_timer_wakeup(10000000);
     if (e != ESP_OK) return e;
-    if (audio_state == ESP_OK && (e=bsp_audio_sleep()) != ESP_OK) return e;
-    // Terminal handoff: no further UI, ADC or codec access until reset/wakeup.
     atomic_store(&terminal_sleep, true);
-    int level=0;
-    e=bsp_button_prepare_deep_sleep(&level);
-    if (e == ESP_OK && level) e=esp_deep_sleep_enable_gpio_wakeup(1ULL<<BSP_BTN_GPIO, ESP_GPIO_WAKEUP_GPIO_LOW);
-    else if (e == ESP_OK) e=ESP_ERR_INVALID_STATE;
-    if (e == ESP_OK && battery_state == ESP_OK) e=bsp_battery_sleep();
-    if (e == ESP_OK && audio_state == ESP_OK) e=bsp_audio_prepare_deep_sleep();
-    if (e == ESP_OK) e=bsp_i2c_prepare_deep_sleep();
-    if (e == ESP_OK && !bsp_lvgl_lock(1000)) e=ESP_ERR_TIMEOUT;
-    if (e == ESP_OK) e=bsp_display_prepare_deep_sleep();
-    if (e != ESP_OK) {
-        ESP_LOGE("ppdemo", "Terminal sleep handoff failed: %s; reboot required", esp_err_to_name(e));
-        esp_restart();
-    }
     sleep_marker=0x50505731;
-    esp_deep_sleep_start();
-    return ESP_FAIL;
+    pp_board_enter_deep_sleep();
 }
 static void io_worker(void *arg)
 {
@@ -361,14 +354,17 @@ void app_main(void)
         atomic_store(&wake_guard,true);
     }
     e=bsp_button_init(button,NULL);
-    if (e==ESP_OK && bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN)
+    if (e==ESP_OK && pp_board_keys_released())
         atomic_store(&wake_guard,false);
     if (e!=ESP_OK) snprintf(detail,sizeof(detail),LAB_TEXT("Buttons unavailable: %s", "按键不可用: %s"),esp_err_to_name(e));
     if (xTaskCreate(io_worker,"pp_io",6144,NULL,3,NULL)!=pdPASS || xTaskCreate(console,"pp_console",3072,NULL,2,NULL)!=pdPASS) {
         lab_ui_show(LAB_TEXT("Startup failed", "启动失败"),LAB_TEXT("OUT OF MEMORY", "内存不足"),LAB_TEXT("Restart device.\nNo tests started.", "请重启设备\n尚未开始测试"),LAB_TEXT("USB log has details", "详情见 USB 日志"),0); return;
     }
-    if (sleep_marker==0x50505731) {
-        sleep_marker=0; selected=LAB_SLEEP; view=TEST;
+    bool woke_from_test = sleep_marker == 0x50505731 &&
+                          esp_reset_reason() == ESP_RST_DEEPSLEEP;
+    sleep_marker = 0;
+    if (woke_from_test) {
+        selected=LAB_SLEEP; view=TEST;
         snprintf(detail,sizeof(detail),LAB_TEXT("Deep sleep wake cause: %d\n\nVerify display, keys\nand audio after wake.\nNo automatic PASS.", "深睡唤醒原因: %d\n\n请检查屏幕、按键\n和声音是否正常\n不会自动判定通过"),(int)esp_sleep_get_wakeup_cause());
     }
     ESP_LOGI("ppdemo","Firmware %s; audio=%s battery=%s. USB: type report",esp_app_get_description()->version,esp_err_to_name(audio_state),esp_err_to_name(battery_state));

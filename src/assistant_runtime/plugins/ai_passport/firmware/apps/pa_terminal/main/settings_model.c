@@ -25,6 +25,45 @@ static bool token(const char *s) {
             return false;
     return true;
 }
+void pp_settings_project(const pp_settings_t *s, unsigned revision, pp_terminal_settings_t *v) {
+    memcpy(v->url, s->url, sizeof(v->url));
+    memcpy(v->device, s->device, sizeof(v->device));
+    memcpy(v->binding, s->binding, sizeof(v->binding));
+    v->wifi_count = s->wifi_count;
+    v->volume = s->volume;
+    v->sleep_seconds = s->sleep_seconds;
+    v->brightness = s->brightness;
+    v->text_size = s->text_size;
+    v->queue = s->queue;
+    v->keep_online = s->keep_online;
+    v->paired = s->paired;
+    v->offline_cache = s->offline_cache;
+    v->show_images = s->show_images;
+    v->revision = revision;
+}
+bool pp_settings_edit_preference(pp_settings_t *s, pp_preference_t key, unsigned value,
+                                 unsigned *previous) {
+    if (key == PP_PREF_VOLUME && value <= 100) {
+        *previous = s->volume;
+        s->volume = value;
+    } else if (key == PP_PREF_QUEUE && value <= 1) {
+        *previous = s->queue;
+        s->queue = value;
+    } else if (key == PP_PREF_KEEP_ONLINE && value <= 1) {
+        *previous = s->keep_online;
+        s->keep_online = value;
+    } else if (key == PP_PREF_PAIRED && value <= 1) {
+        *previous = s->paired;
+        s->paired = value;
+    } else
+        return false;
+    return true;
+}
+void pp_settings_forget_binding(pp_settings_t *s) {
+    s->paired = false;
+    memset(s->binding, 0, sizeof(s->binding));
+    memset(s->versions, 0, sizeof(s->versions));
+}
 bool pp_settings_valid(const pp_settings_t *s) {
     if (s->magic != PP_SETTINGS_MAGIC || s->wifi_count > PP_WIFI_MAX || s->volume > 100 ||
         s->sleep_seconds < 30 || s->sleep_seconds > 3600 || s->speech_mode > 2 ||
@@ -142,11 +181,15 @@ static bool apply(pp_settings_t *s, unsigned i, const cJSON *v) {
     return true;
 }
 
-bool pp_settings_prepare_bootstrap(const pp_settings_t *old, const char *raw, pp_settings_t *out) {
-    if (!old || !out || old == out || !raw || strlen(raw) > 6144 || strstr(raw, "\\u0000"))
+bool pp_settings_prepare_bootstrap(const pp_settings_t *old, const char *raw,
+                                   const char *release_url, const char *release_ca,
+                                   pp_settings_t *out) {
+    if (!old || !out || old == out || !raw || strlen(raw) > PP_WIFI_SETUP_JSON_MAX ||
+        strstr(raw, "\\u0000") || !pp_server_url_valid(release_url) || !release_ca ||
+        strlen(release_ca) >= sizeof(out->ca))
         return false;
-    cJSON *j = cJSON_Parse(raw);
-    if (!j || !cJSON_IsObject(j)) {
+    cJSON *j = cJSON_ParseWithOpts(raw, NULL, true);
+    if (!cJSON_IsObject(j)) {
         cJSON_Delete(j);
         return false;
     }
@@ -154,18 +197,23 @@ bool pp_settings_prepare_bootstrap(const pp_settings_t *old, const char *raw, pp
     memset(out->wifi, 0, sizeof(out->wifi));
     bool ok =
         string_field(j, "ssid", out->wifi[0].ssid, sizeof(out->wifi[0].ssid), false) &&
-        string_field(j, "password", out->wifi[0].password, sizeof(out->wifi[0].password), true) &&
-        string_field(j, "server_url", out->url, sizeof(out->url), false) &&
-        string_field(j, "trusted_ca", out->ca, sizeof(out->ca), true);
+        string_field(j, "password", out->wifi[0].password, sizeof(out->wifi[0].password), true);
+    bool seen_ssid = false, seen_password = false;
     const cJSON *field;
     cJSON_ArrayForEach(field, j) {
-        if (!field->string ||
-            (strcmp(field->string, "ssid") && strcmp(field->string, "password") &&
-             strcmp(field->string, "server_url") && strcmp(field->string, "trusted_ca")))
+        if (field->string && !strcmp(field->string, "ssid") && !seen_ssid)
+            seen_ssid = true;
+        else if (field->string && !strcmp(field->string, "password") && !seen_password)
+            seen_password = true;
+        else
             ok = false;
     }
+    out->paired = old->paired && !strcmp(old->url, release_url) && !strcmp(old->ca, release_ca);
+    memset(out->url, 0, sizeof(out->url));
+    memset(out->ca, 0, sizeof(out->ca));
+    strcpy(out->url, release_url);
+    strcpy(out->ca, release_ca);
     out->wifi_count = 1;
-    out->paired = false;
     cJSON_Delete(j);
     return ok && pp_settings_valid(out);
 }

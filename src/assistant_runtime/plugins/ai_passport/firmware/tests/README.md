@@ -1,9 +1,14 @@
 # PPDemo 检查分层
 
+- `test_board_power.c`：深睡驱动调用顺序、每一步故障后的停止与重启、按键交接前后释放状态。
 - `test_lab_model.c`：主机 C 测试人工报告、损坏记录、导航及有界配网表单解析。
+- `test_settings_store.c`：以实际配置模块验证锁竞争、无变更免写、NVS 提交失败回滚、云端回执，以及重新配对时旧回执的隔离。
 - `test_terminal_model.c`：终端按键、短按／双击不误发、录音序号与上限、UTF-8 分页及休眠条件。
 - `test_package_firmware.py`：PPDemo／PPDemo-Zh／PA-Terminal 独立身份、镜像布局、拒绝 NVS 覆盖及构建证据。
+- `test_playback_buffer.c` 验证短 PCM 帧填满字节窗口、环形回绕、写入后归还额度，以及停播后的迟到结果。
+- `test_terminal_audio.c` 用真实 worker 和模拟驱动验证采音拥塞后恢复、芯片错误只报告一次和休眠交接。
 - `test_byte_buffer.c`：按需分配、分配失败保留原数据、16 KiB 网络上限、USB 8191 字节上限及安全释放。
+- `test_terminal_events.c`：验证小帧缓冲复用、大帧直接移交、借用数据复制、满队列与复制失败，以及文本释放前擦除。
 - ESP-IDF 5.5.3：实际解析组件、编译、链接和镜像尺寸检查；不以语法检查代替。
 - 真实 PP：依照 `../README.md`，测试声音、屏幕、按键、无线、NVS 和休眠恢复。
 
@@ -19,7 +24,12 @@ cmake --build build/host
 ctest --test-dir build/host --output-on-failure
 ```
 
-`network_model` 检查五网络顺序、三轮边界、HTTP/HTTPS业务根地址及凭据格式；
+`network_model` 检查五网络顺序、三轮边界、HTTP/HTTPS 业务根地址、凭据格式，
+以及更换 WebSocket 后的握手和旧代次回调。`terminal_model` 覆盖各录音阶段在断线后的处理，
+包括已发出 `input.finish` 时保留待核对状态。`terminal_audio_codec_failure` 与
+`terminal_audio_capture_overflow` 使用可控驱动运行实际录播工作循环，覆盖持续静音失败只报告一次、
+故障后仍可休眠，以及录音队列写满后开始下一次采样。
+
 `settings_model` 检查字段版本、本地偏好不被重连重置、网络变更、无效候选不修改当前值、
 紧凑存储往返。没有设置 `PP_CJSON_SOURCE` 时仍运行其余不依赖SDK的主机测试；
 这不构成配置模型或NVS硬件验收。真实NVS断电、无线及配网页守卫仍在设备验收中验证。

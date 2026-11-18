@@ -8,6 +8,7 @@ from contextlib import suppress
 from aiohttp import web
 from assistant_runtime.api.conversation import ConversationRequest
 from assistant_runtime.api.configuration import ConfigurationActionRejected, ConfigurationUpdate
+from . import protocol
 from .declaration import DECLARATION
 from .repository import Devices
 from .settings import desired, DEVICE_FIELDS, NETWORK_FIELDS
@@ -27,7 +28,7 @@ class AiPassportPlugin:
     async def start(self, context):
         self.devices = context.repository(Devices)
         self.frontend = context.resource("http_frontend")
-        app = web.Application(client_max_size=16384, middlewares=[self.guard])
+        app = web.Application(client_max_size=protocol.MAX_JSON_BYTES, middlewares=[self.guard])
         app.add_routes([web.post("/pair", self.pair), web.get("/stream", self.stream)])
         self.runner = web.AppRunner(app, access_log=None)
         context.own(self.close)
@@ -150,7 +151,7 @@ class AiPassportPlugin:
         if (
             set(data) != {"device_id", "credential", "protocol"}
             or type(data["protocol"]) is not int
-            or data["protocol"] != 2
+            or data["protocol"] != protocol.VERSION
         ):
             raise ValueError("Invalid pairing")
         if any(
@@ -160,7 +161,9 @@ class AiPassportPlugin:
             raise ValueError("Invalid pairing")
         # The device creates its own random credential; no administrator or
         # supplier credential is ever delivered to the terminal.
-        return web.json_response({"protocol": 2, **self.devices.begin(data["device_id"], data["credential"])})
+        return web.json_response(
+            {"protocol": protocol.VERSION, **self.devices.begin(data["device_id"], data["credential"])}
+        )
 
     async def stream(self, request):
         from .connection import Connection
@@ -178,7 +181,7 @@ class AiPassportPlugin:
             and len(self.connections.keys() | self.connecting) >= self.settings["max_connections"]
         ):
             raise web.HTTPServiceUnavailable(text="terminal_capacity")
-        ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=15)
+        ws = web.WebSocketResponse(max_msg_size=protocol.MAX_JSON_BYTES, heartbeat=15)
         connection = Connection(self, ident, session, ws)
         self.connecting.add(ident)
 

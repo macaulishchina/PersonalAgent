@@ -1,0 +1,205 @@
+#include "terminal_audio.h"
+#include "playback_buffer.h"
+#include "bsp_audio.h"
+#include "network.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include <stdatomic.h>
+#include <stdlib.h>
+
+static QueueHandle_t recorded;
+static TaskHandle_t worker;
+static pp_playback_buffer_t *output;
+static portMUX_TYPE output_lock = portMUX_INITIALIZER_UNLOCKED;
+static atomic_bool capturing, busy, codec_failed, pause_requested, parked;
+static atomic_int fault;
+static atomic_uint capture_generation, target_volume, input_level;
+
+bool pp_audio_capturing(void) { return capturing; }
+bool pp_audio_busy(void) { return busy; }
+unsigned pp_audio_level(void) { return input_level; }
+unsigned pp_audio_volume(void) { return target_volume; }
+void pp_audio_set_volume(unsigned volume) { target_volume = volume; }
+pp_audio_error_t pp_audio_take_error(void) { return atomic_exchange(&fault, PP_AUDIO_OK); }
+
+void pp_audio_capture_release(void) { capturing = false; }
+void pp_audio_capture_discard(void) {
+    capturing = false;
+    capture_generation++;
+    if (recorded)
+        xQueueReset(recorded);
+}
+void pp_audio_capture_begin(void) {
+    pp_audio_capture_discard();
+    if (worker && !codec_failed) {
+        capturing = true;
+        xTaskNotifyGive(worker);
+    }
+}
+bool pp_audio_recorded(pp_recording_t *block) {
+    while (recorded && xQueueReceive(recorded, block, 0))
+        if (block->generation == capture_generation)
+            return true;
+    return false;
+}
+bool pp_audio_capture_drained(void) {
+    return !busy && !codec_failed && fault == PP_AUDIO_OK &&
+           (!recorded || !uxQueueMessagesWaiting(recorded));
+}
+
+static void reset_playback(uint32_t generation, bool active) {
+    if (!output)
+        return;
+    portENTER_CRITICAL(&output_lock);
+    pp_playback_reset(output, generation, active);
+    portEXIT_CRITICAL(&output_lock);
+    xTaskNotifyGive(worker); /* Apply stop/mute even when no more frames arrive. */
+}
+void pp_audio_play_begin(uint32_t generation) { reset_playback(generation, !codec_failed); }
+void pp_audio_play_stop(void) { reset_playback(0, false); }
+bool pp_play_pcm(uint32_t generation, const void *pcm, size_t bytes) {
+    if (!output || codec_failed)
+        return true; /* Controller declines playback on a terminal without audio. */
+    portENTER_CRITICAL(&output_lock);
+    bool accepted = pp_playback_append(output, generation, pcm, bytes);
+    portEXIT_CRITICAL(&output_lock);
+    if (accepted)
+        xTaskNotifyGive(worker);
+    return accepted;
+}
+bool pp_audio_play_drained(void) {
+    if (!output)
+        return false;
+    portENTER_CRITICAL(&output_lock);
+    bool drained = output->active && !output->writing && !output->queued;
+    portEXIT_CRITICAL(&output_lock);
+    return drained;
+}
+unsigned pp_audio_take_credit(void) {
+    if (!output)
+        return 0;
+    portENTER_CRITICAL(&output_lock);
+    unsigned bytes = output->credit;
+    output->credit = 0;
+    portEXIT_CRITICAL(&output_lock);
+    return bytes;
+}
+
+typedef struct {
+    unsigned rate, volume;
+} codec_state_t;
+static bool set_volume(codec_state_t *codec, unsigned volume) {
+    if (volume != codec->volume && bsp_audio_set_volume(volume) != ESP_OK)
+        return false;
+    codec->volume = volume;
+    return true;
+}
+static bool set_format(codec_state_t *codec, unsigned rate, unsigned volume) {
+    if (codec->rate != rate) {
+        if (bsp_audio_set_format(rate, 16, 1) != ESP_OK)
+            return false;
+        codec->rate = rate;
+        codec->volume = UINT32_MAX;
+    }
+    return set_volume(codec, volume);
+}
+static pp_audio_error_t read_block(codec_state_t *codec, unsigned generation) {
+    pp_recording_t block = {.generation = generation};
+    if (!set_format(codec, PP_CAPTURE_RATE, 0) ||
+        bsp_audio_read(block.pcm, sizeof(block.pcm)) != ESP_OK)
+        return PP_AUDIO_CODEC_FAILURE;
+    if (capture_generation != generation)
+        return PP_AUDIO_OK;
+    if (xQueueSend(recorded, &block, 0) != pdTRUE)
+        return PP_AUDIO_CAPTURE_OVERFLOW;
+    unsigned amplitude = 0;
+    for (unsigned i = 0; i < sizeof(block.pcm); i += 16) {
+        int sample = (int16_t)(block.pcm[i] | ((unsigned)block.pcm[i + 1] << 8));
+        amplitude += sample < 0 ? -sample : sample;
+    }
+    input_level = amplitude / (sizeof(block.pcm) / 16) / 12;
+    return PP_AUDIO_OK;
+}
+
+static void disable_codec(void) {
+    /* Only the I2S worker transitions the codec to this state. Keep the
+     * UI, transport and deep-sleep handshake available until reboot. */
+    codec_failed = true;
+    capturing = false;
+    fault = PP_AUDIO_CODEC_FAILURE;
+}
+
+static void audio_worker(void *arg) {
+    (void)arg;
+    codec_state_t codec = {.volume = UINT32_MAX};
+    for (;;) {
+        if (pause_requested || codec_failed) {
+            parked = true;
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+        parked = false;
+        busy = true;
+        unsigned generation = capture_generation;
+        if (capturing) {
+            pp_audio_error_t error = read_block(&codec, generation);
+            if (error == PP_AUDIO_CODEC_FAILURE)
+                disable_codec();
+            else if (error == PP_AUDIO_CAPTURE_OVERFLOW && generation == capture_generation) {
+                capturing = false;
+                fault = error;
+            }
+            busy = false;
+            continue;
+        }
+        uint8_t pcm[1024];
+        uint32_t epoch = 0;
+        portENTER_CRITICAL(&output_lock);
+        size_t n = pp_playback_take(output, pcm, sizeof(pcm), &epoch);
+        bool active = output->active;
+        portEXIT_CRITICAL(&output_lock);
+        if (n) {
+            bool ok = set_format(&codec, PP_PLAYBACK_RATE, target_volume) &&
+                      bsp_audio_write(pcm, n) == ESP_OK;
+            portENTER_CRITICAL(&output_lock);
+            pp_playback_written(output, epoch, ok);
+            portEXIT_CRITICAL(&output_lock);
+            if (!ok)
+                disable_codec();
+        } else if (!active && codec.rate && !set_volume(&codec, 0)) {
+            disable_codec();
+        }
+        busy = false;
+        if (!n && !codec_failed)
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+bool pp_audio_start(unsigned volume) {
+    target_volume = volume;
+    recorded = xQueueCreate(32, sizeof(pp_recording_t));
+    output = calloc(1, sizeof(*output));
+    if (recorded && output && bsp_audio_init() == ESP_OK &&
+        xTaskCreate(audio_worker, "pp_audio", 4096, NULL, 4, &worker) == pdPASS)
+        return true;
+    if (recorded)
+        vQueueDelete(recorded);
+    recorded = NULL;
+    free(output);
+    output = NULL;
+    return false;
+}
+bool pp_audio_quiesce(void) {
+    if (!worker)
+        return true;
+    pause_requested = true;
+    xTaskNotifyGive(worker);
+    for (unsigned i = 0; i < 100; i++) {
+        if (parked)
+            return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    pause_requested = false;
+    xTaskNotifyGive(worker);
+    return false;
+}

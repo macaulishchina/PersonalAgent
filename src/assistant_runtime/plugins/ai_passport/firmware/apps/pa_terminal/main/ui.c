@@ -36,7 +36,8 @@ static const lv_image_dsc_t *previous_avatar;
 static unsigned filtered_level;
 static bool photo_available;
 static const lv_font_t *body_font = &terminal_zh_16;
-static unsigned current_brightness = 65;
+/* Backlight starts off until the first populated frame has been drawn. */
+static unsigned current_brightness;
 
 static unsigned body_rows(bool input) {
     return (input ? 110u : 198u) / (body_font->line_height + 1);
@@ -44,6 +45,7 @@ static unsigned body_rows(bool input) {
 
 static lv_obj_t *label(int x, int y, int w, int h, bool symbols) {
     lv_obj_t *object = lv_label_create(screen);
+    lv_label_set_text_static(object, "");
     lv_obj_set_pos(object, x, y);
     lv_obj_set_size(object, w, h);
     lv_obj_set_style_text_font(object, symbols ? &lv_font_montserrat_14 : &terminal_zh_16, 0);
@@ -149,7 +151,6 @@ bool pp_ui_init(void) {
     visible(volume_track, false);
     lv_screen_load(screen);
     bsp_lvgl_unlock();
-    bsp_display_backlight(65);
     return true;
 }
 
@@ -184,11 +185,6 @@ size_t pp_ui_previous(const char *value, size_t start) {
 }
 
 size_t pp_ui_render(const pp_ui_frame_t *f) {
-    /* Backlight PWM does not require a redraw or an LVGL allocation. */
-    if (f->brightness >= 40 && f->brightness <= 100 && f->brightness != current_brightness) {
-        bsp_display_backlight(f->brightness);
-        current_brightness = f->brightness;
-    }
     if (!screen || !bsp_lvgl_lock(100))
         return f->page;
     const lv_font_t *wanted_font = f->text_size == 18 ? &terminal_zh_18 : &terminal_zh_16;
@@ -297,6 +293,16 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         layout =
             pp_layout_page(page, sizeof(page), body, f->page, 216, body_rows(false), measure, NULL);
     text(content, page);
+    const bool first_frame = current_brightness == 0;
+    if (first_frame)
+        lv_refr_now(lv_obj_get_display(screen));
     bsp_lvgl_unlock();
+    unsigned brightness = f->brightness;
+    if (brightness < 40 || brightness > 100)
+        brightness = first_frame ? 65 : current_brightness;
+    if (brightness != current_brightness) {
+        bsp_display_backlight(brightness);
+        current_brightness = brightness;
+    }
     return layout.more ? layout.next : 0;
 }

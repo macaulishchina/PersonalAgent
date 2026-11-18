@@ -34,11 +34,29 @@ target_include_directories(test_navigation PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_navigation PRIVATE -Wall -Wextra -Werror)
 add_test(NAME navigation COMMAND test_navigation)
 
+add_executable(test_playback_buffer test_playback_buffer.c ../apps/pa_terminal/main/playback_buffer.c)
+target_include_directories(test_playback_buffer PRIVATE ../apps/pa_terminal/main)
+target_compile_options(test_playback_buffer PRIVATE -Wall -Wextra -Werror)
+add_test(NAME playback_buffer COMMAND test_playback_buffer)
+
 add_executable(test_byte_buffer test_byte_buffer.c ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_byte_buffer PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_byte_buffer PRIVATE -Wall -Wextra -Werror)
 set_source_files_properties(../apps/pa_terminal/main/byte_buffer.c PROPERTIES COMPILE_DEFINITIONS "realloc=pp_test_realloc")
 add_test(NAME byte_buffer COMMAND test_byte_buffer)
+
+# Actual mailbox with bounded, nonblocking host queues and observable allocation failures.
+set(event_stubs "${CMAKE_CURRENT_BINARY_DIR}/event-stubs")
+file(MAKE_DIRECTORY "${event_stubs}/freertos")
+foreach(header bsp_button cJSON freertos/FreeRTOS freertos/queue)
+    file(WRITE "${event_stubs}/${header}.h" "#include \"terminal_events_fixture.h\"\n")
+endforeach()
+add_executable(test_terminal_events test_terminal_events.c ../apps/pa_terminal/main/terminal_events.c
+               ../apps/pa_terminal/main/byte_buffer.c)
+target_include_directories(test_terminal_events PRIVATE "${event_stubs}" stubs ../apps/pa_terminal/main)
+target_compile_definitions(test_terminal_events PRIVATE malloc=pp_test_malloc free=pp_test_free)
+target_compile_options(test_terminal_events PRIVATE -Wall -Wextra -Werror)
+add_test(NAME terminal_events COMMAND test_terminal_events)
 
 add_executable(test_network_model test_network_model.c ../apps/pa_terminal/main/network_model.c)
 target_include_directories(test_network_model PRIVATE ../apps/pa_terminal/main)
@@ -74,6 +92,24 @@ if(PP_CJSON_SOURCE)
         target_link_libraries(test_settings_model PRIVATE m)
     endif()
     add_test(NAME settings_model COMMAND test_settings_model)
+
+    # Compile the settings owner with deterministic failure/lock injection only for this target.
+    set(settings_stubs "${CMAKE_CURRENT_BINARY_DIR}/settings-stubs")
+    file(MAKE_DIRECTORY "${settings_stubs}/freertos")
+    foreach(header esp_err nvs bootloader_random esp_random freertos/FreeRTOS freertos/semphr)
+        file(WRITE "${settings_stubs}/${header}.h" "#include \"settings_store_fixture.h\"\n")
+    endforeach()
+    add_executable(test_settings_store test_settings_store.c ../apps/pa_terminal/main/settings.c
+                   ../apps/pa_terminal/main/settings_model.c ../apps/pa_terminal/main/network_model.c
+                   "${PP_CJSON_SOURCE}")
+    target_include_directories(test_settings_store PRIVATE "${settings_stubs}" stubs
+                               ../apps/pa_terminal/main "${PP_CJSON_DIRECTORY}")
+    target_compile_options(test_settings_store PRIVATE -Wall -Wextra -Werror)
+    if(NOT WIN32)
+        target_link_libraries(test_settings_store PRIVATE m)
+    endif()
+    add_test(NAME settings_store COMMAND test_settings_store)
+
     add_executable(test_notification_model test_notification_model.c ../apps/pa_terminal/main/notification_model.c "${PP_CJSON_SOURCE}")
     target_include_directories(test_notification_model PRIVATE ../apps/pa_terminal/main "${PP_CJSON_DIRECTORY}")
     target_compile_options(test_notification_model PRIVATE -Wall -Wextra -Werror)
@@ -94,3 +130,29 @@ if(PP_CJSON_SOURCE)
     endif()
     add_test(NAME history_cache COMMAND test_history_cache)
 endif()
+
+# Compile the actual board sequence on the host. These headers stand in for
+# ESP-IDF/BSP declarations only; the test supplies failing driver operations.
+set(board_stubs "${CMAKE_CURRENT_BINARY_DIR}/board-stubs")
+file(MAKE_DIRECTORY "${board_stubs}")
+foreach(header bsp_audio bsp_battery bsp_button bsp_display bsp_i2c bsp_pins esp_log esp_sleep esp_system)
+    file(WRITE "${board_stubs}/${header}.h" "#include \"board_power_fixture.h\"\n")
+endforeach()
+add_executable(test_board_power test_board_power.c ../components/pp_board/pp_board_power.c)
+target_include_directories(test_board_power PRIVATE "${board_stubs}" stubs ../components/pp_board/include)
+target_compile_options(test_board_power PRIVATE -Wall -Wextra -Werror)
+add_test(NAME board_power COMMAND test_board_power)
+
+# Run the real audio worker with deterministic driver and scheduling fixtures.
+set(audio_stubs "${CMAKE_CURRENT_BINARY_DIR}/audio-stubs")
+file(MAKE_DIRECTORY "${audio_stubs}/freertos")
+foreach(header bsp_audio freertos/FreeRTOS freertos/queue freertos/task)
+    file(WRITE "${audio_stubs}/${header}.h" "#include \"terminal_audio_fixture.h\"\n")
+endforeach()
+file(WRITE "${audio_stubs}/cJSON.h" "typedef struct cJSON cJSON;\n")
+add_executable(test_terminal_audio test_terminal_audio.c ../apps/pa_terminal/main/terminal_audio.c
+               ../apps/pa_terminal/main/playback_buffer.c)
+target_include_directories(test_terminal_audio PRIVATE "${audio_stubs}" stubs ../apps/pa_terminal/main)
+target_compile_options(test_terminal_audio PRIVATE -Wall -Wextra -Werror)
+add_test(NAME terminal_audio_codec_failure COMMAND test_terminal_audio mute)
+add_test(NAME terminal_audio_capture_overflow COMMAND test_terminal_audio overflow)

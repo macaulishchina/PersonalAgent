@@ -125,6 +125,7 @@ class PackageTest(unittest.TestCase):
                         manifest["application"],
                         "PA-Terminal" if project == "pa_terminal" else "PPDemo-Zh" if chinese else "PPDemo",
                     )
+                    self.assertEqual("LittleFS.LICENSE.txt" in archive.namelist(), project == "pa_terminal")
                     if project == "pa_terminal":
                         self.assertIn("docs/acceptance.md", archive.namelist())
                         self.assertNotIn("../../../docs", archive.read("README.md").decode())

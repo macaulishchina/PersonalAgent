@@ -103,7 +103,22 @@ static void test_audio_limit(void) {
     pp_input_abort(&s);
     assert(!pp_input_audio(&s, 640));
 }
+static void test_disconnected_input(void) {
+    for (unsigned phase = PP_INPUT_IDLE; phase <= PP_INPUT_UNKNOWN; phase++) {
+        pp_input_t input = {.phase = phase, .generation = 11};
+        bool pending = phase == PP_INPUT_FINALIZING || phase == PP_INPUT_CONFIRM ||
+                       phase == PP_INPUT_SUBMITTING || phase == PP_INPUT_UNKNOWN;
+        assert(pp_input_disconnect(&input) == pending);
+        assert(input.generation == 12 && input.phase == (pending ? PP_INPUT_UNKNOWN : PP_INPUT_IDLE));
+        if (pending) {
+            assert(pp_input_disconnect(&input)); /* The handshake may follow a disconnect event. */
+            assert(input.phase == PP_INPUT_UNKNOWN && !pp_input_start(&input, 0));
+        }
+    }
+}
+
 int main(void) {
+    test_disconnected_input();
     test_input_lifecycle();
     test_audio_limit();
     pp_button_t b = {0};

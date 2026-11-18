@@ -1,7 +1,6 @@
 """Bounded terminal protocol. Socket lifetime never owns an accepted execution."""
 
 import asyncio
-import base64
 import json
 import struct
 import time
@@ -13,6 +12,8 @@ from assistant_runtime.api.ai_usage import UsageScope
 from assistant_runtime.api.conversation import ConversationInputRequest, ConversationRequest
 from assistant_runtime.api.speech import SpeechError, SpeechRequest, spoken_excerpt, spoken_sentence
 from assistant_runtime.api.terminal import TerminalNotifications
+from . import protocol
+from .display import TerminalDisplay
 from .settings import LOCAL_FIELDS
 
 
@@ -25,6 +26,7 @@ class Connection:
         self.failed_input_id = None
         self.tasks = set()
         self.play_task = self.watch_task = self.finish_task = None
+        self.pending_finish_stream = None
         self.generation = 0
         self.playing = None
         self.closed = False
@@ -48,19 +50,12 @@ class Connection:
         self.speech_changed = asyncio.Event()
         self.segment_completed = asyncio.Event()
         self.voice = None
-        self.thumbnail = None
+        self.display = TerminalDisplay(self.conversation, self.send, self.settings)
 
     async def send(self, event_type, **data):
-        if event_type == "input.receipt" and "result" in data:
-            result = data["result"]
-            data["result"] = {
-                k: result[k] for k in ("state", "request_id") if isinstance(result, dict) and k in result
-            }
+        text = protocol.encode_event(event_type, data)
         async with self.send_lock:
-            payload = {"type": event_type, **data}
-            if len(json.dumps(payload, ensure_ascii=False).encode()) > 16384:
-                raise SpeechError("terminal_message_limit")
-            await asyncio.wait_for(self.ws.send_json(payload), 5)
+            await asyncio.wait_for(self.ws.send_str(text), 5)
 
     def spawn(self, coro, name):
         task = self.context.spawn(coro, "passport-" + name)
@@ -87,18 +82,18 @@ class Connection:
         self.cursor = history["cursor"]
         await self.send(
             "hello",
-            protocol=2,
-            input_rate=16000,
-            output_rate=24000,
+            protocol=protocol.VERSION,
+            input_rate=protocol.INPUT_RATE,
+            output_rate=protocol.OUTPUT_RATE,
             binding=self.session,
             server_time=int(time.time()),
         )
         await self.send_configuration()
         await self.send("history.index", **history)
-        await self.cache_index(history)
+        await self.display.cache_index(history)
         # Reconnection displays history without replaying historical speech.
         for message in history["items"]:
-            await self.restore_message(message)
+            await self.display.restore_message(message)
         if self.closed:
             return
         self.watch_task = self.spawn(self.watch(), "state")
@@ -170,31 +165,7 @@ class Connection:
         await self.send("error", code=code, request_id=request_id, operation=operation)
 
     async def command(self, data):
-        kind = data.get("type")
-        allowed = {
-            "input.begin": {"request_id", "mode"},
-            "input.finish": {"request_id", "frames", "confirmation_required"},
-            "input.confirm": {"request_id"},
-            "input.cancel": {"request_id"},
-            "input.receipt": {"request_id"},
-            "input.transcript": {"request_id", "offset"},
-            "playback.stop": set(),
-            "playback.credit": {"generation", "bytes"},
-            "playback.completed": {"generation"},
-            "message.page": {"message_id", "offset", "prefetch"},
-            "history.index": {"before", "after", "limit"},
-            "execution.cancel": {"request_id"},
-            "notifications.list": {"before"},
-            "notification.receipt": {"id", "revision", "action"},
-            "notification.page": {"id", "revision", "offset"},
-            "configuration.reload": set(),
-            "configuration.applied": {"versions", "actual"},
-            "image.open": {"message_id", "image_id", "width", "height"},
-            "image.chunk": {"version", "offset"},
-            "image.close": set(),
-        }
-        if not isinstance(kind, str) or kind not in allowed or set(data) - (allowed[kind] | {"type"}):
-            raise ValueError("Invalid terminal command")
+        kind = protocol.command_type(data)
         if kind.startswith("input."):
             ident = str(uuid.UUID(data.get("request_id")))
             if kind == "input.receipt":
@@ -250,46 +221,13 @@ class Connection:
                     raise ValueError("Invalid input confirmation")
                 confirm = confirm or self.input.size >= self.input.max_bytes
                 stream, self.input = self.input, None
+                self.pending_finish_stream = stream
                 self.finish_task = self.spawn(self.finish(stream, ident, confirm), "recognition")
             else:
                 raise SpeechError("speech_input_closed")
             return
-        if kind == "image.open":
-            self.thumbnail = None
-            if not self.settings().get("show_images", True):
-                raise SpeechError("terminal_images_disabled")
-            self.thumbnail = await self.conversation(
-                "thumbnail",
-                message_id=data.get("message_id"),
-                image_id=data.get("image_id"),
-                **{k: data[k] for k in ("width", "height") if k in data},
-            )
-            await self.send(
-                "image.open",
-                message_id=data.get("message_id"),
-                **{k: v for k, v in self.thumbnail.items() if k != "data"},
-            )
-        elif kind == "image.chunk":
-            offset = data.get("offset")
-            image = self.thumbnail
-            if (
-                not image
-                or data.get("version") != image["version"]
-                or type(offset) is not int
-                or not 0 <= offset < image["bytes"]
-                or offset % 2
-            ):
-                raise ValueError("Invalid image page")
-            raw = image["data"][offset : offset + 2048]
-            await self.send(
-                "image.chunk",
-                version=image["version"],
-                offset=offset,
-                data=base64.b64encode(raw).decode(),
-                next_offset=offset + len(raw) if offset + len(raw) < image["bytes"] else None,
-            )
-        elif kind == "image.close":
-            self.thumbnail = None
+        if kind.startswith("image."):
+            await self.display.image(kind, data)
         elif kind == "configuration.reload":
             await self.send_configuration()
         elif kind == "configuration.applied":
@@ -314,16 +252,13 @@ class Connection:
             self.owner.devices.configuration_receipt(self.device, versions, actual)
             await self.send("configuration.receipt")
         elif kind == "history.index":
-            page = await self.conversation(
-                "history_index", **{k: data[k] for k in ("before", "after", "limit") if k in data}
-            )
-            await self.send("history.index", **page)
+            await self.display.history_index(data)
         elif kind == "playback.credit":
             credit = data.get("bytes")
-            if type(credit) is not int or credit <= 0 or credit % 2 or credit > 8192:
+            if type(credit) is not int or credit <= 0 or credit % 2 or credit > protocol.PLAYBACK_WINDOW:
                 raise ValueError("Invalid playback credit")
             if data.get("generation") == self.generation:
-                if self.credit + credit > 8192:
+                if self.credit + credit > protocol.PLAYBACK_WINDOW:
                     raise ValueError("Playback window exceeded")
                 self.credit += credit
                 self.credit_changed.set()
@@ -350,29 +285,7 @@ class Connection:
                 self.playing = None
                 self.segment_completed.set()
         elif kind == "message.page":
-            if "prefetch" in data and type(data["prefetch"]) is not bool:
-                raise ValueError("Invalid history prefetch flag")
-            try:
-                message = await self.conversation(
-                    "message",
-                    message_id=data.get("message_id"),
-                    offset=data.get("offset", 0),
-                    limit=80,
-                )
-            except Exception:
-                if not data.get("prefetch"):
-                    raise
-                # Cache warming is a bounded read, never a foreground failure
-                # or an excuse to replay the conversation/tool operation.
-                await self.send(
-                    "cache.prefetch_unavailable",
-                    message_id=data.get("message_id"),
-                    offset=data.get("offset", 0),
-                )
-                return
-            if message.get("kind") == "detail":
-                message.update(text="", next_offset=None, kind="image")
-            await self.send("message.page", prefetch=data.get("prefetch", False), **message)
+            await self.display.message_page(data)
         elif kind == "execution.cancel":
             result = await self.conversation("cancel", request_id=data.get("request_id"))
             await self.send("execution.cancelled", result=result)
@@ -421,7 +334,8 @@ class Connection:
         self.committing = True
         try:
             result = await self.receipt("commit", ident, text=text)
-            await self.send("input.receipt", request_id=ident, **result)
+            if not self.closed:
+                await self.send("input.receipt", request_id=ident, **result)
         finally:
             self.committing = False
 
@@ -435,6 +349,8 @@ class Connection:
         await self.send("input.receipt", request_id=ident, **result)
 
     async def finish(self, stream, ident, confirmation_required=False):
+        # Until this task actually starts, abort_input owns the parked stream.
+        self.pending_finish_stream = None
         try:
             await self.send("recognizing", request_id=ident)
             ended = time.monotonic()
@@ -484,13 +400,20 @@ class Connection:
         ):
             self.finish_task.cancel()
             await asyncio.gather(self.finish_task, return_exceptions=True)
+        if self.pending_finish_stream is not None:
+            stream, self.pending_finish_stream = self.pending_finish_stream, None
+            await stream.close()
         if self.input:
             stream, self.input = self.input, None
             await stream.close()
         self.confirmation = None
         self.input_id = None
         if ident:
-            if preserve_review and (await self.receipt("receipt", ident))["state"] == "review":
+            if preserve_review and (await self.receipt("receipt", ident))["state"] in {
+                "review",
+                "accepted",
+                "unknown",
+            }:
                 return
             await self.receipt("cancel", ident)
 
@@ -540,9 +463,9 @@ class Connection:
                 if changes["events"] is None:
                     history = await self.conversation("history_index", limit=3)
                     self.cursor = history["cursor"]
-                    await self.cache_index(history)
+                    await self.display.cache_index(history)
                     for m in history["items"]:
-                        await self.restore_message(m)
+                        await self.display.restore_message(m)
                 else:
                     refresh_history = False
                     for event in changes["events"]:
@@ -556,7 +479,7 @@ class Connection:
                         # Its snapshot cursor must not skip undelivered events.
                         index = await self.conversation("history_index", limit=3)
                         await self.send("history.index", pushed=True, **index)
-                        await self.cache_index(index)
+                        await self.display.cache_index(index)
                     if len(changes["events"]) >= 100:
                         self.changed.set()
         except asyncio.CancelledError:
@@ -599,45 +522,6 @@ class Connection:
             raise
         except Exception as exc:
             await self.error(exc)
-
-    async def cache_index(self, history):
-        # An authoritative recent window is independent of the user's browsing
-        # cursor. It contains metadata only, with no model or image inference.
-        if self.settings().get("offline_cache", True):
-            await self.send(
-                "cache.index",
-                items=[
-                    {k: item[k] for k in ("id", "cursor", "role", "status", "updated", "kind") if k in item}
-                    for item in history["items"]
-                    if item.get("status") != "streaming"
-                ],
-            )
-
-    async def restore_message(self, message):
-        if message["role"] != "assistant" or message["status"] not in {"complete", "failed", "cancelled"}:
-            return
-        page = await self.conversation("message", message_id=message["id"], limit=80)
-        if page.get("kind") == "detail":
-            page.update(text="", next_offset=None, kind="image")
-        await self.send(
-            "message",
-            restored=True,
-            **{
-                k: page[k]
-                for k in (
-                    "message_id",
-                    "role",
-                    "text",
-                    "total",
-                    "offset",
-                    "next_offset",
-                    "updated",
-                    "status",
-                    "images",
-                    "kind",
-                )
-            },
-        )
 
     async def present(self, message, speak):
         presentation = message.get("presentation") or {}
@@ -840,7 +724,7 @@ class Connection:
             await self.send(
                 "playback.start",
                 generation=generation,
-                rate=24000,
+                rate=protocol.OUTPUT_RATE,
                 offset=offset - len(text),
                 next_offset=offset,
             )
@@ -855,8 +739,8 @@ class Connection:
                         time.monotonic() - started,
                     )
                     first = False
-                for start in range(0, len(pcm), 4096):
-                    chunk = pcm[start : start + 4096]
+                for start in range(0, len(pcm), protocol.PLAYBACK_CHUNK):
+                    chunk = pcm[start : start + protocol.PLAYBACK_CHUNK]
                     async with asyncio.timeout(30):
                         while self.credit < len(chunk):
                             self.credit_changed.clear()
@@ -865,9 +749,7 @@ class Connection:
                         return
                     self.credit -= len(chunk)
                     async with self.send_lock:
-                        await asyncio.wait_for(
-                            self.ws.send_bytes(struct.pack("!I", generation) + pcm[start : start + 4096]), 5
-                        )
+                        await asyncio.wait_for(self.ws.send_bytes(struct.pack("!I", generation) + chunk), 5)
             if generation == self.generation:
                 self.playing["sent"] = True
                 await self.send("playback.end", generation=generation)
@@ -967,11 +849,16 @@ class Connection:
     async def _close(self):
         # Let an already accepted frame finish before touching its input receipt.
         await self.frame_done.wait()
-        self.thumbnail = None
+        self.display.close_image()
         try:
-            for task in tuple(self.tasks):
+            tasks = tuple(self.tasks)
+            for task in tasks:
+                if task is self.finish_task and self.committing:
+                    # Dispatch has crossed the durable receipt boundary. Wait for
+                    # the capability call to settle even if the radio dropped.
+                    continue
                 task.cancel()
-            await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
             await self.abort_input(preserve_review=True)
         finally:
             await self.ws.close()
