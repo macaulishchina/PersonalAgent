@@ -218,7 +218,6 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         snprintf(value, sizeof(value), "%d", f->battery > 100 ? 100 : f->battery);
     text(battery_text, value);
     text(mode, f->queue ? LV_SYMBOL_LIST : LV_SYMBOL_NEW_LINE);
-    text(footer, f->hint && f->hint[0] ? f->hint : "上下翻页 · OK 菜单");
     bool input = f->view == PP_UI_INPUT, idle = f->view == PP_UI_IDLE;
     visible(avatar, input || idle);
     visible(photo, f->view == PP_UI_IMAGE && photo_available);
@@ -262,8 +261,10 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         snprintf(value, sizeof(value), "音量 %u", f->volume);
     else if (input && f->elapsed)
         snprintf(value, sizeof(value), "%.1f 秒", f->elapsed / 1000.0);
-    else
+    else if (idle || !f->origin || !f->state || strcmp(f->origin, f->state))
         snprintf(value, sizeof(value), "%s", f->state ? f->state : "");
+    else
+        value[0] = 0;
     text(state, value);
     lv_obj_set_style_text_color(state, lv_color_hex(f->volume_feedback ? 0xb6cfa4 : 0x9aaa99), 0);
     visible(volume_track, f->volume_feedback);
@@ -293,6 +294,11 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         layout =
             pp_layout_page(page, sizeof(page), body, f->page, 216, body_rows(false), measure, NULL);
     text(content, page);
+    const char *hint = f->hint && f->hint[0] ? f->hint : "上下翻页 · OK 菜单";
+    if (f->local_page_hint && (layout.more || f->page))
+        hint = layout.more ? (f->page ? "上下翻页 · OK 返回" : "向下翻页 · OK 返回")
+                           : "向上翻页 · OK 返回";
+    text(footer, hint);
     const bool first_frame = current_brightness == 0;
     if (first_frame)
         lv_refr_now(lv_obj_get_display(screen));

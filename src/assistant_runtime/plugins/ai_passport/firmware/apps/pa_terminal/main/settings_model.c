@@ -73,7 +73,7 @@ bool pp_settings_valid(const pp_settings_t *s) {
         !bounded_string(s->device, sizeof(s->device)) || strlen(s->device) != 32 ||
         !bounded_string(s->credential, sizeof(s->credential)) || strlen(s->credential) != 64 ||
         !token(s->device) || !token(s->credential) ||
-        (s->wifi_count && !pp_server_url_valid(s->url)))
+        ((s->wifi_count || s->paired) && !pp_server_url_valid(s->url)))
         return false;
     for (unsigned i = 0; i < s->wifi_count; i++) {
         if (!bounded_string(s->wifi[i].ssid, sizeof(s->wifi[i].ssid)) ||
@@ -91,7 +91,7 @@ static bool integer(const cJSON *v, unsigned low, unsigned high) {
     return cJSON_IsNumber(v) && isfinite(v->valuedouble) && v->valuedouble >= low &&
            v->valuedouble <= high && floor(v->valuedouble) == v->valuedouble;
 }
-static bool apply(pp_settings_t *s, unsigned i, const cJSON *v) {
+static bool apply_value(pp_settings_t *s, unsigned i, const cJSON *v) {
     if (cJSON_IsNull(v))
         return true; /* Release cloud management, retain usable local state. */
     switch (i) {
@@ -156,8 +156,6 @@ static bool apply(pp_settings_t *s, unsigned i, const cJSON *v) {
         if (!cJSON_IsString(v) || strlen(v->valuestring) >= sizeof(s->url) ||
             !pp_server_url_valid(v->valuestring))
             return false;
-        if (strcmp(s->url, v->valuestring))
-            s->paired = false;
         strcpy(s->url, v->valuestring);
         break;
     case 9:
@@ -239,7 +237,7 @@ bool pp_settings_prepare_cloud(const pp_settings_t *old, const cJSON *changes, p
         seen |= 1u << i;
         uint32_t revision = (uint32_t)v->valuedouble;
         if (out->versions[i] != revision) {
-            if (!apply(out, i, value))
+            if (!apply_value(out, i, value))
                 return false;
             out->versions[i] = revision;
             *changed = true;
@@ -249,6 +247,8 @@ bool pp_settings_prepare_cloud(const pp_settings_t *old, const cJSON *changes, p
         if (!cJSON_AddNumberToObject(versions, fields[i], revision))
             return false;
     }
+    if (strcmp(old->url, out->url))
+        out->paired = false;
     return pp_settings_valid(out);
 }
 
@@ -352,7 +352,7 @@ bool pp_settings_decode(const char *raw, pp_settings_t *out) {
         unsigned i = 0;
         while (i < PP_CONFIG_FIELDS && (!item->string || strcmp(item->string, fields[i])))
             i++;
-        if (i == PP_CONFIG_FIELDS || cJSON_IsNull(item) || !apply(out, i, item))
+        if (i == PP_CONFIG_FIELDS || cJSON_IsNull(item) || !apply_value(out, i, item))
             ok = false;
     }
     /* Newly added display fields default without replacing pairing or local preferences. */

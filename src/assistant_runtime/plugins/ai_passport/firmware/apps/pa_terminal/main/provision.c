@@ -6,6 +6,7 @@
 #include "esp_http_server.h"
 #include "esp_wifi.h"
 #include "esp_random.h"
+#include "freertos/FreeRTOS.h"
 #include <sys/socket.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -14,6 +15,8 @@
 
 static httpd_handle_t server;
 static atomic_bool complete, active;
+static portMUX_TYPE hotspot_lock = portMUX_INITIALIZER_UNLOCKED;
+static pp_hotspot_t hotspot;
 #if PP_HAS_RELEASE_CA
 extern const char release_ca[] asm("_binary_pp_release_ca_pem_start");
 #else
@@ -113,20 +116,25 @@ esp_err_t pp_provision_start(void) {
         return ESP_OK;
     complete = false;
     wifi_config_t ap = {0};
-    char name[24], password[16];
-    snprintf(name, sizeof(name), "PP-%06lX", (unsigned long)(esp_random() & 0xffffff));
-    snprintf(password, sizeof(password), "%08lu", (unsigned long)(esp_random() % 100000000));
-    memcpy(ap.ap.ssid, name, strlen(name));
-    ap.ap.ssid_len = strlen(name);
-    memcpy(ap.ap.password, password, strlen(password));
+    pp_hotspot_t credentials = {0};
+    snprintf(credentials.ssid, sizeof(credentials.ssid), "PP-%06lX",
+             (unsigned long)(esp_random() & 0xffffff));
+    snprintf(credentials.password, sizeof(credentials.password), "%08lu",
+             (unsigned long)(esp_random() % 100000000));
+    memcpy(ap.ap.ssid, credentials.ssid, strlen(credentials.ssid));
+    ap.ap.ssid_len = strlen(credentials.ssid);
+    memcpy(ap.ap.password, credentials.password, strlen(credentials.password));
     ap.ap.max_connection = 1;
     ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
     esp_err_t e = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (e == ESP_OK)
         e = esp_wifi_set_config(WIFI_IF_AP, &ap);
     memset(&ap, 0, sizeof(ap));
-    if (e != ESP_OK)
+    if (e != ESP_OK) {
+        (void)esp_wifi_set_mode(WIFI_MODE_STA);
+        memset(&credentials, 0, sizeof(credentials));
         return e;
+    }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_open_sockets = 2;
     cfg.stack_size = 4096;
@@ -144,24 +152,14 @@ esp_err_t pp_provision_start(void) {
     }
     if (e != ESP_OK) {
         pp_provision_stop();
+        memset(&credentials, 0, sizeof(credentials));
         return e;
     }
-    cJSON *display = cJSON_CreateObject();
-    cJSON_AddStringToObject(display, "type", "setup");
-    cJSON_AddStringToObject(display, "ssid", name);
-    cJSON_AddStringToObject(display, "password", password);
-    cJSON_AddStringToObject(display, "address", "http://192.168.4.1");
-    char *raw = cJSON_PrintUnformatted(display);
-    cJSON_Delete(display);
-    memset(password, 0, sizeof(password));
-    if (!raw) {
-        pp_provision_stop();
-        return ESP_ERR_NO_MEM;
-    }
-    pp_received(raw, strlen(raw));
-    memset(raw, 0, strlen(raw));
-    free(raw);
+    portENTER_CRITICAL(&hotspot_lock);
+    hotspot = credentials;
     active = true;
+    portEXIT_CRITICAL(&hotspot_lock);
+    memset(&credentials, 0, sizeof(credentials));
     return ESP_OK;
 }
 esp_err_t pp_provision_stop(void) {
@@ -171,8 +169,19 @@ esp_err_t pp_provision_stop(void) {
             return e;
         server = NULL;
     }
+    portENTER_CRITICAL(&hotspot_lock);
     active = false;
+    memset(&hotspot, 0, sizeof(hotspot));
+    portEXIT_CRITICAL(&hotspot_lock);
     return esp_wifi_set_mode(WIFI_MODE_STA);
 }
 bool pp_provision_complete(void) { return complete; }
 bool pp_provision_active(void) { return active; }
+bool pp_provision_credentials(pp_hotspot_t *out) {
+    portENTER_CRITICAL(&hotspot_lock);
+    const bool ready = active;
+    if (ready)
+        *out = hotspot;
+    portEXIT_CRITICAL(&hotspot_lock);
+    return ready;
+}

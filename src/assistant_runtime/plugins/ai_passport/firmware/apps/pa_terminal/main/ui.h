@@ -16,7 +16,7 @@ typedef struct {
     const char *body, *state, *hint, *origin;
     const char *const *choices;
     unsigned choice_count, selection;
-    bool queue, follow, online, volume_feedback, task_context;
+    bool queue, follow, online, volume_feedback, task_context, local_page_hint;
     unsigned volume, level, elapsed, now, brightness, text_size;
     int battery, wifi;
     size_t page;

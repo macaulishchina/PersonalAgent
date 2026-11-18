@@ -1,9 +1,10 @@
 #include "terminal_model.h"
+#include "terminal_limits.h"
 #include <string.h>
 unsigned pp_press(pp_button_t *b, uint32_t now, bool playing) {
     if (b->wake_guard || b->down)
         return PP_NONE;
-    b->second = b->released && now - b->clicked <= 300;
+    b->second = b->released && now - b->clicked <= PP_OK_DOUBLE_WINDOW_MS;
     b->stopped = playing;
     b->released = false;
     b->down = true;
@@ -36,7 +37,7 @@ unsigned pp_tick(pp_button_t *b, uint32_t now) {
         b->recording = true;
         return PP_BEGIN;
     }
-    if (b->released && now - b->clicked > 300) {
+    if (b->released && now - b->clicked > PP_OK_DOUBLE_WINDOW_MS) {
         b->released = false;
         return b->stopped ? PP_NONE : PP_MENU;
     }

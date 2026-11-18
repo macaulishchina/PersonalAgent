@@ -40,7 +40,7 @@ class Connection:
         self.credit_changed = asyncio.Event()
         self.last_state = None
         self.last_notices = None
-        self.notice_before = None
+        self.legacy_notice_before = None
         self.last_partial = ""
         self.work = None
         self.confirmation = None
@@ -87,6 +87,7 @@ class Connection:
             output_rate=protocol.OUTPUT_RATE,
             binding=self.session,
             server_time=int(time.time()),
+            notification_list_ids=True,
         )
         await self.send_configuration()
         await self.send("history.index", **history)
@@ -136,6 +137,8 @@ class Connection:
                     )
                 )
                 ident = self.input_id if input_failure else None
+                if operation == "notifications.list" and isinstance(data.get("request_id"), str):
+                    ident = data["request_id"][:36]
                 if input_failure:
                     self.failed_input_id = ident
                     if self.input:
@@ -315,8 +318,12 @@ class Connection:
                 updated=notice["updated"],
             )
         elif kind == "notifications.list":
-            self.notice_before = data.get("before")
-            await self.notices(self.notice_before)
+            request_id = data.get("request_id")
+            if request_id is not None:
+                request_id = str(uuid.UUID(request_id))
+            else:
+                self.legacy_notice_before = data.get("before")
+            await self.notices(data.get("before"), requested=True, request_id=request_id)
         else:
             if data.get("action") not in {"read", "received", "played"}:
                 raise ValueError("Invalid notification receipt")
@@ -516,7 +523,8 @@ class Connection:
     async def watch_notices(self):
         try:
             while not self.closed:
-                await self.notices(self.notice_before)
+                if self.legacy_notice_before is None:
+                    await self.notices()
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
             raise
@@ -784,8 +792,10 @@ class Connection:
         if not self.closed:
             await self.send("playback.stop", generation=self.generation)
 
-    async def notices(self, before=None):
+    async def notices(self, before=None, *, requested=False, request_id=None):
         if not self.context.available(TerminalNotifications):
+            if requested:
+                raise SpeechError("terminal_notifications_unavailable")
             return
         page = await self.context.invoke(
             TerminalNotifications(
@@ -805,9 +815,15 @@ class Connection:
             }
             for i in page["items"]
         ]
+        payload = {"items": items, "before": page["before"], "quiet": page["quiet"]}
+        if requested:
+            if request_id is not None:
+                payload["request_id"] = request_id
+            await self.send("notifications", **payload)
+            return
         fresh = self.last_notices is not None
-        if items != self.last_notices or before is not None:
-            await self.send("notifications", items=items, before=page["before"], quiet=page["quiet"])
+        if items != self.last_notices:
+            await self.send("notifications", **payload)
             self.last_notices = items
             for item in page["items"]:
                 eligible = self.owner.devices.claim_playback(
@@ -816,7 +832,6 @@ class Connection:
                 if (
                     eligible
                     and fresh
-                    and before is None
                     and item["updated"] >= self.started
                     and item["unread"]
                     and not item["expired"]

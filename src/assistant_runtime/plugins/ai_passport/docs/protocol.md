@@ -66,7 +66,7 @@ UTF-8 传输。索引只包含浏览所需的元数据。
 | playback.credit(generation, bytes) | 播放窗口最多 8192 字节；二进制为 4 字节大端播放版本 + PCM16 |
 | playback.completed(generation) | 设备完整消费本句 PCM 后确认；不等于业务执行结束 |
 | execution.cancel(request_id) | 使用现有会话取消机制，停止播报不代替取消执行 |
-| notifications.list(before) | 有归属的任务结果、小页及游标；离线积压不连续补播 |
+| notifications.list(before, request_id) | 有归属的任务结果、小页及游标；主动读取不触发播报。PA 在 hello 声明 `notification_list_ids` 后，查询响应原样返回请求 UUID，主动推送不带 UUID |
 | notification.page(id, revision, offset) | 返回同一通知的id、revision、offset、text及next_offset；不使用语音内部消息id |
 | notification.receipt | received、played、read 独立收据 |
 | configuration.reload | 获取已应用的文件配置，不读取未保存的后台草稿 |

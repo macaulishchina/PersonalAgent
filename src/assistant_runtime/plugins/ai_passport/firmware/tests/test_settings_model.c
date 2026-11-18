@@ -68,6 +68,21 @@ int main(void) {
     assert(!memcmp(&prepared, &restored, sizeof(restored)));
     cJSON_free(encoded);
     restored.paired = true;
+    /* Pairing is saved before the first WebSocket has supplied a binding. */
+    encoded = pp_settings_encode(&restored);
+    assert(encoded && pp_settings_decode(encoded, &prepared));
+    assert(prepared.paired && !prepared.binding[0]);
+    cJSON_free(encoded);
+    strcpy(restored.binding, "saved-session");
+    encoded = pp_settings_encode(&restored);
+    assert(encoded && pp_settings_decode(encoded, &prepared));
+    assert(!memcmp(&prepared, &restored, sizeof(restored)));
+    cJSON_free(encoded);
+    original = restored;
+    assert(prepare("{\"server_url\":{\"version\":1,\"value\":\"https://release.example:8047\"}}"));
+    assert(prepared.paired);
+    assert(prepare("{\"server_url\":{\"version\":1,\"value\":\"https://another.example:8047\"}}"));
+    assert(changed && reconnect && !prepared.paired);
     assert(pp_settings_prepare_bootstrap(&restored, "{\"ssid\":\"Cafe\"}", release_url, release_ca,
                                          &prepared));
     assert(prepared.paired && !strcmp(prepared.wifi[0].ssid, "Cafe") &&

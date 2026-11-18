@@ -46,6 +46,7 @@ static int opcode;
 static atomic_bool socket_error;
 static bool wifi_uncertain; /* Owned only by the network worker. */
 #define PP_NETWORK_TASK_PRIORITY 3
+#define PP_HELLO_TIMEOUT_MS 30000
 
 static void memory_stage(const char *stage) {
     ESP_LOGI("pp_network", "stage=%s heap=%u largest=%u low=%u", stage,
@@ -282,9 +283,17 @@ static bool interruptible_wait(unsigned ms) {
     return !stopped;
 }
 static bool disconnect_wifi(void) {
+    wifi_ap_record_t ap;
+    const bool unassociated = esp_wifi_sta_get_ap_info(&ap) == ESP_ERR_WIFI_NOT_CONNECT;
     xEventGroupClearBits(network, WIFI_FAILED);
     if (esp_wifi_disconnect() != ESP_OK)
         return false;
+    /* An already disconnected station, including a cancelled association attempt,
+     * does not necessarily post STA_DISCONNECTED. Still verify the final state. */
+    if (unassociated && esp_wifi_sta_get_ap_info(&ap) == ESP_ERR_WIFI_NOT_CONNECT) {
+        xEventGroupClearBits(network, WIFI_READY);
+        return true;
+    }
     EventBits_t bits =
         xEventGroupWaitBits(network, WIFI_FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
     return (bits & WIFI_FAILED) != 0;
@@ -396,6 +405,8 @@ static void worker(void *arg) {
                 report_offline("热点未正常关闭，请重启");
                 break;
             }
+            if (!stopped)
+                report_offline("正在连接 Wi-Fi");
             exhausted = false;
             continue;
         }
@@ -473,12 +484,26 @@ static void worker(void *arg) {
                  n++)
                 vTaskDelay(pdMS_TO_TICKS(100));
         }
-        if (pp_link_connected(&ws_link, generation))
-            reconnect = 1000;
+        TickType_t hello_started = xTaskGetTickCount();
+        if (pp_link_connected(&ws_link, generation) && !pp_link_ready(&ws_link) &&
+            !stopped && !provision && !reconfigure) {
+            /* IDF 5.5.3 can buffer the first frame with HTTP 101 while polling only
+             * the socket. A protocol ping makes the peer's pong wake that reader. */
+            static const uint8_t ping = 0;
+            (void)esp_websocket_client_send_with_opcode(client, WS_TRANSPORT_OPCODES_PING,
+                                                        &ping, sizeof(ping), pdMS_TO_TICKS(1000));
+        }
         unsigned draining = 0;
         while (pp_link_connected(&ws_link, generation) && !stopped && !provision) {
             if (reconfigure && !uxQueueMessagesWaiting(outgoing))
                 break;
+            if (pp_link_ready(&ws_link) == generation)
+                reconnect = 1000;
+            else if (xTaskGetTickCount() - hello_started >= pdMS_TO_TICKS(PP_HELLO_TIMEOUT_MS)) {
+                pp_link_close(&ws_link, generation);
+                report_offline("PA 会话同步超时，稍后重连");
+                break;
+            }
             packet_t p;
             if (xQueueReceive(outgoing, &p, pdMS_TO_TICKS(100))) {
                 if (p.generation != generation || pp_link_ready(&ws_link) != generation) {

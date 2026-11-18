@@ -56,6 +56,7 @@ static unsigned image_count;
 static unsigned image_index;
 static unsigned review_choice, review_offset, review_next, review_requested;
 static bool review_reading, review_pending;
+static uint32_t review_started;
 static uint32_t preference_changed, volume_feedback_at;
 static bool waiting, configured, sleep_failed, maintenance_confirmed, speech_session,
     audio_available, dangerous_confirm;
@@ -72,6 +73,11 @@ static char notices[8][160], notice_ids[8][65];
 static unsigned notice_revisions[8];
 static int notice_count;
 static pp_notice_read_t notice_read;
+static struct {
+    char id[37];
+    uint32_t started;
+    bool correlated, pending, older, viewing_older;
+} notice_directory;
 static char active_notice_title[64], dismissed_input[37];
 static char question_text[1024];
 
@@ -97,8 +103,14 @@ static bool setup_home(void) {
 static const char *connection_info(void) {
     if (!configured)
         return "本地设置读取失败，请通过 USB 诊断检查设备。";
-    if (pp_provision_active())
+    pp_hotspot_t hotspot;
+    if (pp_provision_credentials(&hotspot)) {
+        snprintf(hotspot_info, sizeof(hotspot_info), "%s\n密码 %s\n\n手机打开\nhttp://192.168.4.1",
+                 hotspot.ssid, hotspot.password);
+        memset(&hotspot, 0, sizeof(hotspot));
         return hotspot_info;
+    }
+    memset(hotspot_info, 0, sizeof(hotspot_info));
     if (pp_net_rejected())
         return "请检查 PA 接入设置。配对已被撤销时，可在设备维护中重新配对，保留 Wi-Fi。";
     return pairing_info;
@@ -116,6 +128,7 @@ static void request_review_page(unsigned offset) {
     cJSON_AddNumberToObject(j, "offset", offset);
     if (pp_net_send(j)) {
         review_pending = true;
+        review_started = now_ms();
         review_requested = offset;
         set_status("正在读取转写");
     } else {
@@ -301,6 +314,7 @@ static void home(const char *hint) {
     pp_navigation_open(&navigation, PP_SCREEN_HOME);
     button_state = (pp_button_t){.wake_guard = button_state.down || button_state.wake_guard};
     dangerous_confirm = maintenance_confirmed = notice_read.pending = page_pending = false;
+    notice_directory.pending = notice_directory.viewing_older = false;
     index_direction = 0;
     review_reading = review_pending = false;
     message_streaming = false;
@@ -318,14 +332,37 @@ static void home(const char *hint) {
 static unsigned notice_choices(void) {
     return (unsigned)notice_count + (notice_older ? 1u : 0u) + 1u;
 }
+static void make_id(char *out);
+static void request_notice_list(bool older) {
+    cJSON *j = command("notifications.list");
+    if (older) {
+        cJSON *cursor = cJSON_Parse(notice_cursor);
+        if (!cJSON_IsArray(cursor)) {
+            cJSON_Delete(cursor);
+            cJSON_Delete(j);
+            set_status("任务分页不可用，请重新打开");
+            return;
+        }
+        cJSON_AddItemToObject(j, "before", cursor);
+    }
+    if (notice_directory.correlated) {
+        make_id(notice_directory.id);
+        cJSON_AddStringToObject(j, "request_id", notice_directory.id);
+    }
+    notice_directory.started = now_ms();
+    notice_directory.older = older;
+    notice_directory.pending = pp_net_send(j);
+    set_status(notice_directory.pending ? "正在读取任务列表"
+                                        : "任务列表未发送，请重新打开");
+}
 static void show_notices(void) {
     stop_play();
     close_image();
     pp_navigation_open(&navigation, PP_SCREEN_TASKS);
-    notice_index = 0;
+    notice_index = notice_count = 0;
+    notice_older = notice_directory.viewing_older = false;
     notice_read.pending = false;
-    set_status(notice_count ? "选择任务查看" : "暂无任务消息");
-    pp_net_send(command("notifications.list"));
+    request_notice_list(false);
 }
 static void make_id(char *out) {
     unsigned char b[16];
@@ -487,13 +524,18 @@ static void receive_hello(cJSON *j, uint32_t generation) {
                           settings.offline_cache, settings.show_images);
     strcpy(connection_status, "PA 已连接");
     pairing_info[0] = hotspot_info[0] = 0;
+    notice_directory.correlated =
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "notification_list_ids"));
+    if (notice_list && !notice_directory.pending && !notice_directory.viewing_older)
+        request_notice_list(false);
     playing = false;
     speech_session = false;
     play_generation = 0;
     page_pending = false;
     index_direction = 0;
     pp_audio_play_stop();
-    set_status(audio_available ? "就绪" : "音频不可用");
+    if (!notice_list)
+        set_status(audio_available ? "就绪" : "音频不可用");
     if ((navigation.screen == PP_SCREEN_HOME || navigation.screen == PP_SCREEN_CHAT) &&
         !dangerous_confirm && input_state.phase == PP_INPUT_IDLE) {
         body[0] = 0;
@@ -594,7 +636,30 @@ static void receive_message(cJSON *j) {
 }
 
 static void receive_notifications(cJSON *j) {
+    const char *request = string(j, "request_id");
+    bool response = notice_directory.pending &&
+                    (notice_directory.correlated ? !strcmp(request, notice_directory.id) : !*request);
+    const bool past_page = notice_directory.viewing_older ||
+                           (notice_directory.pending && notice_directory.older);
+    if (!response && (*request || past_page))
+        return;
     cJSON *items = cJSON_GetObjectItemCaseSensitive(j, "items"), *i;
+    if (!cJSON_IsArray(items)) {
+        if (response) {
+            notice_directory.pending = false;
+            if (notice_list)
+                set_status("任务列表格式有误，请重新打开");
+        }
+        return;
+    }
+    char selected[sizeof(notice_ids[0])] = "";
+    if (!response && notice_index < (unsigned)notice_count)
+        pp_text(selected, sizeof(selected), notice_ids[notice_index]);
+    if (response) {
+        notice_directory.pending = false;
+        notice_directory.viewing_older = notice_directory.older;
+        notice_index = 0;
+    }
     notice_count = 0;
     cJSON *before = cJSON_GetObjectItemCaseSensitive(j, "before");
     notice_older = cJSON_IsArray(before);
@@ -612,10 +677,14 @@ static void receive_notifications(cJSON *j) {
         pp_text(notices[notice_count], 160, string(i, "title"));
         pp_text(notice_ids[notice_count], 65, string(i, "id"));
         notice_revisions[notice_count] = number(i, "revision");
+        if (selected[0] && !strcmp(selected, notice_ids[notice_count]))
+            notice_index = notice_count;
         notice_count++;
     }
     if (notice_index >= (unsigned)notice_count)
         notice_index = 0;
+    if (notice_list && !notice_directory.pending && !notice_read.pending)
+        set_status(notice_count ? "选择任务查看" : "暂无任务消息");
     for (unsigned k = 0; k < (unsigned)notice_count; k++) {
         cJSON *r = command("notification.receipt");
         cJSON_AddStringToObject(r, "id", notice_ids[k]);
@@ -676,10 +745,19 @@ static void receive_error(cJSON *j, const char *type) {
             return;
         }
         review_pending = false;
-        set_status("转写页读取失败，可重试");
+        set_status("转写页读取失败，返回后可重试");
         return;
     }
     const char *operation = string(j, "operation");
+    if (!strcmp(operation, "notifications.list")) {
+        if (notice_directory.pending &&
+            (!notice_directory.correlated || !strcmp(string(j, "request_id"), notice_directory.id))) {
+            notice_directory.pending = false;
+            if (notice_list)
+                set_status("任务列表读取失败，请重新打开");
+        }
+        return;
+    }
     bool image_read = !strcmp(operation, "image.open") || !strcmp(operation, "image.chunk");
     if ((!strcmp(operation, "message.page") && !page_pending) ||
         (!strcmp(operation, "history.index") && !index_direction) ||
@@ -740,11 +818,7 @@ static void dispatch_message(cJSON *j, uint32_t generation) {
         }
         return;
     }
-    if (!strcmp(type, "setup")) {
-        strcpy(connection_status, "连接设备热点");
-        snprintf(hotspot_info, sizeof(hotspot_info), "%s\n密码 %s\n\n手机打开\n%s",
-                 string(j, "ssid"), string(j, "password"), string(j, "address"));
-    } else if (!strcmp(type, "pairing")) {
+    if (!strcmp(type, "pairing")) {
         strcpy(connection_status, "等待配对");
         snprintf(pairing_info, sizeof(pairing_info),
                  "%s\n\n在 PA 后台输入这八位数字\n配对码十分钟有效", string(j, "code"));
@@ -826,6 +900,7 @@ static void dispatch_message(cJSON *j, uint32_t generation) {
             review_next = number(j, "next_offset");
             pp_text(body, sizeof(body), string(j, "text"));
             view_page = view_next = 0;
+            set_status("");
         }
     } else if (!strcmp(type, "input.receipt")) {
         receive_input_receipt(j);
@@ -1117,9 +1192,7 @@ static void apply_configuration(void) {
 }
 static int battery = -1;
 
-static void handle_key(pp_event_t event) {
-    pp_route_t route = current_route();
-    activity = now_ms();
+static void dispatch_key(pp_event_t event, pp_route_t route) {
     if (button_state.wake_guard) {
         if (event.button == BSP_BTN_RELEASE)
             button_state.wake_guard = false;
@@ -1145,6 +1218,7 @@ static void handle_key(pp_event_t event) {
                 if (review_reading) {
                     review_reading = review_pending = false;
                     review_choice = 0;
+                    set_status("确认后才发送");
                 } else if (review_choice == 2) {
                     review_reading = true;
                     body[0] = 0;
@@ -1164,16 +1238,18 @@ static void handle_key(pp_event_t event) {
             if (event.button == BSP_BTN_RELEASE) {
                 if (notice_read.pending) {
                     set_status("正在读取任务");
+                } else if (notice_directory.pending && notice_index < notice_choices() - 1) {
+                    set_status("正在读取任务列表");
                 } else if (notice_index == (unsigned)notice_count && notice_older) {
-                    cJSON *j = command("notifications.list");
-                    cJSON_AddItemToObject(j, "before", cJSON_Parse(notice_cursor));
-                    pp_net_send(j);
-                    notice_index = 0;
+                    request_notice_list(true);
                 } else if (notice_index < (unsigned)notice_count) {
                     next_offset = 0;
                     request_notice_page(0);
-                } else
+                } else {
+                    notice_directory.pending = notice_directory.viewing_older = false;
                     pp_navigation_back(&navigation);
+                    set_status("请选择");
+                }
             }
         } else if (notice_view) {
             if (event.button == BSP_BTN_RELEASE) {
@@ -1308,6 +1384,33 @@ static void handle_key(pp_event_t event) {
     }
 }
 
+static void handle_key(pp_event_t event) {
+    const pp_route_t route = current_route();
+    const uint32_t page_epoch = navigation.page_epoch;
+    const uint32_t now = now_ms();
+    activity = now;
+    if (event.key != BSP_BTN_OK) {
+        if (event.button == BSP_BTN_PRESS)
+            navigation.transition_click = false;
+        dispatch_key(event, route);
+        return;
+    }
+    if (event.button == BSP_BTN_PRESS) {
+        if (!button_state.wake_guard && !pp_navigation_ok_press(&navigation, route, now))
+            return;
+    } else if (!pp_navigation_ok_release(&navigation, route) && !button_state.wake_guard) {
+        /* Recording can move from home to chat while held. The audio gesture
+         * still owns this release; a destination control cannot consume it. */
+        if (button_state.down)
+            actions(pp_release(&button_state, now));
+        return;
+    }
+    dispatch_key(event, route);
+    if (event.button == BSP_BTN_RELEASE &&
+        (navigation.page_epoch != page_epoch || current_route() != route))
+        pp_navigation_ok_transition(&navigation, now);
+}
+
 static void handle_link(pp_event_t event) {
     if (!event.online) {
         reset_record_controls();
@@ -1317,6 +1420,7 @@ static void handle_link(pp_event_t event) {
         waiting = false;
         page_pending = false;
         notice_read.pending = false;
+        notice_directory.pending = false;
         index_direction = 0;
         close_image();
         if (settings.offline_cache) {
@@ -1336,7 +1440,9 @@ static void handle_link(pp_event_t event) {
     pp_text(connection_status, sizeof(connection_status),
             event.text.data ? event.text.data : "网络错误");
     pairing_info[0] = 0;
-    if (!pp_navigation_local(&navigation))
+    if (notice_list)
+        set_status(notice_count ? "连接中断，显示上次列表" : "离线，暂无法读取任务");
+    else if (!pp_navigation_local(&navigation))
         set_status(connection_status);
 }
 
@@ -1412,14 +1518,20 @@ static void render_screen(void) {
     pp_route_t route = current_route();
     bool setup_card = route == PP_ROUTE_SETUP;
     bool network_page = navigation.screen == PP_SCREEN_NETWORK;
+    const char *details = setup_card ? connection_info() : "";
+    if (!setup_card)
+        memset(hotspot_info, 0, sizeof(hotspot_info));
+    const char *link_status = (details == hotspot_info || (network_page && pp_provision_active()))
+                                  ? "连接设备热点"
+                                  : connection_status;
     if (network_page) {
         char signal[24] = "未连接";
         if (wifi_rssi != -127)
             snprintf(signal, sizeof(signal), "%d dBm", wifi_rssi);
         snprintf(network_details, sizeof(network_details),
-                 "Wi-Fi %s\n%s\n%s\n信号 %s\n可用内存 %u\n最大连续块 %u",
-                 wifi_rssi == -127 ? "未连接" : wifi_name, connection_status,
-                 connection_info(), signal, (unsigned)esp_get_free_heap_size(),
+                 "Wi-Fi %s\n%s\n信号 %s\n可用内存 %u\n最大连续块 %u",
+                 wifi_rssi == -127 ? "未连接" : wifi_name, link_status, signal,
+                 (unsigned)esp_get_free_heap_size(),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
     bool volume_screen = navigation.screen == PP_SCREEN_VOLUME;
@@ -1431,11 +1543,11 @@ static void render_screen(void) {
                                                               : view,
         .state =
             (setup_card || (navigation.screen == PP_SCREEN_HOME && !pp_net_connected()))
-                ? connection_status
+                ? link_status
             : new_message && (browsing || navigation.screen == PP_SCREEN_HOME)
                 ? "有新回复 · 上下查看"
                 : status,
-        .body = setup_card                                ? connection_info()
+        .body = setup_card                                ? details
                 : network_page                            ? network_details
                 : navigation.screen == PP_SCREEN_QUESTION ? question_text
                                                           : body,
@@ -1450,6 +1562,7 @@ static void render_screen(void) {
         .choice_count = count,
         .selection = navigation.selection,
         .task_context = notice_list || notice_view,
+        .local_page_hint = network_page && !dangerous_confirm,
         .queue = settings.queue,
         .online = pp_net_connected(),
         .volume = pp_audio_volume(),
@@ -1574,6 +1687,7 @@ void app_main(void) {
         pp_event_t event;
         if (pp_events_take_key_overflow()) {
             navigation.up_down = navigation.up_consumed = false;
+            navigation.ok_held = false;
             pp_audio_capture_release();
             abort_record();
             set_status("按键事件拥塞，本次收音已取消");
@@ -1629,6 +1743,16 @@ void app_main(void) {
         if (pp_notice_expire(&notice_read, now_ms())) {
             set_status("任务读取超时，OK重试或返回");
             ESP_LOGW("pa_terminal", "notice_read timed out");
+        }
+        if (notice_directory.pending &&
+            now_ms() - notice_directory.started >= PP_TERMINAL_READ_TIMEOUT_MS) {
+            notice_directory.pending = false;
+            if (notice_list)
+                set_status("任务列表读取超时，请重新打开");
+        }
+        if (review_pending && now_ms() - review_started >= PP_TERMINAL_READ_TIMEOUT_MS) {
+            review_pending = false;
+            set_status("转写读取超时，返回后可重试");
         }
         apply_configuration();
         if (configured && !setup_home() && settings.wifi_count &&

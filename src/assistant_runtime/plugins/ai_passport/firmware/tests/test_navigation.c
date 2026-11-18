@@ -16,6 +16,10 @@ int main(void) {
     pp_navigation_open(&nav, PP_SCREEN_SETTINGS);
     assert(pp_navigation_count(&nav) == 5);
     assert(pp_navigation_selected(&nav) == PP_SELECT_KEEP_ONLINE);
+    pp_navigation_move(&nav, 1);
+    pp_navigation_open(&nav, PP_SCREEN_NETWORK);
+    pp_navigation_back(&nav);
+    assert(pp_navigation_selected(&nav) == PP_SELECT_NETWORK);
     pp_navigation_open(&nav, PP_SCREEN_MAINTENANCE);
     assert(pp_navigation_selected(&nav) == PP_SELECT_RELOAD);
     pp_navigation_move(&nav, -1);
@@ -73,5 +77,21 @@ int main(void) {
     assert(pp_navigation_audio(&nav));
     pp_navigation_back(&nav);
     assert(nav.screen == PP_SCREEN_HOME);
+
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_SETUP, 100));
+    assert(pp_navigation_ok_release(&nav, PP_ROUTE_SETUP));
+    pp_navigation_open(&nav, PP_SCREEN_SETTINGS);
+    pp_navigation_ok_transition(&nav, 150);
+    assert(!pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 240));
+    assert(!pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 451));
+    assert(pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
+
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 500));
+    pp_navigation_open(&nav, PP_SCREEN_NETWORK);
+    pp_navigation_back(&nav);
+    assert(!pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 600));
+    assert(!pp_navigation_ok_release(&nav, PP_ROUTE_CONFIRM));
     return 0;
 }

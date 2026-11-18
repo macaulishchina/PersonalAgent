@@ -4,7 +4,7 @@ import json
 import sqlite3
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 from assistant_runtime.api.terminal import TerminalNotifications
@@ -88,13 +88,37 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         data = await self.call("get", **args, offset=2, limit=2)
         self.assertEqual(data["text"], "内容")
 
+    async def test_explicit_passport_list_resends_unchanged_notifications_without_replay(self):
+        item = self.notice("passport-resend")
+        ws = SimpleNamespace(send_str=AsyncMock())
+        claim = Mock(return_value=False)
+        owner = SimpleNamespace(
+            context=SimpleNamespace(available=lambda _: True, invoke=self.delivery.request),
+            devices=SimpleNamespace(claim_playback=claim),
+        )
+        connection = Connection(owner, "device", "pp", ws)
+        await connection.notices()
+        original = json.loads(ws.send_str.call_args.args[0])
+        self.assertEqual([row["id"] for row in original["items"]], [item["id"]])
+        await connection.notices()
+        ws.send_str.assert_awaited_once()
+        await connection.command({"type": "notifications.list"})
+        self.assertEqual(ws.send_str.await_count, 2)
+        self.assertEqual(json.loads(ws.send_str.call_args.args[0]), original)
+        request_id = "e903a172-e4a1-459c-9e5d-6d3039d17e93"
+        await connection.command({"type": "notifications.list", "request_id": request_id})
+        self.assertEqual(json.loads(ws.send_str.call_args.args[0]), original | {"request_id": request_id})
+        await connection.notices()
+        self.assertEqual(ws.send_str.await_count, 3)
+        claim.assert_called_once()
+
     async def test_passport_page_preserves_notification_identity_through_real_delivery(self):
         item = self.notice("passport-page")
         text = "这是分页的后台任务报告。" * 20
         payload = item["payload"] | {"body": text}
         self.db.execute("UPDATE notifications SET payload=? WHERE id=?", (json.dumps(payload), item["id"]))
         self.db.commit()
-        ws = SimpleNamespace(send_json=AsyncMock())
+        ws = SimpleNamespace(send_str=AsyncMock())
         owner = SimpleNamespace(context=SimpleNamespace(invoke=self.delivery.request))
         connection = Connection(owner, "device", "pp", ws)
         pages, offset = [], 0
@@ -102,7 +126,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
             await connection.command(
                 {"type": "notification.page", "id": item["id"], "revision": 1, "offset": offset}
             )
-            page = ws.send_json.call_args.args[0]
+            page = json.loads(ws.send_str.call_args.args[0])
             self.assertEqual(
                 (page["type"], page["id"], page["revision"], page["offset"]),
                 ("notification.page", item["id"], 1, offset),

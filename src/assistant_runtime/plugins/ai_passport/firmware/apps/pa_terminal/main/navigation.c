@@ -1,4 +1,5 @@
 #include "navigation.h"
+#include "terminal_limits.h"
 
 typedef struct {
     const char *label;
@@ -41,16 +42,22 @@ static const page_t pages[PP_SCREEN_COUNT] = {
     [PP_SCREEN_NETWORK] = {"网络状态", PP_SCREEN_SETTINGS, NULL, 0, true},
     [PP_SCREEN_QUESTION] = {"等待回答", PP_SCREEN_HOME},
 };
-void pp_navigation_open(pp_navigation_t *n, pp_screen_t screen) {
+static void open_page(pp_navigation_t *n, pp_screen_t screen, bool restore_focus) {
     if (screen == PP_SCREEN_SETTINGS &&
         (n->screen == PP_SCREEN_HOME || n->screen == PP_SCREEN_MENU))
         n->settings_parent = n->screen;
+    n->focus[n->screen] = n->selection;
+    if (n->screen != screen)
+        n->page_epoch++;
     n->screen = screen;
-    n->selection = 0;
+    n->selection = restore_focus ? n->focus[screen] : 0;
+}
+void pp_navigation_open(pp_navigation_t *n, pp_screen_t screen) {
+    open_page(n, screen, false);
 }
 void pp_navigation_back(pp_navigation_t *n) {
-    pp_navigation_open(n, n->screen == PP_SCREEN_SETTINGS ? n->settings_parent
-                                                          : pages[n->screen].parent);
+    open_page(n, n->screen == PP_SCREEN_SETTINGS ? n->settings_parent : pages[n->screen].parent,
+              true);
 }
 bool pp_navigation_local(const pp_navigation_t *n) { return pages[n->screen].local; }
 pp_route_t pp_navigation_route(const pp_navigation_t *n, bool confirmation, bool setup,
@@ -81,6 +88,24 @@ void pp_navigation_move(pp_navigation_t *n, int direction) {
     unsigned count = pp_navigation_count(n);
     if (count)
         n->selection = (n->selection + (direction < 0 ? count - 1 : 1)) % count;
+}
+bool pp_navigation_ok_press(pp_navigation_t *n, pp_route_t route, uint32_t now) {
+    if (n->ok_held || (n->transition_click && now - n->transition_at <= PP_OK_DOUBLE_WINDOW_MS))
+        return false;
+    n->transition_click = false;
+    n->ok_held = true;
+    n->ok_route = route;
+    n->ok_epoch = n->page_epoch;
+    return true;
+}
+bool pp_navigation_ok_release(pp_navigation_t *n, pp_route_t route) {
+    bool owned = n->ok_held && n->ok_epoch == n->page_epoch && n->ok_route == route;
+    n->ok_held = false;
+    return owned;
+}
+void pp_navigation_ok_transition(pp_navigation_t *n, uint32_t now) {
+    n->transition_click = true;
+    n->transition_at = now;
 }
 void pp_navigation_up_press(pp_navigation_t *n, uint32_t now) {
     if (!n->up_down) {

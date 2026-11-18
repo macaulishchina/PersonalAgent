@@ -25,7 +25,7 @@ _COMMAND_FIELDS = {
     "message.page": {"message_id", "offset", "prefetch"},
     "history.index": {"before", "after", "limit"},
     "execution.cancel": {"request_id"},
-    "notifications.list": {"before"},
+    "notifications.list": {"before", "request_id"},
     "notification.receipt": {"id", "revision", "action"},
     "notification.page": {"id", "revision", "offset"},
     "configuration.reload": set(),

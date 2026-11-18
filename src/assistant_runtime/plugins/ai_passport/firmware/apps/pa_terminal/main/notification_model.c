@@ -1,4 +1,5 @@
 #include "notification_model.h"
+#include "terminal_limits.h"
 #include <string.h>
 
 static bool equal_number(const cJSON *value, unsigned expected) {
@@ -32,7 +33,7 @@ int pp_notice_page(pp_notice_read_t *read, const cJSON *page) {
 }
 bool pp_notice_expire(pp_notice_read_t *read, uint32_t now) {
     /* A directory/page read does not wait for model execution or change a task. */
-    if (!read->pending || now - read->started < 15000)
+    if (!read->pending || now - read->started < PP_TERMINAL_READ_TIMEOUT_MS)
         return false;
     read->pending = false;
     return true;
