@@ -73,8 +73,8 @@ UI 队列丢弃数和剩余堆内存，不含录音、Wi-Fi 密码或生产凭�
 
 ## 本机稳定开发环境
 
-Dell 已将共享工具链放在 `/home/macaulish/workspace/esp32-toolchain/`。
-新开终端先执行 `source /home/macaulish/workspace/esp32-toolchain/activate.sh`，
+Dell 已将共享工具链放在 `/home/macaulish/workspace/pp-firmware/toolchain/`。
+新开终端先执行 `source /home/macaulish/workspace/pp-firmware/toolchain/activate.sh`，
 再进入本目录运行下述标准构建命令。激活只影响当前终端，不修改 PA 的环境。
 
 本机候选产物集中在 `/home/macaulish/workspace/pp-firmware/candidates/`，
@@ -123,7 +123,7 @@ python3 tools/package_firmware.py --build build/zh --output build/zh/ppdemo-zh-0
 许可位于 `main/fonts/`。无需额外字体工具即可构建；修改中文文案后，开发者用固定的
 `lv_font_conv@1.5.3` 执行 `python3 tools/generate_fonts.py --converter /path/to/lv_font_conv`，
 再运行 `python3 tests/test_localization.py` 检查字形覆盖和 printf 参数一致性。
-Dell 的字体工具安装于 `/home/macaulish/workspace/esp32-toolchain/font-tools/`，与网站和 PA 依赖隔离。
+Dell 的字体工具安装于 `/home/macaulish/workspace/pp-firmware/toolchain/font-tools/`，与网站和 PA 依赖隔离。
 英文和中文固件共用 `ppdemo` NVS 命名空间，切换语言不清空原来的人工报告。
 
 ## 编译后的交付包

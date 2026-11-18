@@ -1413,10 +1413,13 @@ static void render_screen(void) {
     bool setup_card = route == PP_ROUTE_SETUP;
     bool network_page = navigation.screen == PP_SCREEN_NETWORK;
     if (network_page) {
+        char signal[24] = "未连接";
+        if (wifi_rssi != -127)
+            snprintf(signal, sizeof(signal), "%d dBm", wifi_rssi);
         snprintf(network_details, sizeof(network_details),
-                 "Wi-Fi %s\n%s\n%s\n信号 %d dBm\n可用内存 %u\n最大连续块 %u",
+                 "Wi-Fi %s\n%s\n%s\n信号 %s\n可用内存 %u\n最大连续块 %u",
                  wifi_rssi == -127 ? "未连接" : wifi_name, connection_status,
-                 connection_info(), wifi_rssi, (unsigned)esp_get_free_heap_size(),
+                 connection_info(), signal, (unsigned)esp_get_free_heap_size(),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
     bool volume_screen = navigation.screen == PP_SCREEN_VOLUME;

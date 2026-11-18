@@ -10,7 +10,7 @@
 - [上游对应提交硬件指南](https://github.com/FoloToy/ai-passport/blob/488beda41309f052d81f08d0016d65a3fd85eb7e/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md)。
 - [ESP-IDF 5.5.3 C3 内存分配](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32c3/api-reference/system/mem_alloc.html)。
 - [ESP-IDF 5.5.3 C3 休眠](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32c3/api-reference/system/sleep_modes.html)。
-- 稳定工具链在 `/home/macaulish/workspace/esp32-toolchain/`；用 `activate.sh`，
+- 稳定工具链在 `/home/macaulish/workspace/pp-firmware/toolchain/`；用 `activate.sh`，
   不依赖开发终端临时 PATH，不向 PA Python 环境安装串口/固件依赖。
 
 ## 已从源码确认的硬件

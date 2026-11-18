@@ -95,8 +95,8 @@ AI Passport 的 PA 交互入口。代码与构建已经接通协议 2；真机�
 固定 ESP-IDF 5.5.3、LVGL 9.5.0、ESP32-C3、8 MB Flash、无 PSRAM；依赖见锁文件。
 
 ```sh
-source /home/macaulish/workspace/esp32-toolchain/activate.sh
-cd /home/macaulish/workspace/dell-voice-assistant/src/assistant_runtime/plugins/ai_passport/firmware/apps/pa_terminal
+source /home/macaulish/workspace/pp-firmware/toolchain/activate.sh
+cd /home/macaulish/workspace/PersonalAgent/src/assistant_runtime/plugins/ai_passport/firmware/apps/pa_terminal
 idf.py -DPP_PA_URL=https://pa.example:8047 -DPP_PA_CA_FILE=/path/to/public-ca.pem build
 python ../../tools/package_firmware.py --build build --output build/pa-terminal.zip
 ```

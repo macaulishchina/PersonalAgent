@@ -52,29 +52,23 @@
 
 ```text
 /home/macaulish/workspace/
-├── AI-Passport/                         官方参考源码；保持独立
-├── esp32-toolchain/                     本机稳定工具链；不放应用源码
-│   ├── esp-idf-v5.5.3/                  固定 SDK 与子模块
-│   ├── tools/                          官方 IDF 工具管理器布局
-│   ├── python_env/                     在稳定路径重建
-│   ├── dist/                           安装压缩包缓存
-│   ├── logs/                           安装／环境验证记录
-│   ├── activate.sh                     当前终端激活，不改全局 PATH
-│   └── environment.json                本机工具版本及 SDK 标识
-├── dell-voice-assistant/
+├── PersonalAgent/
 │   └── src/assistant_runtime/plugins/ai_passport/firmware/
-│       ├── main/ components/ tests/     自研固件唯一源码及测试
-│       ├── tools/ docs/                打包工具及维护文档
-│       ├── dependencies.lock           固定实际解析版本
-│       └── build/                      可清理的构建缓存，不作发布目录
-└── pp-firmware/                         本机交付与未来网站工作区
-    ├── candidates/<app>/<version>/<app-sha256>/
-    │                                   固定到真实镜像的候选；含私有调试包
-    ├── releases/                       显式发布后的公开版本；当前为空
-    └── site/                           未来网站源码；当前仅目录说明
+│       ├── apps/pa_terminal/            PA-Terminal
+│       ├── main/ components/ tests/    PPDemo 源码、共用板级代码及测试
+│       └── tools/                     镜像打包及字体工具
+└── pp-firmware/
+    ├── upstream/AI-Passport/          FoloToy 官方参考仓库
+    ├── upstream/passportsim/          PassportSim 源码仓库
+    ├── toolchain/                     ESP-IDF 5.5.3 和本机编译工具
+    ├── candidates/                    私有候选及配套调试产物
+    ├── releases/                      已发布镜像和下载包
+    ├── runtime/passportsim/            9443 /pp-sim/ 的静态产物
+    ├── private/                       本机验收记录和私有配置
+    └── site/                          固件站和 PP Lab 源码
 ```
 
-固件源码继续在 PA 插件下，不另建源码副本；网站未来独立部署，不依赖 PA 模型授权或运行状态。
+自研固件源码由 PA 插件维护。固件站独立部署，可在 PA 停止时继续分发与运行网页模拟器。
 工具链不进入 PA wheel、生产 .venv 或网站资源。网站也不承载 ESP-IDF 在线编译。
 SDK 遵循官方 `IDF_TOOLS_PATH` 机制，采用完整固定子模块及原生激活流程；更换目录后
 重建 Python 环境和 CMake 缓存，不修改缓存中的绝对路径来伪装迁移完成。
