@@ -20,6 +20,7 @@ class Duplex:
         self.ws = None
         self.sent = self.bytes = 0
         self.done = self.closed = False
+        self.finish_sent = False
         self.sentences = {}
         self.reader = None
         self.partial = ""
@@ -56,6 +57,18 @@ class Duplex:
             code = str(header.get("error_code", ""))
             category = "auth" if code in {"InvalidApiKey", "AccessDenied"} else "provider"
             safe_code = code if re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", code) else "unspecified"
+            if self.request.action == "recognize":
+                timeout = code == "CLIENT_ERROR" and re.fullmatch(
+                    r"request timeout after [0-9]+(?:\.[0-9]+)? seconds\.?",
+                    str(header.get("error_message", "")).strip(),
+                    re.IGNORECASE,
+                )
+                self.owner.context.log.warning(
+                    "speech_asr_rejected code=%s audio_bytes=%d finish_sent=%s provider_timeout=%s",
+                    safe_code, self.bytes, self.finish_sent, bool(timeout),
+                )
+                if timeout:
+                    raise SpeechError("speech_provider_timeout")
             raise SpeechError("speech_" + category + "_rejected:" + safe_code)
         return event
 
@@ -142,13 +155,14 @@ class Duplex:
         if self.reader.done():
             await self.reader
             raise SpeechError("speech_input_closed")
-        self.bytes += len(pcm)
-        if self.bytes > self.request.max_seconds * 32000:
+        if self.bytes + len(pcm) > self.request.max_seconds * 32000:
             raise SpeechError("speech_input_limit")
         await self.ws.send_bytes(pcm)
+        self.bytes += len(pcm)
 
     async def finish(self):
         await self.command("finish-task", {"input": {}})
+        self.finish_sent = True
         return await self.reader
 
     async def playback(self):

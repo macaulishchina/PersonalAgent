@@ -24,6 +24,7 @@ class Connection:
         self.source = "terminal:" + device
         self.input = self.input_id = self.scope = None
         self.failed_input_id = None
+        self.refused_input_id = None
         self.tasks = set()
         self.play_task = self.watch_task = self.finish_task = None
         self.pending_finish_stream = None
@@ -31,8 +32,7 @@ class Connection:
         self.playing = None
         self.closed = False
         self.closing = None
-        self.frame_done = asyncio.Event()
-        self.frame_done.set()
+        self.frame_lock = asyncio.Lock()
         self.cursor = 0
         self.started = time.time()
         self.send_lock = asyncio.Lock()
@@ -100,60 +100,55 @@ class Connection:
         self.watch_task = self.spawn(self.watch(), "state")
         self.spawn(self.watch_notices(), "notifications")
         async for frame in self.ws:
-            if self.closed or frame.type not in {WSMsgType.TEXT, WSMsgType.BINARY}:
-                break
-            self.frame_done.clear()
-            operation = None
-            try:
-                if frame.type == WSMsgType.BINARY:
-                    operation = "input.pcm"
-                    if self.input is None and self.failed_input_id:
-                        # Already reported this prepared input's failure. Drain
-                        # residual PCM until the next explicit input.begin.
-                        continue
-                    if self.input is None or len(frame.data) < 6:
-                        raise SpeechError("speech_input_not_started")
-                    sequence = struct.unpack("!I", frame.data[:4])[0]
-                    await self.input.accept(sequence, frame.data[4:])
-                else:
-                    data = json.loads(frame.data)
-                    if not isinstance(data, dict):
-                        raise ValueError("Invalid command")
-                    operation = data.get("type") if isinstance(data.get("type"), str) else None
-                    await self.command(data)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                input_failure = (
-                    frame.type == WSMsgType.BINARY
-                    or (
-                        operation in {"input.finish", "input.confirm", "input.cancel"}
-                        and data.get("request_id") == self.input_id
-                    )
-                    or (
-                        operation == "input.begin"
-                        and data.get("request_id") == self.input_id
-                        and not (isinstance(exc, SpeechError) and exc.code == "speech_busy")
-                    )
-                )
-                ident = self.input_id if input_failure else None
-                if operation == "notifications.list" and isinstance(data.get("request_id"), str):
-                    ident = data["request_id"][:36]
-                if input_failure:
-                    self.failed_input_id = ident
-                    if self.input:
-                        self.context.log.warning(
-                            "passport_input_rejected input=%s operation=%s frames=%s audio_bytes=%s max_audio_bytes=%s",
-                            ident,
-                            operation or "pcm",
-                            self.input.sequence,
-                            self.input.size,
-                            self.input.max_bytes,
-                        )
-                    await self.abort_input()
+            async with self.frame_lock:
+                if self.closed or frame.type not in {WSMsgType.TEXT, WSMsgType.BINARY}:
+                    break
+                await self.receive(frame)
+
+    async def receive(self, frame):
+        operation = None
+        data = {}
+        try:
+            if frame.type == WSMsgType.BINARY:
+                operation = "input.pcm"
+                if self.input is None and self.failed_input_id:
+                    return  # The failed input may still have PCM queued on the device.
+                if self.input is None or len(frame.data) < 6:
+                    raise SpeechError("speech_input_not_started")
+                sequence = struct.unpack("!I", frame.data[:4])[0]
+                await self.input.accept(sequence, frame.data[4:])
+            else:
+                payload = json.loads(frame.data)
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid command")
+                data = payload
+                operation = data.get("type") if isinstance(data.get("type"), str) else None
+                await self.command(data)
+        except Exception as exc:
+            request_id = data.get("request_id")
+            if (frame.type == WSMsgType.BINARY and self.input is not None) or (
+                operation in {"input.begin", "input.finish", "input.confirm", "input.cancel"}
+                and self.input_id is not None
+                and request_id == self.input_id
+            ):
+                await self.fail_capture(exc, self.input_id, operation)
+            else:
+                ident = request_id[:36] if operation == "notifications.list" and isinstance(request_id, str) else None
                 await self.error(exc, request_id=ident, operation=operation)
-            finally:
-                self.frame_done.set()
+
+    async def fail_capture(self, exc, ident, operation):
+        self.failed_input_id = ident
+        if self.input:
+            self.context.log.warning(
+                "passport_input_rejected input=%s operation=%s frames=%s audio_bytes=%s max_audio_bytes=%s",
+                ident,
+                operation,
+                self.input.sequence,
+                self.input.size,
+                self.input.max_bytes,
+            )
+        await self.abort_input()
+        await self.error(exc, request_id=ident, operation=operation)
 
     async def error(self, exc, request_id=None, operation=None):
         code = exc.code if isinstance(exc, SpeechError) else "terminal_request_failed"
@@ -176,7 +171,10 @@ class Connection:
                 return
             if kind == "input.begin":
                 if self.input or self.confirmation or self.finish_task and not self.finish_task.done():
-                    raise SpeechError("speech_busy")
+                    if ident != self.input_id:
+                        self.refused_input_id = ident
+                        await self.error(SpeechError("speech_busy"), request_id=ident, operation=kind)
+                    return
                 await self.stop_playback()
                 result = await self.receipt(
                     "prepare", ident, source=self.source, mode=data.get("mode", "steer")
@@ -195,6 +193,10 @@ class Connection:
                 await self.send("input.ready", request_id=ident, max_audio_bytes=self.input.max_bytes)
                 return
             if ident != self.input_id:
+                if kind == "input.cancel" and ident == self.refused_input_id:
+                    # A legacy client can cancel a start that was refused before prepare.
+                    await self.send("input.receipt", request_id=ident, state="cancelled")
+                    return
                 if ident == self.failed_input_id:
                     if kind == "input.cancel":
                         await self.input_receipt(ident, await self.receipt("receipt", ident))
@@ -361,7 +363,15 @@ class Connection:
         try:
             await self.send("recognizing", request_id=ident)
             ended = time.monotonic()
-            text = await stream.finish()
+            try:
+                text = await stream.finish()
+            except Exception as exc:
+                await self.receipt("cancel", ident)
+                self.failed_input_id, self.input_id = ident, None
+                if isinstance(exc, TimeoutError):
+                    exc = SpeechError("speech_provider_timeout")
+                await self.error(exc, request_id=ident, operation="input.finish")
+                return
             if self.input_id != ident or self.closed:
                 return
             self.context.log.info(
@@ -513,12 +523,13 @@ class Connection:
         except (StopAsyncIteration, asyncio.CancelledError):
             return
         except Exception as exc:
-            if self.input is stream:
-                await self.abort_input()
-                await self.error(
-                    SpeechError("speech_input_deadline") if isinstance(exc, TimeoutError) else exc,
-                    request_id=ident,
-                )
+            async with self.frame_lock:
+                if not self.closed and self.input is stream and self.input_id == ident:
+                    await self.fail_capture(
+                        SpeechError("speech_input_deadline") if isinstance(exc, TimeoutError) else exc,
+                        ident,
+                        "input.pcm",
+                    )
 
     async def watch_notices(self):
         try:
@@ -863,7 +874,8 @@ class Connection:
 
     async def _close(self):
         # Let an already accepted frame finish before touching its input receipt.
-        await self.frame_done.wait()
+        async with self.frame_lock:
+            pass
         self.display.close_image()
         try:
             tasks = tuple(self.tasks)

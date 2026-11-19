@@ -271,11 +271,14 @@ static void reset_record_controls(void) {
     button_state = (pp_button_t){.wake_guard = button_state.wake_guard || button_state.down};
 }
 static void abort_record(void) {
-    bool pending_input = input_state.phase != PP_INPUT_IDLE;
+    bool pending_input = input_state.phase != PP_INPUT_IDLE && request_id[0] &&
+                         !strcmp(request_id, pending);
     reset_record_controls();
     pp_input_abort(&input_state);
-    if (pending_input && request_id[0])
-        send_id("input.cancel", request_id);
+    if (pending_input && !send_id("input.cancel", request_id)) {
+        ESP_LOGW("pa_terminal", "input_cancel_not_queued frames=%u", sequence);
+        pp_net_interrupt_input();
+    }
     set_status("收音中断，请重新说");
 }
 static void input_limit_reached(bool discard_excess) {
@@ -290,6 +293,10 @@ static void input_limit_reached(bool discard_excess) {
              (unsigned)(now_ms() - input_state.started));
 }
 static const char *input_failure_hint(const char *code) {
+    if (!strcmp(code, "speech_busy"))
+        return "上一轮语音正在收尾，请稍后再说。";
+    if (!strcmp(code, "speech_no_transcript") || !strcmp(code, "speech_empty_or_closed"))
+        return "未检测到内容，请重新说。";
     if (!strcmp(code, "speech_input_gap"))
         return "音频不连续，本次未发送，请重新说。";
     if (!strcmp(code, "speech_invalid_pcm"))
@@ -298,6 +305,13 @@ static const char *input_failure_hint(const char *code) {
         return "音频超出上限，本次未发送。";
     if (!strcmp(code, "speech_input_deadline"))
         return "收音超时，本次未发送，请重新说。";
+    if (!strcmp(code, "speech_input_buffer_limit"))
+        return "语音传输跟不上，本次未发送，请重新说。";
+    if (!strcmp(code, "speech_provider_timeout") || !strcmp(code, "speech_stream_deadline"))
+        return "语音识别超时，本次未发送，请重新说。";
+    if (!strncmp(code, "speech_provider_rejected:", sizeof("speech_provider_rejected:") - 1) ||
+        !strcmp(code, "speech_stream_disconnected"))
+        return "语音识别服务中断，本次未发送，请重新说。";
     return NULL;
 }
 static void home(const char *hint) {
@@ -582,7 +596,7 @@ static void receive_input_receipt(cJSON *j) {
         review_reading = review_pending = false;
         waiting = true;
         set_status("处理中");
-    } else if (!strcmp(state, "prepared") || !strcmp(state, "cancelled")) {
+    } else if (!strcmp(state, "prepared") || !strcmp(state, "cancelled") || !strcmp(state, "absent")) {
         pp_pending("");
         pending[0] = 0;
         pp_input_abort(&input_state);
@@ -721,26 +735,28 @@ static void receive_notification_page(cJSON *j) {
 }
 
 static void receive_error(cJSON *j, const char *type) {
-    const char *input_hint = input_failure_hint(string(j, "code"));
-    if (input_hint && !strcmp(string(j, "request_id"), request_id) &&
-        strcmp(request_id, dismissed_input)) {
+    const char *ident = string(j, "request_id");
+    const char *operation = string(j, "operation");
+    const char *code = string(j, "code");
+    const char *input_hint = !strcmp(type, "error") ? input_failure_hint(code) : NULL;
+    bool busy_begin = !strcmp(operation, "input.begin") && !strcmp(code, "speech_busy");
+    bool matches_input = request_id[0] && (ident[0] ? !strcmp(ident, request_id) : busy_begin);
+    bool before_submit = input_state.phase >= PP_INPUT_OPENING && input_state.phase <= PP_INPUT_FINALIZING;
+    if (input_hint && matches_input && before_submit && strcmp(request_id, dismissed_input)) {
         pp_text(dismissed_input, sizeof(dismissed_input), request_id);
+        if (!strcmp(request_id, pending) && pp_pending("") == ESP_OK)
+            pending[0] = 0;
+        reset_record_controls();
+        pp_input_abort(&input_state);
         waiting = false;
-        abort_record();
         home(input_hint);
         return;
     }
-    if (!strcmp(string(j, "code"), "speech_no_transcript") &&
-        !strcmp(string(j, "request_id"), request_id)) {
-        pp_text(dismissed_input, sizeof(dismissed_input), request_id);
-        waiting = false;
-        home("未检测到内容，请重新说。");
+    if (ident[0] && (!strcmp(ident, dismissed_input) ||
+                     (!strncmp(operation, "input.", sizeof("input.") - 1) && strcmp(ident, request_id)))) {
         return;
     }
-    if (string(j, "request_id")[0] && !strcmp(string(j, "request_id"), dismissed_input)) {
-        return;
-    }
-    if (!strcmp(string(j, "operation"), "input.transcript")) {
+    if (!strcmp(operation, "input.transcript")) {
         if (!review_pending) {
             return;
         }
@@ -748,7 +764,6 @@ static void receive_error(cJSON *j, const char *type) {
         set_status("转写页读取失败，返回后可重试");
         return;
     }
-    const char *operation = string(j, "operation");
     if (!strcmp(operation, "notifications.list")) {
         if (notice_directory.pending &&
             (!notice_directory.correlated || !strcmp(string(j, "request_id"), notice_directory.id))) {
@@ -781,7 +796,6 @@ static void receive_error(cJSON *j, const char *type) {
         view = PP_UI_INFO;
         pp_navigation_open(&navigation, PP_SCREEN_CHAT);
     }
-    const char *code = string(j, "code");
     pp_text(body, sizeof(body),
             !strcmp(code, "terminal_request_failed") ? "请求处理失败，请查看后台诊断。"
             : !strcmp(code, "terminal_input_identity_mismatch")
@@ -1450,31 +1464,34 @@ static void poll_audio(void) {
     if (input_state.phase == PP_INPUT_RECORDING || input_state.phase == PP_INPUT_DRAINING) {
         pp_recording_t audio;
         unsigned n = 0;
-        while (n++ < 4 && pp_audio_recorded(&audio)) {
+        while (n++ < 4 && pp_net_has_capacity(true) && pp_audio_recorded(&audio)) {
             if (!pp_input_audio(&input_state, sizeof(audio.pcm))) {
                 abort_record();
                 set_status("音频帧超出限制，本次未发送");
                 break;
             }
-            if (!pp_net_pcm(sequence++, audio.pcm, sizeof(audio.pcm))) {
+            if (!pp_net_pcm(sequence, audio.pcm, sizeof(audio.pcm))) {
                 abort_record();
                 break;
             }
+            sequence++;
             if (input_state.audio_bytes == input_state.max_audio_bytes) {
                 input_limit_reached(true);
                 break;
             }
         }
-        if (input_state.phase == PP_INPUT_DRAINING && pp_audio_capture_drained()) {
+        if (input_state.phase == PP_INPUT_DRAINING && pp_audio_capture_drained() &&
+            pp_net_has_capacity(false)) {
             cJSON *j = command("input.finish");
             cJSON_AddStringToObject(j, "request_id", request_id);
             cJSON_AddNumberToObject(j, "frames", sequence);
             cJSON_AddBoolToObject(j, "confirmation_required", input_state.limited);
-            pp_input_drained(&input_state);
-            if (!pp_net_send(j))
-                set_status("提交待核对");
-            else
+            if (pp_net_send(j)) {
+                pp_input_drained(&input_state);
                 waiting = true;
+            } else {
+                abort_record();
+            }
         }
     }
     unsigned consumed = pp_audio_take_credit();

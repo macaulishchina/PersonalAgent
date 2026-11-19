@@ -29,6 +29,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.received = []
         self.fault = None
+        self.fault_message = "secret must not escape"
         self.run_gate = None
 
         async def ws_handler(request):
@@ -62,7 +63,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
                                     "task_id": ident,
                                     "event": "task-failed",
                                     "error_code": self.fault,
-                                    "error_message": "secret must not escape",
+                                    "error_message": self.fault_message,
                                 }
                             }
                         )
@@ -105,6 +106,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.context = SimpleNamespace(
             config=settings,
             credential=lambda _: "synthetic-key",
+            log=logging.getLogger("test"),
             resource=lambda _: self.usage,
             own=lambda _: None,
             register=lambda *a, **kw: None,
@@ -172,6 +174,16 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(self.fault, str(exc.exception))
         self.assertNotIn("secret", str(exc.exception))
         self.assertEqual(self.received.count("run-task"), 1)
+        self.assertFalse(self.provider.streams)
+
+    async def test_provider_client_timeout_has_distinct_safe_code(self):
+        self.fault = "CLIENT_ERROR"
+        self.fault_message = "request timeout after 23 seconds."
+        with self.assertLogs("test", level="WARNING") as logs:
+            with self.assertRaisesRegex(SpeechError, "^speech_provider_timeout$"):
+                await self.provider.request(RecognitionRequest(self.scope, 1))
+        self.assertIn("audio_bytes=0 finish_sent=False provider_timeout=True", logs.output[0])
+        self.assertNotIn(self.fault_message, logs.output[0])
         self.assertFalse(self.provider.streams)
 
     async def test_provider_can_offer_only_one_capability(self):
@@ -670,6 +682,74 @@ class EntranceReceiptTest(unittest.IsolatedAsyncioTestCase):
 
 
 class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_busy_begin_and_legacy_cancel_are_bound_to_refused_attempt(self):
+        active, refused = (str(uuid.uuid4()) for _ in range(2))
+        stream = self.connection.input = AsyncMock()
+        self.connection.input_id = active
+        await self.connection.command({"type": "input.begin", "request_id": refused})
+        self.assertEqual(self.messages[-1], {
+            "type": "error", "code": "speech_busy", "request_id": refused, "operation": "input.begin",
+        })
+        await self.connection.command({"type": "input.cancel", "request_id": refused})
+        self.assertEqual(self.messages[-1], {"type": "input.receipt", "request_id": refused, "state": "cancelled"})
+        self.assertIs(self.connection.input, stream)
+        self.assertEqual(self.connection.input_id, active)
+        stream.close.assert_not_awaited()
+        self.assertEqual(self.calls, [])
+
+    async def test_async_provider_failure_drains_audio_and_releases_input_for_next_attempt(self):
+        failed, following = (str(uuid.uuid4()) for _ in range(2))
+        upstream = AsyncMock()
+        upstream.wait_update.side_effect = SpeechError("speech_provider_timeout")
+        stream = InputStream(upstream, 1, lambda _: None)
+        fresh_provider = SimpleNamespace(send=AsyncMock(), close=AsyncMock())
+        fresh = InputStream(fresh_provider, 1, lambda _: None)
+
+        async def invoke(request, **_):
+            if isinstance(request, SpeechRequest):
+                return fresh
+            if request.action == "prepare":
+                return {"state": "prepared", "work_id": "work"}
+            self.assertIn(request.action, {"cancel", "receipt"})
+            return {"state": "cancelled"}
+
+        self.context.invoke = invoke
+        self.connection.input, self.connection.input_id = stream, failed
+        await self.connection.watch_transcript(stream, failed)
+        self.assertIsNone(self.connection.input_id)
+        self.assertEqual(self.messages[-1], {
+            "type": "error", "request_id": failed, "operation": "input.pcm", "code": "speech_provider_timeout",
+        })
+        first_error_count = len(self.messages)
+        await self.connection.receive(SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 1) + b"\0\0"))
+        self.assertEqual(len(self.messages), first_error_count)
+        await self.connection.command({"type": "input.cancel", "request_id": failed})
+        self.assertEqual(self.messages[-1]["state"], "cancelled")
+        upstream.close.assert_awaited_once()
+
+        await self.connection.command({"type": "input.begin", "request_id": following})
+        self.assertEqual(self.messages[-1]["type"], "input.ready")
+        self.assertEqual(self.messages[-1]["request_id"], following)
+        await self.connection.receive(SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 0) + b"\0\0"))
+        fresh_provider.send.assert_awaited_once_with(b"\0\0")
+        self.assertIs(self.connection.input, fresh)
+
+    async def test_recognition_failure_cancels_prepared_input_before_reporting(self):
+        ident = str(uuid.uuid4())
+        self.connection.input_id = ident
+        upstream = AsyncMock()
+        upstream.finish.side_effect = SpeechError("speech_provider_timeout")
+        stream = InputStream(upstream, 1, lambda _: None)
+        await stream.accept(0, b"\0\0")
+        await self.connection.finish(stream, ident)
+        self.assertIsNone(self.connection.input_id)
+        self.assertEqual(self.connection.failed_input_id, ident)
+        self.assertEqual([r.action for r in self.calls], ["cancel"])
+        self.assertEqual(self.messages[-1], {
+            "type": "error", "request_id": ident, "operation": "input.finish", "code": "speech_provider_timeout",
+        })
+        upstream.close.assert_awaited_once()
+
     async def test_cache_index_is_a_small_completed_metadata_window_not_a_browsing_cursor(self):
         items = [
             {
@@ -946,7 +1026,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    async def test_invalid_controls_and_busy_begin_do_not_cancel_active_recording(self):
+    async def test_invalid_controls_and_duplicate_begin_do_not_cancel_active_recording(self):
         stream = AsyncMock()
         ident = str(uuid.uuid4())
         self.connection.input, self.connection.input_id = stream, ident
@@ -988,7 +1068,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.connection.input, stream)
         stream.close.assert_not_awaited()
         errors = [m for m in self.messages if isinstance(m, dict) and m.get("type") == "error"]
-        self.assertEqual(len(errors), 3)
+        self.assertEqual(len(errors), 2)
         self.assertTrue(all(m["request_id"] is None for m in errors))
 
     async def test_confirmed_sentence_speaks_before_message_end_and_stop_is_permanent(self):

@@ -579,6 +579,18 @@ bool pp_net_pcm(uint32_t sequence, const void *pcm, size_t bytes) {
     memcpy(data + 4, pcm, bytes);
     return enqueue(data, bytes + 4, true);
 }
+bool pp_net_has_capacity(bool pcm) {
+    /* The application produces both PCM and commands. Leave room for the
+     * terminal command even when the network worker is draining slowly. */
+    return pp_net_connected() && outgoing && uxQueueSpacesAvailable(outgoing) > (pcm ? 1 : 0);
+}
+void pp_net_interrupt_input(void) {
+    uint32_t generation = pp_link_ready(&ws_link);
+    if (generation) {
+        pp_link_close(&ws_link, generation);
+        pp_network_state(false, "收音连接中断，正在重连", generation);
+    }
+}
 bool pp_net_connected(void) { return pp_link_ready(&ws_link) != 0; }
 uint32_t pp_net_generation(void) { return pp_link_generation(&ws_link); }
 bool pp_net_current_frame(uint32_t generation) { return pp_link_connected(&ws_link, generation); }
