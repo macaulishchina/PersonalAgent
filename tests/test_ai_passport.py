@@ -10,6 +10,7 @@ import unittest
 
 from assistant_runtime.app.config import Config
 from assistant_runtime.app.host import AssistantService
+from assistant_runtime.core.conversation.instructions import instructions
 from assistant_runtime.core.plugin_catalog import metadata
 
 
@@ -42,6 +43,19 @@ assert 'assistant_runtime.plugins.ai_passport.declaration' not in sys.modules
 
 
 class SpeechConfigurationTest(unittest.TestCase):
+    def test_terminal_presentation_uses_terminal_speech_with_shared_assistant_role(self):
+        config = Config(plugins=["assistant", "tasks"])
+        web = instructions(config)
+        terminal = instructions(config, presentation="voice_terminal")
+        for common in ("用户本地服务器上的个人助手", "先判断工作是否适合在当前对话完成"):
+            self.assertIn(common, web)
+            self.assertIn(common, terminal)
+        for host_only in ("当前语音未启用", "语音交互尚未启用", "你接收网页文字和图片输入"):
+            self.assertIn(host_only, web)
+            self.assertNotIn(host_only, terminal)
+        self.assertNotIn("用户可在终端录音", web)
+        self.assertIn("用户可在终端录音", terminal)
+
     def test_shared_defaults_and_validation_apply_without_runtime(self):
         from assistant_runtime.core.plugin_catalog import declaration
         from assistant_runtime.core.configuration.schema import resolve

@@ -82,7 +82,7 @@ class Conversations:
         action, args = request.action, request.arguments
         allowed = {
             "create": {"title", "request_id", "policy"},
-            "configure": {"session_id", "policy"},
+            "configure": {"session_id", "policy", "merge"},
             "list": {"before", "limit"},
             "open": {"operator", "session_id"},
             "history": {"session_id", "before"},
@@ -135,8 +135,16 @@ class Conversations:
         if action == "configure":
             policy = args.get("policy")
             self.sessions.validate_policy(policy)
+            merge = args.get("merge", False)
+            if type(merge) is not bool:
+                raise ValueError("Conversation policy merge must be boolean")
             async with self.opening:
-                if ident in self.opened and self.sessions.policy(ident) != policy:
+                previous = self.sessions.policy(ident)
+                if merge:
+                    policy = {**previous, **policy}
+                if policy == previous:
+                    return {"session_id": ident, "policy": previous}
+                if ident in self.opened:
                     raise ValueError("Conversation policy can only change before the session is opened")
                 return self.sessions.configure(ident, policy)
         if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:

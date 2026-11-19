@@ -27,6 +27,9 @@ class AiPassportPlugin:
 
     async def start(self, context):
         self.devices = context.repository(Devices)
+        for device in self.devices.list():
+            if device["paired"] and not device["revoked"]:
+                await self.configure_conversation(device["session_id"])
         self.frontend = context.resource("http_frontend")
         app = web.Application(client_max_size=protocol.MAX_JSON_BYTES, middlewares=[self.guard])
         app.add_routes([web.post("/pair", self.pair), web.get("/stream", self.stream)])
@@ -38,6 +41,14 @@ class AiPassportPlugin:
         port = site._server.sockets[0].getsockname()[1]
         self.frontend.publish("127.0.0.1", port)
         context.spawn(self.changes(context.subscribe(capacity=64)), "passport-changes")
+
+    async def configure_conversation(self, session):
+        await self.context.invoke(
+            ConversationRequest(
+                "configure",
+                {"session_id": session, "policy": {"presentation": "voice_terminal"}, "merge": True},
+            )
+        )
 
     async def changes(self, queue):
         while True:
@@ -96,6 +107,7 @@ class AiPassportPlugin:
                     "create", {"title": name, "request_id": ident, "policy": {"capture_memory": True}}
                 )
             )
+            await self.configure_conversation(result["id"])
             try:
                 return self.devices.activate(code, name, result["id"])
             except PermissionError:

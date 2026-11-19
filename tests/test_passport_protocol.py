@@ -1552,6 +1552,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
         from aiohttp import ClientSession
         from assistant_runtime.app.host import AssistantService
         from assistant_runtime.app.config import Config
+        from assistant_runtime.core.conversation.sessions import Sessions
         from pi_gateway import FakeResponsesGateway, sse_text_reply, sse_tool_call
         import test_pi_skeleton as fixtures
 
@@ -1562,9 +1563,14 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
         pending_final = threading.Event()
 
         def answer(step, body):
+            payload = json.dumps(body, ensure_ascii=False)
+            self.assertIn("用户可在终端录音", payload)
+            self.assertIn("一到三个短句", payload)
+            self.assertIn("每项只写一个动作", payload)
+            self.assertNotIn("当前语音未启用", payload)
             if step == 1:
                 return sse_tool_call("read-synthetic", "read", {"path": str(read_path)})
-            self.assertIn("SYNTHETIC_PP_READ", json.dumps(body))
+            self.assertIn("SYNTHETIC_PP_READ", payload)
             events = sse_text_reply("answer", "收到，测试完成。")
             for event in events:
                 if event.get("item", {}).get("type") == "message":
@@ -1609,9 +1615,17 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                     model_api=fixtures.configuration(gateway.base_url),
                 )
                 host = AssistantService(config)
+                sessions = Sessions(host.store)
+                legacy_policy = {"capture_memory": False, "instructions": "Retain my existing preference."}
+                legacy = sessions.create("Previously paired PP", policy=legacy_policy)["id"]
+                devices = Devices(host.store.db)
+                legacy_code = devices.begin(uuid.uuid4().hex, "legacy-credential")["code"]
+                devices.activate(legacy_code, "Previously paired PP", legacy)
                 running = asyncio.create_task(host.run())
                 await asyncio.wait_for(host.runtime.ready.wait(), 30)
                 self.assertEqual(host.runtime.health()["ai_passport"]["state"], "ready")
+                self.assertEqual(sessions.policy(legacy), {**legacy_policy, "presentation": "voice_terminal"})
+                self.assertEqual(sessions.policy(sessions.bound("web")), {})
                 speech = host.runtime.plugins["aliyun_speech"].instance
                 speech.settings = {**speech.settings, "endpoint": provider.context.config["endpoint"]}
                 frontend = host.http_frontends["ai_passport"]
@@ -1629,6 +1643,10 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                         challenge = await response.json()
                     pair = await host.runtime.plugins["ai_passport"].instance.configuration_action(
                         "pair", {"name": "Synthetic PP", "code": challenge["code"]}
+                    )
+                    self.assertEqual(
+                        sessions.policy(pair["session_id"]),
+                        {"capture_memory": True, "presentation": "voice_terminal"},
                     )
                     headers.update(
                         {"Authorization": "Bearer " + body["credential"], "X-Device-Id": pair["device_id"]}

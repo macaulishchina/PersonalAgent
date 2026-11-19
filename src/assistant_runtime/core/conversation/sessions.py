@@ -105,7 +105,12 @@ class Sessions:
 
     @staticmethod
     def validate_policy(policy):
-        if not isinstance(policy, dict) or set(policy) - {"tools", "instructions", "capture_memory"}:
+        if not isinstance(policy, dict) or set(policy) - {
+            "tools",
+            "instructions",
+            "capture_memory",
+            "presentation",
+        }:
             raise ValueError("Invalid conversation policy")
         if "tools" in policy and (
             not isinstance(policy["tools"], list)
@@ -119,6 +124,8 @@ class Sessions:
             raise ValueError("Expected bounded conversation instructions")
         if "capture_memory" in policy and type(policy["capture_memory"]) is not bool:
             raise ValueError("Expected memory capture flag")
+        if "presentation" in policy and policy["presentation"] != "voice_terminal":
+            raise ValueError("Unsupported conversation presentation")
 
     def policy(self, ident):
         self.get(ident)

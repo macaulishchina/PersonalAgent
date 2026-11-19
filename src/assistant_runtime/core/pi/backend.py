@@ -3,6 +3,7 @@
 from assistant_runtime.api.conversation import ConversationInputChanged
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -142,17 +143,6 @@ class PiBackend:
             if self.integrations
             else None
         )
-        params = {
-            "model": self.config.main_model,
-            "cwd": self.config.workspace,
-            "instructions": instructions(self.config),
-            "config": {
-                "model_reasoning_effort": self.config.main_reasoning_effort,
-                "mcp_servers": self.integrations.configuration("foreground")
-                if self.integrations
-                else server_config(self.config.socket, plugins=self.config.enabled_plugins),
-            },
-        }
         policy_table = self.store.db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_policies'"
         ).fetchone()
@@ -163,14 +153,22 @@ class PiBackend:
             if policy_table
             else None
         )
-        if policy_row:
-            import json
-
-            policy = json.loads(policy_row[0])
-            if "tools" in policy:
-                params["config"]["allowed_tools"] = policy["tools"]
-            if policy.get("instructions"):
-                params["instructions"] += "\n" + policy["instructions"]
+        policy = json.loads(policy_row[0]) if policy_row else {}
+        params = {
+            "model": self.config.main_model,
+            "cwd": self.config.workspace,
+            "instructions": instructions(self.config, presentation=policy.get("presentation")),
+            "config": {
+                "model_reasoning_effort": self.config.main_reasoning_effort,
+                "mcp_servers": self.integrations.configuration("foreground")
+                if self.integrations
+                else server_config(self.config.socket, plugins=self.config.enabled_plugins),
+            },
+        }
+        if "tools" in policy:
+            params["config"]["allowed_tools"] = policy["tools"]
+        if policy.get("instructions"):
+            params["instructions"] += "\n" + policy["instructions"]
         if saved:
             prior = await self.client.request("session.read", {"session_id": saved, "include_runs": True})
             if prior["session"]["status"]["type"] == "unknown" or any(

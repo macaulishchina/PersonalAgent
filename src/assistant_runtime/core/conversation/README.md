@@ -1,7 +1,8 @@
 # Public conversations
 
-Since 0.5.3, trusted entrances can call `configure` with `session_id` and a complete
-`policy` (`tools`, `instructions`, `capture_memory`) before opening the session.
+Since 0.5.3, trusted entrances can call `configure` with `session_id` and a
+`policy` before opening the session. By default it replaces the policy.
+With `merge: true` it overlays the supplied fields and retains the others.
 It preserves history, identity and original creation receipts. Repeating the same
 policy is safe, including after opening; changing an opened session is rejected.
 Model/tool executions cannot configure a conversation. Apply policy upgrades before
@@ -48,8 +49,9 @@ does not copy evidence onto final messages or guess associations from phrases su
 “见附件”. User uploads and task-report media retain their own presentation and ownership.
 
 Creation receipts are durable and isolated by the authenticated caller. The optional
-`policy` object accepts an explicit `tools` allowlist, additional `instructions`, and
-`capture_memory` (default true). Policy restrictions apply to fresh and resumed turns;
+`policy` object accepts an explicit `tools` allowlist, additional `instructions`,
+`capture_memory` (default true), and the optional `presentation: "voice_terminal"`
+for small-screen voice conversations. Policy restrictions apply to fresh and resumed turns;
 false memory capture excludes this session from automatic global transcript capture.
 
 `ConversationRequest(action, arguments)` supports:

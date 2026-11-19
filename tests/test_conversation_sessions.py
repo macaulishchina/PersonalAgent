@@ -173,12 +173,27 @@ class SessionsTest(unittest.IsolatedAsyncioTestCase):
             current_usage.reset(usage)
         self.assertEqual(self.registry.sessions.policy(session), {})
 
+    async def test_terminal_presentation_merges_without_changing_other_session_policy(self):
+        original = {
+            "tools": ["read_tool"],
+            "instructions": "Keep these instructions",
+            "capture_memory": False,
+        }
+        session = (await self.call("create", policy=original))["id"]
+        patch = {"presentation": "voice_terminal"}
+        result = await self.call("configure", session_id=session, policy=patch, merge=True)
+        self.assertEqual(result["policy"], {**original, **patch})
+        self.assertEqual(self.registry.sessions.policy(self.registry.main.session), {})
+        await self.registry.get(session)
+        self.assertEqual(await self.call("configure", session_id=session, policy=patch, merge=True), result)
+
     async def test_invalid_configuration_never_changes_policy(self):
         session = (await self.call("create"))["id"]
         for policy in (
             None,
             {"tools": "tool"},
             {"capture_memory": 1},
+            {"presentation": "unsupported"},
             {"secret": "invalid"},
             {"instructions": "x" * 4001},
         ):
