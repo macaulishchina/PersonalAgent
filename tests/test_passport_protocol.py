@@ -19,6 +19,7 @@ from assistant_runtime.api.speech import RecognitionRequest, SynthesisRequest, S
 from assistant_runtime.api.terminal import TerminalNotifications
 from assistant_runtime.core.speech_io.service import InputStream
 from assistant_runtime.plugins.aliyun_speech.plugin import AliyunSpeech
+from assistant_runtime.plugins.ai_passport import protocol
 from assistant_runtime.plugins.ai_passport.connection import Connection
 from assistant_runtime.plugins.ai_passport.repository import Devices
 from assistant_runtime.plugins.ai_passport.plugin import AiPassportPlugin
@@ -670,6 +671,12 @@ class EntranceReceiptTest(unittest.IsolatedAsyncioTestCase):
             ConversationRequest("thumbnail", {**args, "width": 64, "height": 48})
         )
         self.assertEqual((small["width"], small["height"], small["bytes"]), (64, 48, 6144))
+        raster = await self.registry.request(
+            ConversationRequest("image_raster", {**args, "width": 216, "height": 194})
+        )
+        self.assertGreater(raster["width"], 160)
+        self.assertLessEqual(raster["height"], 194)
+        self.assertEqual(raster["data"], b"\x00\xf8" * raster["width"] * raster["height"])
         other = (await self.registry.request(ConversationRequest("create", {"title": "other"})))["id"]
         for changed in (
             {"session_id": other},
@@ -679,19 +686,78 @@ class EntranceReceiptTest(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(ValueError):
                 await self.registry.request(ConversationRequest("thumbnail", {**args, **changed}))
+        for changed in ({"session_id": other}, {"width": 217}, {"height": 195}, {"image_id": "missing"}):
+            with self.assertRaises(ValueError):
+                await self.registry.request(ConversationRequest("image_raster", {**args, **changed}))
 
 
 class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_identified_audio_is_accepted_before_delayed_ready_without_crossing_input_ids(self):
+        ident, rejected = (uuid.uuid4() for _ in range(2))
+        started, release_ready, ready_sent = (asyncio.Event() for _ in range(3))
+        original_send = self.connection.send
+        provider = SimpleNamespace(send=AsyncMock(), close=AsyncMock())
+        stream = InputStream(provider, 1, lambda _: None)
+
+        async def send(event, **fields):
+            if event == "input.ready":
+                started.set()
+                await release_ready.wait()
+            await original_send(event, **fields)
+            if event == "input.ready":
+                ready_sent.set()
+
+        async def invoke(request, **_):
+            if isinstance(request, SpeechRequest):
+                return stream
+            return {"state": "prepared" if request.action == "prepare" else "cancelled", "work_id": "work"}
+
+        async def audio(key, sequence, pcm):
+            prefix = protocol.INPUT_AUDIO_ID_TAG + key.bytes if key else b""
+            await self.connection.receive(
+                SimpleNamespace(type=WSMsgType.BINARY, data=prefix + struct.pack("!I", sequence) + pcm)
+            )
+
+        self.connection.send = send
+        self.context.invoke = invoke
+        await self.connection.command({"type": "input.begin", "request_id": str(ident), "audio_ids": True})
+        await asyncio.wait_for(started.wait(), 1)
+        try:
+            await self.connection.command(
+                {"type": "input.begin", "request_id": str(rejected), "audio_ids": True}
+            )
+            await audio(rejected, 0, b"\x00\x00" * 320)
+            await audio(None, 0, b"\x00\x00" * 320)
+            await audio(ident, 0, b"\x01\x00" * 1600)
+            self.assertEqual((stream.sequence, stream.size), (1, 3200))
+            provider.send.assert_awaited_once_with(b"\x01\x00" * 1600)
+            self.assertFalse(ready_sent.is_set())
+        finally:
+            release_ready.set()
+        await asyncio.wait_for(ready_sent.wait(), 1)
+        await self.connection.command({"type": "input.cancel", "request_id": str(ident)})
+        await audio(ident, 1, b"\x02\x00" * 320)
+        self.assertEqual(provider.send.await_count, 1)
+        provider.close.assert_awaited_once()
+
     async def test_busy_begin_and_legacy_cancel_are_bound_to_refused_attempt(self):
         active, refused = (str(uuid.uuid4()) for _ in range(2))
         stream = self.connection.input = AsyncMock()
         self.connection.input_id = active
         await self.connection.command({"type": "input.begin", "request_id": refused})
-        self.assertEqual(self.messages[-1], {
-            "type": "error", "code": "speech_busy", "request_id": refused, "operation": "input.begin",
-        })
+        self.assertEqual(
+            self.messages[-1],
+            {
+                "type": "error",
+                "code": "speech_busy",
+                "request_id": refused,
+                "operation": "input.begin",
+            },
+        )
         await self.connection.command({"type": "input.cancel", "request_id": refused})
-        self.assertEqual(self.messages[-1], {"type": "input.receipt", "request_id": refused, "state": "cancelled"})
+        self.assertEqual(
+            self.messages[-1], {"type": "input.receipt", "request_id": refused, "state": "cancelled"}
+        )
         self.assertIs(self.connection.input, stream)
         self.assertEqual(self.connection.input_id, active)
         stream.close.assert_not_awaited()
@@ -717,11 +783,19 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.connection.input, self.connection.input_id = stream, failed
         await self.connection.watch_transcript(stream, failed)
         self.assertIsNone(self.connection.input_id)
-        self.assertEqual(self.messages[-1], {
-            "type": "error", "request_id": failed, "operation": "input.pcm", "code": "speech_provider_timeout",
-        })
+        self.assertEqual(
+            self.messages[-1],
+            {
+                "type": "error",
+                "request_id": failed,
+                "operation": "input.pcm",
+                "code": "speech_provider_timeout",
+            },
+        )
         first_error_count = len(self.messages)
-        await self.connection.receive(SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 1) + b"\0\0"))
+        await self.connection.receive(
+            SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 1) + b"\0\0")
+        )
         self.assertEqual(len(self.messages), first_error_count)
         await self.connection.command({"type": "input.cancel", "request_id": failed})
         self.assertEqual(self.messages[-1]["state"], "cancelled")
@@ -730,7 +804,9 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         await self.connection.command({"type": "input.begin", "request_id": following})
         self.assertEqual(self.messages[-1]["type"], "input.ready")
         self.assertEqual(self.messages[-1]["request_id"], following)
-        await self.connection.receive(SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 0) + b"\0\0"))
+        await self.connection.receive(
+            SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", 0) + b"\0\0")
+        )
         fresh_provider.send.assert_awaited_once_with(b"\0\0")
         self.assertIs(self.connection.input, fresh)
 
@@ -745,9 +821,15 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.connection.input_id)
         self.assertEqual(self.connection.failed_input_id, ident)
         self.assertEqual([r.action for r in self.calls], ["cancel"])
-        self.assertEqual(self.messages[-1], {
-            "type": "error", "request_id": ident, "operation": "input.finish", "code": "speech_provider_timeout",
-        })
+        self.assertEqual(
+            self.messages[-1],
+            {
+                "type": "error",
+                "request_id": ident,
+                "operation": "input.finish",
+                "code": "speech_provider_timeout",
+            },
+        )
         upstream.close.assert_awaited_once()
 
     async def test_cache_index_is_a_small_completed_metadata_window_not_a_browsing_cursor(self):
@@ -1223,6 +1305,51 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         await self.connection.command({"type": "image.close"})
         with self.assertRaises(ValueError):
             await self.connection.command({"type": "image.chunk", "version": "one", "offset": 0})
+
+    async def test_hd_image_rows_are_bounded_checked_and_scoped_to_the_active_request(self):
+        import hashlib
+
+        pixels = bytes(range(256)) * 206
+        pixels = pixels[: 216 * 122 * 2]
+        self.context.invoke = AsyncMock(
+            return_value={
+                "image_id": "photo",
+                "version": hashlib.sha256(pixels).hexdigest(),
+                "width": 216,
+                "height": 122,
+                "format": "rgb565le",
+                "data": pixels,
+                "bytes": len(pixels),
+            }
+        )
+        open_image = {
+            "type": "image.stream.open",
+            "request_id": 4,
+            "message_id": "row",
+            "image_id": "photo",
+            "width": 216,
+            "height": 194,
+        }
+        await self.connection.command(open_image)
+        self.assertEqual(self.context.invoke.call_args.args[0].action, "image_raster")
+        self.assertNotIn("data", self.messages[-1])
+        await self.connection.command({**open_image, "request_id": 5})
+        await self.connection.command({"type": "image.stream.close", "request_id": 4})
+        await self.connection.command({"type": "image.stream.next", "request_id": 4, "row": 0})
+        self.assertEqual(self.connection.display.stream[0], 5)
+        with self.assertRaises(ValueError):
+            await self.connection.command({"type": "image.stream.next", "request_id": 5, "row": 8})
+
+        sent = self.connection.ws.send_bytes = AsyncMock()
+        for row in range(0, 122, 8):
+            await self.connection.command({"type": "image.stream.next", "request_id": 5, "row": row})
+            frame = sent.await_args.args[0]
+            tag, request, start, count, digest = struct.unpack("!4sIHH8s", frame[:20])
+            self.assertEqual((tag, request, start, count), (b"\xff" * 4, 5, row, min(8, 122 - row)))
+            self.assertEqual(frame[20:], pixels[row * 432 : (row + count) * 432])
+            self.assertEqual(digest, hashlib.sha256(frame[20:]).digest()[:8])
+            self.assertLessEqual(len(frame), 3476)
+        self.assertIsNone(self.connection.display.stream)
 
     async def test_over_limit_transcript_waits_for_explicit_confirmation(self):
         async def invoke(request, **kwargs):

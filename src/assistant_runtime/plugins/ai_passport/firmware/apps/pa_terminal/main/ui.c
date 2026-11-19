@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
+#include "image_model.h"
 #include "text_layout.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -28,13 +29,21 @@ static const lv_image_dsc_t idle_blink = AVATAR(cat_idle_blink_rgb565a8, 120, 14
 static const lv_image_dsc_t input_open = AVATAR(cat_input_open_rgb565a8, 60, 72);
 static const lv_image_dsc_t input_blink = AVATAR(cat_input_blink_rgb565a8, 60, 72);
 static lv_image_dsc_t photo_descriptor;
+static lv_image_dsc_t strip_descriptor;
+static lv_area_t strip_area;
+static const lv_area_t image_viewport = {12, 66, 12 + PP_IMAGE_VIEW_WIDTH - 1,
+                                       66 + PP_IMAGE_VIEW_HEIGHT - 1};
+static lv_area_t stream_area;
+static lv_display_t *display;
 static lv_obj_t *screen, *clock_label, *wifi, *volume, *battery, *battery_text, *mode;
-static lv_obj_t *origin, *state, *content, *footer, *avatar, *photo, *bars[5], *items[7];
+static lv_obj_t *origin, *state, *content, *footer, *avatar, *photo, *strip_photo, *bars[5], *items[7];
 static lv_obj_t *volume_track, *volume_fill;
 static pp_ui_view_t previous_view = (pp_ui_view_t)-1;
 static const lv_image_dsc_t *previous_avatar;
 static unsigned filtered_level;
 static bool photo_available;
+static enum { STREAM_INACTIVE, STREAM_CLEARING, STREAM_READY } stream_view;
+static bool invalidating_strip, strip_done;
 static const lv_font_t *body_font = &terminal_zh_16;
 /* Backlight starts off until the first populated frame has been drawn. */
 static unsigned current_brightness;
@@ -64,6 +73,11 @@ static void visible(lv_obj_t *object, bool show) {
     else
         lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
 }
+static void text_color(lv_obj_t *object, uint32_t rgb) {
+    lv_color_t color = lv_color_hex(rgb);
+    if (!lv_color_eq(lv_obj_get_style_text_color(object, 0), color))
+        lv_obj_set_style_text_color(object, color, 0);
+}
 static void rule(int y) {
     lv_obj_t *object = lv_obj_create(screen);
     lv_obj_remove_style_all(object);
@@ -80,8 +94,37 @@ static unsigned measure(uint32_t c, void *context) {
     return 16;
 }
 
+static void protect_stream_pixels(lv_event_t *event) {
+    if (stream_view != STREAM_READY || invalidating_strip)
+        return;
+    lv_area_t *area = lv_event_get_param(event);
+    /* LVGL invalidates widget bounds, in absolute screen coordinates. Never
+     * recurse into invalidation from its event hook or hand it an empty area. */
+    if (area->y2 < image_viewport.y1 || area->y1 > image_viewport.y2)
+        return;
+    if (area->y1 < image_viewport.y1)
+        area->y2 = image_viewport.y1 - 1;
+    else if (area->y2 > image_viewport.y2)
+        area->y1 = image_viewport.y2 + 1;
+    else
+        *area = (lv_area_t){0, 0, 1, 0};
+}
+static void detach_strip(void) {
+    visible(strip_photo, false);
+    lv_image_set_src(strip_photo, NULL);
+    lv_image_cache_drop(&strip_descriptor);
+    strip_descriptor.data = NULL;
+}
+static void complete_image_refresh(lv_event_t *event) {
+    (void)event;
+    if (stream_view == STREAM_CLEARING)
+        stream_view = STREAM_READY;
+    if (strip_descriptor.data)
+        strip_done = true;
+}
+
 bool pp_ui_init(void) {
-    if (bsp_display_init() != ESP_OK || !bsp_lvgl_init() || !bsp_lvgl_lock(1000))
+    if (bsp_display_init() != ESP_OK || !(display = bsp_lvgl_init()) || !bsp_lvgl_lock(1000))
         return false;
     screen = lv_obj_create(NULL);
     lv_obj_remove_style_all(screen);
@@ -116,7 +159,14 @@ bool pp_ui_init(void) {
     mode = label(212, 297, 18, 17, true);
     avatar = lv_image_create(screen);
     photo = lv_image_create(screen);
+    lv_obj_set_pos(photo, image_viewport.x1, image_viewport.y1);
+    lv_obj_set_size(photo, PP_IMAGE_VIEW_WIDTH, PP_IMAGE_VIEW_HEIGHT);
+    /* LVGL fits the pixels proportionally using its small scan-line scratch buffer. */
+    lv_image_set_inner_align(photo, LV_IMAGE_ALIGN_CONTAIN);
     visible(photo, false);
+    strip_photo = lv_image_create(screen);
+    lv_image_set_inner_align(strip_photo, LV_IMAGE_ALIGN_TOP_LEFT);
+    visible(strip_photo, false);
     for (unsigned i = 0; i < 5; i++) {
         bars[i] = lv_obj_create(screen);
         lv_obj_remove_style_all(bars[i]);
@@ -149,6 +199,8 @@ bool pp_ui_init(void) {
     lv_obj_set_style_bg_color(volume_fill, lv_color_hex(0xb6cfa4), 0);
     lv_obj_set_style_bg_opa(volume_fill, LV_OPA_COVER, 0);
     visible(volume_track, false);
+    lv_display_add_event_cb(display, protect_stream_pixels, LV_EVENT_INVALIDATE_AREA, NULL);
+    lv_display_add_event_cb(display, complete_image_refresh, LV_EVENT_REFR_READY, NULL);
     lv_screen_load(screen);
     bsp_lvgl_unlock();
     return true;
@@ -157,6 +209,12 @@ bool pp_ui_init(void) {
 bool pp_ui_image(const void *pixels, unsigned width, unsigned height) {
     if (!screen || !bsp_lvgl_lock(1000))
         return false;
+    if (stream_view != STREAM_INACTIVE) {
+        stream_view = STREAM_INACTIVE;
+        detach_strip();
+        strip_done = false;
+        lv_obj_invalidate_area(screen, &image_viewport);
+    }
     visible(photo, false);
     /* A descriptor points directly at the one owner-managed RGB565 buffer. */
     lv_image_cache_drop(&photo_descriptor);
@@ -170,10 +228,70 @@ bool pp_ui_image(const void *pixels, unsigned width, unsigned height) {
                                             .data_size = width * height * 2,
                                             .data = pixels};
         lv_image_set_src(photo, &photo_descriptor);
-        lv_obj_set_pos(photo, (240 - width) / 2, 72 + (144 - height) / 2);
-    }
+    } else
+        lv_image_set_src(photo, NULL);
     bsp_lvgl_unlock();
     return true;
+}
+
+bool pp_ui_stream_begin(unsigned width, unsigned height) {
+    if (!screen || !width || width > PP_IMAGE_VIEW_WIDTH || !height ||
+        height > PP_IMAGE_VIEW_HEIGHT || !bsp_lvgl_lock(1))
+        return false;
+    if (previous_view != PP_UI_IMAGE) {
+        bsp_lvgl_unlock();
+        return false;
+    }
+    if (stream_view != STREAM_INACTIVE) {
+        bool ready = stream_view == STREAM_READY;
+        bsp_lvgl_unlock();
+        return ready;
+    }
+    stream_area.x1 = image_viewport.x1 + (PP_IMAGE_VIEW_WIDTH - width) / 2;
+    stream_area.y1 = image_viewport.y1 + (PP_IMAGE_VIEW_HEIGHT - height) / 2;
+    stream_area.x2 = stream_area.x1 + width - 1;
+    stream_area.y2 = stream_area.y1 + height - 1;
+    visible(photo, false);
+    stream_view = STREAM_CLEARING;
+    lv_obj_invalidate_area(screen, &image_viewport);
+    bsp_lvgl_unlock();
+    return false;
+}
+bool pp_ui_stream_draw(const void *pixels, unsigned row, unsigned rows) {
+    if (!pixels || !rows || !bsp_lvgl_lock(1))
+        return false;
+    if (stream_view != STREAM_READY || row + rows > (unsigned)lv_area_get_height(&stream_area)) {
+        bsp_lvgl_unlock();
+        return false;
+    }
+    if (strip_done) {
+        /* Once rasterized, LCD I/O owns the separate LVGL flush buffer. */
+        detach_strip();
+        strip_done = false;
+        bsp_lvgl_unlock();
+        return true;
+    }
+    if (strip_descriptor.data) {
+        bsp_lvgl_unlock();
+        return false;
+    }
+    unsigned width = (unsigned)lv_area_get_width(&stream_area);
+    strip_area = stream_area;
+    strip_area.y1 += row;
+    strip_area.y2 = strip_area.y1 + rows - 1;
+    strip_descriptor = (lv_image_dsc_t){.header = {.magic = LV_IMAGE_HEADER_MAGIC,
+                                                  .cf = LV_COLOR_FORMAT_RGB565,
+                                                  .w = width, .h = rows, .stride = width * 2},
+                                         .data_size = width * rows * 2, .data = pixels};
+    lv_obj_set_pos(strip_photo, strip_area.x1, strip_area.y1);
+    lv_obj_set_size(strip_photo, width, rows);
+    lv_image_set_src(strip_photo, &strip_descriptor);
+    visible(strip_photo, true);
+    invalidating_strip = true;
+    lv_obj_invalidate_area(screen, &strip_area);
+    invalidating_strip = false;
+    bsp_lvgl_unlock();
+    return false;
 }
 
 size_t pp_ui_previous(const char *value, size_t start) {
@@ -207,11 +325,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
                  : f->volume < 55 ? LV_SYMBOL_VOLUME_MID
                                   : LV_SYMBOL_VOLUME_MAX);
     text(wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(wifi,
-                                lv_color_hex(f->wifi > -70   ? 0xb6cfa4
-                                             : f->wifi > -90 ? 0x839278
-                                                             : 0x526158),
-                                0);
+    text_color(wifi, f->wifi > -70 ? 0xb6cfa4 : f->wifi > -90 ? 0x839278 : 0x526158);
     if (f->battery < 0)
         strcpy(value, "--");
     else
@@ -224,7 +338,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     visible(origin, !idle);
     visible(content, !idle && f->view != PP_UI_MENU && f->view != PP_UI_IMAGE);
     visible(state, true);
-    lv_obj_set_style_text_color(origin, lv_color_hex(f->task_context ? 0xa7c7e8 : 0xb6cfa4), 0);
+    text_color(origin, f->task_context ? 0xa7c7e8 : 0xb6cfa4);
     if (previous_view != f->view) {
         lv_obj_set_pos(content, 12, input ? 145 : 66);
         lv_obj_set_height(content, input ? 110 : 198);
@@ -266,7 +380,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     else
         value[0] = 0;
     text(state, value);
-    lv_obj_set_style_text_color(state, lv_color_hex(f->volume_feedback ? 0xb6cfa4 : 0x9aaa99), 0);
+    text_color(state, f->volume_feedback ? 0xb6cfa4 : 0x9aaa99);
     visible(volume_track, f->volume_feedback);
     if (f->volume_feedback) {
         unsigned percent = f->volume > 100 ? 100 : f->volume;

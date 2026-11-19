@@ -23,6 +23,7 @@ class Connection:
         self.device, self.session, self.ws = device, session, ws
         self.source = "terminal:" + device
         self.input = self.input_id = self.scope = None
+        self.input_audio_id = None
         self.failed_input_id = None
         self.refused_input_id = None
         self.tasks = set()
@@ -50,12 +51,16 @@ class Connection:
         self.speech_changed = asyncio.Event()
         self.segment_completed = asyncio.Event()
         self.voice = None
-        self.display = TerminalDisplay(self.conversation, self.send, self.settings)
+        self.display = TerminalDisplay(self.conversation, self.send, self.settings, self.send_binary)
 
     async def send(self, event_type, **data):
         text = protocol.encode_event(event_type, data)
         async with self.send_lock:
             await asyncio.wait_for(self.ws.send_str(text), 5)
+
+    async def send_binary(self, data):
+        async with self.send_lock:
+            await asyncio.wait_for(self.ws.send_bytes(data), 5)
 
     def spawn(self, coro, name):
         task = self.context.spawn(coro, "passport-" + name)
@@ -88,6 +93,8 @@ class Connection:
             binding=self.session,
             server_time=int(time.time()),
             notification_list_ids=True,
+            input_audio_ids=True,
+            image_strips=True,
         )
         await self.send_configuration()
         await self.send("history.index", **history)
@@ -111,12 +118,21 @@ class Connection:
         try:
             if frame.type == WSMsgType.BINARY:
                 operation = "input.pcm"
+                audio = frame.data
+                if audio.startswith(protocol.INPUT_AUDIO_ID_TAG):
+                    offset = len(protocol.INPUT_AUDIO_ID_TAG)
+                    end = offset + protocol.INPUT_AUDIO_ID_BYTES
+                    if self.input is None or self.input_audio_id != audio[offset:end]:
+                        return  # Late data or audio for a start rejected before prepare.
+                    audio = audio[end:]
+                elif self.input_audio_id is not None:
+                    return
                 if self.input is None and self.failed_input_id:
                     return  # The failed input may still have PCM queued on the device.
-                if self.input is None or len(frame.data) < 6:
+                if self.input is None or len(audio) < 6:
                     raise SpeechError("speech_input_not_started")
-                sequence = struct.unpack("!I", frame.data[:4])[0]
-                await self.input.accept(sequence, frame.data[4:])
+                sequence = struct.unpack("!I", audio[:4])[0]
+                await self.input.accept(sequence, audio[4:])
             else:
                 payload = json.loads(frame.data)
                 if not isinstance(payload, dict):
@@ -133,7 +149,18 @@ class Connection:
             ):
                 await self.fail_capture(exc, self.input_id, operation)
             else:
-                ident = request_id[:36] if operation == "notifications.list" and isinstance(request_id, str) else None
+                ident = (
+                    request_id[:36]
+                    if operation == "notifications.list" and isinstance(request_id, str)
+                    else None
+                )
+                if (
+                    operation
+                    and operation.startswith("image.stream.")
+                    and type(request_id) is int
+                    and 0 < request_id < 2**32
+                ):
+                    ident = request_id
                 await self.error(exc, request_id=ident, operation=operation)
 
     async def fail_capture(self, exc, ident, operation):
@@ -170,6 +197,9 @@ class Connection:
                 await self.input_receipt(ident, await self.receipt("receipt", ident))
                 return
             if kind == "input.begin":
+                audio_ids = data.get("audio_ids", False)
+                if type(audio_ids) is not bool:
+                    raise ValueError("Invalid input audio framing")
                 if self.input or self.confirmation or self.finish_task and not self.finish_task.done():
                     if ident != self.input_id:
                         self.refused_input_id = ident
@@ -183,6 +213,7 @@ class Connection:
                     await self.input_receipt(ident, result)
                     return
                 self.input_id = ident
+                self.input_audio_id = uuid.UUID(ident).bytes if audio_ids else None
                 self.failed_input_id = None
                 self.confirmation = None
                 self.last_partial = ""
@@ -190,7 +221,10 @@ class Connection:
                 self.work = result["work_id"]
                 self.input = await self.context.invoke(SpeechRequest("recognize", self.scope), timeout=35)
                 self.spawn(self.watch_transcript(self.input, ident), "transcript")
-                await self.send("input.ready", request_id=ident, max_audio_bytes=self.input.max_bytes)
+                if audio_ids:
+                    self.spawn(self.send_input_ready(self.input, ident), "input-ready")
+                else:
+                    await self.send("input.ready", request_id=ident, max_audio_bytes=self.input.max_bytes)
                 return
             if ident != self.input_id:
                 if kind == "input.cancel" and ident == self.refused_input_id:
@@ -339,6 +373,14 @@ class Connection:
             )
             await self.send("notification.receipt", id=data["id"], result=result)
 
+    async def send_input_ready(self, stream, ident):
+        if self.closed or self.input is not stream:
+            return
+        try:
+            await self.send("input.ready", request_id=ident, max_audio_bytes=stream.max_bytes)
+        except (ConnectionError, TimeoutError):
+            await self.ws.close(code=1011)
+
     async def commit(self, ident, text):
         self.committing = True
         try:
@@ -422,6 +464,12 @@ class Connection:
             await stream.close()
         if self.input:
             stream, self.input = self.input, None
+            self.context.log.info(
+                "passport_capture_cancelled input=%s frames=%s audio_bytes=%s",
+                ident,
+                stream.sequence,
+                stream.size,
+            )
             await stream.close()
         self.confirmation = None
         self.input_id = None
@@ -767,8 +815,7 @@ class Connection:
                     if generation != self.generation:
                         return
                     self.credit -= len(chunk)
-                    async with self.send_lock:
-                        await asyncio.wait_for(self.ws.send_bytes(struct.pack("!I", generation) + chunk), 5)
+                    await self.send_binary(struct.pack("!I", generation) + chunk)
             if generation == self.generation:
                 self.playing["sent"] = True
                 await self.send("playback.end", generation=generation)

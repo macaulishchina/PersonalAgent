@@ -1,4 +1,5 @@
 #include "terminal_model.h"
+#include "terminal_limits.h"
 #include <assert.h>
 #include <string.h>
 static void test_input_lifecycle(void) {
@@ -8,7 +9,7 @@ static void test_input_lifecycle(void) {
     assert(!pp_input_start(&s, 101));
     assert(pp_input_capturing(&s));
     assert(!pp_input_listening(&s)); /* Prebuffer is invisible to short/double clicks. */
-    assert(pp_input_begin(&s));
+    assert(pp_input_begin(&s, false));
     assert(pp_input_listening(&s));
     pp_input_release(&s); /* release must work while provider opens */
     assert(!pp_input_listening(&s));
@@ -26,7 +27,7 @@ static void test_input_lifecycle(void) {
 
     assert(pp_input_start(&s, UINT32_MAX - 999));
     generation = s.generation;
-    assert(pp_input_begin(&s));
+    assert(pp_input_begin(&s, false));
     assert(pp_input_ready(&s, generation, 1920000));
     assert(!pp_input_limit(&s, 98, 2000));
     assert(pp_input_limit(&s, 1000, 2000));
@@ -58,11 +59,11 @@ static void test_input_lifecycle(void) {
     assert(!pp_input_ready(&s, generation, 1920000));
     assert(!pp_input_transcript(&s, generation));
     assert(pp_input_start(&s, 3000));
-    assert(pp_input_begin(&s));
+    assert(pp_input_begin(&s, false));
     generation = s.generation;
     pp_input_abort(&s);
     assert(pp_input_start(&s, 4000));
-    assert(pp_input_begin(&s));
+    assert(pp_input_begin(&s, false));
     assert(!pp_input_ready(&s, generation, 1920000)); /* cancelled callback cannot revive input */
 }
 static void test_audio_limit(void) {
@@ -70,7 +71,7 @@ static void test_audio_limit(void) {
     for (unsigned attempt = 0; attempt < 3; attempt++) {
         assert(pp_input_start(&s, attempt * 70000));
         unsigned generation = s.generation;
-        assert(pp_input_begin(&s));
+        assert(pp_input_begin(&s, false));
         assert(!pp_input_ready(&s, generation, 0));
         assert(!pp_input_ready(&s, generation, 1920001));
         assert(pp_input_ready(&s, generation, 1920000));
@@ -94,7 +95,7 @@ static void test_audio_limit(void) {
         }
     }
     assert(pp_input_start(&s, 250000));
-    assert(pp_input_begin(&s));
+    assert(pp_input_begin(&s, false));
     assert(pp_input_ready(&s, s.generation, 32000));
     assert(!pp_input_audio(&s, 0) && !pp_input_audio(&s, 3));
     assert(!pp_input_limit(&s, 250999, 60000));
@@ -103,6 +104,31 @@ static void test_audio_limit(void) {
     pp_input_abort(&s);
     assert(!pp_input_audio(&s, 640));
 }
+static void test_opening_audio_uses_only_the_guaranteed_prefix(void) {
+    pp_input_t s = {0};
+    assert(pp_input_start(&s, 10));
+    assert(pp_input_begin(&s, true));
+    assert(pp_input_audio_room(&s) == PP_INPUT_EARLY_BYTES);
+    for (unsigned i = 0; i < PP_INPUT_EARLY_BYTES / PP_INPUT_BATCH_BYTES; i++)
+        assert(pp_input_audio(&s, PP_INPUT_BATCH_BYTES));
+    assert(!pp_input_audio(&s, PP_CAPTURE_BYTES));
+    assert(s.phase == PP_INPUT_OPENING && !s.limited);
+    pp_input_release(&s);
+    assert(!pp_input_drained(&s));
+    assert(pp_input_ready(&s, s.generation, PP_INPUT_EARLY_BYTES));
+    assert(s.phase == PP_INPUT_DRAINING && s.limited);
+    assert(pp_input_audio_room(&s) == 0);
+    assert(pp_input_drained(&s));
+    assert(pp_input_transcript(&s, s.generation) && s.phase == PP_INPUT_CONFIRM);
+
+    pp_input_abort(&s);
+    assert(pp_input_start(&s, 20));
+    assert(pp_input_begin(&s, false));
+    assert(!pp_input_audio(&s, PP_CAPTURE_BYTES));
+    assert(pp_input_ready(&s, s.generation, 1920000));
+    assert(pp_input_audio(&s, PP_CAPTURE_BYTES));
+}
+
 static void test_disconnected_input(void) {
     for (unsigned phase = PP_INPUT_IDLE; phase <= PP_INPUT_UNKNOWN; phase++) {
         pp_input_t input = {.phase = phase, .generation = 11};
@@ -121,6 +147,7 @@ int main(void) {
     test_disconnected_input();
     test_input_lifecycle();
     test_audio_limit();
+    test_opening_audio_uses_only_the_guaranteed_prefix();
     pp_button_t b = {0};
     assert(pp_press(&b, 0, false) == PP_CAPTURE);
     assert(pp_tick(&b, 199) == PP_NONE);

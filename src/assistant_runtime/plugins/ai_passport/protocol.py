@@ -1,6 +1,8 @@
 """Wire-level contracts of PA-Terminal protocol 2 (ESP32-C3, no PSRAM)."""
 
+import hashlib
 import json
+import struct
 
 from assistant_runtime.api.speech import SpeechError
 
@@ -11,9 +13,15 @@ OUTPUT_RATE = 24000
 PLAYBACK_WINDOW = 8192
 PLAYBACK_CHUNK = 4096
 IMAGE_CHUNK = 2048
+IMAGE_STRIP_ROWS = 8
+IMAGE_STRIP_WIDTH = 216
+IMAGE_STRIP_HEIGHT = 194
+IMAGE_STRIP_TAG = b"\xff\xff\xff\xff"
+INPUT_AUDIO_ID_TAG = b"\xff\xff\xff\xff"
+INPUT_AUDIO_ID_BYTES = 16
 
 _COMMAND_FIELDS = {
-    "input.begin": {"request_id", "mode"},
+    "input.begin": {"request_id", "mode", "audio_ids"},
     "input.finish": {"request_id", "frames", "confirmation_required"},
     "input.confirm": {"request_id"},
     "input.cancel": {"request_id"},
@@ -33,7 +41,15 @@ _COMMAND_FIELDS = {
     "image.open": {"message_id", "image_id", "width", "height"},
     "image.chunk": {"version", "offset"},
     "image.close": set(),
+    "image.stream.open": {"request_id", "message_id", "image_id", "width", "height"},
+    "image.stream.next": {"request_id", "row"},
+    "image.stream.close": {"request_id"},
 }
+
+
+def image_strip(request_id, row, rows, pixels):
+    digest = hashlib.sha256(pixels).digest()[:8]
+    return struct.pack("!4sIHH8s", IMAGE_STRIP_TAG, request_id, row, rows, digest) + pixels
 
 
 def command_type(data):

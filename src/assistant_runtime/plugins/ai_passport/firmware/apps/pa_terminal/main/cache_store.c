@@ -1,5 +1,6 @@
 #include "cache_store.h"
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,13 +25,16 @@ static uint32_t crc_step(uint32_t result, const void *data, size_t bytes) {
     return result;
 }
 static uint32_t crc(const void *data, size_t bytes) { return ~crc_step(UINT32_MAX, data, bytes); }
-static bool valid_body(FILE *file, const header_t *h) {
+static bool allowed(const pp_cache_store_t *store) {
+    return !store->allowed || store->allowed(store->context);
+}
+static bool valid_body(const pp_cache_store_t *s, FILE *file, const header_t *h) {
     unsigned char block[256];
     size_t remaining = h->size;
     uint32_t sum = UINT32_MAX;
     while (remaining) {
         size_t bytes = remaining < sizeof(block) ? remaining : sizeof(block);
-        if (fread(block, 1, bytes, file) != bytes)
+        if (!allowed(s) || fread(block, 1, bytes, file) != bytes)
             return false;
         sum = crc_step(sum, block, bytes);
         remaining -= bytes;
@@ -63,7 +67,12 @@ bool pp_cache_store_open(pp_cache_store_t *s, const char *root, size_t budget) {
     memset(s, 0, sizeof(*s));
     strcpy(s->root, root);
     s->budget = budget;
-    DIR *dir = opendir(root);
+    return true;
+}
+bool pp_cache_store_recover(pp_cache_store_t *s) {
+    if (!allowed(s))
+        return false;
+    DIR *dir = opendir(s->root);
     if (!dir)
         return false;
     char path[192];
@@ -71,19 +80,28 @@ bool pp_cache_store_open(pp_cache_store_t *s, const char *root, size_t budget) {
     while ((entry = readdir(dir))) {
         if (!key_valid(entry->d_name) || !path_for(s, entry->d_name, path))
             continue;
+        if (!allowed(s)) {
+            closedir(dir);
+            return false;
+        }
         FILE *file = fopen(path, "rb");
         header_t h;
         bool valid = file && header(file, &h);
+        bool io_error = !file || ferror(file);
         if (file)
             fclose(file);
-        if (!valid)
-            unlink(path);
-        else if (h.sequence > s->sequence)
+        if (io_error) {
+            closedir(dir);
+            return false;
+        }
+        if (valid && h.sequence > s->sequence)
             s->sequence = h.sequence;
     }
     closedir(dir);
-    if (path_for(s, ".pending", path))
-        unlink(path);
+    if (!allowed(s))
+        return false;
+    if (path_for(s, ".pending", path) && unlink(path) && errno != ENOENT)
+        return false;
     return true;
 }
 void pp_cache_store_scope(pp_cache_store_t *s, const unsigned char scope[16],
@@ -93,39 +111,38 @@ void pp_cache_store_scope(pp_cache_store_t *s, const unsigned char scope[16],
     if (s->pin_count)
         memcpy(s->pins, pins, s->pin_count * 16);
 }
-void pp_cache_value_free(pp_cache_value_t *v) {
-    free(v->data);
-    memset(v, 0, sizeof(*v));
-}
-bool pp_cache_store_get_limit(pp_cache_store_t *s, const char key[65], size_t limit,
-                              pp_cache_value_t *v) {
+pp_cache_status_t pp_cache_store_read(pp_cache_store_t *s, const char key[65],
+                                     pp_cache_value_t *v,
+                                     bool (*reserve)(pp_buffer_t *, size_t, void *), void *context) {
     char path[192];
-    memset(v, 0, sizeof(*v));
+    *v = (pp_cache_value_t){0};
+    if (!allowed(s))
+        return PP_CACHE_BUSY;
     if (!key_valid(key) || !path_for(s, key, path))
-        return false;
+        return PP_CACHE_IO_ERROR;
     FILE *file = fopen(path, "rb");
     if (!file)
-        return false;
+        return errno == ENOENT ? PP_CACHE_MISSING : PP_CACHE_IO_ERROR;
     header_t h;
-    bool valid = header(file, &h) && h.size <= limit && !memcmp(h.scope, s->scope, sizeof(h.scope));
-    if (valid) {
-        v->data = malloc(h.size + 1);
-        valid = v->data && fread(v->data, 1, h.size, file) == h.size &&
-                crc(v->data, h.size) == h.data_crc;
-    }
+    pp_cache_status_t result = PP_CACHE_HIT;
+    if (!header(file, &h))
+        result = ferror(file) ? PP_CACHE_IO_ERROR : PP_CACHE_CORRUPT;
+    else if (memcmp(h.scope, s->scope, sizeof(h.scope)))
+        result = PP_CACHE_MISSING;
+    else if (!allowed(s))
+        result = PP_CACHE_BUSY;
+    else if (!reserve(&v->bytes, h.size ? h.size : 1, context))
+        result = PP_CACHE_NO_MEMORY;
+    else if (fread(v->bytes.data, 1, h.size, file) != h.size || crc(v->bytes.data, h.size) != h.data_crc)
+        result = ferror(file) ? PP_CACHE_IO_ERROR : PP_CACHE_CORRUPT;
     fclose(file);
-    if (!valid) {
-        pp_cache_value_free(v);
-        return false; /* Allocation failure must not destroy useful data. */
+    if (result == PP_CACHE_HIT) {
+        v->bytes.size = h.size;
+        v->aux_size = h.aux_size;
+        memcpy(v->aux, h.aux, h.aux_size);
     }
-    ((char *)v->data)[h.size] = 0;
-    v->size = h.size;
-    v->aux_size = h.aux_size;
-    memcpy(v->aux, h.aux, h.aux_size);
-    return true;
-}
-bool pp_cache_store_get(pp_cache_store_t *s, const char key[65], pp_cache_value_t *v) {
-    return pp_cache_store_get_limit(s, key, PP_CACHE_VALUE_MAX, v);
+    /* The caller releases any allocation even after a failed body read. */
+    return result;
 }
 static bool protected(const pp_cache_store_t *s, const header_t *h) {
     if (memcmp(s->scope, h->scope, sizeof(h->scope)))
@@ -138,11 +155,13 @@ static bool protected(const pp_cache_store_t *s, const header_t *h) {
     return false;
 }
 static size_t charge(size_t bytes) { return (bytes + 4095u) / 4096u * 4096u; }
-static bool room(pp_cache_store_t *s, const char *replaced, size_t bytes, size_t limit) {
+static pp_cache_status_t room(pp_cache_store_t *s, const char *replaced, size_t bytes, size_t limit) {
     for (unsigned attempt = 0; attempt <= PP_CACHE_OBJECTS; attempt++) {
+        if (!allowed(s))
+            return PP_CACHE_BUSY;
         DIR *dir = opendir(s->root);
         if (!dir)
-            return false;
+            return PP_CACHE_IO_ERROR;
         size_t used = 0;
         unsigned count = 0;
         bool replacing = false;
@@ -152,13 +171,23 @@ static bool room(pp_cache_store_t *s, const char *replaced, size_t bytes, size_t
         while ((entry = readdir(dir))) {
             if (!key_valid(entry->d_name) || !path_for(s, entry->d_name, path))
                 continue;
+            if (!allowed(s)) {
+                closedir(dir);
+                return PP_CACHE_BUSY;
+            }
             FILE *file = fopen(path, "rb");
             header_t h;
             bool valid = file && header(file, &h);
+            bool io_error = !file || ferror(file);
             if (file)
                 fclose(file);
+            if (io_error) {
+                closedir(dir);
+                return PP_CACHE_IO_ERROR;
+            }
             if (!valid) {
-                unlink(path);
+                if (allowed(s))
+                    unlink(path);
                 continue;
             }
             used += charge(sizeof(h) + h.size);
@@ -174,21 +203,27 @@ static bool room(pp_cache_store_t *s, const char *replaced, size_t bytes, size_t
          * stays outside the data budget for filesystem metadata and COW. */
         if (used + charge(bytes) <= limit &&
             (count < PP_CACHE_OBJECTS || (replacing && count == PP_CACHE_OBJECTS)))
-            return true;
-        if (!victim[0] || !path_for(s, victim, path) || unlink(path))
-            return false;
+            return PP_CACHE_HIT;
+        if (!allowed(s))
+            return PP_CACHE_BUSY;
+        if (!victim[0])
+            return PP_CACHE_FULL;
+        if (!path_for(s, victim, path) || unlink(path))
+            return PP_CACHE_IO_ERROR;
     }
-    return false;
+    return PP_CACHE_FULL;
 }
-bool pp_cache_store_put(pp_cache_store_t *s, const char key[65], const unsigned char owner[16],
+pp_cache_status_t pp_cache_store_write(pp_cache_store_t *s, const char key[65], const unsigned char owner[16],
                         bool index, const void *data, size_t size, const void *aux,
                         size_t aux_size) {
     if (!key_valid(key) || !data || size > PP_CACHE_VALUE_MAX || aux_size > PP_CACHE_AUX_MAX ||
         (aux_size && !aux) || s->sequence == UINT64_MAX)
-        return false;
+        return PP_CACHE_IO_ERROR;
+    if (!allowed(s))
+        return PP_CACHE_BUSY;
     char path[192], staged[192];
     if (!path_for(s, key, path) || !path_for(s, ".pending", staged))
-        return false;
+        return PP_CACHE_IO_ERROR;
     header_t h = {.magic = CACHE_MAGIC,
                   .version = 1,
                   .sequence = s->sequence + 1,
@@ -206,11 +241,11 @@ bool pp_cache_store_put(pp_cache_store_t *s, const char key[65], const unsigned 
         bool same = header(old, &prior) && prior.size == size && prior.data_crc == h.data_crc &&
                     prior.aux_size == aux_size && !memcmp(prior.scope, h.scope, sizeof(h.scope)) &&
                     !memcmp(prior.aux, h.aux, aux_size);
-        same = same && valid_body(old, &prior);
+        same = same && valid_body(s, old, &prior);
         fclose(old);
         /* No duplicate pixel allocation just to avoid an identical Flash write. */
         if (same)
-            return true;
+            return PP_CACHE_HIT;
     }
     /* Small LittleFS files may still occupy one whole Flash block. Charge
      * conservatively, not merely by payload length, and reserve previews space
@@ -218,23 +253,38 @@ bool pp_cache_store_put(pp_cache_store_t *s, const char key[65], const unsigned 
     size_t limit = s->budget;
     if (!index && !aux_size && limit >= 65536)
         limit -= 32768;
-    if (!room(s, key, sizeof(h) + size, limit))
-        return false;
+    pp_cache_status_t capacity = room(s, key, sizeof(h) + size, limit);
+    if (capacity != PP_CACHE_HIT)
+        return capacity;
+    if (!allowed(s))
+        return PP_CACHE_BUSY;
     h.header_crc = crc(&h, offsetof(header_t, header_crc));
     FILE *file = fopen(staged, "wb");
     if (!file)
-        return false;
-    bool ok = fwrite(&h, sizeof(h), 1, file) == 1 && fwrite(data, 1, size, file) == size &&
-              fflush(file) == 0 && fsync(fileno(file)) == 0;
+        return PP_CACHE_IO_ERROR;
+    bool ok = fwrite(&h, sizeof(h), 1, file) == 1;
+    for (size_t offset = 0; ok && offset < size;) {
+        size_t chunk = size - offset > 512 ? 512 : size - offset;
+        ok = allowed(s) && fwrite((const char *)data + offset, 1, chunk, file) == chunk;
+        offset += chunk;
+    }
+    ok = ok && allowed(s) && fflush(file) == 0 && allowed(s) && fsync(fileno(file)) == 0;
     if (fclose(file))
         ok = false;
-    if (ok)
+    bool commit = allowed(s);
+    if (ok && commit)
         ok = rename(staged, path) == 0;
+    else
+        ok = false;
     if (!ok)
         unlink(staged);
     else
         s->sequence = h.sequence;
-    return ok;
+    return ok ? PP_CACHE_HIT : (commit ? PP_CACHE_IO_ERROR : PP_CACHE_BUSY);
+}
+bool pp_cache_store_put(pp_cache_store_t *s, const char key[65], const unsigned char owner[16],
+                        bool index, const void *data, size_t size, const void *aux, size_t aux_size) {
+    return pp_cache_store_write(s, key, owner, index, data, size, aux, aux_size) == PP_CACHE_HIT;
 }
 bool pp_cache_store_clear(pp_cache_store_t *s) {
     DIR *dir = opendir(s->root);

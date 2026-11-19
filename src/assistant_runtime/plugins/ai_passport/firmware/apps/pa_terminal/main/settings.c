@@ -112,12 +112,28 @@ bool pp_settings_refresh(pp_terminal_settings_t *view) {
     xSemaphoreGive(lock);
     return true;
 }
-esp_err_t pp_settings_snapshot(pp_settings_t *s) {
+esp_err_t pp_settings_connection(pp_connection_settings_t *s, pp_buffer_t *certificate) {
     if (!lock || !xSemaphoreTake(lock, pdMS_TO_TICKS(2000)))
         return ESP_ERR_TIMEOUT;
-    *s = stored;
+    esp_err_t error = ESP_OK;
+    if (!strncmp(stored.url, "https://", 8) && stored.ca[0]) {
+        size_t size = strlen(stored.ca) + 1;
+        if (pp_buffer_reserve(certificate, size, PP_MEMORY_CRITICAL, PP_MEMORY_TLS_CERT)) {
+            memcpy(certificate->data, stored.ca, size);
+            certificate->size = size;
+        } else
+            error = ESP_ERR_NO_MEM;
+    }
+    if (error == ESP_OK) {
+        memcpy(s->url, stored.url, sizeof(s->url));
+        memcpy(s->device, stored.device, sizeof(s->device));
+        memcpy(s->credential, stored.credential, sizeof(s->credential));
+        memcpy(s->wifi, stored.wifi, sizeof(s->wifi));
+        s->wifi_count = stored.wifi_count;
+        s->paired = stored.paired;
+    }
     xSemaphoreGive(lock);
-    return ESP_OK;
+    return error;
 }
 static pp_settings_t *candidate(void) {
     pp_settings_t *s = malloc(sizeof(*s));

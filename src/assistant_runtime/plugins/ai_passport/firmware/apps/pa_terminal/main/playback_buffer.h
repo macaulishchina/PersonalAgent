@@ -1,13 +1,17 @@
 #pragma once
+#include "byte_buffer.h"
 #include "terminal_limits.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#define PP_PLAYBACK_BLOCK_BYTES 2048u
+#define PP_PLAYBACK_BLOCKS (PP_PLAYBACK_WINDOW / PP_PLAYBACK_BLOCK_BYTES)
+
 /* Protocol credit counts PCM bytes. One I2S write may be outstanding.
  * The adapter serializes these operations; codec I/O runs outside the lock. */
 typedef struct {
-    uint8_t pcm[PP_PLAYBACK_WINDOW];
+    pp_buffer_t blocks[PP_PLAYBACK_BLOCKS];
     size_t head, queued, writing, credit;
     uint32_t generation, epoch;
     bool active;

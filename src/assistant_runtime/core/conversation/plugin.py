@@ -89,6 +89,7 @@ class Conversations:
             "history_index": {"session_id", "before", "after", "limit"},
             "message": {"session_id", "message_id", "offset", "limit"},
             "thumbnail": {"session_id", "message_id", "image_id", "width", "height"},
+            "image_raster": {"session_id", "message_id", "image_id", "width", "height"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
             "receipt": {"session_id", "request_id", "include_execution"},
@@ -141,19 +142,20 @@ class Conversations:
         if action in {"snapshot", "snapshot_receipt", "snapshot_inputs"}:
             return await self.snapshots.request(action, args)
         store = self.main.store
-        if action in {"message", "thumbnail"}:
+        if action in {"message", "thumbnail", "image_raster"}:
             item = store.get(args.get("message_id"))
             offset, limit = args.get("offset", 0), args.get("limit", 240)
             if not item or item["session_id"] != ident:
                 raise ValueError("Unknown conversation message")
             images = [ref for ref in item["attachments"] if ref.get("type", "").startswith("image/")][:4]
-            if action == "thumbnail":
+            if action != "message":
                 width, height = args.get("width", 160), args.get("height", 96)
+                max_width, max_height = (160, 96) if action == "thumbnail" else (216, 194)
                 if (
                     type(width) is not int
-                    or not 16 <= width <= 160
+                    or not 16 <= width <= max_width
                     or type(height) is not int
-                    or not 16 <= height <= 96
+                    or not 16 <= height <= max_height
                     or args.get("image_id") not in {r["id"] for r in images}
                 ):
                     raise ValueError("Invalid conversation image request")

@@ -7,14 +7,17 @@ from . import protocol
 
 
 class TerminalDisplay:
-    def __init__(self, conversation, send, settings):
+    def __init__(self, conversation, send, settings, send_binary):
         self.conversation = conversation
         self.send = send
         self.settings = settings
+        self.send_binary = send_binary
         self.thumbnail = None
+        self.stream = None
 
     def close_image(self):
         self.thumbnail = None
+        self.stream = None
 
     async def image(self, kind, data):
         if kind == "image.open":
@@ -53,6 +56,54 @@ class TerminalDisplay:
             )
         elif kind == "image.close":
             self.close_image()
+        else:
+            await self.image_stream(kind, data)
+
+    async def image_stream(self, kind, data):
+        ident = data.get("request_id")
+        if type(ident) is not int or not 0 < ident < 2**32:
+            raise ValueError("Invalid image request ID")
+        if kind == "image.stream.open":
+            self.close_image()
+            if not self.settings().get("show_images", True):
+                raise SpeechError("terminal_images_disabled")
+            width, height = data.get("width"), data.get("height")
+            if (
+                type(width) is not int
+                or not 16 <= width <= protocol.IMAGE_STRIP_WIDTH
+                or type(height) is not int
+                or not 16 <= height <= protocol.IMAGE_STRIP_HEIGHT
+            ):
+                raise ValueError("Invalid image viewport")
+            image = await self.conversation(
+                "image_raster",
+                message_id=data.get("message_id"),
+                image_id=data.get("image_id"),
+                width=width,
+                height=height,
+            )
+            self.stream = (ident, 0, image)
+            await self.send(
+                "image.stream.open",
+                request_id=ident,
+                message_id=data.get("message_id"),
+                **{k: v for k, v in image.items() if k != "data"},
+            )
+            return
+        if self.stream is None or ident != self.stream[0]:
+            return  # A command for an already replaced view cannot advance or close its successor.
+        if kind == "image.stream.close":
+            self.stream = None
+            return
+        _, expected, image = self.stream
+        row = data.get("row")
+        if type(row) is not int or row != expected or not 0 <= row < image["height"]:
+            raise ValueError("Invalid image row")
+        rows = min(protocol.IMAGE_STRIP_ROWS, image["height"] - row)
+        stride = 2 * image["width"]
+        pixels = image["data"][row * stride : (row + rows) * stride]
+        await self.send_binary(protocol.image_strip(ident, row, rows, pixels))
+        self.stream = (ident, row + rows, image) if row + rows < image["height"] else None
 
     async def history_index(self, data):
         page = await self.conversation(

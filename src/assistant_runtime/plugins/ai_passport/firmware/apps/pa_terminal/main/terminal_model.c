@@ -90,14 +90,15 @@ bool pp_input_start(pp_input_t *s, uint32_t now) {
     s->started = now;
     s->max_audio_bytes = 60u * 32000u;
     s->audio_bytes = 0;
-    s->released = s->limited = false;
+    s->released = s->limited = s->early_audio = false;
     s->phase = PP_INPUT_PREBUFFER;
     return true;
 }
-bool pp_input_begin(pp_input_t *s) {
+bool pp_input_begin(pp_input_t *s, bool early_audio) {
     if (s->phase != PP_INPUT_PREBUFFER || s->released)
         return false;
     s->phase = PP_INPUT_OPENING;
+    s->early_audio = early_audio;
     return true;
 }
 bool pp_input_ready(pp_input_t *s, uint32_t generation, unsigned max_audio_bytes) {
@@ -106,12 +107,22 @@ bool pp_input_ready(pp_input_t *s, uint32_t generation, unsigned max_audio_bytes
         return false;
     if (max_audio_bytes < s->max_audio_bytes)
         s->max_audio_bytes = max_audio_bytes;
+    if (s->audio_bytes == s->max_audio_bytes) {
+        s->limited = true;
+        s->released = true;
+    }
     s->phase = s->released ? PP_INPUT_DRAINING : PP_INPUT_RECORDING;
     return true;
 }
+unsigned pp_input_audio_room(const pp_input_t *s) {
+    if (s->phase == PP_INPUT_OPENING && s->early_audio)
+        return PP_INPUT_EARLY_BYTES - s->audio_bytes;
+    if (s->phase == PP_INPUT_RECORDING || s->phase == PP_INPUT_DRAINING)
+        return s->max_audio_bytes - s->audio_bytes;
+    return 0;
+}
 bool pp_input_audio(pp_input_t *s, unsigned bytes) {
-    if ((s->phase != PP_INPUT_RECORDING && s->phase != PP_INPUT_DRAINING) || !bytes || bytes % 2 ||
-        bytes > s->max_audio_bytes - s->audio_bytes)
+    if (!bytes || bytes % 2 || bytes > pp_input_audio_room(s))
         return false;
     s->audio_bytes += bytes;
     if (s->audio_bytes == s->max_audio_bytes) {

@@ -27,6 +27,19 @@ static size_t used(const char *root) {
     closedir(dir);
     return result;
 }
+static bool before_pause(void *staged_path) {
+    return access(staged_path, F_OK) != 0;
+}
+static bool reserve(pp_buffer_t *buffer, size_t bytes, void *limit) {
+    return (!limit || bytes <= *(size_t *)limit) &&
+           pp_buffer_reserve(buffer, bytes, PP_MEMORY_NORMAL, PP_MEMORY_CACHE);
+}
+static pp_cache_status_t read_value(pp_cache_store_t *store, const char *key, pp_cache_value_t *value) {
+    pp_cache_status_t status = pp_cache_store_read(store, key, value, reserve, NULL);
+    if (status != PP_CACHE_HIT)
+        pp_buffer_free(&value->bytes);
+    return status;
+}
 int main(void) {
     char root[] = "/tmp/pp-cache-XXXXXX";
     assert(mkdtemp(root));
@@ -50,16 +63,16 @@ int main(void) {
         assert(used(root) <= 8192);
     }
     pp_cache_value_t value;
-    assert(pp_cache_store_get(&store, pinned_key, &value));
-    assert(value.size == sizeof(data) && value.aux_size == 4 && !memcmp(value.aux, "aux", 4));
-    pp_cache_value_free(&value);
-    assert(!pp_cache_store_get_limit(&store, pinned_key, 100, &value));
-    assert(!value.data);
+    assert(PP_CACHE_HIT == read_value(&store, pinned_key, &value));
+    assert(value.bytes.size == sizeof(data) && value.aux_size == 4 && !memcmp(value.aux, "aux", 4));
+    pp_buffer_free(&value.bytes);
+    assert(PP_CACHE_NO_MEMORY == pp_cache_store_read(&store, pinned_key, &value, reserve, &(size_t){100}));
+    assert(!value.bytes.data);
     key(2, name);
-    assert(!pp_cache_store_get(&store, name, &value));
+    assert(PP_CACHE_MISSING == read_value(&store, name, &value));
     /* Namespace isolation applies even to a caller using the same storage key. */
     pp_cache_store_scope(&store, other, NULL, 0);
-    assert(!pp_cache_store_get(&store, pinned_key, &value));
+    assert(PP_CACHE_MISSING == read_value(&store, pinned_key, &value));
     pp_cache_store_scope(&store, scope, pinned, 1);
     /* A torn staged write cannot replace the last committed value. */
     snprintf(path, sizeof(path), "%s/.pending", root);
@@ -69,28 +82,40 @@ int main(void) {
     fclose(file);
     pp_cache_store_t reopened;
     assert(pp_cache_store_open(&reopened, root, 8192));
+    assert(pp_cache_store_recover(&reopened));
     pp_cache_store_scope(&reopened, scope, pinned, 1);
-    assert(pp_cache_store_get(&reopened, pinned_key, &value));
-    pp_cache_value_free(&value);
+    assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
+    pp_buffer_free(&value.bytes);
     assert(access(path, F_OK));
     /* Deterministic I/O failure leaves the old committed body readable. */
     assert(!mkdir(path, 0700));
     assert(
         !pp_cache_store_put(&reopened, pinned_key, pinned[0], false, "replacement", 11, NULL, 0));
-    assert(pp_cache_store_get(&reopened, pinned_key, &value));
-    pp_cache_value_free(&value);
+    assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
+    pp_buffer_free(&value.bytes);
     assert(!rmdir(path));
+    /* Denying further work during a staged write keeps the committed version. */
+    reopened.allowed = before_pause;
+    reopened.context = path;
+    char replacement[1024];
+    memset(replacement, 'y', sizeof(replacement));
+    assert(pp_cache_store_write(&reopened, pinned_key, pinned[0], false, replacement,
+                                  sizeof(replacement), NULL, 0) == PP_CACHE_BUSY);
+    reopened.allowed = NULL;
+    assert(read_value(&reopened, pinned_key, &value) == PP_CACHE_HIT);
+    assert(value.bytes.size == sizeof(data) && value.bytes.data[0] == 'x');
+    pp_buffer_free(&value.bytes);
     /* Corruption must not be delivered; an identical original repairs it. */
     snprintf(path, sizeof(path), "%s/%s", root, pinned_key);
     file = fopen(path, "r+b");
     assert(file && !fseek(file, -1, SEEK_END));
     assert(fputc('!', file) != EOF);
     fclose(file);
-    assert(!pp_cache_store_get(&reopened, pinned_key, &value));
+    assert(PP_CACHE_CORRUPT == read_value(&reopened, pinned_key, &value));
     assert(
         pp_cache_store_put(&reopened, pinned_key, pinned[0], false, data, sizeof(data), "aux", 4));
-    assert(pp_cache_store_get(&reopened, pinned_key, &value));
-    pp_cache_value_free(&value);
+    assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
+    pp_buffer_free(&value.bytes);
     char invalid[65] = "../../escape";
     assert(!pp_cache_store_put(&reopened, invalid, old, false, data, sizeof(data), NULL, 0));
     assert(!pp_cache_store_put(&reopened, pinned_key, old, false, data, PP_CACHE_VALUE_MAX + 1,
@@ -105,8 +130,8 @@ int main(void) {
     key(1000, name);
     char large[4096] = {0};
     assert(!pp_cache_store_put(&reopened, name, old, false, large, sizeof(large), NULL, 0));
-    assert(pp_cache_store_get(&reopened, pinned_key, &value));
-    pp_cache_value_free(&value);
+    assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
+    pp_buffer_free(&value.bytes);
     assert(pp_cache_store_clear(&reopened));
     assert(used(root) == 0);
     /* Charge Flash blocks, reserve image space, and keep accepting previews

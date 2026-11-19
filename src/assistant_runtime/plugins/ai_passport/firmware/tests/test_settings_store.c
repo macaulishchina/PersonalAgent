@@ -103,7 +103,6 @@ static void check_publication(pp_terminal_settings_t *ui) {
     assert(pp_preference(PP_PREF_VOLUME, 77, ui) == ESP_FAIL);
     assert(pp_settings_refresh(ui) && ui->revision == revision && ui->volume == 45);
     pp_settings_t full;
-    assert(pp_settings_snapshot(&full) == ESP_OK && full.volume == 45);
     assert(pp_settings_decode(nvs.settings, &full) && full.volume == 45);
     nvs.fail_settings_commit = false;
     assert(pp_preference(PP_PREF_VOLUME, 77, ui) == ESP_OK && ui->volume == 77);
@@ -143,12 +142,29 @@ static void check_identity_transition(pp_terminal_settings_t *ui) {
     assert(ui->wifi_count == 1 && ui->volume == 77 && ui->text_size == 18);
     assert(pp_pending_read(id, sizeof(id)) == ESP_OK && !id[0]);
 }
+static void check_connection_snapshot(void) {
+    pp_connection_settings_t connected = {0};
+    pp_buffer_t pem = {0}, next = {0};
+    assert(pp_settings_connection(&connected, &pem) == ESP_OK);
+    assert(connected.wifi_count == 1 && !strcmp(connected.wifi[0].ssid, "Home") && !pem.data);
+    const char *ca = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+    assert(pp_settings_bootstrap("{\"ssid\":\"Home\"}", "https://pa.local:8047", ca) == ESP_OK);
+    assert(pp_settings_connection(&connected, &pem) == ESP_OK);
+    assert(strlen(ca) + 1 == pem.size && !strcmp(pem.data, ca));
+    assert(pp_memory_stats().live[PP_MEMORY_TLS_CERT] == pem.size);
+    assert(pp_settings_bootstrap("{\"ssid\":\"Home\"}", "http://pa.local:8047", "") == ESP_OK);
+    assert(pp_settings_connection(&connected, &next) == ESP_OK && !next.data);
+    assert(!strcmp(pem.data, ca)); /* The established connection owns its CA across edits. */
+    pp_buffer_free(&pem);
+    assert(!pp_memory_stats().live[PP_MEMORY_TLS_CERT]);
+}
 int main(void) {
     pp_terminal_settings_t ui = {0};
     assert(pp_settings_load(&ui) == ESP_OK && ui.revision && !ui.paired);
     check_publication(&ui);
     check_cloud_receipt(&ui);
     check_identity_transition(&ui);
+    check_connection_snapshot();
     assert(!locked && !nvs.open);
     return 0;
 }

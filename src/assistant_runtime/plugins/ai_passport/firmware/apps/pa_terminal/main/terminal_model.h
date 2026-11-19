@@ -40,11 +40,12 @@ typedef struct {
     pp_input_phase_t phase;
     uint32_t generation, started;
     uint32_t max_audio_bytes, audio_bytes;
-    bool released, limited;
+    bool released, limited, early_audio;
 } pp_input_t;
 bool pp_input_start(pp_input_t *input, uint32_t now);
-bool pp_input_begin(pp_input_t *input);
+bool pp_input_begin(pp_input_t *input, bool early_audio);
 bool pp_input_ready(pp_input_t *input, uint32_t generation, unsigned max_audio_bytes);
+unsigned pp_input_audio_room(const pp_input_t *input);
 /* Count only frames admitted to transport; hard audio limits do not depend on
  * the microphone clock matching the wall clock exactly. */
 bool pp_input_audio(pp_input_t *input, unsigned bytes);

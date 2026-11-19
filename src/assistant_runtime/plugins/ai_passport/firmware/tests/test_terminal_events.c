@@ -1,3 +1,4 @@
+#undef realloc
 /* Only the linked firmware sources use the instrumented allocator. */
 #undef malloc
 #undef free
@@ -42,10 +43,9 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned wait) {
 void xQueueReset(QueueHandle_t q) { q->count = 0; }
 void vQueueDelete(QueueHandle_t q) { q->count = 0; }
 void pp_audio_capture_release(void) {}
-void *pp_test_realloc(void *p, size_t n) { return realloc(p, n); }
-void *pp_test_malloc(size_t n) {
+void *pp_test_realloc(void *p, size_t n) {
     copies++;
-    return fail_copy ? NULL : malloc(n);
+    return fail_copy ? NULL : realloc(p, n);
 }
 void pp_test_free(void *p) {
     if (watched && watched == p) {

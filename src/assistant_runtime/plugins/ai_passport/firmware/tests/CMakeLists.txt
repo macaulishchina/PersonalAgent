@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(ppdemo_host C)
 enable_testing()
-add_executable(test_cache_store test_cache_store.c ../apps/pa_terminal/main/cache_store.c)
+add_executable(test_cache_store test_cache_store.c ../apps/pa_terminal/main/cache_store.c
+               ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_cache_store PRIVATE ../apps/pa_terminal/main)
 target_compile_definitions(test_cache_store PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(test_cache_store PRIVATE -Wall -Wextra -Werror)
@@ -34,7 +35,8 @@ target_include_directories(test_navigation PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_navigation PRIVATE -Wall -Wextra -Werror)
 add_test(NAME navigation COMMAND test_navigation)
 
-add_executable(test_playback_buffer test_playback_buffer.c ../apps/pa_terminal/main/playback_buffer.c)
+add_executable(test_playback_buffer test_playback_buffer.c ../apps/pa_terminal/main/playback_buffer.c
+               ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_playback_buffer PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_playback_buffer PRIVATE -Wall -Wextra -Werror)
 add_test(NAME playback_buffer COMMAND test_playback_buffer)
@@ -42,7 +44,7 @@ add_test(NAME playback_buffer COMMAND test_playback_buffer)
 add_executable(test_byte_buffer test_byte_buffer.c ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_byte_buffer PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_byte_buffer PRIVATE -Wall -Wextra -Werror)
-set_source_files_properties(../apps/pa_terminal/main/byte_buffer.c PROPERTIES COMPILE_DEFINITIONS "realloc=pp_test_realloc")
+target_compile_definitions(test_byte_buffer PRIVATE realloc=pp_test_realloc)
 add_test(NAME byte_buffer COMMAND test_byte_buffer)
 
 # Actual mailbox with bounded, nonblocking host queues and observable allocation failures.
@@ -54,7 +56,7 @@ endforeach()
 add_executable(test_terminal_events test_terminal_events.c ../apps/pa_terminal/main/terminal_events.c
                ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_terminal_events PRIVATE "${event_stubs}" stubs ../apps/pa_terminal/main)
-target_compile_definitions(test_terminal_events PRIVATE malloc=pp_test_malloc free=pp_test_free)
+target_compile_definitions(test_terminal_events PRIVATE realloc=pp_test_realloc free=pp_test_free)
 target_compile_options(test_terminal_events PRIVATE -Wall -Wextra -Werror)
 add_test(NAME terminal_events COMMAND test_terminal_events)
 
@@ -100,6 +102,7 @@ if(PP_CJSON_SOURCE)
         file(WRITE "${settings_stubs}/${header}.h" "#include \"settings_store_fixture.h\"\n")
     endforeach()
     add_executable(test_settings_store test_settings_store.c ../apps/pa_terminal/main/settings.c
+                   ../apps/pa_terminal/main/byte_buffer.c
                    ../apps/pa_terminal/main/settings_model.c ../apps/pa_terminal/main/network_model.c
                    "${PP_CJSON_SOURCE}")
     target_include_directories(test_settings_store PRIVATE "${settings_stubs}" stubs
@@ -122,6 +125,7 @@ if(PP_CJSON_SOURCE)
     endif()
     add_test(NAME timeline COMMAND test_timeline)
     add_executable(test_history_cache test_history_cache.c ../apps/pa_terminal/main/history_cache.c
+                   ../apps/pa_terminal/main/byte_buffer.c
                    ../apps/pa_terminal/main/timeline.c "${PP_CJSON_SOURCE}")
     target_include_directories(test_history_cache PRIVATE stubs ../apps/pa_terminal/main "${PP_CJSON_DIRECTORY}")
     target_compile_options(test_history_cache PRIVATE -Wall -Wextra -Werror)
@@ -151,8 +155,15 @@ foreach(header bsp_audio freertos/FreeRTOS freertos/queue freertos/task)
 endforeach()
 file(WRITE "${audio_stubs}/cJSON.h" "typedef struct cJSON cJSON;\n")
 add_executable(test_terminal_audio test_terminal_audio.c ../apps/pa_terminal/main/terminal_audio.c
-               ../apps/pa_terminal/main/playback_buffer.c)
+               ../apps/pa_terminal/main/playback_buffer.c ../apps/pa_terminal/main/byte_buffer.c)
+target_compile_definitions(test_terminal_audio PRIVATE realloc=pp_test_realloc)
 target_include_directories(test_terminal_audio PRIVATE "${audio_stubs}" stubs ../apps/pa_terminal/main)
 target_compile_options(test_terminal_audio PRIVATE -Wall -Wextra -Werror)
 add_test(NAME terminal_audio_codec_failure COMMAND test_terminal_audio mute)
 add_test(NAME terminal_audio_capture_overflow COMMAND test_terminal_audio overflow)
+
+add_executable(test_cache_resident test_cache_resident.c ../apps/pa_terminal/main/cache_resident.c
+               ../apps/pa_terminal/main/byte_buffer.c)
+target_include_directories(test_cache_resident PRIVATE ../apps/pa_terminal/main)
+target_compile_options(test_cache_resident PRIVATE -Wall -Wextra -Werror)
+add_test(NAME cache_resident COMMAND test_cache_resident)

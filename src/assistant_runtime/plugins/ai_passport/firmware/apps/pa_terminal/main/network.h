@@ -6,7 +6,10 @@
 #include <stdint.h>
 bool pp_net_start(void);
 bool pp_net_send(cJSON *command); /* Consumes JSON on all paths. */
-bool pp_net_pcm(uint32_t sequence, const void *pcm, size_t bytes);
+void pp_net_expect_image(uint32_t request); /* Zero closes the receive window. */
+size_t pp_net_audio_header(const uint8_t *input_id, uint32_t sequence, pp_buffer_t *packet,
+                           size_t pcm_capacity);
+bool pp_net_send_audio(pp_buffer_t *packet, uint32_t generation);
 bool pp_net_has_capacity(bool pcm);
 void pp_net_interrupt_input(void);
 bool pp_net_connected(void); /* Application handshake, not only TCP. */
@@ -26,5 +29,5 @@ void pp_received(const char *text, size_t bytes);
  * frames are copied so the transport can reuse its receive buffer. */
 #define PP_NET_REUSE_CAPACITY 4096u
 void pp_received_frame(pp_buffer_t *frame, uint32_t generation);
-bool pp_play_pcm(uint32_t generation, const void *pcm, size_t bytes);
+void pp_received_image(pp_buffer_t *frame, uint32_t generation);
 void pp_network_state(bool ready, const char *reason, uint32_t generation);

@@ -5,7 +5,7 @@ idf_component_register(
         "terminal_audio.c" "playback_buffer.c"
         "ui.c" "text_layout.c" "timeline.c" "image_model.c" "pictures.c"
         "network.c" "network_model.c" "provision.c" "provision_access.c" "byte_buffer.c"
-        "settings.c" "settings_model.c" "cache_store.c" "cache_disk.c" "history_cache.c"
+        "settings.c" "settings_model.c" "cache_store.c" "cache_disk.c" "cache_resident.c" "history_cache.c"
     INCLUDE_DIRS "."
     REQUIRES bsp pp_board esp_event esp_timer esp_wifi esp_netif esp_http_client esp_websocket_client
              nvs_flash json esp_app_format esp_hw_support mbedtls esp_http_server bootloader_support joltwallet__littlefs)
@@ -36,3 +36,8 @@ if(PP_PA_CA_FILE)
     target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_BINARY_DIR}/pp_release_ca.pem" TEXT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PP_HAS_RELEASE_CA=1)
 endif()
+
+# The VFS collapses all mount errors to ESP_FAIL. Its pinned LittleFS headers
+# allow a read-only probe to distinguish corruption from I/O and allocation errors.
+idf_component_get_property(pp_littlefs_dir joltwallet__littlefs COMPONENT_DIR)
+target_include_directories(${COMPONENT_LIB} PRIVATE "${pp_littlefs_dir}/src/littlefs" "${pp_littlefs_dir}/src")

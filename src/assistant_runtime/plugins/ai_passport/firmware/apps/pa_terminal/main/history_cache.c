@@ -24,7 +24,9 @@ static unsigned count, serial, warm_index, warm_offset, warm_pages;
 static unsigned warm_offsets[PP_CACHE_RECENT];
 static bool warm_done[PP_CACHE_RECENT];
 static char *pending_catalog;
-static char *pending_page;
+static unsigned pending_next;
+static char pending_image[33];
+static uint32_t retry_after;
 static unsigned index_write_ticket, index_write_failures;
 static unsigned recent_ticket;
 static bool enabled, warming, images_enabled;
@@ -54,11 +56,10 @@ static void configure(void) {
         snprintf(values[i], sizeof(values[i]), "%s/%.17g", recent[i].id, recent[i].revision);
         owners[i] = values[i];
     }
-    pp_disk_configure(scope, owners, count, enabled);
+    pp_objects_configure(scope, owners, count, enabled);
 }
 void pp_history_cache_init(void (*callback)(const char *, size_t)) {
     receive = callback;
-    (void)pp_disk_start();
 }
 void pp_history_cache_bind(const char *url, const char *device, const char *binding, bool active,
                            bool images) {
@@ -68,7 +69,7 @@ void pp_history_cache_bind(const char *url, const char *device, const char *bind
         warming = true;
     }
     images_enabled = images;
-    bool valid = pp_disk_identity(url, device, binding, next);
+    bool valid = pp_objects_identity(url, device, binding, next);
     active = active && binding[0] && valid;
     if (strcmp(scope, next) || enabled != active) {
         count = 0;
@@ -77,8 +78,6 @@ void pp_history_cache_bind(const char *url, const char *device, const char *bind
         warming = false;
         free(pending_catalog);
         pending_catalog = NULL;
-        free(pending_page);
-        pending_page = NULL;
         index_write_ticket = 0;
     }
     strcpy(scope, next);
@@ -124,9 +123,9 @@ static bool remote(const read_t *read, bool prefetch) {
         cJSON_AddBoolToObject(j, "prefetch", true);
     return pp_net_send(j);
 }
-static void unavailable(const read_t *read) {
+static void unavailable(const read_t *read, bool busy) {
     cJSON *j = cJSON_CreateObject();
-    cJSON_AddStringToObject(j, "type", "cache.unavailable");
+    cJSON_AddStringToObject(j, "type", busy ? "cache.busy" : "cache.unavailable");
     cJSON_AddStringToObject(j, "message_id", read->id);
     cJSON_AddNumberToObject(j, "offset", read->offset);
     deliver(j);
@@ -140,18 +139,16 @@ static bool begin(read_t *read, const char *id, unsigned offset, bool prefetch) 
     char key[256];
     if (enabled && pp_history_cache_revision(id, &read->revision)) {
         page_key(key, id, read->revision, offset);
-        if (pp_disk_read(key, read->ticket))
+        if (pp_objects_read(key, read->ticket, prefetch ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL))
             return true;
-        if (prefetch) {
-            read->active = false; /* Retry this local lookup when the bounded queue drains. */
-            return false;
-        }
+        read->active = false;
+        return false; /* Keep foreground data and retry the same background cursor. */
     }
     if (remote(read, prefetch))
         return true;
     read->active = false;
     if (!prefetch)
-        unavailable(read);
+        unavailable(read, false);
     return true;
 }
 bool pp_history_cache_page(const char *id, unsigned offset) {
@@ -159,7 +156,7 @@ bool pp_history_cache_page(const char *id, unsigned offset) {
 }
 bool pp_history_cache_recent(void) {
     unsigned ticket = (++serial << 2) | 2u;
-    if (!enabled || !pp_disk_read("recent", ticket))
+    if (!enabled || !pp_objects_read("recent", ticket, PP_MEMORY_NORMAL))
         return false;
     recent_ticket = ticket;
     return true;
@@ -193,8 +190,6 @@ static bool catalog(const cJSON *j) {
     configure();
     if (changed) {
         background.active = false;
-        free(pending_page);
-        pending_page = NULL;
         index_write_ticket = index_write_failures = 0;
         warm_index = warm_offset = warm_pages = 0;
         warming = true;
@@ -205,34 +200,38 @@ static bool catalog(const cJSON *j) {
     }
     return true;
 }
-static void completed(const cJSON *j, read_t *read, bool prefetch) {
-    const cJSON *revision = cJSON_GetObjectItemCaseSensitive(j, "updated");
-    if (!read->active || strcmp(text(j, "message_id"), read->id) ||
-        !cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(j, "offset")) ||
-        cJSON_GetObjectItemCaseSensitive(j, "offset")->valuedouble != read->offset)
-        return;
-    read->active = false;
-    if (!prefetch)
-        return;
-    if (!cJSON_IsNumber(revision) || revision->valuedouble != read->revision) {
-        warming = false; /* Wait for a current authoritative directory. */
-        return;
-    }
-    const cJSON *images = cJSON_GetObjectItemCaseSensitive(j, "images");
-    if (read->offset == 0 && warm_index < count && cJSON_IsArray(images)) {
-        const char *image = text(cJSON_GetArrayItem(images, 0), "id");
-        if (strlen(image) == 32)
-            strcpy(warm_images[warm_index], image);
-    }
+static void warm_metadata(const cJSON *j) {
     const cJSON *next = cJSON_GetObjectItemCaseSensitive(j, "next_offset");
-    if (cJSON_IsNumber(next) && next->valuedouble > warm_offset && next->valuedouble <= UINT32_MAX)
-        warm_offsets[warm_index] = (unsigned)next->valuedouble;
-    else
-        warm_done[warm_index] = true;
+    pending_next = cJSON_IsNumber(next) && next->valuedouble > warm_offset &&
+                   next->valuedouble <= UINT32_MAX ? (unsigned)next->valuedouble : 0;
+    pending_image[0] = 0;
+    if (!warm_offset) {
+        const char *image = text(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "images"), 0), "id");
+        if (strlen(image) == 32)
+            strcpy(pending_image, image);
+    }
+}
+static void warm_complete(void) {
+    background.active = false;
+    if (pending_image[0])
+        strcpy(warm_images[warm_index], pending_image);
+    warm_offsets[warm_index] = pending_next;
+    warm_done[warm_index] = !pending_next;
     warm_pages++;
     warm_index = (warm_index + 1) % count;
 }
-bool pp_history_cache_receive(cJSON *j) {
+static void warm_retry(void) {
+    background.active = false;
+    retry_after = now() + 500;
+}
+static pp_buffer_t payload(cJSON *j, pp_buffer_t *frame) {
+    if (frame && frame->data)
+        return pp_buffer_take(frame);
+    char *raw = cJSON_PrintUnformatted(j);
+    size_t size = raw ? strlen(raw) : 0;
+    return pp_buffer_adopt(raw, size, size + 1, PP_MEMORY_CACHE);
+}
+bool pp_history_cache_receive(cJSON *j, pp_buffer_t *frame) {
     const char *type = text(j, "type");
     if (!strcmp(type, "cache.index")) {
         if (!enabled || !catalog(j))
@@ -262,29 +261,27 @@ bool pp_history_cache_receive(cJSON *j) {
             !pp_timeline_decode(&page, j) || !page.complete || page.offset != background.offset ||
             page.revision != background.revision)
             return true;
+        warm_metadata(j);
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "cached")))
-            completed(j, &background, true);
+            warm_complete();
         else {
             char key[256], owner[192];
-            free(pending_page);
-            pending_page = cJSON_PrintUnformatted(j);
             page_key(key, page.id, page.revision, page.offset);
-            if (!pending_page || !pp_history_cache_owner(page.id, owner) ||
-                !pp_disk_write_confirm(key, owner, false, pending_page, strlen(pending_page),
-                                       background.ticket)) {
-                free(pending_page);
-                pending_page = NULL;
-                background.active = false;
-                warming = warm_pages >= count;
-                if (warming)
-                    warm_pages = 96; /* Keep the reserved preview budget usable. */
-            } else
-                background.started = now();
+            if (pp_history_cache_owner(page.id, owner)) {
+                pp_buffer_t data = payload(j, frame);
+                if (pp_objects_write(key, owner, false, &data, NULL, 0, background.ticket)) {
+                    background.started = now();
+                    return true;
+                }
+            }
+            warm_retry();
         }
         return true;
     }
-    if (!strcmp(type, "message.page"))
-        completed(j, &foreground, false);
+    if (!strcmp(type, "message.page") && foreground.active &&
+        !strcmp(text(j, "message_id"), foreground.id) &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j, "offset")) == foreground.offset)
+        foreground.active = false;
     double revision;
     const cJSON *updated = cJSON_GetObjectItemCaseSensitive(j, "updated");
     const char *id = text(j, "message_id");
@@ -294,128 +291,135 @@ bool pp_history_cache_receive(cJSON *j) {
         const cJSON *offset = cJSON_GetObjectItemCaseSensitive(j, "offset");
         if (cJSON_IsNumber(offset) && offset->valuedouble >= 0 &&
             offset->valuedouble <= UINT32_MAX) {
-            char key[256], owner[192], *raw = cJSON_PrintUnformatted(j);
+            char key[256], owner[192];
             page_key(key, id, revision, (unsigned)offset->valuedouble);
-            if (raw) {
-                if (pp_history_cache_owner(id, owner))
-                    pp_disk_write(key, owner, false, raw, strlen(raw));
-                free(raw);
+            if (pp_history_cache_owner(id, owner)) {
+                pp_buffer_t data = payload(j, frame);
+                pp_objects_write(key, owner, false, &data, NULL, 0, 0);
             }
         }
     }
     return prefetch;
 }
+void pp_history_cache_picture_done(const char *message, const char *image, double revision,
+                                   bool completed) {
+    if (warm_image >= count || strcmp(recent[warm_image].id, message) ||
+        recent[warm_image].revision != revision || strcmp(warm_images[warm_image], image))
+        return;
+    if (completed)
+        warm_image++;
+    else
+        retry_after = now() + 500;
+}
 void pp_history_cache_poll(bool idle) {
-    pp_disk_result_t result;
-    while (pp_disk_result(&result)) {
-        if (result.written) {
+    pp_cache_result_t result;
+    while (pp_objects_next(&result)) {
+        bool hit = result.status == PP_CACHE_HIT;
+        bool absent = result.status == PP_CACHE_MISSING || result.status == PP_CACHE_CORRUPT;
+        if ((result.ticket & 3u) == 3u) {
+            pp_picture_cached(&result);
+        } else if (result.written) {
             if (result.ticket == index_write_ticket) {
                 index_write_ticket = 0;
-                if (result.hit || ++index_write_failures >= 3) {
+                if (hit || (result.status != PP_CACHE_BUSY && result.status != PP_CACHE_NO_MEMORY &&
+                            ++index_write_failures >= 3)) {
                     free(pending_catalog);
                     pending_catalog = NULL;
-                }
-            } else if (background.active && result.ticket == background.ticket && pending_page) {
-                cJSON *j = result.hit ? cJSON_Parse(pending_page) : NULL;
-                if (j)
-                    completed(j, &background, true);
-                else {
+                } else
+                    retry_after = now() + 500;
+            } else if (background.active && result.ticket == background.ticket) {
+                if (hit)
+                    warm_complete();
+                else if (result.status == PP_CACHE_FULL) {
                     background.active = false;
                     warming = warm_pages >= count;
-                    if (warming)
-                        warm_pages = 96;
-                }
-                cJSON_Delete(j);
-                free(pending_page);
-                pending_page = NULL;
+                    warm_pages = 96; /* Keep the reserved preview budget usable. */
+                } else
+                    warm_retry();
             }
-        } else if ((result.ticket & 3u) == 3u) {
-            pp_picture_cached(&result);
         } else if ((result.ticket & 3u) == 2u) {
-            cJSON *j = result.hit ? cJSON_Parse(result.value.data) : NULL;
-            if (result.ticket == recent_ticket && enabled && !pp_net_connected() && j &&
-                catalog(j)) {
-                free(pending_catalog);
-                pending_catalog = NULL;
-                free(pending_page);
-                pending_page = NULL;
-                background.active = false;
-                index_write_ticket = 0;
-                cJSON_SetValuestring(cJSON_GetObjectItemCaseSensitive(j, "type"), "cache.restored");
-                deliver(j);
-            } else {
-                cJSON_Delete(j);
-                if (result.ticket == recent_ticket && !pp_net_connected()) {
+            if (result.ticket == recent_ticket && enabled && !pp_net_connected()) {
+                cJSON *j = hit ? cJSON_ParseWithLength(result.value.bytes.data, result.value.bytes.size) : NULL;
+                if (j && catalog(j)) {
                     free(pending_catalog);
                     pending_catalog = NULL;
-                    free(pending_page);
-                    pending_page = NULL;
-                    count = 0;
-                    memset(recent, 0, sizeof(recent));
-                    foreground.active = background.active = warming = false;
+                    background.active = false;
                     index_write_ticket = 0;
-                    cJSON *empty = cJSON_CreateObject();
-                    cJSON_AddStringToObject(empty, "type", "cache.empty");
-                    deliver(empty);
+                    cJSON_SetValuestring(cJSON_GetObjectItemCaseSensitive(j, "type"), "cache.restored");
+                    deliver(j);
+                } else {
+                    bool empty = absent || j;
+                    cJSON_Delete(j);
+                    cJSON *state = cJSON_CreateObject();
+                    cJSON_AddStringToObject(state, "type", empty ? "cache.empty" : "cache.busy");
+                    deliver(state);
                 }
             }
         } else {
-            read_t *read = foreground.active && foreground.ticket == result.ticket   ? &foreground
+            read_t *read = foreground.active && foreground.ticket == result.ticket ? &foreground
                            : background.active && background.ticket == result.ticket ? &background
-                                                                                     : NULL;
+                           : NULL;
             if (read) {
                 bool prefetch = read == &background;
-                cJSON *j = result.hit ? cJSON_Parse(result.value.data) : NULL;
+                cJSON *j = hit ? cJSON_ParseWithLength(result.value.bytes.data, result.value.bytes.size) : NULL;
                 pp_history_page_t page;
                 double current;
                 if (pp_history_cache_revision(read->id, &current) && current != read->revision) {
                     read->revision = current;
                     cJSON_Delete(j);
                     j = NULL;
+                    absent = true;
                 }
-                if (j &&
-                    (!pp_timeline_decode(&page, j) || !page.complete || strcmp(page.id, read->id) ||
-                     page.offset != read->offset || page.revision != read->revision)) {
+                if (j && (!pp_timeline_decode(&page, j) || !page.complete || strcmp(page.id, read->id) ||
+                          page.offset != read->offset || page.revision != read->revision)) {
                     cJSON_Delete(j);
                     j = NULL;
+                    absent = true;
                 }
-                if (j) {
-                    cJSON_SetValuestring(cJSON_GetObjectItemCaseSensitive(j, "type"),
-                                         "message.page");
+                if (j && prefetch) {
+                    warm_metadata(j);
+                    warm_complete();
+                    cJSON_Delete(j);
+                } else if (j) {
+                    cJSON_SetValuestring(cJSON_GetObjectItemCaseSensitive(j, "type"), "message.page");
                     cJSON_DeleteItemFromObject(j, "prefetch");
                     cJSON_AddBoolToObject(j, "cached", true);
-                    if (prefetch)
-                        cJSON_AddBoolToObject(j, "prefetch", true);
                     deliver(j);
-                } else if (!remote(read, prefetch)) {
+                } else if (!absent || !remote(read, prefetch)) {
                     read->active = false;
                     if (prefetch)
-                        warming = false;
+                        warm_retry();
                     else
-                        unavailable(read);
+                        unavailable(read, !absent);
                 }
             }
         }
-        pp_cache_value_free(&result.value);
+        pp_objects_release(&result);
     }
     if (foreground.active && now() - foreground.started > 15000) {
         foreground.active = false;
-        unavailable(&foreground);
+        unavailable(&foreground, true);
     }
-    if (background.active && now() - background.started > 15000) {
-        background.active = false;
-        warming = false;
-        free(pending_page);
-        pending_page = NULL;
-    }
-    if (idle && enabled && pp_net_connected() && !background.active && !foreground.active) {
+    if (background.active && now() - background.started > 15000)
+        warm_retry();
+    if (retry_after && (int32_t)(now() - retry_after) >= 0)
+        retry_after = 0;
+    if (idle && !retry_after && enabled && pp_net_connected() &&
+        !background.active && !foreground.active) {
         /* Publish only after every head was a verified hit or a confirmed
          * commit. This is an I/O receipt, not a timer or a network send receipt. */
         if (pending_catalog && !index_write_ticket && (warm_pages >= count || !count)) {
             unsigned ticket = ++serial << 2;
-            if (pp_disk_write_confirm("recent", "", true, pending_catalog, strlen(pending_catalog),
-                                      ticket))
-                index_write_ticket = ticket;
+            pp_buffer_t data = {0};
+            size_t length = strlen(pending_catalog);
+            if (pp_buffer_reserve(&data, length, PP_MEMORY_BACKGROUND, PP_MEMORY_CACHE)) {
+                memcpy(data.data, pending_catalog, length);
+                data.size = length;
+                if (pp_objects_write("recent", "", true, &data, NULL, 0, ticket))
+                    index_write_ticket = ticket;
+                else
+                    retry_after = now() + 500;
+            }
         }
         if (!warming)
             return;
@@ -429,11 +433,13 @@ void pp_history_cache_poll(bool idle) {
         }
         if (available && warm_pages < 96) {
             warm_offset = warm_offsets[warm_index];
-            begin(&background, recent[warm_index].id, warm_offset, true);
+            if (!begin(&background, recent[warm_index].id, warm_offset, true))
+                warm_retry();
         } else if (images_enabled && warm_image < count) {
-            unsigned index = warm_image++;
-            if (warm_images[index][0])
-                pp_picture_prefetch(recent[index].id, warm_images[index]);
+            if (!warm_images[warm_image][0])
+                warm_image++;
+            else if (!pp_picture_prefetch(recent[warm_image].id, warm_images[warm_image]))
+                retry_after = now() + 500;
         } else
             warming = false;
     }

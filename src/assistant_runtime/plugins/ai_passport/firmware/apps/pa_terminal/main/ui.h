@@ -27,3 +27,7 @@ size_t pp_ui_render(const pp_ui_frame_t *frame);
 size_t pp_ui_previous(const char *text, size_t start);
 /* Removes the old image while holding the render lock before the caller frees it. */
 bool pp_ui_image(const void *pixels, unsigned width, unsigned height);
+/* Poll begin/draw until completion. Draw borrows pixels until completion or pp_ui_image(NULL).
+ * A busy renderer is retried by the controller rather than blocking a key handler. */
+bool pp_ui_stream_begin(unsigned width, unsigned height);
+bool pp_ui_stream_draw(const void *pixels, unsigned row, unsigned rows);

@@ -36,7 +36,8 @@ void pp_events_key(bsp_btn_t key, bsp_btn_ev_t action, void *arg) {
 static void enqueue_owned(pp_event_t event) {
     if (!messages || xQueueSend(messages, &event, 0) != pdTRUE) {
         pp_buffer_free(&event.text);
-        event_error = true;
+        if (event.kind != PP_EVENT_IMAGE)
+            event_error = true;
     }
 }
 static void push_text(pp_event_kind_t kind, bool online, uint32_t generation, const char *text, size_t bytes) {
@@ -44,14 +45,15 @@ static void push_text(pp_event_kind_t kind, bool online, uint32_t generation, co
         event_error = true;
         return;
     }
-    char *copy = malloc(bytes + 1);
-    if (!copy) {
+    pp_buffer_t copy = {0};
+    if (!pp_buffer_reserve(&copy, bytes + 1, PP_MEMORY_CRITICAL, PP_MEMORY_WIRE)) {
         event_error = true;
         return;
     }
-    memcpy(copy, text, bytes);
-    copy[bytes] = 0;
-    enqueue_owned((pp_event_t){.kind = kind, .online = online, .generation = generation, .text = {copy, bytes, bytes + 1}});
+    memcpy(copy.data, text, bytes);
+    copy.data[bytes] = 0;
+    copy.size = bytes;
+    enqueue_owned((pp_event_t){.kind = kind, .online = online, .generation = generation, .text = copy});
 }
 void pp_received(const char *text, size_t bytes) {
     push_text(PP_EVENT_MESSAGE, false, 0, text, bytes);
@@ -67,13 +69,17 @@ void pp_received_frame(pp_buffer_t *frame, uint32_t generation) {
         push_text(PP_EVENT_MESSAGE, false, generation, frame->data ? frame->data : "", frame->size);
         return;
     }
-    pp_buffer_t owned = *frame;
-    *frame = (pp_buffer_t){0};
+    pp_buffer_t owned = pp_buffer_take(frame);
     owned.data[owned.size] = 0;
     enqueue_owned((pp_event_t){.kind = PP_EVENT_MESSAGE, .generation = generation, .text = owned});
 }
 void pp_network_state(bool online, const char *reason, uint32_t generation) {
     push_text(PP_EVENT_LINK, online, generation, reason, strlen(reason));
+}
+void pp_received_image(pp_buffer_t *frame, uint32_t generation) {
+    pp_buffer_set_use(frame, PP_MEMORY_IMAGE);
+    enqueue_owned((pp_event_t){.kind = PP_EVENT_IMAGE, .generation = generation,
+                               .text = pp_buffer_take(frame)});
 }
 bool pp_events_next(pp_event_t *event) {
     return xQueueReceive(keys, event, 0) || xQueueReceive(messages, event, 0);

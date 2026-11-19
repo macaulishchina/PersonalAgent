@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum { PP_EVENT_KEY, PP_EVENT_MESSAGE, PP_EVENT_LINK } pp_event_kind_t;
+typedef enum { PP_EVENT_KEY, PP_EVENT_MESSAGE, PP_EVENT_LINK, PP_EVENT_IMAGE } pp_event_kind_t;
 typedef struct {
     pp_event_kind_t kind;
     bsp_btn_t key;

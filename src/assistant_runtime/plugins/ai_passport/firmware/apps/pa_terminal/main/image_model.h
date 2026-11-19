@@ -1,6 +1,33 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+#define PP_IMAGE_MAX_WIDTH 160u
+#define PP_IMAGE_MAX_HEIGHT 96u
+#define PP_IMAGE_PREVIEW_WIDTH 64u
+#define PP_IMAGE_PREVIEW_HEIGHT 32u
+#define PP_IMAGE_VIEW_WIDTH 216u
+#define PP_IMAGE_VIEW_HEIGHT 194u
+#define PP_IMAGE_STRIP_ROWS 8u
+#define PP_IMAGE_STRIP_HEADER 20u
+#define PP_IMAGE_STRIP_MAX (PP_IMAGE_STRIP_HEADER + PP_IMAGE_VIEW_WIDTH * PP_IMAGE_STRIP_ROWS * 2u)
+
+typedef struct {
+    uint32_t request;
+    unsigned row, rows;
+} pp_image_strip_t;
+bool pp_image_strip_tag(const void *frame, size_t bytes);
+bool pp_image_strip_parse(pp_image_strip_t *strip, const void *frame, size_t bytes,
+                          unsigned width, unsigned height);
+void pp_image_preview_dimensions(unsigned width, unsigned height, unsigned *w, unsigned *h);
+void pp_image_preview_rows(unsigned char *out, unsigned w, unsigned h, const unsigned char *pixels,
+                           unsigned width, unsigned height, unsigned row, unsigned rows);
+
+/* Pixel storage is separate from the heap needed by transport and audio. */
+bool pp_image_has_headroom(size_t available, size_t bytes, bool background);
+bool pp_image_request_size(size_t available, size_t largest, size_t limit, bool background,
+                           unsigned *width, unsigned *height);
 
 typedef struct {
     char version[65];

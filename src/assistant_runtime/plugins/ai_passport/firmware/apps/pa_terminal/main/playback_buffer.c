@@ -1,6 +1,16 @@
 #include "playback_buffer.h"
 #include <string.h>
 
+_Static_assert(PP_PLAYBACK_WINDOW % PP_PLAYBACK_BLOCK_BYTES == 0, "Whole playback blocks");
+
+static size_t block_span(size_t position, size_t remaining) {
+    size_t span = PP_PLAYBACK_BLOCK_BYTES - position % PP_PLAYBACK_BLOCK_BYTES;
+    return span < remaining ? span : remaining;
+}
+static char *block_at(pp_playback_buffer_t *b, size_t position) {
+    return b->blocks[position / PP_PLAYBACK_BLOCK_BYTES].data + position % PP_PLAYBACK_BLOCK_BYTES;
+}
+
 void pp_playback_reset(pp_playback_buffer_t *b, uint32_t generation, bool active) {
     b->epoch++;
     b->generation = generation;
@@ -13,11 +23,13 @@ bool pp_playback_append(pp_playback_buffer_t *b, uint32_t generation, const void
     if (!pcm || !bytes || bytes % 2 || bytes > PP_PLAYBACK_WINDOW - b->queued - b->writing)
         return false;
     size_t tail = (b->head + b->queued) % PP_PLAYBACK_WINDOW;
-    size_t first = PP_PLAYBACK_WINDOW - tail;
-    if (first > bytes)
-        first = bytes;
-    memcpy(b->pcm + tail, pcm, first);
-    memcpy(b->pcm, (const uint8_t *)pcm + first, bytes - first);
+    const unsigned char *source = pcm;
+    for (size_t copied = 0; copied < bytes;) {
+        size_t n = block_span(tail, bytes - copied);
+        memcpy(block_at(b, tail), source + copied, n);
+        copied += n;
+        tail = (tail + n) % PP_PLAYBACK_WINDOW;
+    }
     b->queued += bytes;
     return true;
 }
@@ -28,7 +40,13 @@ size_t pp_playback_take(pp_playback_buffer_t *b, void *pcm, size_t capacity, uin
     if (n > PP_PLAYBACK_WINDOW - b->head)
         n = PP_PLAYBACK_WINDOW - b->head;
     n &= ~(size_t)1;
-    memcpy(pcm, b->pcm + b->head, n);
+    unsigned char *target = pcm;
+    for (size_t copied = 0; copied < n;) {
+        size_t pos = b->head + copied;
+        size_t span = block_span(pos, n - copied);
+        memcpy(target + copied, block_at(b, pos), span);
+        copied += span;
+    }
     b->head = (b->head + n) % PP_PLAYBACK_WINDOW;
     b->queued -= n;
     b->writing = n;
