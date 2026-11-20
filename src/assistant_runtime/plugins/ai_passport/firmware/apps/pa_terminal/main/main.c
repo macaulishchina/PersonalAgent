@@ -1387,7 +1387,7 @@ static void apply_configuration(void) {
 }
 static int battery = -1;
 
-static void dispatch_key(pp_event_t event, pp_route_t route) {
+static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
     if (button_state.wake_guard) {
         if (event.button == BSP_BTN_RELEASE)
             button_state.wake_guard = false;
@@ -1452,15 +1452,18 @@ static void dispatch_key(pp_event_t event, pp_route_t route) {
                 pp_navigation_back(&navigation);
                 set_status("选择任务查看");
             }
-        } else
-            actions(event.button == BSP_BTN_PRESS
-                        ? pp_press(&button_state, now_ms(), speech_session)
-                        : pp_release(&button_state, now_ms()));
+        } else if (event.button == BSP_BTN_PRESS) {
+            unsigned action = pp_press(&button_state, now, speech_session);
+            /* A short Wi-Fi gesture is replayed at release. Never open the mic then. */
+            actions(navigation.ok_wifi_retry ? action & ~PP_CAPTURE : action);
+        } else {
+            actions(pp_release(&button_state, now));
+        }
     } else if (event.button == BSP_BTN_PRESS) {
         pp_navigation_arrow_press(&navigation, event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN,
-                                  now_ms(), can_jump_to_latest(route));
+                                  now, can_jump_to_latest(route));
     } else if (event.button == BSP_BTN_RELEASE) {
-        handle_arrow_hold(route, now_ms());
+        handle_arrow_hold(route, now);
         pp_arrow_t key = event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN;
         if (!pp_navigation_arrow_release(&navigation, key))
             return;
@@ -1578,6 +1581,16 @@ static void dispatch_key(pp_event_t event, pp_route_t route) {
     }
 }
 
+static bool can_retry_wifi(pp_route_t route) {
+    return route != PP_ROUTE_CONFIRM && route != PP_ROUTE_REVIEW && configured &&
+           settings.wifi_count && !pp_provision_active() && !pp_net_wifi_connected();
+}
+static void handle_ok_hold(pp_route_t route, uint32_t now) {
+    if (!button_state.wake_guard && pp_navigation_ok_wifi_tick(&navigation, route, now)) {
+        button_state.released = false;
+        pp_net_retry_wifi();
+    }
+}
 static void handle_key(pp_event_t event) {
     const pp_route_t route = current_route();
     const uint32_t page_epoch = navigation.page_epoch;
@@ -1586,20 +1599,31 @@ static void handle_key(pp_event_t event) {
     if (event.key != BSP_BTN_OK) {
         if (event.button == BSP_BTN_PRESS)
             navigation.transition_click = false;
-        dispatch_key(event, route);
+        dispatch_key(event, route, now);
         return;
     }
     if (event.button == BSP_BTN_PRESS) {
-        if (!button_state.wake_guard && !pp_navigation_ok_press(&navigation, route, now))
+        if (!button_state.wake_guard &&
+            (!pp_navigation_ok_press(&navigation, route, now, can_retry_wifi(route)) ||
+             navigation.ok_wifi_retry))
             return;
-    } else if (!pp_navigation_ok_release(&navigation, route) && !button_state.wake_guard) {
-        /* Recording can move from home to chat while held. The audio gesture
-         * still owns this release; a destination control cannot consume it. */
-        if (button_state.down)
-            actions(pp_release(&button_state, now));
-        return;
+    } else {
+        const bool wifi_gesture = navigation.ok_held && navigation.ok_wifi_retry;
+        handle_ok_hold(route, now);
+        if (!pp_navigation_ok_release(&navigation, route) && !button_state.wake_guard) {
+            /* Recording can move from home to chat while held. The audio gesture
+             * still owns this release; a destination control cannot consume it. */
+            if (button_state.down)
+                actions(pp_release(&button_state, now));
+            return;
+        }
+        if (wifi_gesture && !button_state.wake_guard) {
+            pp_event_t press = event;
+            press.button = BSP_BTN_PRESS;
+            dispatch_key(press, route, navigation.ok_started);
+        }
     }
-    dispatch_key(event, route);
+    dispatch_key(event, route, now);
     if (event.button == BSP_BTN_RELEASE &&
         (navigation.page_epoch != page_epoch || current_route() != route))
         pp_navigation_ok_transition(&navigation, now);
@@ -1980,8 +2004,12 @@ void app_main(void) {
                               !pp_picture_active());
         if (view == PP_UI_IMAGE && !pp_picture_active())
             view = PP_UI_REPLY;
-        if (current_route() == PP_ROUTE_SESSION && !notice_list && !notice_view)
-            actions(pp_tick(&button_state, now_ms()));
+        const pp_route_t route = current_route();
+        const uint32_t now = now_ms();
+        handle_ok_hold(route, now);
+        if (route == PP_ROUTE_SESSION && !notice_list && !notice_view &&
+            !(navigation.ok_held && navigation.ok_wifi_retry))
+            actions(pp_tick(&button_state, now));
         pp_audio_error_t audio_error = pp_audio_take_error();
         bool event_error = pp_events_take_error();
         if (audio_error == PP_AUDIO_CAPTURE_OVERFLOW)

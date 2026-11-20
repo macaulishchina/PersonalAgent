@@ -19,6 +19,7 @@ bool pp_net_accept_protocol(unsigned protocol, uint32_t generation);
 bool pp_net_rejected(void);
 void pp_net_repair(void);
 void pp_net_retry(void);
+void pp_net_retry_wifi(void); /* Advance an idle Wi-Fi retry interval. */
 void pp_net_reload(void);
 void pp_net_provision(void);
 bool pp_net_stop(void);

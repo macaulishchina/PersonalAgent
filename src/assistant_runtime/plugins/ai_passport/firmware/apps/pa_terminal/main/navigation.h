@@ -56,9 +56,9 @@ typedef struct {
     pp_arrow_t arrow;
     bool arrow_consumed, arrow_can_jump;
     uint32_t arrow_started, arrow_epoch;
-    bool ok_held, transition_click;
+    bool ok_held, ok_wifi_retry, ok_consumed, transition_click;
     pp_route_t ok_route;
-    uint32_t ok_epoch, transition_at;
+    uint32_t ok_epoch, ok_started, transition_at;
 } pp_navigation_t;
 
 pp_route_t pp_navigation_route(const pp_navigation_t *nav, bool confirmation, bool setup,
@@ -76,7 +76,9 @@ pp_selection_t pp_navigation_selected(const pp_navigation_t *nav);
 void pp_navigation_move(pp_navigation_t *nav, int direction);
 /* A press belongs to its original page and route. Double-click tails cannot
  * activate a control on the destination page. */
-bool pp_navigation_ok_press(pp_navigation_t *nav, pp_route_t route, uint32_t now);
+bool pp_navigation_ok_press(pp_navigation_t *nav, pp_route_t route, uint32_t now,
+                            bool wifi_retry);
+bool pp_navigation_ok_wifi_tick(pp_navigation_t *nav, pp_route_t route, uint32_t now);
 bool pp_navigation_ok_release(pp_navigation_t *nav, pp_route_t route);
 void pp_navigation_ok_transition(pp_navigation_t *nav, uint32_t now);
 void pp_navigation_arrow_press(pp_navigation_t *nav, pp_arrow_t key, uint32_t now,

@@ -105,17 +105,31 @@ void pp_navigation_move(pp_navigation_t *n, int direction) {
     if (count)
         n->selection = (n->selection + (direction < 0 ? count - 1 : 1)) % count;
 }
-bool pp_navigation_ok_press(pp_navigation_t *n, pp_route_t route, uint32_t now) {
+bool pp_navigation_ok_press(pp_navigation_t *n, pp_route_t route, uint32_t now,
+                            bool wifi_retry) {
     if (n->ok_held || (n->transition_click && now - n->transition_at <= PP_OK_DOUBLE_WINDOW_MS))
         return false;
     n->transition_click = false;
     n->ok_held = true;
+    n->ok_wifi_retry = wifi_retry;
+    n->ok_consumed = false;
     n->ok_route = route;
     n->ok_epoch = n->page_epoch;
+    n->ok_started = now;
+    return true;
+}
+static bool owns_ok(const pp_navigation_t *n, pp_route_t route) {
+    return n->ok_held && n->ok_epoch == n->page_epoch && n->ok_route == route;
+}
+bool pp_navigation_ok_wifi_tick(pp_navigation_t *n, pp_route_t route, uint32_t now) {
+    if (!n->ok_wifi_retry || n->ok_consumed || !owns_ok(n, route) ||
+        now - n->ok_started < PP_OK_HOLD_MS)
+        return false;
+    n->ok_consumed = true;
     return true;
 }
 bool pp_navigation_ok_release(pp_navigation_t *n, pp_route_t route) {
-    bool owned = n->ok_held && n->ok_epoch == n->page_epoch && n->ok_route == route;
+    bool owned = !n->ok_consumed && owns_ok(n, route);
     n->ok_held = false;
     return owned;
 }

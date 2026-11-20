@@ -33,7 +33,7 @@ unsigned pp_release(pp_button_t *b, uint32_t now) {
     return PP_DISCARD;
 }
 unsigned pp_tick(pp_button_t *b, uint32_t now) {
-    if (b->down && !b->recording && now - b->pressed >= 200) {
+    if (b->down && !b->recording && now - b->pressed >= PP_OK_HOLD_MS) {
         b->recording = true;
         return PP_BEGIN;
     }

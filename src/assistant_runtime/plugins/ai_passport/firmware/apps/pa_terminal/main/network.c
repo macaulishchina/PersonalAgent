@@ -42,7 +42,8 @@ static atomic_uint expected_image;
 static EventGroupHandle_t network;
 static pp_link_t ws_link;
 static atomic_bool stopped, standby, reconfigure, retry, provision, rejected, repair;
-static atomic_bool wifi_searching;
+typedef enum { WIFI_IDLE, WIFI_SEARCHING, WIFI_WAITING, WIFI_RETRY_PENDING } wifi_phase_t;
+static _Atomic wifi_phase_t wifi_phase;
 #define WIFI_READY BIT0
 #define WIFI_FAILED BIT1
 #define CONTROL BIT2
@@ -363,6 +364,7 @@ static bool interruptible_wait(unsigned ms) {
     const TickType_t started = xTaskGetTickCount(), duration = pdMS_TO_TICKS(ms);
     TickType_t elapsed;
     while (!stopped && !standby && !reconfigure && !provision && !retry && !repair &&
+           wifi_phase != WIFI_RETRY_PENDING &&
            (!had_wifi || pp_net_wifi_connected()) &&
            (elapsed = xTaskGetTickCount() - started) < duration)
         xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, duration - elapsed);
@@ -529,17 +531,19 @@ static void worker(void *arg) {
         if (wifi_uncertain || !pp_net_wifi_connected()) {
             const uint32_t started = esp_timer_get_time() / 1000;
             pp_objects_connecting(true);
-            wifi_searching = true;
+            wifi_phase = WIFI_SEARCHING;
             bool connected = connect_wifi(settings, &wifi_plan);
-            wifi_searching = false;
             if (!connected) {
+                wifi_phase = WIFI_WAITING;
                 pp_buffer_free(&setup);
                 pp_buffer_free(&certificate);
                 if (wifi_uncertain)
                     ESP_LOGW("pp_network", "Wi-Fi disconnect not confirmed; deferring association");
                 interruptible_wait(pp_wifi_retry_remaining(started, esp_timer_get_time() / 1000));
+                wifi_phase = WIFI_IDLE;
                 continue;
             }
+            wifi_phase = WIFI_IDLE;
             wifi_plan.cursor = 0;
             reconnect = 1000;
         }
@@ -772,6 +776,14 @@ void pp_net_retry(void) {
     if (network)
         xEventGroupSetBits(network, CONTROL);
 }
+void pp_net_retry_wifi(void) {
+    if (!network || stopped || standby || provision || pp_net_wifi_connected())
+        return;
+    /* Only the worker's cooldown can be interrupted. One request is enough. */
+    wifi_phase_t waiting = WIFI_WAITING;
+    if (atomic_compare_exchange_strong(&wifi_phase, &waiting, WIFI_RETRY_PENDING))
+        xEventGroupSetBits(network, CONTROL);
+}
 void pp_net_reload(void) {
     reconfigure = true;
     if (network)
@@ -834,7 +846,7 @@ bool pp_net_start(void) {
 bool pp_net_wifi_connected(void) {
     return network && (xEventGroupGetBits(network) & WIFI_READY);
 }
-bool pp_net_wifi_searching(void) { return wifi_searching; }
+bool pp_net_wifi_searching(void) { return wifi_phase == WIFI_SEARCHING; }
 bool pp_net_wifi_details(char *ssid, size_t capacity, int *rssi) {
     if (!pp_net_wifi_connected())
         return false;

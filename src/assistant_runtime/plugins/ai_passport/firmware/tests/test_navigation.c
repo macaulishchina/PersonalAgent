@@ -1,4 +1,5 @@
 #include "navigation.h"
+#include "terminal_limits.h"
 #include <assert.h>
 #include <string.h>
 int main(void) {
@@ -115,20 +116,31 @@ int main(void) {
     pp_navigation_back(&nav);
     assert(nav.screen == PP_SCREEN_HOME);
 
-    assert(pp_navigation_ok_press(&nav, PP_ROUTE_SETUP, 100));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_SETUP, 100, false));
+    assert(!pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_SETUP, 400));
     assert(pp_navigation_ok_release(&nav, PP_ROUTE_SETUP));
     pp_navigation_open(&nav, PP_SCREEN_SETTINGS);
     pp_navigation_ok_transition(&nav, 150);
-    assert(!pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 240));
+    assert(!pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 240, true));
     assert(!pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
-    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 451));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 451, false));
     assert(pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
 
-    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 500));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 500, true));
     pp_navigation_open(&nav, PP_SCREEN_NETWORK);
     pp_navigation_back(&nav);
+    assert(!pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_LOCAL, 800));
     assert(!pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
-    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 600));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 850, true));
+    assert(!pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_CONFIRM, 1150));
     assert(!pp_navigation_ok_release(&nav, PP_ROUTE_CONFIRM));
+
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 1200, true));
+    assert(!pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_LOCAL, 1200 + PP_OK_HOLD_MS - 1));
+    assert(pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
+    assert(pp_navigation_ok_press(&nav, PP_ROUTE_LOCAL, 1500, true));
+    assert(pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_LOCAL, 1500 + PP_OK_HOLD_MS));
+    assert(!pp_navigation_ok_wifi_tick(&nav, PP_ROUTE_LOCAL, 1900));
+    assert(!pp_navigation_ok_release(&nav, PP_ROUTE_LOCAL));
     return 0;
 }
