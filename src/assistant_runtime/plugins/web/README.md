@@ -91,8 +91,8 @@ close the entrance and create another to change the binding.
 
 The landing page offers:
 
-- **申请访问**: persists a browser-bound request, shows a six-digit comparison
-  code, and waits up to five minutes. The authenticated approval adapter decides
+- **申请访问** is disabled on the landing page. Existing browser-bound requests
+  still show their six-digit comparison code and wait up to five minutes. The authenticated approval adapter decides
   approval/denial and supplies the duration. No browser request can specify the
   destination, approver, duration or grant permission. Approvals can be claimed
   once within 60 seconds. The lease starts at approval, not at claim or first

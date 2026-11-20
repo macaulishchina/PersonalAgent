@@ -1253,7 +1253,7 @@ function App() {
               : "请重新打开完整快捷链接。链接过期或已撤销时，请联系管理员。"}
           </p>
           {entranceBase && (
-            <a href={entranceBase}>返回入口，申请访问或登录进入</a>
+            <a href={entranceBase}>返回入口登录</a>
           )}
           {error && (
             <p className="error" role="alert">

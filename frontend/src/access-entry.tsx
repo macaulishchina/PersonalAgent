@@ -98,23 +98,6 @@ export function AccessEntry() {
       clearTimeout(timer);
     };
   }, [revision]);
-  async function start() {
-    setBusy(true);
-    setError("");
-    claiming.current = false;
-    try {
-      const result = await call("request", {});
-      setStatus((current) =>
-        current ? { ...current, request: result.request } : current,
-      );
-      setWaiting(true);
-      setRevision((current) => current + 1);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "申请失败，请重试。");
-    } finally {
-      setBusy(false);
-    }
-  }
   async function signIn(event?: React.FormEvent) {
     event?.preventDefault();
     setBusy(true);
@@ -142,21 +125,24 @@ export function AccessEntry() {
     state === "denied"
       ? "设备拒绝了本次申请。"
       : state === "expired"
-        ? "本次申请已过期，请重新申请。"
+        ? "本次申请已过期。"
         : state === "cancelled"
           ? "本次申请已取消。"
           : state === "consumed"
-            ? "上次授权已使用或访问已结束，可以重新申请。"
+            ? "上次授权已使用或访问已结束。"
             : "";
   return (
     <main className="welcome login access-entry">
       <h1>{status?.title || "访问对话"}</h1>
-      <p>选择设备授权，或使用已有 Web 身份登录。</p>
       <div className="access-choices">
         <section className="access-choice">
           <Smartphone size={22} aria-hidden="true" />
           <h2>申请访问</h2>
-          <p>在设备上确认，访问时长由设备决定。</p>
+          <p>
+            {waiting
+              ? "在设备上确认，访问时长由设备决定。"
+              : "暂不接受新的设备访问申请。"}
+          </p>
           {waiting ? (
             <div role="status">
               <LoaderCircle className="spin" size={18} />
@@ -182,11 +168,7 @@ export function AccessEntry() {
               </button>
             </div>
           ) : (
-            <button
-              className="primary"
-              disabled={busy || !status}
-              onClick={() => void start()}
-            >
+            <button type="button" disabled>
               申请访问
             </button>
           )}
