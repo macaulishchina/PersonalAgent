@@ -22,6 +22,11 @@ void pp_net_retry(void);
 void pp_net_reload(void);
 void pp_net_provision(void);
 bool pp_net_stop(void);
+bool pp_net_enter_standby(void);
+void pp_net_leave_standby(void);
+bool pp_net_in_standby(void);
+bool pp_net_wifi_connected(void);
+bool pp_net_wifi_searching(void);
 bool pp_net_wifi_details(char *ssid, size_t capacity, int *rssi);
 /* Application callbacks only enqueue bounded work, never block this transport. */
 void pp_received(const char *text, size_t bytes);

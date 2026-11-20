@@ -2,6 +2,7 @@
 #include <string.h>
 
 _Static_assert(PP_PLAYBACK_WINDOW % PP_PLAYBACK_BLOCK_BYTES == 0, "Whole playback blocks");
+_Static_assert(PP_PLAYBACK_PREFILL_BYTES <= PP_PLAYBACK_WINDOW, "Prefill fits the credit window");
 
 static size_t block_span(size_t position, size_t remaining) {
     size_t span = PP_PLAYBACK_BLOCK_BYTES - position % PP_PLAYBACK_BLOCK_BYTES;
@@ -15,10 +16,12 @@ void pp_playback_reset(pp_playback_buffer_t *b, uint32_t generation, bool active
     b->epoch++;
     b->generation = generation;
     b->active = active;
+    b->priming = active;
+    b->ended = false;
     b->head = b->queued = b->writing = b->credit = 0;
 }
 bool pp_playback_append(pp_playback_buffer_t *b, uint32_t generation, const void *pcm, size_t bytes) {
-    if (!b->active || generation != b->generation)
+    if (!b->active || b->ended || generation != b->generation)
         return true;
     if (!pcm || !bytes || bytes % 2 || bytes > PP_PLAYBACK_WINDOW - b->queued - b->writing)
         return false;
@@ -33,13 +36,25 @@ bool pp_playback_append(pp_playback_buffer_t *b, uint32_t generation, const void
     b->queued += bytes;
     return true;
 }
-size_t pp_playback_take(pp_playback_buffer_t *b, void *pcm, size_t capacity, uint32_t *epoch) {
+void pp_playback_finish(pp_playback_buffer_t *b, uint32_t generation) {
+    if (b->active && b->generation == generation)
+        b->ended = true;
+}
+size_t pp_playback_take(pp_playback_buffer_t *b, void *pcm, size_t capacity,
+                        bool dma_empty, uint32_t *epoch) {
     if (!b->active || b->writing)
+        return 0;
+    if (dma_empty)
+        b->priming = true;
+    if (b->priming && !b->ended && b->queued < PP_PLAYBACK_PREFILL_BYTES)
         return 0;
     size_t n = capacity < b->queued ? capacity : b->queued;
     if (n > PP_PLAYBACK_WINDOW - b->head)
         n = PP_PLAYBACK_WINDOW - b->head;
     n &= ~(size_t)1;
+    if (!n)
+        return 0;
+    b->priming = false;
     unsigned char *target = pcm;
     for (size_t copied = 0; copied < n;) {
         size_t pos = b->head + copied;

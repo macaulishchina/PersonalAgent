@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
+#include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -40,11 +41,14 @@ static atomic_uint pcm_in_flight;
 static atomic_uint expected_image;
 static EventGroupHandle_t network;
 static pp_link_t ws_link;
-static atomic_bool stopped, reconfigure, retry, provision, rejected, repair;
+static atomic_bool stopped, standby, reconfigure, retry, provision, rejected, repair;
+static atomic_bool wifi_searching;
 #define WIFI_READY BIT0
 #define WIFI_FAILED BIT1
 #define CONTROL BIT2
 #define WORKER_DONE BIT3
+#define STANDBY_PAUSED BIT4
+#define STANDBY_FAILED BIT5
 static pp_buffer_t received;
 static size_t used, frame_used;
 static int opcode;
@@ -69,7 +73,8 @@ static void memory_stage(const char *stage) {
 }
 
 static void report_offline(const char *reason) {
-    pp_network_state(false, reason, pp_link_generation(&ws_link));
+    if (!standby)
+        pp_network_state(false, reason, pp_link_generation(&ws_link));
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
@@ -79,11 +84,11 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         xEventGroupSetBits(network, WIFI_READY);
         memory_stage("wifi_ready");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupClearBits(network, WIFI_READY);
-        xEventGroupSetBits(network, WIFI_FAILED);
+        bool had_ip = (xEventGroupClearBits(network, WIFI_READY) & WIFI_READY) != 0;
+        xEventGroupSetBits(network, WIFI_FAILED | (had_ip ? CONTROL : 0));
         pp_link_close(&ws_link, pp_link_generation(&ws_link));
-        if (!provision)
-            report_offline("网络断开");
+        if (had_ip && !provision && !standby)
+            report_offline("");
     }
 }
 static uint32_t wire_word(const unsigned char *p) {
@@ -354,12 +359,13 @@ static bool pairing(pp_connection_settings_t *settings, const char *pem) {
 }
 static bool interruptible_wait(unsigned ms) {
     pp_objects_connecting(false);
-    unsigned elapsed = 0;
-    while (!stopped && !reconfigure && !provision && !retry && elapsed < ms) {
-        unsigned part = ms - elapsed > 100 ? 100 : ms - elapsed;
-        xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, pdMS_TO_TICKS(part));
-        elapsed += part;
-    }
+    const bool had_wifi = pp_net_wifi_connected();
+    const TickType_t started = xTaskGetTickCount(), duration = pdMS_TO_TICKS(ms);
+    TickType_t elapsed;
+    while (!stopped && !standby && !reconfigure && !provision && !retry && !repair &&
+           (!had_wifi || pp_net_wifi_connected()) &&
+           (elapsed = xTaskGetTickCount() - started) < duration)
+        xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, duration - elapsed);
     return !stopped;
 }
 static bool disconnect_wifi(void) {
@@ -378,23 +384,21 @@ static bool disconnect_wifi(void) {
         xEventGroupWaitBits(network, WIFI_FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
     return (bits & WIFI_FAILED) != 0;
 }
-static bool connect_wifi(const pp_connection_settings_t *s) {
+static bool connect_wifi(const pp_connection_settings_t *s, pp_wifi_plan_t *plan) {
     if (wifi_uncertain) {
         if (!disconnect_wifi())
             return false;
         wifi_uncertain = false;
     }
-    pp_wifi_plan_t plan = {.count = s->wifi_count};
-    unsigned index, round;
-    while (pp_wifi_next(&plan, &index, &round) && !stopped && !provision && !reconfigure) {
+    plan->count = s->wifi_count;
+    plan->attempt = 0;
+    unsigned index;
+    while (!stopped && !standby && !provision && !reconfigure && !retry && pp_wifi_next(plan, &index)) {
         xEventGroupClearBits(network, WIFI_READY | WIFI_FAILED);
         wifi_config_t cfg = {0};
         memcpy(cfg.sta.ssid, s->wifi[index].ssid, strlen(s->wifi[index].ssid));
         memcpy(cfg.sta.password, s->wifi[index].password, strlen(s->wifi[index].password));
-        char reason[96];
-        snprintf(reason, sizeof(reason), "连接 Wi-Fi %u/%u · 第 %u/3 轮", index + 1, s->wifi_count,
-                 round);
-        report_offline(reason);
+        ESP_LOGI("pp_network", "wifi_attempt=%u profile=%u", plan->attempt, index + 1);
         esp_err_t e = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
         if (e == ESP_OK)
@@ -402,7 +406,7 @@ static bool connect_wifi(const pp_connection_settings_t *s) {
         if (e != ESP_OK)
             continue;
         EventBits_t bits = 0;
-        for (unsigned waited = 0; waited < 100 && !stopped && !provision && !reconfigure;
+        for (unsigned waited = 0; waited < 100 && !stopped && !standby && !provision && !reconfigure && !retry;
              waited++) {
             bits = xEventGroupWaitBits(network, WIFI_READY | WIFI_FAILED | CONTROL, pdFALSE,
                                        pdFALSE, pdMS_TO_TICKS(100));
@@ -441,27 +445,48 @@ static void worker(void *arg) {
     pp_buffer_t setup = {0}, certificate = {0};
     esp_sntp_config_t timecfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     bool time_started = esp_netif_sntp_init(&timecfg) == ESP_OK;
-    bool exhausted = false;
+    bool invalid_address = false;
+    pp_wifi_plan_t wifi_plan = {0};
     unsigned reconnect = 1000;
     while (!stopped) {
         pp_buffer_free(&setup);
         pp_buffer_free(&certificate);
         xEventGroupClearBits(network, CONTROL);
+        if (standby) {
+            pp_objects_connecting(false);
+            if (time_started) {
+                esp_netif_sntp_deinit();
+                time_started = false;
+            }
+            /* The previous iteration has closed the PA socket. Only an
+             * uncertain station transition still needs cleanup. */
+            const bool detached = !wifi_uncertain || disconnect_wifi();
+            wifi_uncertain = !detached;
+            xEventGroupSetBits(network, detached ? STANDBY_PAUSED : STANDBY_FAILED);
+            while (standby && !stopped)
+                xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, portMAX_DELAY);
+            xEventGroupClearBits(network, STANDBY_PAUSED | STANDBY_FAILED);
+            reconnect = 1000;
+            if (!stopped)
+                time_started = esp_netif_sntp_init(&timecfg) == ESP_OK;
+            continue;
+        }
         if (atomic_exchange(&repair, false) && rejected) {
             if (pp_settings_new_identity() == ESP_OK)
                 esp_restart();
             report_offline("配对身份保存失败，请重试");
         }
         if (atomic_exchange(&retry, false)) {
-            exhausted = false;
+            invalid_address = false;
+            wifi_plan.cursor = 0;
             rejected = false;
         }
         if (atomic_exchange(&reconfigure, false)) {
-            exhausted = false;
+            invalid_address = false;
+            wifi_plan.cursor = 0;
             rejected = false;
             if ((xEventGroupGetBits(network) & WIFI_READY) && !disconnect_wifi()) {
                 wifi_uncertain = true;
-                exhausted = true;
             }
         }
         bool buffer_ready = pp_buffer_reserve(&setup, sizeof(pp_connection_settings_t),
@@ -481,7 +506,6 @@ static void worker(void *arg) {
             pp_buffer_free(&certificate);
             provision = false;
             rejected = false;
-            report_offline("等待手机配网");
             if ((xEventGroupGetBits(network) & WIFI_READY) && !disconnect_wifi()) {
                 report_offline("Wi-Fi 未正常断开，请重启");
                 break;
@@ -492,42 +516,48 @@ static void worker(void *arg) {
                 report_offline("热点启动失败，请重启");
                 break;
             }
-            while (!stopped && !pp_provision_complete() && !(retry && has_wifi))
+            while (!stopped && !standby && !pp_provision_complete() && !(retry && has_wifi))
                 xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, pdMS_TO_TICKS(250));
             if (pp_provision_stop() != ESP_OK) {
                 report_offline("热点未正常关闭，请重启");
                 break;
             }
-            if (!stopped)
-                report_offline("正在连接 Wi-Fi");
-            exhausted = false;
+            wifi_plan.cursor = 0;
+            invalid_address = false;
             continue;
         }
-        if (rejected || exhausted) {
+        if (wifi_uncertain || !pp_net_wifi_connected()) {
+            const uint32_t started = esp_timer_get_time() / 1000;
+            pp_objects_connecting(true);
+            wifi_searching = true;
+            bool connected = connect_wifi(settings, &wifi_plan);
+            wifi_searching = false;
+            if (!connected) {
+                pp_buffer_free(&setup);
+                pp_buffer_free(&certificate);
+                if (wifi_uncertain)
+                    ESP_LOGW("pp_network", "Wi-Fi disconnect not confirmed; deferring association");
+                interruptible_wait(pp_wifi_retry_remaining(started, esp_timer_get_time() / 1000));
+                continue;
+            }
+            wifi_plan.cursor = 0;
+            reconnect = 1000;
+        }
+        if (rejected || invalid_address) {
             pp_buffer_free(&setup);
             pp_buffer_free(&certificate);
-            if (exhausted)
-                report_offline(wifi_uncertain
-                                            ? "Wi-Fi 状态未确认，请重试或重启"
-                                            : "Wi-Fi 三轮连接失败，请在菜单重试或重新配网");
             pp_objects_connecting(false);
-            while (!stopped && !retry && !provision && !reconfigure && !repair)
+            while (!stopped && !standby && !retry && !provision && !reconfigure && !repair &&
+                   pp_net_wifi_connected())
                 xEventGroupWaitBits(network, CONTROL, pdTRUE, pdFALSE, pdMS_TO_TICKS(1000));
             continue;
         }
         pp_objects_connecting(true);
-        if (!(xEventGroupGetBits(network) & WIFI_READY)) {
-            if (!connect_wifi(settings)) {
-                if (!stopped && !provision && !reconfigure)
-                    exhausted = true;
-                continue;
-            }
-        }
         bool secure = !strncmp(settings->url, "https://", 8);
         if (secure && time(NULL) < 1700000000) {
             report_offline("HTTPS 正在校准时间");
             for (unsigned i = 0;
-                 i < 150 && !stopped && !provision && !reconfigure && time(NULL) < 1700000000; i++)
+                 i < 150 && !stopped && !standby && !provision && !reconfigure && time(NULL) < 1700000000; i++)
                 vTaskDelay(pdMS_TO_TICKS(100));
             if (time(NULL) < 1700000000) {
                 pp_buffer_free(&setup);
@@ -537,7 +567,7 @@ static void worker(void *arg) {
                 continue;
             }
         }
-        if (stopped || provision || reconfigure)
+        if (stopped || standby || provision || reconfigure)
             continue;
         if (!settings->paired && !pairing(settings, certificate.data)) {
             pp_buffer_free(&setup);
@@ -547,8 +577,8 @@ static void worker(void *arg) {
         }
         char uri[600], headers[180];
         if (!pp_server_endpoint(settings->url, "stream", true, uri, sizeof(uri))) {
-            report_offline("PA 地址无效，请重新配网");
-            exhausted = true;
+            report_offline("PA 地址无效，请检查设置");
+            invalid_address = true;
             continue;
         }
         snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\nX-Device-Id: %s\r\n",
@@ -584,13 +614,13 @@ static void worker(void *arg) {
                                       (void *)(uintptr_t)generation);
         if (esp_websocket_client_start(client) == ESP_OK) {
             for (unsigned n = 0;
-                 n < 150 && !pp_link_connected(&ws_link, generation) && !socket_error && !stopped && !provision && !reconfigure;
+                 n < 150 && !pp_link_connected(&ws_link, generation) && !socket_error && !stopped && !standby && !provision && !reconfigure;
                  n++)
                 vTaskDelay(pdMS_TO_TICKS(100));
         }
         TickType_t hello_started = xTaskGetTickCount();
         if (pp_link_connected(&ws_link, generation) && !pp_link_ready(&ws_link) &&
-            !stopped && !provision && !reconfigure) {
+            !stopped && !standby && !provision && !reconfigure) {
             /* IDF 5.5.3 can buffer the first frame with HTTP 101 while polling only
              * the socket. A protocol ping makes the peer's pong wake that reader. */
             static const uint8_t ping = 0;
@@ -598,7 +628,7 @@ static void worker(void *arg) {
                                                         &ping, sizeof(ping), pdMS_TO_TICKS(1000));
         }
         unsigned draining = 0;
-        while (pp_link_connected(&ws_link, generation) && !stopped && !provision) {
+        while (pp_link_connected(&ws_link, generation) && !stopped && !standby && !provision) {
             if (reconfigure && !uxQueueMessagesWaiting(outgoing))
                 break;
             if (pp_link_ready(&ws_link) == generation)
@@ -614,10 +644,11 @@ static void worker(void *arg) {
                     release_packet(&p);
                     continue;
                 }
+                TickType_t timeout = pdMS_TO_TICKS(PP_WS_WRITE_TIMEOUT_MS);
                 int sent = p.binary ? esp_websocket_client_send_bin(client, p.buffer.data, p.buffer.size,
-                                                                    pdMS_TO_TICKS(1000))
+                                                                    timeout)
                                     : esp_websocket_client_send_text(client, p.buffer.data, p.buffer.size,
-                                                                     pdMS_TO_TICKS(1000));
+                                                                     timeout);
                 if (sent != (int)p.buffer.size) {
                     if (p.binary) {
                         ESP_LOGW("pp_network", "audio_send_failed result=%d bytes=%u", sent,
@@ -639,7 +670,7 @@ static void worker(void *arg) {
         pp_buffer_free(&certificate);
         pp_buffer_free(&received);
         discard_outgoing();
-        if (!stopped) {
+        if (!stopped && pp_net_wifi_connected()) {
             interruptible_wait(reconnect);
             reconnect = reconnect < 16000 ? reconnect * 2 : 30000;
         }
@@ -751,6 +782,27 @@ void pp_net_provision(void) {
     if (network)
         xEventGroupSetBits(network, CONTROL);
 }
+bool pp_net_enter_standby(void) {
+    if (!network || stopped || pp_provision_active() || provision)
+        return false;
+    xEventGroupClearBits(network, STANDBY_PAUSED | STANDBY_FAILED);
+    standby = true;
+    pp_link_close(&ws_link, pp_link_generation(&ws_link));
+    xEventGroupSetBits(network, CONTROL);
+    EventBits_t bits = xEventGroupWaitBits(network, STANDBY_PAUSED | STANDBY_FAILED, pdFALSE,
+                                         pdFALSE, pdMS_TO_TICKS(12000));
+    if (bits & STANDBY_PAUSED)
+        return true;
+    pp_net_leave_standby();
+    return false;
+}
+void pp_net_leave_standby(void) {
+    standby = false;
+    xEventGroupSetBits(network, CONTROL);
+}
+bool pp_net_in_standby(void) {
+    return standby && network && (xEventGroupGetBits(network) & STANDBY_PAUSED);
+}
 bool pp_net_stop(void) {
     stopped = true;
     pp_link_close(&ws_link, pp_link_generation(&ws_link));
@@ -779,8 +831,12 @@ bool pp_net_start(void) {
         return false;
     return xTaskCreate(worker, "pp_network", 6144, NULL, PP_NETWORK_TASK_PRIORITY, NULL) == pdPASS;
 }
+bool pp_net_wifi_connected(void) {
+    return network && (xEventGroupGetBits(network) & WIFI_READY);
+}
+bool pp_net_wifi_searching(void) { return wifi_searching; }
 bool pp_net_wifi_details(char *ssid, size_t capacity, int *rssi) {
-    if (!network || !(xEventGroupGetBits(network) & WIFI_READY))
+    if (!pp_net_wifi_connected())
         return false;
     wifi_ap_record_t ap;
     if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK)

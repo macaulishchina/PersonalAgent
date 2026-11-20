@@ -14,7 +14,9 @@
     "sdkconfig.defaults",
     "partitions.csv",
     "components/bsp/include/bsp_audio.h",
-    "components/bsp/src/bsp_audio.c"
+    "components/bsp/src/bsp_audio.c",
+    "components/bsp/include/bsp_display.h",
+    "components/bsp/src/bsp_display_lvgl.c"
   ],
   "license": "MIT",
   "license_file": "LICENSE.folotoy",

@@ -25,23 +25,30 @@ static void test_handshake_and_replacement(void) {
 int main(void) {
     test_handshake_and_replacement();
     pp_wifi_plan_t p = {.count = 5};
-    unsigned index, round;
-    for (unsigned n = 0; n < 15; n++) {
-        assert(pp_wifi_next(&p, &index, &round));
+    unsigned index;
+    for (unsigned n = 0; n < 9; n++) {
+        if (n && n % 3 == 0) {
+            assert(!pp_wifi_next(&p, &index));
+            p.attempt = 0;
+        }
+        assert(pp_wifi_next(&p, &index));
         assert(index == n % 5);
-        assert(round == n / 5 + 1);
     }
-    assert(!pp_wifi_next(&p, &index, &round));
+    assert(!pp_wifi_next(&p, &index));
     p = (pp_wifi_plan_t){.count = 0};
-    assert(!pp_wifi_next(&p, &index, &round));
+    assert(!pp_wifi_next(&p, &index));
     p = (pp_wifi_plan_t){.count = 6};
-    assert(!pp_wifi_next(&p, &index, &round));
+    assert(!pp_wifi_next(&p, &index));
     p = (pp_wifi_plan_t){.count = 1};
-    for (unsigned n = 1; n <= 3; n++) {
-        assert(pp_wifi_next(&p, &index, &round));
-        assert(index == 0 && round == n);
+    for (unsigned n = 0; n < 3; n++) {
+        assert(pp_wifi_next(&p, &index));
+        assert(index == 0);
     }
-    assert(!pp_wifi_next(&p, &index, &round));
+    assert(!pp_wifi_next(&p, &index));
+    assert(pp_wifi_retry_remaining(3000, 33000) == 30000);
+    assert(pp_wifi_retry_remaining(3000, 62999) == 1);
+    assert(pp_wifi_retry_remaining(3000, 63000) == 0);
+    assert(pp_wifi_retry_remaining(UINT32_MAX - 2999, 2000) == 55000);
     assert(pp_wifi_valid("家里", "password"));
     assert(pp_wifi_valid("open", ""));
     assert(!pp_wifi_valid("", "password"));

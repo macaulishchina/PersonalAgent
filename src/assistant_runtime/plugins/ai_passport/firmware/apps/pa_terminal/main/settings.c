@@ -79,7 +79,7 @@ static esp_err_t load_record(pp_settings_t *s) {
         s->brightness = 65;
         s->text_size = 16;
         s->sleep_seconds = 120;
-        s->offline_cache = s->show_images = true;
+        s->offline_cache = s->show_images = s->standby_wifi = true;
         bootloader_random_enable();
         random_hex(s->device, 16);
         random_hex(s->credential, 32);

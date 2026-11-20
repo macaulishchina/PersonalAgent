@@ -71,7 +71,8 @@ static void usb_task(void *arg) {
                 pp_memory_stats_t memory = pp_memory_stats();
                 printf("{\"app\":\"PA-Terminal\",\"protocol\":2,\"version\":\"%s\","
                        "\"elf_sha256\":\"%s\",\"connected\":%"
-                       "s,\"device_id\":\"%s\",\"offline_cache\":%s,\"heap\":%u,\"largest\":%u,"
+                       "s,\"wifi_connected\":%s,\"wifi_standby\":%s,\"device_id\":\"%s\","
+                       "\"offline_cache\":%s,\"heap\":%u,\"largest\":%u,"
                        "\"minimum\":%u,\"wake_cause\":%u,\"cache_ready\":%s,\"cache_hits\":%u,"
                        "\"cache_misses\":%u,"
                        "\"cache_write_failures\":%u,\"cache_busy\":%u,\"cache_ram_hits\":%u,"
@@ -81,6 +82,8 @@ static void usb_task(void *arg) {
                        "\"memory_failures\":{\"wire\":%u,\"audio\":%u,\"image\":%u,\"cache\":%u}}\n",
                        app->version, elf_sha256,
                        pp_net_connected() ? "true" : "false",
+                       pp_net_wifi_connected() ? "true" : "false",
+                       pp_net_in_standby() ? "true" : "false",
                        device, offline_cache ? "true" : "false",
                        (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),

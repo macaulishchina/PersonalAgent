@@ -5,16 +5,39 @@ import json
 import struct
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import aclosing
+from dataclasses import dataclass
 
 from aiohttp import WSMsgType
 
 from assistant_runtime.api.ai_usage import UsageScope
 from assistant_runtime.api.conversation import ConversationInputRequest, ConversationRequest
-from assistant_runtime.api.speech import SpeechError, SpeechRequest, spoken_excerpt, spoken_sentence
+from assistant_runtime.api.speech import (
+    PlaybackStream,
+    SpeechError,
+    SpeechRequest,
+)
 from assistant_runtime.api.terminal import TerminalNotifications
 from . import protocol
 from .display import TerminalDisplay
 from .settings import LOCAL_FIELDS
+from .speech_text import CHARACTER_LIMIT, readable_text, source_prefix
+
+
+@dataclass(frozen=True)
+class _SpeechSegment:
+    text: str
+    end: int
+    scope: UsageScope
+
+
+@dataclass
+class _PreparedSpeech:
+    stream: PlaybackStream
+    chunks: AsyncIterator[bytes]
+    first: bytes
+    first_latency: float
 
 
 class Connection:
@@ -49,7 +72,7 @@ class Connection:
         self.changed = asyncio.Event()
         self.changed.set()
         self.speech_changed = asyncio.Event()
-        self.segment_completed = asyncio.Event()
+        self.playback_completed = asyncio.Event()
         self.voice = None
         self.display = TerminalDisplay(self.conversation, self.send, self.settings, self.send_binary)
 
@@ -305,9 +328,9 @@ class Connection:
             await self.stop_playback()
         elif kind == "playback.completed":
             if self.playing and data.get("generation") == self.generation and self.playing.get("sent"):
-                if not self.playing.get("foreground"):
+                if not self.playing.get("foreground") and not self.playing.get("failed"):
                     self.owner.devices.played(self.device, self.playing["id"], self.playing["revision"])
-                if self.playing.get("notification"):
+                if self.playing.get("notification") and not self.playing.get("failed"):
                     await self.context.invoke(
                         TerminalNotifications(
                             "played",
@@ -319,10 +342,14 @@ class Connection:
                             },
                         )
                     )
-                await self.send("playback.receipt", generation=self.generation, played=True)
+                await self.send(
+                    "playback.receipt",
+                    generation=self.generation,
+                    played=not self.playing.get("failed", False),
+                )
                 self.credit = 0
                 self.playing = None
-                self.segment_completed.set()
+                self.playback_completed.set()
         elif kind == "message.page":
             await self.display.message_page(data)
         elif kind == "execution.cancel":
@@ -686,76 +713,166 @@ class Connection:
                 await self.send("playback.pending", generation=self.generation, message_id=message["id"])
                 self.play_task = self.spawn(self.speak_foreground(self.voice), "foreground-speech")
 
-    async def speak_foreground(self, voice):
-        generation = self.generation
-        reason = "complete"
-        try:
-            while not self.closed and self.voice is voice and generation == self.generation:
-                self.speech_changed.clear()
-                span = next((r for r in voice["ranges"] if r["end"] > voice["offset"]), None)
-                if not span:
-                    if voice["complete"]:
-                        break
-                    await self.speech_changed.wait()
-                    continue
-                offset = max(span["start"], voice["offset"])
-                remaining = 200 - voice["spoken"] if voice["settings"]["speech_mode"] == "brief" else 200
-                if remaining <= 0:
-                    reason = "brief_limit"
-                    break
-                page = await self.conversation(
-                    "message", message_id=voice["id"], offset=offset, limit=min(remaining, 200)
-                )
-                if generation != self.generation or self.voice is not voice:
-                    return
-                text = page["text"][: max(0, span["end"] - offset)]
-                sentence = spoken_sentence(
-                    text, final=voice["complete"] and offset + len(text) >= span["end"], limit=remaining
-                )
-                if not sentence:
-                    if len(text) >= remaining or voice["complete"]:
-                        reason = "view_text"
-                        break
-                    await self.speech_changed.wait()
+    async def next_speech_segment(self, voice, offset, spoken):
+        while not self.closed and self.voice is voice:
+            self.speech_changed.clear()
+            span = next((r for r in voice["ranges"] if r["end"] > offset), None)
+            if not span:
+                if voice["complete"]:
+                    return None, "complete"
+                await self.speech_changed.wait()
+                continue
+            offset = max(span["start"], offset)
+            limit = (
+                CHARACTER_LIMIT - spoken if voice["settings"]["speech_mode"] == "brief" else CHARACTER_LIMIT
+            )
+            if limit <= 0:
+                return None, "brief_limit"
+            # A full-mode page is bounded by the provider's single-request limit.
+            page = await self.conversation("message", message_id=voice["id"], offset=offset, limit=limit)
+            if self.closed or self.voice is not voice:
+                break
+            text = page["text"][: span["end"] - offset]
+            end = source_prefix(
+                text, limit, complete=voice["complete"], end_of_span=offset + len(text) == span["end"]
+            )
+            if end:
+                speech = readable_text(text[:end])
+                if not speech:
+                    offset += end
                     continue
                 if not page.get("work_id"):
                     raise SpeechError("speech_work_identity_unavailable")
-                self.segment_completed.clear()
-                self.playing = {"id": voice["id"], "revision": 0, "sent": False, "foreground": True}
-                await self.play(
-                    sentence,
-                    UsageScope(page["work_id"], self.source),
-                    generation,
-                    offset + len(sentence),
-                    voice["settings"],
+                return _SpeechSegment(speech, offset + end, UsageScope(page["work_id"], self.source)), None
+            if voice["complete"]:
+                return None, "view_text"
+            await self.speech_changed.wait()
+        return None, "stopped"
+
+    async def prepare_next_speech(self, voice, offset, spoken):
+        segment, reason = await self.next_speech_segment(voice, offset, spoken)
+        if not segment:
+            return None, reason, None
+        opened_at = time.monotonic()
+        try:
+            stream = await self.open_synthesis(segment.text, segment.scope, voice["settings"])
+        except SpeechError as exc:
+            if exc.code != "speech_busy":
+                raise
+            # Admission declined before dispatch. Open after returning the current stream's slot.
+            return segment, None, None
+        try:
+            chunks = aiter(stream)
+            first = await self.first_pcm(chunks)
+            return segment, None, _PreparedSpeech(stream, chunks, first, time.monotonic() - opened_at)
+        except TimeoutError as exc:
+            await stream.aclose()
+            raise SpeechError("speech_provider_timeout") from exc
+        except BaseException:
+            await stream.aclose()
+            raise
+
+    @staticmethod
+    async def first_pcm(chunks):
+        while (chunk := await anext(chunks, None)) is not None:
+            if chunk:
+                return chunk
+        raise SpeechError("speech_empty_audio")
+
+    async def speech_audio(self, text, scope, settings, generation, prepared=None):
+        stream = prepared.stream if prepared else None
+        try:
+            started = time.monotonic()
+            if stream is None:
+                stream = await self.open_synthesis(text, scope, settings)
+                chunks = aiter(stream)
+                first = await self.first_pcm(chunks)
+                latency = time.monotonic() - started
+            else:
+                chunks, first, latency = prepared.chunks, prepared.first, prepared.first_latency
+            self.context.log.info(
+                "passport_first_audio device=%s generation=%s elapsed_seconds=%.3f",
+                self.device,
+                generation,
+                latency,
+            )
+            yield first
+            while (chunk := await anext(chunks, None)) is not None:
+                if chunk:
+                    yield chunk
+        except TimeoutError as exc:
+            raise SpeechError("speech_provider_timeout") from exc
+        finally:
+            if stream:
+                await stream.aclose()
+
+    async def foreground_audio(self, voice, generation):
+        pending = prepared = None
+        try:
+            segment, reason = await self.next_speech_segment(voice, voice["offset"], voice["spoken"])
+            while segment:
+                spoken = voice["spoken"] + len(segment.text)
+                current, prepared = prepared, None
+                chunks = self.speech_audio(
+                    segment.text, segment.scope, voice["settings"], generation, current
                 )
-                if generation != self.generation:
-                    return
-                await asyncio.wait_for(self.segment_completed.wait(), 30)
-                voice["offset"] = offset + len(sentence)
-                voice["spoken"] += len(sentence)
-            if generation == self.generation:
-                self.owner.devices.played(self.device, voice["id"], 0)
-                await self.send("playback.finished", generation=generation, reason=reason)
+                async with aclosing(chunks):
+                    async for pcm in chunks:
+                        if pending is None:
+                            pending = asyncio.create_task(
+                                self.prepare_next_speech(voice, segment.end, spoken)
+                            )
+                        yield pcm
+                voice["offset"], voice["spoken"] = segment.end, spoken
+                segment, reason, prepared = await asyncio.shield(pending)
+                pending = None
+            voice["reason"] = reason
+        finally:
+            if pending:
+                pending.cancel()
+                (result,) = await asyncio.gather(pending, return_exceptions=True)
+                if isinstance(result, tuple):
+                    _, _, prepared = result
+            if prepared:
+                await prepared.stream.aclose()
+
+    async def speak_foreground(self, voice):
+        generation = self.generation
+        self.playback_completed.clear()
+        self.playing = {"id": voice["id"], "revision": 0, "sent": False, "foreground": True}
+        try:
+            started = await self.send_audio(
+                self.foreground_audio(voice, generation),
+                generation,
+                voice["offset"],
+                end_offset=lambda: voice["offset"],
+            )
+            if started and generation == self.generation:
+                await asyncio.wait_for(self.playback_completed.wait(), 30)
+            if not self.closed and self.voice is voice and generation == self.generation:
+                self.owner.devices.playback_state(
+                    self.device, voice["id"], 0, "played" if started else "unavailable"
+                )
+                await self.send("playback.finished", generation=generation, reason=voice["reason"])
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.owner.devices.playback_state(self.device, voice["id"], 0, "unavailable")
-            await self.send(
-                "playback.unavailable",
-                code=exc.code if isinstance(exc, SpeechError) else "speech_playback_failed",
-            )
+            if not self.closed and generation == self.generation:
+                self.owner.devices.playback_state(self.device, voice["id"], 0, "unavailable")
+                await self.playback_unavailable(exc, generation)
         finally:
             if generation == self.generation:
-                self.playing = None
-                self.voice = None
+                self.playing = self.voice = None
                 self.credit = 0
 
     async def start_playback(self, message, offset=0):
         if self.input:
             raise SpeechError("speech_busy")
         await self.stop_playback()
-        text, end = spoken_excerpt(message["text"], 0)
+        source = message["text"]
+        prefix = source[:CHARACTER_LIMIT]
+        end = source_prefix(prefix, CHARACTER_LIMIT, complete=True, end_of_span=len(prefix) == len(source))
+        text = readable_text(prefix[:end])
         if not text:
             await self.send(
                 "playback.unavailable",
@@ -774,65 +891,88 @@ class Connection:
             "notification_revision": message.get("notification_revision"),
         }
         await self.send("playback.pending", generation=self.generation, message_id=self.playing["id"])
-        self.play_task = self.spawn(self.play(text, scope, self.generation, offset + end), "playback")
+        self.play_task = self.spawn(self.play(text, scope, self.generation, offset, offset + end), "playback")
 
-    async def play(self, text, scope, generation, offset, settings=None):
-        stream = None
-        try:
-            started = time.monotonic()
-            first = True
-            settings = settings or self.settings()
-            stream = await self.context.invoke(
-                SpeechRequest(
-                    "synthesize", scope, text, voice=settings.get("voice") or None, rate=settings.get("rate")
-                ),
-                timeout=35,
-            )
-            await self.send(
-                "playback.start",
-                generation=generation,
-                rate=protocol.OUTPUT_RATE,
-                offset=offset - len(text),
-                next_offset=offset,
-            )
-            async for pcm in stream:
-                if generation != self.generation:
-                    return
-                if first:
-                    self.context.log.info(
-                        "passport_first_audio device=%s generation=%s elapsed_seconds=%.3f",
-                        self.device,
-                        generation,
-                        time.monotonic() - started,
+    async def open_synthesis(self, text, scope, settings):
+        return await self.context.invoke(
+            SpeechRequest(
+                "synthesize", scope, text, voice=settings.get("voice") or None, rate=settings.get("rate")
+            ),
+            timeout=35,
+        )
+
+    async def finish_audio(self, generation, end_offset):
+        self.playing["sent"] = True
+        await self.send("playback.end", generation=generation, next_offset=end_offset())
+
+    async def send_audio(self, audio, generation, offset, *, end_offset):
+        started = False
+        async with aclosing(audio):
+            while True:
+                try:
+                    pcm = await anext(audio, None)
+                    if pcm is not None and (not isinstance(pcm, bytes) or len(pcm) % 2):
+                        raise SpeechError("speech_invalid_pcm")
+                except Exception:
+                    if started and generation == self.generation and not self.closed:
+                        # The provider stopped after sending a prefix. Drain that prefix once.
+                        self.playing["failed"] = True
+                        await self.finish_audio(generation, end_offset)
+                        try:
+                            await asyncio.wait_for(self.playback_completed.wait(), 30)
+                        except TimeoutError:
+                            pass
+                    raise
+                if generation != self.generation or self.closed:
+                    return False
+                if pcm is None:
+                    break
+                if not started:
+                    await self.send(
+                        "playback.start",
+                        generation=generation,
+                        rate=protocol.OUTPUT_RATE,
+                        offset=offset,
+                        next_offset=offset,
                     )
-                    first = False
-                for start in range(0, len(pcm), protocol.PLAYBACK_CHUNK):
-                    chunk = pcm[start : start + protocol.PLAYBACK_CHUNK]
+                    started = True
+                cursor = 0
+                while cursor < len(pcm):
                     async with asyncio.timeout(30):
-                        while self.credit < len(chunk):
+                        while not self.credit:
                             self.credit_changed.clear()
                             await self.credit_changed.wait()
-                    if generation != self.generation:
-                        return
-                    self.credit -= len(chunk)
-                    await self.send_binary(struct.pack("!I", generation) + chunk)
-            if generation == self.generation:
-                self.playing["sent"] = True
-                await self.send("playback.end", generation=generation)
+                    if generation != self.generation or self.closed:
+                        return False
+                    count = min(self.credit, len(pcm) - cursor, protocol.PLAYBACK_CHUNK)
+                    self.credit -= count
+                    await self.send_binary(struct.pack("!I", generation) + pcm[cursor : cursor + count])
+                    cursor += count
+        if started:
+            await self.finish_audio(generation, end_offset)
+        return started
+
+    async def playback_unavailable(self, exc, generation):
+        code = exc.code if isinstance(exc, SpeechError) else "speech_playback_failed"
+        self.context.log.warning("passport_playback_unavailable generation=%s code=%s", generation, code)
+        await self.send("playback.unavailable", generation=generation, code=code)
+
+    async def play(self, text, scope, generation, offset, end):
+        self.playback_completed.clear()
+        try:
+            await self.send_audio(
+                self.speech_audio(text, scope, self.settings(), generation),
+                generation,
+                offset,
+                end_offset=lambda: end,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if self.playing and self.playing.get("foreground"):
-                raise
-            self.playing = None
-            self.credit = 0
-            await self.send(
-                "playback.unavailable",
-                code=exc.code if isinstance(exc, SpeechError) else "speech_playback_failed",
-            )
-        finally:
-            if stream:
-                await stream.aclose()
+            if generation == self.generation and not self.closed:
+                self.playing = None
+                self.credit = 0
+                await self.playback_unavailable(exc, generation)
 
     async def stop_playback(self):
         self.generation += 1
@@ -846,7 +986,7 @@ class Connection:
         self.playing = None
         self.voice = None
         self.speech_changed.set()
-        self.segment_completed.set()
+        self.playback_completed.set()
         if not self.closed:
             await self.send("playback.stop", generation=self.generation)
 

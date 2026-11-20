@@ -40,7 +40,7 @@ typedef struct {
     pp_input_phase_t phase;
     uint32_t generation, started;
     uint32_t max_audio_bytes, audio_bytes;
-    bool released, limited, early_audio;
+    bool released, limited, truncated, early_audio;
 } pp_input_t;
 bool pp_input_start(pp_input_t *input, uint32_t now);
 bool pp_input_begin(pp_input_t *input, bool early_audio);
@@ -51,6 +51,8 @@ unsigned pp_input_audio_room(const pp_input_t *input);
 bool pp_input_audio(pp_input_t *input, unsigned bytes);
 void pp_input_release(pp_input_t *input);
 bool pp_input_limit(pp_input_t *input, uint32_t now, uint32_t limit_ms);
+/* Preserve the contiguous prefix and require review if capture loses its tail. */
+bool pp_input_truncate(pp_input_t *input);
 bool pp_input_drained(pp_input_t *input);
 bool pp_input_transcript(pp_input_t *input, uint32_t generation);
 bool pp_input_confirm(pp_input_t *input);

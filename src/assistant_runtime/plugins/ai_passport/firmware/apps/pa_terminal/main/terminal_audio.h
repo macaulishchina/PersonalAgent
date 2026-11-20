@@ -10,18 +10,22 @@ typedef struct {
 } pp_recording_t;
 
 #define PP_CAPTURE_FRAMES 32u
+#define PP_CAPTURE_MAX_FRAMES 64u
 bool pp_audio_start(unsigned volume);
 bool pp_audio_quiesce(void);
+void pp_audio_resume(void);
 bool pp_audio_capture_begin(void);
 void pp_audio_capture_release(void); /* Nonblocking, also called by the key callback. */
 void pp_audio_capture_discard(void);
 bool pp_audio_capturing(void);
 bool pp_audio_recorded(pp_recording_t *block);
 unsigned pp_audio_recorded_count(void);
+unsigned pp_audio_recording_capacity(void);
 bool pp_audio_capture_drained(void);
 bool pp_audio_play_begin(uint32_t generation);
 void pp_audio_play_stop(void);
 bool pp_play_pcm(uint32_t generation, const void *pcm, size_t bytes);
+void pp_audio_play_end(uint32_t generation);
 bool pp_audio_play_drained(void);
 unsigned pp_audio_take_credit(void);
 typedef enum { PP_AUDIO_OK, PP_AUDIO_CAPTURE_OVERFLOW, PP_AUDIO_CODEC_FAILURE } pp_audio_error_t;

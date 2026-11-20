@@ -3,6 +3,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -42,6 +43,10 @@ esp_err_t bsp_audio_wake(void);
 // 等待按PCM时长+50ms有界；部分读写视为失败，不当作完整音频。
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes);
 esp_err_t bsp_audio_read(void *pcm, size_t bytes);
+
+// 在最后一次成功写入后取标记。DMA 走完整个环及 FIFO 后才算播完。
+uint32_t bsp_audio_tx_position(void);
+bool bsp_audio_tx_drained(uint32_t position);
 
 // 输出音量 0..100(%)。
 esp_err_t bsp_audio_set_volume(uint8_t percent);

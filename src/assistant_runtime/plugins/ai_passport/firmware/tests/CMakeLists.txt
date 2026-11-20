@@ -161,6 +161,8 @@ target_include_directories(test_terminal_audio PRIVATE "${audio_stubs}" stubs ..
 target_compile_options(test_terminal_audio PRIVATE -Wall -Wextra -Werror)
 add_test(NAME terminal_audio_codec_failure COMMAND test_terminal_audio mute)
 add_test(NAME terminal_audio_capture_overflow COMMAND test_terminal_audio overflow)
+add_test(NAME terminal_audio_capture_small_heap COMMAND test_terminal_audio small-heap)
+add_test(NAME terminal_audio_dma_drain COMMAND test_terminal_audio drain)
 
 add_executable(test_cache_resident test_cache_resident.c ../apps/pa_terminal/main/cache_resident.c
                ../apps/pa_terminal/main/byte_buffer.c)

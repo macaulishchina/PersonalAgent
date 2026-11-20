@@ -15,13 +15,16 @@ typedef struct {
     pp_ui_view_t view;
     const char *body, *state, *hint, *origin;
     const char *const *choices;
+    const char *menu_detail;
     unsigned choice_count, selection;
-    bool queue, follow, online, volume_feedback, task_context, local_page_hint;
+    bool queue, follow, online, volume_feedback, task_context, local_page_hint, awaiting_reply,
+        wifi_searching;
     unsigned volume, level, elapsed, now, brightness, text_size;
     int battery, wifi;
     size_t page;
 } pp_ui_frame_t;
 bool pp_ui_init(void);
+bool pp_ui_standby(bool enabled);
 /* Returns the next local page's UTF-8 offset, zero at the end. */
 size_t pp_ui_render(const pp_ui_frame_t *frame);
 size_t pp_ui_previous(const char *text, size_t start);

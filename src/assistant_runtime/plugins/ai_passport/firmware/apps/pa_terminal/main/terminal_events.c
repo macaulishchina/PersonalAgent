@@ -84,6 +84,14 @@ void pp_received_image(pp_buffer_t *frame, uint32_t generation) {
 bool pp_events_next(pp_event_t *event) {
     return xQueueReceive(keys, event, 0) || xQueueReceive(messages, event, 0);
 }
+void pp_events_wait_for_wake(void) {
+    pp_event_t event;
+    /* A release from the sleep menu is not a wake gesture. */
+    for (;;) {
+        if (xQueueReceive(keys, &event, portMAX_DELAY) && event.button == BSP_BTN_PRESS)
+            return;
+    }
+}
 bool pp_events_take_key_overflow(void) {
     if (!atomic_exchange(&key_overflow, false))
         return false;

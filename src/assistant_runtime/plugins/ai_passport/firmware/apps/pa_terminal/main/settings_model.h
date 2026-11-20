@@ -18,7 +18,7 @@ typedef struct {
     pp_wifi_t wifi[PP_WIFI_MAX];
     uint32_t versions[PP_CONFIG_FIELDS];
     unsigned wifi_count, volume, sleep_seconds, brightness, text_size;
-    bool queue, keep_online, paired, offline_cache, show_images;
+    bool queue, keep_online, paired, offline_cache, show_images, standby_wifi;
     unsigned speech_mode; /* 0 brief, 1 full, 2 off; synthesis remains on PA. */
 } pp_settings_t;
 
@@ -29,11 +29,13 @@ typedef struct {
     char device[sizeof(((pp_settings_t *)0)->device)];
     char binding[sizeof(((pp_settings_t *)0)->binding)];
     unsigned wifi_count, volume, sleep_seconds, brightness, text_size, revision;
-    bool queue, keep_online, paired, offline_cache, show_images;
+    bool queue, keep_online, paired, offline_cache, show_images, standby_wifi;
 } pp_terminal_settings_t;
 void pp_settings_project(const pp_settings_t *source, unsigned revision, pp_terminal_settings_t *view);
 
-typedef enum { PP_PREF_VOLUME, PP_PREF_QUEUE, PP_PREF_KEEP_ONLINE, PP_PREF_PAIRED } pp_preference_t;
+typedef enum {
+    PP_PREF_VOLUME, PP_PREF_QUEUE, PP_PREF_KEEP_ONLINE, PP_PREF_PAIRED, PP_PREF_STANDBY_WIFI
+} pp_preference_t;
 /* On success, previous is suitable for rollback while the caller holds its lock. */
 bool pp_settings_edit_preference(pp_settings_t *settings, pp_preference_t key, unsigned value,
                                  unsigned *previous);

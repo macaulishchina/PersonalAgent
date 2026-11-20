@@ -129,6 +129,27 @@ static void test_opening_audio_uses_only_the_guaranteed_prefix(void) {
     assert(pp_input_audio(&s, PP_CAPTURE_BYTES));
 }
 
+static void test_backlog_preserves_prefix_for_review(void) {
+    pp_input_t s = {0};
+    assert(pp_input_start(&s, 1));
+    assert(!pp_input_truncate(&s)); /* A short press cannot create a draft. */
+    assert(pp_input_begin(&s, true));
+    assert(pp_input_audio(&s, PP_INPUT_EARLY_BYTES));
+    pp_input_release(&s);
+    assert(pp_input_truncate(&s)); /* The in-flight I2S read can overflow after release. */
+    assert(s.phase == PP_INPUT_OPENING && s.truncated && !pp_input_capturing(&s));
+    assert(pp_input_ready(&s, s.generation, 1920000));
+    assert(s.phase == PP_INPUT_DRAINING);
+    assert(pp_input_audio(&s, PP_CAPTURE_BYTES));
+    assert(pp_input_truncate(&s));
+    assert(pp_input_drained(&s));
+    assert(!pp_input_truncate(&s));
+    assert(pp_input_transcript(&s, s.generation) && s.phase == PP_INPUT_CONFIRM);
+    assert(!pp_input_done(&s, s.generation)); /* Never submit an incomplete recording by itself. */
+    pp_input_abort(&s);
+    assert(pp_input_start(&s, 2) && !s.truncated && !s.limited);
+}
+
 static void test_disconnected_input(void) {
     for (unsigned phase = PP_INPUT_IDLE; phase <= PP_INPUT_UNKNOWN; phase++) {
         pp_input_t input = {.phase = phase, .generation = 11};
@@ -148,6 +169,7 @@ int main(void) {
     test_input_lifecycle();
     test_audio_limit();
     test_opening_audio_uses_only_the_guaranteed_prefix();
+    test_backlog_preserves_prefix_for_review();
     pp_button_t b = {0};
     assert(pp_press(&b, 0, false) == PP_CAPTURE);
     assert(pp_tick(&b, 199) == PP_NONE);

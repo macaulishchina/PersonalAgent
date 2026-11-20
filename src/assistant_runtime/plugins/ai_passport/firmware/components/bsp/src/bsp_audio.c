@@ -9,6 +9,7 @@
 #include "es8311_codec.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -31,6 +32,28 @@ static esp_err_t s_sleep_result;
 static bool     s_codec_release_failed;
 static uint8_t  s_volume;
 static int      s_io_error;
+
+enum { TX_DMA_DESCRIPTORS = 6, DMA_FRAMES = 240 };
+/* On the single-core C3, only the TX ISR writes this aligned word. */
+static volatile uint32_t s_tx_position;
+
+static bool IRAM_ATTR audio_tx_complete(i2s_chan_handle_t chan, i2s_event_data_t *event,
+                                       void *user) {
+    (void)chan;
+    (void)event;
+    (void)user;
+    s_tx_position++;
+    return false;
+}
+
+uint32_t bsp_audio_tx_position(void) {
+    return s_tx_position;
+}
+
+bool bsp_audio_tx_drained(uint32_t position) {
+    /* One additional descriptor also covers samples still in the I2S FIFO. */
+    return s_tx_position - position >= TX_DMA_DESCRIPTORS + 1u;
+}
 
 // esp_codec_dev 1.6.2 discards some control/data interface errors. Remember the
 // first one at the public interface boundary; never inspect its private state.
@@ -313,8 +336,8 @@ static esp_err_t i2s_full_duplex_init(void) {
     i2s_chan_config_t chan = {
         .id = BSP_I2S_PORT,
         .role = I2S_ROLE_MASTER,
-        .dma_desc_num = 6,
-        .dma_frame_num = 240,
+        .dma_desc_num = TX_DMA_DESCRIPTORS,
+        .dma_frame_num = DMA_FRAMES,
         .auto_clear_after_cb = true,
         .auto_clear_before_cb = false,
         .intr_priority = 0,
@@ -353,6 +376,11 @@ static esp_err_t i2s_full_duplex_init(void) {
     }
     if ((e = i2s_channel_init_std_mode(s_rx, &std)) != ESP_OK) {
         ESP_LOGE(TAG, "i2s rx 初始化失败: %s", esp_err_to_name(e)); return e;
+    }
+    const i2s_event_callbacks_t callbacks = {.on_sent = audio_tx_complete};
+    if ((e = i2s_channel_register_event_callback(s_tx, &callbacks, NULL)) != ESP_OK) {
+        ESP_LOGE(TAG, "I2S TX 回调注册失败: %s", esp_err_to_name(e));
+        return e;
     }
     // esp_codec_dev_open 内部重配前会先 i2s_channel_disable,而 disable 要求通道处于
     // RUNNING;刚 init 的通道是 READY,会打一条 "channel has not been enabled yet" 错误日志。

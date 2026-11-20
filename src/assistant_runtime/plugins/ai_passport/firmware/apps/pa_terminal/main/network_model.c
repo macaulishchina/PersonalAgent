@@ -5,14 +5,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool pp_wifi_next(pp_wifi_plan_t *p, unsigned *index, unsigned *round) {
-    if (!p || !index || !round || !p->count || p->count > PP_WIFI_MAX ||
-        p->attempt >= p->count * PP_WIFI_ROUNDS)
+bool pp_wifi_next(pp_wifi_plan_t *p, unsigned *index) {
+    if (!p || !index || !p->count || p->count > PP_WIFI_MAX ||
+        p->attempt >= PP_WIFI_BATCH_ATTEMPTS)
         return false;
-    *index = p->attempt % p->count;
-    *round = p->attempt / p->count + 1;
+    *index = p->cursor % p->count;
+    p->cursor = (*index + 1) % p->count;
     p->attempt++;
     return true;
+}
+uint32_t pp_wifi_retry_remaining(uint32_t started, uint32_t now) {
+    uint32_t elapsed = now - started;
+    return elapsed >= PP_WIFI_RETRY_MS ? 0 : PP_WIFI_RETRY_MS - elapsed;
 }
 bool pp_wifi_valid(const char *ssid, const char *password) {
     if (!ssid || !password || !ssid[0] || strlen(ssid) > 32)

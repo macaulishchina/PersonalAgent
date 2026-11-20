@@ -29,6 +29,7 @@ import test_conversation_sessions as sessions_fixture
 class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.received = []
+        self.synthesized = []
         self.fault = None
         self.fault_message = "secret must not escape"
         self.run_gate = None
@@ -37,6 +38,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
             ws = web.WebSocketResponse()
             await ws.prepare(request)
             ident = None
+            asr = False
             async for message in ws:
                 if message.type == WSMsgType.BINARY:
                     self.received.append(message.data)
@@ -56,7 +58,7 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
                 if action == "run-task":
                     if self.run_gate:
                         await self.run_gate.wait()
-                    self.asr = command["payload"]["task"] == "asr"
+                    asr = command["payload"]["task"] == "asr"
                     if self.fault:
                         await ws.send_json(
                             {
@@ -70,8 +72,10 @@ class ProviderProtocolTest(unittest.IsolatedAsyncioTestCase):
                         )
                     else:
                         await ws.send_json({"header": {"task_id": ident, "event": "task-started"}})
+                if action == "continue-task" and not asr:
+                    self.synthesized.append(command["payload"]["input"]["text"])
                 if action == "finish-task":
-                    if self.asr:
+                    if asr:
                         await ws.send_json(
                             {
                                 "header": {"task_id": ident, "event": "result-generated"},
@@ -1155,21 +1159,16 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirmed_sentence_speaks_before_message_end_and_stop_is_permanent(self):
         spoken = []
-        started = asyncio.Event()
         body = "第一句。后续还没结束"
 
         async def invoke(request, **kwargs):
-            self.assertIsInstance(request, ConversationRequest)
+            if isinstance(request, SpeechRequest):
+                spoken.append(request.text)
+                return self.speech_stream()
             offset = request.arguments.get("offset", 0)
             return {"text": body[offset : offset + request.arguments["limit"]], "work_id": "bound-work"}
 
-        async def play(text, *args):
-            spoken.append(text)
-            self.connection.segment_completed.set()
-            started.set()
-
         self.context.invoke = invoke
-        self.connection.play = play
         self.connection.work = "bound-work"
         message = {
             "id": "answer",
@@ -1184,7 +1183,8 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             },
         }
         await self.connection.present(message, speak=True)
-        await asyncio.wait_for(started.wait(), 1)
+        await self.allow_playback(self.connection.generation)
+        await self.wait_for_playback(lambda: any(isinstance(msg, bytes) for msg in self.messages))
         self.assertEqual(spoken, ["第一句。"])
         await self.connection.stop_playback()
         await self.connection.present({**message, "updated": 2, "status": "complete"}, speak=True)
@@ -1192,20 +1192,18 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_speech_is_paged_and_metadata_updates_do_not_repeat_it(self):
         self.owner.settings["speech_mode"] = "full"
-        body = "长" * 180 + "。" + "剩" * 120 + "。"
+        body = "**标题** ✨\n" + "长" * 230 + "，下一节 [说明](https://example.test/a) 正文。" + "尾" * 205
         spoken, sizes = [], []
 
         async def invoke(request, **kwargs):
+            if isinstance(request, SpeechRequest):
+                spoken.append(request.text)
+                return self.speech_stream()
             sizes.append(request.arguments["limit"])
-            offset = request.arguments.get("offset", 0)
+            offset = request.arguments["offset"]
             return {"text": body[offset : offset + request.arguments["limit"]], "work_id": "bound-work"}
 
-        async def play(text, *args):
-            spoken.append(text)
-            self.connection.segment_completed.set()
-
         self.context.invoke = invoke
-        self.connection.play = play
         self.connection.work = "bound-work"
         message = {
             "id": "full-answer",
@@ -1216,11 +1214,46 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             "presentation": {"phase": "final"},
         }
         await self.connection.present(message, speak=True)
+        generation = self.connection.generation
+        await self.allow_playback(generation)
+        await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+        await self.connection.command({"type": "playback.completed", "generation": generation})
         await asyncio.wait_for(self.connection.play_task, 1)
-        self.assertEqual("".join(spoken), body)
-        self.assertTrue(all(n <= 200 for n in sizes))
+        expected = "标题" + "长" * 230 + "，下一节说明正文。" + "尾" * 205
+        self.assertEqual("".join(spoken).replace(" ", ""), expected)
+        self.assertTrue(all(n <= 200 for n in sizes + list(map(len, spoken))))
+        self.assertEqual(self.playback_messages("playback.end")[0]["next_offset"], len(body))
+        self.assertEqual(self.playback_messages("message")[0]["text"], body[:160])
         await self.connection.present({**message, "updated": 2}, speak=True)
-        self.assertEqual("".join(spoken), body)
+        self.assertEqual("".join(spoken).replace(" ", ""), expected)
+
+    async def test_brief_long_sentence_and_symbol_only_reply(self):
+        spoken = []
+        body = "✨" + "长" * 260
+
+        async def invoke(request, **_):
+            if isinstance(request, SpeechRequest):
+                spoken.append(request.text)
+                return self.speech_stream()
+            start = request.arguments["offset"]
+            return {"text": body[start : start + request.arguments["limit"]], "work_id": "bound-work"}
+
+        self.context.invoke = invoke
+        self.connection.work = "bound-work"
+        reply = {"id": "brief", "role": "assistant", "text": body, "status": "complete"}
+        await self.connection.present(reply, speak=True)
+        generation = self.connection.generation
+        await self.allow_playback(generation)
+        await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+        await self.connection.command({"type": "playback.completed", "generation": generation})
+        await asyncio.wait_for(self.connection.play_task, 1)
+        self.assertEqual("".join(spoken), "长" * 200)
+        self.assertEqual(self.playback_messages("playback.finished")[-1]["reason"], "brief_limit")
+        body = "✨---\n**🔥**"
+        await self.connection.present({**reply, "id": "symbols", "text": body}, speak=True)
+        await asyncio.wait_for(self.connection.play_task, 1)
+        self.assertEqual(len(self.playback_messages("playback.start")), 1)
+        self.assertFalse(self.playback_messages("playback.unavailable"))
 
     async def test_commentary_is_not_spoken_even_if_message_ends_without_tools(self):
         self.connection.work = "bound-work"
@@ -1241,17 +1274,12 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.connection.play_task)
 
     async def test_phase_update_with_same_timestamp_and_failed_turn_stop(self):
-        spoken = asyncio.Event()
-
         async def invoke(request, **kwargs):
+            if isinstance(request, SpeechRequest):
+                return self.speech_stream()
             return {"text": "回答。", "work_id": "work"}
 
-        async def play(*args):
-            spoken.set()
-            self.connection.segment_completed.set()
-
         self.context.invoke = invoke
-        self.connection.play = play
         self.connection.work = "work"
         message = {
             "id": "phase",
@@ -1272,7 +1300,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             },
         }
         await self.connection.present(final, speak=True)
-        await asyncio.wait_for(spoken.wait(), 1)
+        await self.allow_playback(self.connection.generation)
         await self.connection.present({**final, "status": "unknown"}, speak=True)
         self.assertIsNone(self.connection.voice)
         self.assertEqual(
@@ -1542,6 +1570,146 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.calls)
         self.assertEqual(self.messages[-1]["type"], "playback.stop")
 
+    @staticmethod
+    def speech_stream():
+        stream = AsyncMock()
+        stream.__aiter__.return_value = [b"\x02\x00"]
+        return stream
+
+    async def allow_playback(self, generation):
+        await self.wait_for_playback(lambda: self.playback_messages("playback.start"))
+        await self.connection.command({"type": "playback.credit", "generation": generation, "bytes": 8192})
+
+    def start_sentence_playback(self, *, single_slot=False, block_prefetched=False, fail_next=False):
+        sentences = ("首" * 120 + "。", "次" * 120 + "。")
+        text = "\n".join(sentences)
+        finish_current = asyncio.Event()
+        syntheses = []
+
+        class Stream:
+            def __init__(self, number):
+                self.number = number
+                self.reads = 0
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.number == 1 and self.reads == 1:
+                    await finish_current.wait()
+                elif self.number == 2 and block_prefetched:
+                    await asyncio.Event().wait()
+                if self.number == 2 and fail_next:
+                    raise SpeechError("speech_provider_rejected:CLIENT_ERROR")
+                if self.reads >= 2:
+                    raise StopAsyncIteration
+                self.reads += 1
+                return bytes((self.number, 0)) * 240
+
+            async def aclose(self):
+                self.closed = True
+
+        streams = [Stream(1), Stream(2)]
+
+        async def invoke(request, **_):
+            if isinstance(request, SpeechRequest):
+                syntheses.append(request.text)
+                self.assertEqual(request.scope, UsageScope("work", "terminal:device"))
+                index = sentences.index(request.text)
+                if index == 1 and single_slot and not streams[0].closed:
+                    raise SpeechError("speech_busy")
+                return streams[index]
+            offset = request.arguments["offset"]
+            return {"text": text[offset : offset + request.arguments["limit"]], "work_id": "work"}
+
+        self.context.invoke = invoke
+        voice = {
+            "id": "reply",
+            "ranges": [{"start": 0, "end": len(text)}],
+            "complete": True,
+            "offset": 0,
+            "spoken": 0,
+            "settings": {"speech_mode": "full"},
+        }
+        self.owner.devices.claim_playback("device", "reply", 0)
+        self.connection.voice = voice
+        self.connection.play_task = self.connection.spawn(self.connection.speak_foreground(voice), "test")
+        return streams, syntheses, finish_current
+
+    async def wait_for_playback(self, predicate):
+        async with asyncio.timeout(2):
+            while not predicate():
+                await asyncio.sleep(0.001)
+
+    def playback_messages(self, kind):
+        return [msg for msg in self.messages if isinstance(msg, dict) and msg["type"] == kind]
+
+    async def test_prefetch_reads_one_frame_and_joins_segments_without_a_device_receipt(self):
+        streams, syntheses, finish_current = self.start_sentence_playback()
+        await self.allow_playback(0)
+        await self.wait_for_playback(lambda: streams[1].reads == 1)
+        self.assertFalse(streams[0].closed)
+        self.assertEqual(len(syntheses), 2)
+        self.assertEqual(len(self.playback_messages("playback.start")), 1)
+        finish_current.set()
+        await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+        self.assertEqual([msg[4] for msg in self.messages if isinstance(msg, bytes)], [1, 1, 2, 2])
+        await self.connection.command({"type": "playback.completed", "generation": 0})
+        await asyncio.wait_for(self.connection.play_task, 2)
+        self.assertTrue(all(s.closed for s in streams))
+        self.assertEqual(len(self.playback_messages("playback.finished")), 1)
+
+    async def test_failed_second_segment_drains_receipt_and_does_not_regenerate(self):
+        streams, syntheses, finish_current = self.start_sentence_playback(fail_next=True)
+        await self.allow_playback(0)
+        await self.wait_for_playback(lambda: streams[1].closed)
+        finish_current.set()
+        await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+        self.assertFalse(self.playback_messages("playback.unavailable"))
+        self.assertEqual([msg[4] for msg in self.messages if isinstance(msg, bytes)], [1, 1])
+        await self.connection.command({"type": "playback.completed", "generation": 0})
+        await asyncio.wait_for(self.connection.play_task, 2)
+        self.assertEqual(len(syntheses), 2)
+        self.assertFalse(self.playback_messages("playback.receipt")[0]["played"])
+        self.assertEqual(
+            self.playback_messages("playback.unavailable")[0]["code"], "speech_provider_rejected:CLIENT_ERROR"
+        )
+
+    async def test_stop_closes_the_current_and_prefetched_stream_before_accepting_late_receipts(self):
+        streams, _, _ = self.start_sentence_playback()
+        await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 8192})
+        await self.wait_for_playback(lambda: streams[1].reads == 1)
+        await self.connection.command({"type": "playback.stop"})
+        await self.connection.command({"type": "playback.completed", "generation": 0})
+        self.assertTrue(all(s.closed for s in streams))
+        self.assertEqual(self.connection.generation, 1)
+        self.assertEqual(len(self.playback_messages("playback.start")), 1)
+        self.assertFalse(self.playback_messages("playback.finished"))
+        self.assertEqual([msg[4] for msg in self.messages if isinstance(msg, bytes)], [1])
+
+    async def test_disconnect_cancels_prefetch_still_waiting_for_first_audio(self):
+        streams, syntheses, _ = self.start_sentence_playback(block_prefetched=True)
+        await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 8192})
+        await self.wait_for_playback(lambda: len(syntheses) == 2)
+        await self.connection.close()
+        self.assertTrue(all(s.closed for s in streams))
+        self.assertEqual(streams[1].reads, 0)
+        self.assertEqual(len(self.playback_messages("playback.start")), 1)
+
+    async def test_prefetch_busy_waits_for_a_slot_without_interrupting_current_sentence(self):
+        streams, syntheses, finish_current = self.start_sentence_playback(single_slot=True)
+        await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 8192})
+        await self.wait_for_playback(lambda: len(syntheses) == 2)
+        self.assertEqual(streams[1].reads, 0)
+        finish_current.set()
+        await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+        await self.connection.command({"type": "playback.completed", "generation": 0})
+        self.assertEqual(len(self.playback_messages("playback.start")), 1)
+        self.assertEqual(len(syntheses), 3)
+        self.assertEqual(syntheses[1], syntheses[2])
+        self.assertFalse(self.playback_messages("playback.unavailable"))
+
 
 @unittest.skipUnless(__import__("sys").platform == "linux", "Requires Linux-certified speech_io")
 class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
@@ -1561,6 +1729,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
         read_path = None
         release_final = threading.Event()
         pending_final = threading.Event()
+        reply = "收到，测试完成。\n可以继续。"
 
         def answer(step, body):
             payload = json.dumps(body, ensure_ascii=False)
@@ -1571,7 +1740,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
             if step == 1:
                 return sse_tool_call("read-synthetic", "read", {"path": str(read_path)})
             self.assertIn("SYNTHETIC_PP_READ", payload)
-            events = sse_text_reply("answer", "收到，测试完成。")
+            events = sse_text_reply("answer", reply)
             for event in events:
                 if event.get("item", {}).get("type") == "message":
                     event["item"]["phase"] = "final_answer"
@@ -1696,6 +1865,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                         completed = asyncio.Event()
                         heard = bytearray()
                         accepted = 0
+                        played_segments = 0
                         message_seen = False
                         early_speech = False
                         await ws.send_json({"type": "input.begin", "request_id": ident, "mode": "steer"})
@@ -1730,10 +1900,10 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                                         )
                                 if kind == "message":
                                     self.assertIn(data["status"], {"streaming", "complete"}, data)
-                                    self.assertIn("收到，测试完成。", data["text"])
+                                    self.assertIn(reply, data["text"])
                                     message_seen |= data["status"] == "complete"
                                 if kind == "playback.start":
-                                    early_speech = (
+                                    early_speech |= (
                                         pending_final.is_set()
                                         and not release_final.is_set()
                                         and not message_seen
@@ -1747,6 +1917,7 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                                         }
                                     )
                                 if kind == "playback.end":
+                                    played_segments += 1
                                     await ws.send_json(
                                         {"type": "playback.completed", "generation": data["generation"]}
                                     )
@@ -1754,14 +1925,15 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                                     completed.set()
                         self.assertTrue(message_seen)
                         self.assertTrue(early_speech)
-                        self.assertTrue(heard)
+                        self.assertEqual(played_segments, 1)
+                        self.assertEqual(len(heard), 320)
+                        self.assertEqual(provider.synthesized, ["收到，测试完成。 可以继续。"])
                         self.assertGreaterEqual(accepted, 2)
                         self.assertEqual(len(gateway.requests), 2)
                         binding = await host.ai_usage.service.binding(ident)
                         snapshot = await host.ai_usage.service.snapshot(binding.work_id)
-                        self.assertEqual(
-                            snapshot["requests"], 4
-                        )  # ASR + two Pi requests around a read + TTS.
+                        # ASR + two Pi requests around a read + one shared TTS request.
+                        self.assertEqual(snapshot["requests"], 4)
                         self.assertEqual(snapshot["inflight"], 0)
                         self.assertFalse(host.runtime.plugins["speech_io"].instance.streams)
                         history = await host.runtime.invoke(

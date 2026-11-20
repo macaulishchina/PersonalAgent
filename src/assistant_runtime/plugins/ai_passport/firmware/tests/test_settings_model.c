@@ -24,7 +24,8 @@ static void test_terminal_snapshot(const pp_settings_t *source) {
     assert(view.wifi_count == source->wifi_count && view.volume == source->volume &&
            view.brightness == source->brightness && view.sleep_seconds == source->sleep_seconds &&
            view.text_size == source->text_size && view.queue == source->queue &&
-           view.keep_online == source->keep_online && view.paired == source->paired &&
+           view.keep_online == source->keep_online && view.standby_wifi == source->standby_wifi &&
+           view.paired == source->paired &&
            view.offline_cache == source->offline_cache && view.show_images == source->show_images);
     pp_settings_t edit = *source;
     unsigned previous, ignored;
@@ -126,13 +127,20 @@ int main(void) {
     cJSON *saved = cJSON_Parse(encoded);
     cJSON *saved_values = cJSON_GetObjectItemCaseSensitive(saved, "values");
     cJSON *saved_versions = cJSON_GetObjectItemCaseSensitive(saved, "versions");
+    cJSON_DeleteItemFromObjectCaseSensitive(saved, "standby_wifi");
     cJSON_DeleteItemFromObjectCaseSensitive(saved_values, "brightness");
     cJSON_DeleteItemFromObjectCaseSensitive(saved_values, "text_size");
     cJSON_DeleteItemFromArray(saved_versions, 11);
     cJSON_DeleteItemFromArray(saved_versions, 10);
     char *prior = cJSON_PrintUnformatted(saved);
     assert(pp_settings_decode(prior, &restored));
-    assert(restored.brightness == 65 && restored.text_size == 16);
+    assert(restored.brightness == 65 && restored.text_size == 16 && restored.standby_wifi);
+    unsigned previous;
+    assert(pp_settings_edit_preference(&restored, PP_PREF_STANDBY_WIFI, 0, &previous));
+    assert(previous == 1 && !restored.standby_wifi);
+    char *disabled = pp_settings_encode(&restored);
+    assert(disabled && pp_settings_decode(disabled, &restored) && !restored.standby_wifi);
+    cJSON_free(disabled);
     assert(restored.volume == prepared.volume && restored.queue == prepared.queue);
     assert(!strcmp(restored.device, prepared.device) &&
            !strcmp(restored.credential, prepared.credential));

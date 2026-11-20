@@ -1,6 +1,7 @@
 #pragma once
 /* Host declarations for the FreeRTOS and codec operations used by terminal_audio.c. */
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef void *QueueHandle_t;
@@ -31,3 +32,5 @@ int bsp_audio_set_volume(unsigned volume);
 int bsp_audio_set_format(unsigned rate, unsigned bits, unsigned channels);
 int bsp_audio_read(void *pcm, size_t size);
 int bsp_audio_write(const void *pcm, size_t size);
+uint32_t bsp_audio_tx_position(void);
+bool bsp_audio_tx_drained(uint32_t position);

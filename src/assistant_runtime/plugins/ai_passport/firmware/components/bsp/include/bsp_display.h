@@ -46,3 +46,5 @@ struct _lv_display_t *bsp_lvgl_init(void);
 // LVGL 尚未就绪或超时时 lock 返回 false；只有 lock 成功后才调用 unlock。
 bool bsp_lvgl_lock(int timeout_ms);
 void bsp_lvgl_unlock(void);
+// Reversible panel and LVGL pause for Wi-Fi standby. Resume leaves the backlight off.
+esp_err_t bsp_lvgl_standby(bool enabled);

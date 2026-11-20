@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from assistant_runtime.api.speech import SpeechError, spoken_excerpt
 from assistant_runtime.api.ai_usage import UsageScope, UsageError
-from assistant_runtime.core.speech_io.service import InputStream, BufferedRecognition
+from assistant_runtime.core.speech_io.service import (
+    RECOGNITION_BUFFER_BYTES,
+    RECOGNITION_BUFFER_CHUNKS,
+    BufferedRecognition,
+    InputStream,
+)
 from assistant_runtime.core.ai_usage.service import UsageService
 from assistant_runtime.core.ai_usage.settings import UsageSettings
 from assistant_runtime.plugins.ai_passport.repository import Devices
@@ -105,17 +110,16 @@ class SpeechIntegrityTest(unittest.IsolatedAsyncioTestCase):
 
         context = SimpleNamespace(invoke=invoke, spawn=lambda coro, _: asyncio.create_task(coro))
         pending = BufferedRecognition(context, None)
-        stream = InputStream(pending, 1, lambda _: None)
-        await stream.accept(0, b"\x01\x00" * 320)
-        await stream.accept(1, b"\x02\x00" * 320)
+        stream = InputStream(pending, 10, lambda _: None)
+        frames = [index.to_bytes(2, "little") * 320 for index in range(250)]
+        for index, pcm in enumerate(frames):
+            await stream.accept(index, pcm)
         task = asyncio.create_task(stream.finish())
         await asyncio.sleep(0)
         self.assertFalse(task.done())
         opened.set()
         self.assertEqual(await task, "首尾完整")
-        self.assertEqual(
-            [c.args[0] for c in upstream.send.await_args_list], [b"\x01\x00" * 320, b"\x02\x00" * 320]
-        )
+        self.assertEqual([c.args[0] for c in upstream.send.await_args_list], frames)
         upstream.close.assert_awaited_once()
         self.assertEqual(pending.pending_bytes, 0)
 
@@ -124,15 +128,20 @@ class SpeechIntegrityTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         context = SimpleNamespace(invoke=invoke, spawn=lambda coro, _: asyncio.create_task(coro))
-        pending = BufferedRecognition(context, None)
-        stream = InputStream(pending, 10, lambda _: None)
-        for index in range(8):
-            await stream.accept(index, b"\x00\x00" * 4096)
-        with self.assertRaisesRegex(SpeechError, "speech_input_buffer_limit"):
-            await stream.accept(8, b"\x00\x00")
-        self.assertTrue(stream.closed)
-        self.assertTrue(pending.task.cancelled())
-        self.assertEqual(pending.pending_bytes, 0)
+        for bytes_per_chunk, chunks in [
+            (1280, RECOGNITION_BUFFER_BYTES // 1280),
+            (2, RECOGNITION_BUFFER_CHUNKS),
+        ]:
+            with self.subTest(bytes_per_chunk=bytes_per_chunk):
+                pending = BufferedRecognition(context, None)
+                stream = InputStream(pending, 10, lambda _: None)
+                for index in range(chunks):
+                    await stream.accept(index, bytes(bytes_per_chunk))
+                with self.assertRaisesRegex(SpeechError, "speech_input_buffer_limit"):
+                    await stream.accept(chunks, b"\x00\x00")
+                self.assertTrue(stream.closed)
+                self.assertTrue(pending.task.cancelled())
+                self.assertEqual(pending.pending_bytes, 0)
 
     async def test_final_only_and_gap_never_finishes(self):
         upstream = AsyncMock()

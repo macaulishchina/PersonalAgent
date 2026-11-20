@@ -4,6 +4,7 @@
 #include "bsp_display_rounding.h"
 #include "bsp_pins.h"
 #include "esp_lvgl_port.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -129,4 +130,29 @@ bool bsp_lvgl_lock(int timeout_ms) {
 }
 void bsp_lvgl_unlock(void) {
     if (s_disp) lvgl_port_unlock();
+}
+
+esp_err_t bsp_lvgl_standby(bool enabled) {
+    if (!bsp_lvgl_lock(1000))
+        return ESP_ERR_TIMEOUT;
+    esp_lcd_panel_handle_t panel = bsp_display_panel();
+    esp_err_t error;
+    if (enabled) {
+        bsp_display_backlight(0);
+        error = lvgl_port_stop();
+        if (error == ESP_OK)
+            error = esp_lcd_panel_disp_on_off(panel, false);
+        if (error == ESP_OK)
+            error = esp_lcd_panel_disp_sleep(panel, true);
+    } else {
+        error = esp_lcd_panel_disp_sleep(panel, false);
+        if (error == ESP_OK)
+            error = esp_lcd_panel_disp_on_off(panel, true);
+        if (error == ESP_OK)
+            error = lvgl_port_resume();
+        if (error == ESP_OK)
+            lv_obj_invalidate(lv_screen_active());
+    }
+    bsp_lvgl_unlock();
+    return error;
 }

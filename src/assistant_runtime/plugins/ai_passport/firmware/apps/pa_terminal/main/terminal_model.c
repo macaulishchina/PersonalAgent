@@ -90,7 +90,7 @@ bool pp_input_start(pp_input_t *s, uint32_t now) {
     s->started = now;
     s->max_audio_bytes = 60u * 32000u;
     s->audio_bytes = 0;
-    s->released = s->limited = s->early_audio = false;
+    s->released = s->limited = s->truncated = s->early_audio = false;
     s->phase = PP_INPUT_PREBUFFER;
     return true;
 }
@@ -147,6 +147,14 @@ bool pp_input_limit(pp_input_t *s, uint32_t now, uint32_t limit_ms) {
     pp_input_release(s);
     return true;
 }
+bool pp_input_truncate(pp_input_t *s) {
+    if (s->phase != PP_INPUT_OPENING && s->phase != PP_INPUT_RECORDING &&
+        s->phase != PP_INPUT_DRAINING)
+        return false;
+    s->truncated = s->limited = true;
+    pp_input_release(s);
+    return true;
+}
 bool pp_input_drained(pp_input_t *s) {
     if (s->phase != PP_INPUT_DRAINING)
         return false;
@@ -170,6 +178,7 @@ void pp_input_restore_confirmation(pp_input_t *s) {
     s->phase = PP_INPUT_CONFIRM;
     s->released = true;
     s->limited = true;
+    s->truncated = false;
 }
 bool pp_input_done(pp_input_t *s, uint32_t generation) {
     if (s->generation != generation ||
@@ -182,7 +191,7 @@ void pp_input_abort(pp_input_t *s) {
     s->generation++;
     s->phase = PP_INPUT_IDLE;
     s->released = true;
-    s->limited = false;
+    s->limited = s->truncated = false;
 }
 bool pp_input_disconnect(pp_input_t *s) {
     bool reconcile = s->phase == PP_INPUT_FINALIZING || s->phase == PP_INPUT_CONFIRM ||

@@ -5,12 +5,14 @@
 #include <stddef.h>
 
 #define PP_WIFI_MAX 5
-#define PP_WIFI_ROUNDS 3
-/* One explicit connection flow, never an unbounded restart of failed rounds. */
+#define PP_WIFI_BATCH_ATTEMPTS 3u
+#define PP_WIFI_RETRY_MS 60000u
+/* Keep the next profile across failed batches so all configured networks get a turn. */
 typedef struct {
-    unsigned count, attempt;
+    unsigned count, cursor, attempt;
 } pp_wifi_plan_t;
-bool pp_wifi_next(pp_wifi_plan_t *plan, unsigned *index, unsigned *round);
+bool pp_wifi_next(pp_wifi_plan_t *plan, unsigned *index);
+uint32_t pp_wifi_retry_remaining(uint32_t started, uint32_t now);
 bool pp_wifi_valid(const char *ssid, const char *password);
 bool pp_server_url_valid(const char *url);
 bool pp_server_endpoint(const char *root, const char *route, bool websocket, char *destination,

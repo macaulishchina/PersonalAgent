@@ -33,7 +33,7 @@ int xQueueSend(QueueHandle_t q, const void *item, unsigned wait) {
     return pdTRUE;
 }
 int xQueueReceive(QueueHandle_t q, void *item, unsigned wait) {
-    assert(!wait);
+    assert(!wait || (wait == portMAX_DELAY && q == &queues[0] && q->count));
     if (!q->count)
         return 0;
     *(pp_event_t *)item = q->items[0];
@@ -144,5 +144,12 @@ int main(void) {
     check_transfer(PP_NET_REUSE_CAPACITY);
     check_transfer(PP_WIRE_MESSAGE_BYTES);
     check_failed_delivery();
+    pp_events_key(BSP_BTN_OK, BSP_BTN_RELEASE, NULL);
+    pp_events_key(BSP_BTN_UP, BSP_BTN_PRESS, NULL);
+    pp_events_key(BSP_BTN_UP, BSP_BTN_RELEASE, NULL);
+    pp_events_wait_for_wake();
+    pp_event_t e;
+    assert(pp_events_next(&e) && e.key == BSP_BTN_UP && e.button == BSP_BTN_RELEASE);
+    assert(!pp_events_next(&e));
     return 0;
 }

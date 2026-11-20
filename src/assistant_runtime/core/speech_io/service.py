@@ -6,6 +6,10 @@ from collections import deque
 
 from assistant_runtime.api.speech import SpeechError, RecognitionRequest, SynthesisRequest
 
+INPUT_BYTES_PER_SECOND = 32000  # 16 kHz, signed 16-bit mono
+RECOGNITION_BUFFER_BYTES = 8 * INPUT_BYTES_PER_SECOND
+RECOGNITION_BUFFER_CHUNKS = 512
+
 
 class BufferedRecognition:
     """Accept bounded PCM while the provider opens, preserving the first sound.
@@ -36,7 +40,10 @@ class BufferedRecognition:
             await self.task
             raise SpeechError("speech_input_closed")
         # Both byte and item limits cover tiny frames as well as large ones.
-        if self.pending_bytes + len(pcm) > 65536 or len(self.chunks) >= 256:
+        if (
+            self.pending_bytes + len(pcm) > RECOGNITION_BUFFER_BYTES
+            or len(self.chunks) >= RECOGNITION_BUFFER_CHUNKS
+        ):
             raise SpeechError("speech_input_buffer_limit")
         self.chunks.append(pcm)
         self.pending_bytes += len(pcm)
@@ -92,7 +99,7 @@ class BufferedRecognition:
 class InputStream:
     def __init__(self, upstream, max_seconds, release):
         self.upstream, self.release = upstream, release
-        self.max_bytes = max_seconds * 32000
+        self.max_bytes = max_seconds * INPUT_BYTES_PER_SECOND
         self.max_seconds = max_seconds
         self.sequence = self.size = 0
         self.closed = False

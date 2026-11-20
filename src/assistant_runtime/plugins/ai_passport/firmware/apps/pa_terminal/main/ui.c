@@ -39,6 +39,7 @@ static lv_obj_t *screen, *clock_label, *wifi, *volume, *battery, *battery_text, 
 static lv_obj_t *origin, *state, *content, *footer, *avatar, *photo, *strip_photo, *bars[5], *items[7];
 static lv_obj_t *volume_track, *volume_fill;
 static pp_ui_view_t previous_view = (pp_ui_view_t)-1;
+static bool previous_menu_detail;
 static const lv_image_dsc_t *previous_avatar;
 static unsigned filtered_level;
 static bool photo_available;
@@ -47,6 +48,13 @@ static bool invalidating_strip, strip_done;
 static const lv_font_t *body_font = &terminal_zh_16;
 /* Backlight starts off until the first populated frame has been drawn. */
 static unsigned current_brightness;
+
+bool pp_ui_standby(bool enabled) {
+    if (bsp_lvgl_standby(enabled) != ESP_OK)
+        return false;
+    current_brightness = 0; /* The first complete wake frame restores the configured brightness. */
+    return true;
+}
 
 static unsigned body_rows(bool input) {
     return (input ? 110u : 198u) / (body_font->line_height + 1);
@@ -77,6 +85,26 @@ static void text_color(lv_obj_t *object, uint32_t rgb) {
     lv_color_t color = lv_color_hex(rgb);
     if (!lv_color_eq(lv_obj_get_style_text_color(object, 0), color))
         lv_obj_set_style_text_color(object, color, 0);
+}
+static void activity_indicator(const pp_ui_frame_t *f, bool input) {
+    const bool show_wait = f->awaiting_reply && !f->volume_feedback;
+    const bool show_level = !show_wait && input && f->elapsed && f->level;
+    const unsigned active_dot = f->now / 240 % 3;
+    const unsigned weights[] = {5, 9, 12, 9, 5};
+    filtered_level = (filtered_level * 3 + (f->level > 1024 ? 1024 : f->level)) / 4;
+    /* The microphone bars double as three dots while waiting for a reply. */
+    for (unsigned i = 0; i < 5; i++) {
+        const bool dot = show_wait && i < 3;
+        visible(bars[i], dot || show_level);
+        if (!dot && !show_level)
+            continue;
+        const unsigned height = dot ? 4 : 2 + filtered_level * weights[i] / 1024;
+        lv_obj_set_pos(bars[i], dot ? 86 + i * 9 : 101 + i * 8, dot ? 273 : 114 - height / 2);
+        lv_obj_set_size(bars[i], dot ? 4 : 3, height);
+        const lv_color_t color = lv_color_hex(!dot || i == active_dot ? 0xb6cfa4 : 0x526158);
+        if (!lv_color_eq(lv_obj_get_style_bg_color(bars[i], 0), color))
+            lv_obj_set_style_bg_color(bars[i], color, 0);
+    }
 }
 static void rule(int y) {
     lv_obj_t *object = lv_obj_create(screen);
@@ -136,15 +164,18 @@ bool pp_ui_init(void) {
     clock_label = label(12, 6, 65, 21, false);
     volume = label(144, 8, 20, 17, true);
     wifi = label(172, 8, 20, 17, true);
+    enum { BATTERY_X = 200, BATTERY_Y = 8, BATTERY_WIDTH = 27, BATTERY_HEIGHT = 14 };
     battery = lv_obj_create(screen);
     lv_obj_remove_style_all(battery);
-    lv_obj_set_pos(battery, 198, 6);
-    lv_obj_set_size(battery, 29, 18);
+    lv_obj_set_pos(battery, BATTERY_X, BATTERY_Y);
+    lv_obj_set_size(battery, BATTERY_WIDTH, BATTERY_HEIGHT);
     lv_obj_set_style_border_width(battery, 1, 0);
     lv_obj_set_style_border_color(battery, lv_color_hex(0xa8b8a6), 0);
     lv_obj_set_style_radius(battery, 2, 0);
     lv_obj_remove_flag(battery, LV_OBJ_FLAG_SCROLLABLE);
-    battery_text = label(199, 6, 27, 18, true);
+    /* Center the visible digits rather than the font's full line box. */
+    battery_text = label(BATTERY_X, BATTERY_Y - 1, BATTERY_WIDTH,
+                         lv_font_montserrat_14.line_height, true);
     lv_obj_set_style_text_align(battery_text, LV_TEXT_ALIGN_CENTER, 0);
     rule(29);
     rule(288);
@@ -325,7 +356,10 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
                  : f->volume < 55 ? LV_SYMBOL_VOLUME_MID
                                   : LV_SYMBOL_VOLUME_MAX);
     text(wifi, LV_SYMBOL_WIFI);
-    text_color(wifi, f->wifi > -70 ? 0xb6cfa4 : f->wifi > -90 ? 0x839278 : 0x526158);
+    static const uint32_t wifi_pulse[] = {0x526158, 0x839278, 0xb6cfa4, 0x839278};
+    text_color(wifi, f->wifi_searching ? wifi_pulse[f->now / 240 % 4]
+                                      : f->wifi > -70 ? 0xb6cfa4
+                                      : f->wifi > -90 ? 0x839278 : 0x526158);
     if (f->battery < 0)
         strcpy(value, "--");
     else
@@ -333,18 +367,21 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     text(battery_text, value);
     text(mode, f->queue ? LV_SYMBOL_LIST : LV_SYMBOL_NEW_LINE);
     bool input = f->view == PP_UI_INPUT, idle = f->view == PP_UI_IDLE;
+    bool menu_detail = f->view == PP_UI_MENU && f->menu_detail;
     visible(avatar, input || idle);
     visible(photo, f->view == PP_UI_IMAGE && photo_available);
     visible(origin, !idle);
-    visible(content, !idle && f->view != PP_UI_MENU && f->view != PP_UI_IMAGE);
+    visible(content, menu_detail || (!idle && f->view != PP_UI_MENU && f->view != PP_UI_IMAGE));
+    text_color(content, menu_detail ? 0x9aaa99 : 0xe6eddf);
     visible(state, true);
     text_color(origin, f->task_context ? 0xa7c7e8 : 0xb6cfa4);
-    if (previous_view != f->view) {
-        lv_obj_set_pos(content, 12, input ? 145 : 66);
-        lv_obj_set_height(content, input ? 110 : 198);
+    if (previous_view != f->view || previous_menu_detail != menu_detail) {
+        lv_obj_set_pos(content, menu_detail ? 18 : 12, menu_detail ? 222 : input ? 145 : 66);
+        lv_obj_set_height(content, menu_detail ? 28 : input ? 110 : 198);
         lv_obj_set_pos(origin, 12, input ? 123 : 38);
     }
     previous_view = f->view;
+    previous_menu_detail = menu_detail;
     if (idle || input) {
         unsigned blink_time = f->now % 11000;
         bool blink =
@@ -357,15 +394,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         }
         lv_obj_set_pos(avatar, input ? 90 : 60, input ? 35 : 88);
     }
-    /* Five tiny native rectangles, not FFT/particle animation or an ARGB layer. */
-    filtered_level = (filtered_level * 3 + (f->level > 1024 ? 1024 : f->level)) / 4;
-    for (unsigned i = 0; i < 5; i++) {
-        visible(bars[i], input && f->elapsed > 0 && f->level > 0);
-        unsigned weight = i == 2 ? 12 : i == 1 || i == 3 ? 9 : 5;
-        unsigned height = 2 + filtered_level * weight / 1024;
-        lv_obj_set_pos(bars[i], 101 + i * 8, 114 - height / 2);
-        lv_obj_set_size(bars[i], 3, height);
-    }
+    activity_indicator(f, input);
     text(origin, input                       ? "你说的"
                  : f->origin && f->origin[0] ? f->origin
                  : f->view == PP_UI_MENU     ? "操作菜单"
@@ -407,7 +436,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     else
         layout =
             pp_layout_page(page, sizeof(page), body, f->page, 216, body_rows(false), measure, NULL);
-    text(content, page);
+    text(content, menu_detail ? f->menu_detail : page);
     const char *hint = f->hint && f->hint[0] ? f->hint : "上下翻页 · OK 菜单";
     if (f->local_page_hint && (layout.more || f->page))
         hint = layout.more ? (f->page ? "上下翻页 · OK 返回" : "向下翻页 · OK 返回")

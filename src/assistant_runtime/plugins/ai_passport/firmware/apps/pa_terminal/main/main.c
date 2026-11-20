@@ -2,9 +2,11 @@
 #include "terminal_events.h"
 #include "pp_board_power.h"
 #include "bsp_battery.h"
+#include "bsp_audio.h"
 #include "bsp_button.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_random.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
@@ -37,7 +39,7 @@ static pp_navigation_t navigation;
 #define browsing (navigation.screen == PP_SCREEN_HISTORY)
 #define notice_list (navigation.screen == PP_SCREEN_TASKS)
 #define notice_view (navigation.screen == PP_SCREEN_TASK)
-static bool playing, play_end;
+static bool playing;
 static unsigned play_generation;
 static pp_ui_view_t view = PP_UI_INFO;
 static size_t view_page, view_next;
@@ -47,6 +49,7 @@ static pp_timeline_t timeline;
 static unsigned offline_skips;
 static int offline_direction = -1;
 static bool new_message, page_pending, page_tail, index_boundary;
+enum { INDEX_LATEST = 2, INDEX_LATEST_QUEUED };
 static int index_direction;
 static char latest_message[PP_MESSAGE_ID], requested_page[PP_MESSAGE_ID],
     history_anchor[PP_MESSAGE_ID];
@@ -66,6 +69,8 @@ static unsigned sequence, next_offset, segment_end, page_offset, page_next, noti
 static uint32_t activity;
 static char request_id[37], active_id[64], message_id[160], pending[37], body[1024],
     status[160] = "连接中";
+static const char processing_status[] = "处理中";
+static const char speech_unavailable_status[] = "播报暂不可用，可查看文字";
 static const char *review_choices[] = {"丢弃本次输入", "发送已识别文字", "查看完整转写"};
 static char notice_cursor[160];
 static bool notice_older;
@@ -82,6 +87,7 @@ static char active_notice_title[64], dismissed_input[37];
 static char question_text[1024];
 static uint8_t input_audio_id[PP_INPUT_AUDIO_ID_BYTES];
 static bool input_audio_ids, input_begin_queued;
+static uint32_t input_upload_started;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static cJSON *command(const char *type) {
@@ -98,7 +104,7 @@ static void set_status(const char *text) { pp_text(status, sizeof(status), text)
 /* The home card describes connectivity. Menus keep their own route and never
  * borrow the chat body for credentials, network diagnostics or pairing codes. */
 static char network_details[640];
-static char connection_status[160] = "连接中", hotspot_info[192], pairing_info[128];
+static char connection_status[160], hotspot_info[192], pairing_info[128];
 static bool setup_home(void) {
     return !configured || !settings.paired || pp_provision_active() || pp_net_rejected();
 }
@@ -114,7 +120,7 @@ static const char *connection_info(void) {
     }
     memset(hotspot_info, 0, sizeof(hotspot_info));
     if (pp_net_rejected())
-        return "请检查 PA 接入设置。配对已被撤销时，可在设备维护中重新配对，保留 Wi-Fi。";
+        return "请检查 PA 接入设置。旧配对被撤销后，可更换配对并保留 Wi-Fi。";
     return pairing_info;
 }
 static void confirm_maintenance(pp_selection_t action) {
@@ -197,6 +203,38 @@ static void request_index(const char *cursor, int direction) {
         set_status("无法读取历史，请联网后重试");
     }
 }
+static void request_latest_index(void) {
+    index_direction = INDEX_LATEST;
+    request_index(NULL, 0);
+}
+static void request_recent_history(void) {
+    if (settings.offline_cache && pp_history_cache_recent())
+        set_status("正在读取最近缓存记录");
+    else
+        set_status(settings.offline_cache ? "本地读取忙，请稍后重试" : "离线缓存已关闭");
+}
+static void jump_to_latest(void) {
+    if (navigation.screen == PP_SCREEN_CHAT && message_streaming && pp_net_connected()) {
+        page_pending = false;
+        view_page = view_next = 0;
+        return;
+    }
+    if (!close_image())
+        return;
+    pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
+    page_pending = new_message = false;
+    if (!pp_net_connected()) {
+        request_recent_history();
+        return;
+    }
+    set_status("正在读取最新消息");
+    /* History index replies have no request ID. Finish the previous exchange
+     * before requesting the newest window, without opening its old selection. */
+    if (!index_direction)
+        request_latest_index();
+    else if (index_direction != INDEX_LATEST)
+        index_direction = INDEX_LATEST_QUEUED;
+}
 static void history_step(int direction) {
     if (page_pending || index_direction) {
         set_status("正在读取，请稍候");
@@ -232,6 +270,10 @@ static void history_response(cJSON *j) {
     if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "pushed")) &&
         (browsing || index_direction))
         return; /* A live directory refresh cannot steal an explicit history read. */
+    if (index_direction == INDEX_LATEST_QUEUED) {
+        request_latest_index();
+        return;
+    }
     if (!pp_timeline_index(&timeline, j)) {
         index_direction = 0;
         set_status("历史目录格式不匹配");
@@ -239,6 +281,14 @@ static void history_response(cJSON *j) {
     }
     if (!index_direction)
         return;
+    if (index_direction == INDEX_LATEST) {
+        index_direction = 0;
+        if (timeline.count)
+            request_page(timeline.entries[timeline.count - 1].id, 0, false);
+        else
+            set_status("暂无对话记录");
+        return;
+    }
     int direction = index_direction;
     const pp_history_entry_t *next =
         index_boundary ? NULL : pp_timeline_neighbor(&timeline, history_anchor, direction);
@@ -259,7 +309,6 @@ static void history_response(cJSON *j) {
 static void reset_play(void) {
     playing = false;
     speech_session = false;
-    play_end = false;
     play_generation++;
     pp_audio_play_stop();
 }
@@ -270,6 +319,7 @@ static void stop_play(void) {
 static void reset_record_controls(void) {
     pp_audio_capture_discard();
     input_begin_queued = false;
+    input_upload_started = 0;
     review_reading = review_pending = false;
     button_state = (pp_button_t){.wake_guard = button_state.wake_guard || button_state.down};
 }
@@ -287,16 +337,16 @@ static void abort_record(void) {
     }
     set_status("收音中断，请重新说");
 }
-static void input_limit_reached(bool discard_excess) {
+static void stop_capture_upload(bool discard_excess) {
     pp_audio_capture_release();
     button_state = (pp_button_t){.wake_guard = button_state.down || button_state.wake_guard};
-    if (discard_excess) {
+    if (discard_excess)
         pp_audio_capture_discard();
-    }
-    set_status("达到上限，识别中");
-    ESP_LOGI("pa_terminal", "input_limit audio_bytes=%u max_audio_bytes=%u elapsed_ms=%u",
-             (unsigned)input_state.audio_bytes, (unsigned)input_state.max_audio_bytes,
-             (unsigned)(now_ms() - input_state.started));
+    if (!input_upload_started)
+        input_upload_started = now_ms();
+    set_status(input_state.truncated ? "网络慢，上传已录部分"
+               : input_state.limited ? "录音达上限，正在上传"
+                                     : "正在上传录音");
 }
 static const char *input_failure_hint(const char *code) {
     if (!strcmp(code, "speech_busy"))
@@ -414,6 +464,7 @@ static void actions(unsigned mask) {
             return;
         }
         request_id[0] = 0;
+        input_upload_started = 0;
         if (!pp_audio_capture_begin()) {
             abort_record();
             set_status("录音缓冲暂不可用，请重新说");
@@ -460,15 +511,15 @@ static void actions(unsigned mask) {
         }
         input_begin_queued = true;
         sequence = 0;
-        ESP_LOGI("pa_terminal", "input_begin elapsed_ms=%u blocks=%u early=%d",
-                 (unsigned)(now_ms() - input_state.started), pp_audio_recorded_count(), input_state.early_audio);
+        ESP_LOGI("pa_terminal", "input_begin elapsed_ms=%u blocks=%u capacity=%u early=%d",
+                 (unsigned)(now_ms() - input_state.started), pp_audio_recorded_count(),
+                 pp_audio_recording_capacity(), input_state.early_audio);
         set_status("正在听");
     }
     if (mask & PP_FINISH) {
-        pp_audio_capture_release();
         if (input_state.phase == PP_INPUT_OPENING || input_state.phase == PP_INPUT_RECORDING) {
             pp_input_release(&input_state);
-            set_status("识别中");
+            stop_capture_upload(false);
         }
     }
     if (mask & PP_TOGGLE) {
@@ -613,7 +664,7 @@ static void receive_input_receipt(cJSON *j) {
         pp_input_done(&input_state, input_state.generation);
         review_reading = review_pending = false;
         waiting = true;
-        set_status("处理中");
+        set_status(processing_status);
     } else if (!strcmp(state, "prepared") || !strcmp(state, "cancelled") || !strcmp(state, "absent")) {
         clear_pending_input(ident);
         input_begin_queued = false;
@@ -751,11 +802,11 @@ static void receive_notification_page(cJSON *j) {
     pp_net_send(read);
 }
 
-static void receive_error(cJSON *j, const char *type) {
+static void receive_error(cJSON *j) {
     const char *ident = string(j, "request_id");
     const char *operation = string(j, "operation");
     const char *code = string(j, "code");
-    const char *input_hint = !strcmp(type, "error") ? input_failure_hint(code) : NULL;
+    const char *input_hint = input_failure_hint(code);
     bool busy_begin = !strcmp(operation, "input.begin") && !strcmp(code, "speech_busy");
     bool matches_input = request_id[0] && (ident[0] ? !strcmp(ident, request_id) : busy_begin);
     bool before_submit = input_state.phase >= PP_INPUT_OPENING && input_state.phase <= PP_INPUT_FINALIZING;
@@ -798,8 +849,18 @@ static void receive_error(cJSON *j, const char *type) {
     }
     if (!strcmp(operation, "message.page"))
         page_pending = false;
-    if (!strcmp(string(j, "operation"), "history.index"))
+    if (!strcmp(operation, "history.index")) {
+        if (index_direction == INDEX_LATEST_QUEUED) {
+            request_latest_index();
+            return;
+        }
+        bool latest = index_direction == INDEX_LATEST;
         index_direction = 0;
+        if (latest) {
+            set_status("最新消息读取失败，请重试");
+            return;
+        }
+    }
     if (!strcmp(operation, "notification.page")) {
         notice_read.pending = false;
         set_status("任务读取失败，请重试");
@@ -808,7 +869,7 @@ static void receive_error(cJSON *j, const char *type) {
     if (!strcmp(string(j, "operation"), "image.open") ||
         !strcmp(string(j, "operation"), "image.chunk"))
         close_image();
-    if (!strcmp(type, "error") && !pp_navigation_local(&navigation) && !dangerous_confirm) {
+    if (!pp_navigation_local(&navigation) && !dangerous_confirm) {
         view = PP_UI_INFO;
         pp_navigation_open(&navigation, PP_SCREEN_CHAT);
     }
@@ -818,8 +879,6 @@ static void receive_error(cJSON *j, const char *type) {
                 ? "输入状态已变化，请返回主页核对。"
                 : code);
     set_status("请求未完成");
-    if (!strcmp(type, "playback.unavailable"))
-        stop_play();
     if (string(j, "request_id")[0] && !strcmp(string(j, "request_id"), request_id)) {
         waiting = false;
         if (input_state.phase != PP_INPUT_IDLE)
@@ -898,7 +957,7 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         if (number(j, "generation") >= play_generation) {
             if (play_generation != number(j, "generation")) {
                 pp_audio_play_stop();
-                play_end = playing = false;
+                playing = false;
             }
             play_generation = number(j, "generation");
             pp_objects_allow_io(false);
@@ -918,10 +977,13 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
                 ESP_LOGI("pa_terminal", "input_ready elapsed_ms=%u blocks=%u audio_bytes=%u",
                          (unsigned)(now_ms() - input_state.started), pp_audio_recorded_count(),
                          (unsigned)input_state.audio_bytes);
-                if (input_state.limited)
-                    input_limit_reached(true);
+                if (input_state.audio_bytes == input_state.max_audio_bytes)
+                    stop_capture_upload(true);
             }
         }
+    } else if (!strcmp(type, "recognizing") && !strcmp(string(j, "request_id"), request_id)) {
+        if (input_state.phase == PP_INPUT_FINALIZING)
+            set_status(input_state.truncated ? "正在识别已录部分" : "识别中");
     } else if (!strcmp(type, "transcript.partial")) {
         if (!strcmp(string(j, "request_id"), request_id) &&
             (input_state.phase == PP_INPUT_RECORDING || input_state.phase == PP_INPUT_OPENING))
@@ -930,13 +992,15 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         if (!strcmp(string(j, "request_id"), request_id) &&
             pp_input_transcript(&input_state, input_state.generation)) {
             pp_text_suffix(body, sizeof(body), string(j, "text"));
-            set_status(input_state.phase == PP_INPUT_CONFIRM ? "达到上限，尚未发送" : "处理中");
+            set_status(input_state.phase == PP_INPUT_CONFIRM
+                           ? (input_state.truncated ? "仅识别已录部分，请确认" : "录音达上限，请确认")
+                           : "正在提交");
             review_choice = review_offset = review_next = 0;
             review_reading = review_pending = false;
         }
     } else if (!strcmp(type, "input.confirmation")) {
         if (!strcmp(string(j, "request_id"), request_id) && input_state.phase == PP_INPUT_CONFIRM)
-            set_status("达到上限，确认后才发送");
+            set_status(input_state.truncated ? "仅识别已录部分，请确认" : "录音达上限，请确认");
     } else if (!strcmp(type, "input.transcript")) {
         if (review_pending && review_reading && input_state.phase == PP_INPUT_CONFIRM &&
             !strcmp(string(j, "request_id"), request_id) &&
@@ -952,6 +1016,7 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         receive_input_receipt(j);
     } else if (!strcmp(type, "state")) {
         pp_text(active_id, sizeof(active_id), string(j, "active_request_id"));
+        const bool was_waiting = waiting;
         waiting = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "task_running"));
         pp_text(question_text, sizeof(question_text),
                 string(j, "question_id")[0] ? string(j, "questions") : "");
@@ -966,9 +1031,13 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
             pp_navigation_open(&navigation, PP_SCREEN_CHAT);
             view_page = view_next = 0;
             body[0] = 0;
-            set_status(waiting ? "处理中" : "就绪");
+            set_status(waiting ? processing_status : "就绪");
         } else if (waiting && input_state.phase == PP_INPUT_IDLE && !playing)
-            set_status("处理中");
+            set_status(processing_status);
+        else if (was_waiting && !waiting && navigation.screen == PP_SCREEN_CHAT &&
+                 view == PP_UI_INPUT && input_state.phase == PP_INPUT_IDLE &&
+                 !strcmp(status, processing_status))
+            set_status("就绪");
     } else if (!strcmp(type, "message.page")) {
         if (page_pending && !strcmp(string(j, "message_id"), requested_page) &&
             number(j, "offset") == requested_offset) {
@@ -988,7 +1057,6 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         }
         playing = false;
         speech_session = false;
-        play_end = false;
         play_generation = number(j, "generation");
         pp_audio_play_stop();
     } else if (!strcmp(type, "playback.start")) {
@@ -1008,23 +1076,30 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
             }
             playing = true;
             speech_session = true;
-            play_end = false;
             next_offset = number(j, "offset");
             segment_end = number(j, "next_offset");
             credit(PP_PLAYBACK_WINDOW);
             set_status("播放中");
         }
-    } else if (!strcmp(type, "playback.end") && number(j, "generation") == play_generation)
-        play_end = true;
-    else if (!strcmp(type, "notifications")) {
+    } else if (!strcmp(type, "playback.end") && number(j, "generation") == play_generation) {
+        if (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(j, "next_offset")))
+            segment_end = number(j, "next_offset");
+        pp_audio_play_end(play_generation);
+    } else if (!strcmp(type, "playback.unavailable")) {
+        if (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(j, "generation")) &&
+            number(j, "generation") != play_generation)
+            return;
+        reset_play();
+        set_status(speech_unavailable_status);
+    } else if (!strcmp(type, "notifications")) {
         receive_notifications(j);
     } else if (!strcmp(type, "notification.page")) {
         receive_notification_page(j);
     } else if (!strcmp(type, "execution.cancelled")) {
         set_status("已收到取消结果");
         waiting = false;
-    } else if (!strcmp(type, "error") || !strcmp(type, "playback.unavailable")) {
-        receive_error(j, type);
+    } else if (!strcmp(type, "error")) {
+        receive_error(j);
     }
 }
 
@@ -1038,11 +1113,55 @@ static void incoming(pp_buffer_t *frame, uint32_t generation) {
     cJSON_Delete(j);
 }
 
+static void standby_now(void) {
+    activity = now_ms();
+    if (!close_image() || !pp_net_enter_standby()) {
+        set_status("暂无法进入待机");
+        return;
+    }
+    if (!pp_audio_quiesce()) {
+        pp_net_leave_standby();
+        set_status("音频尚未停止");
+        return;
+    }
+    pp_objects_allow_io(false);
+    if (bsp_audio_sleep() != ESP_OK || !pp_ui_standby(true))
+        esp_restart();
+    const esp_pm_config_t low_power = {
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = true,
+    };
+    esp_pm_config_t previous;
+    const bool low_power_enabled = esp_pm_get_configuration(&previous) == ESP_OK &&
+                                   esp_pm_configure(&low_power) == ESP_OK;
+    ESP_LOGI("pa_terminal", "wifi_standby_enter associated=%d automatic_light_sleep=%d",
+             pp_net_wifi_connected(), low_power_enabled);
+    pp_events_wait_for_wake();
+    if (low_power_enabled && esp_pm_configure(&previous) != ESP_OK)
+        esp_restart();
+    if (bsp_audio_wake() != ESP_OK || !pp_ui_standby(false))
+        esp_restart();
+    pp_audio_resume();
+    navigation.arrow = PP_ARROW_NONE;
+    navigation.ok_held = navigation.transition_click = false;
+    button_state = (pp_button_t){.wake_guard = true};
+    pp_navigation_open(&navigation, PP_SCREEN_HOME);
+    activity = now_ms();
+    connection_status[0] = 0;
+    set_status("就绪");
+    pp_net_leave_standby();
+    ESP_LOGI("pa_terminal", "wifi_standby_wake associated=%d", pp_net_wifi_connected());
+}
 static void sleep_now(bool explicit) {
     if (sleep_failed || pp_audio_capturing() || input_state.phase != PP_INPUT_IDLE || waiting ||
         speech_session || !pp_board_keys_released()) {
         if (explicit)
             set_status("当前交互未结束，暂不休眠");
+        return;
+    }
+    if (configured && settings.standby_wifi && settings.wifi_count && !pp_provision_active()) {
+        standby_now();
         return;
     }
     if (!pp_audio_quiesce()) {
@@ -1065,7 +1184,7 @@ static void choose(void) {
     pp_selection_t action = pp_navigation_selected(&navigation);
     if (!configured && action != PP_SELECT_SETTINGS && action != PP_SELECT_MAINTENANCE &&
         action != PP_SELECT_NETWORK && action != PP_SELECT_HOME && action != PP_SELECT_BACK &&
-        action != PP_SELECT_FACTORY) {
+        action != PP_SELECT_PAIRING_RESET && action != PP_SELECT_FACTORY) {
         set_status("本地设置读取失败");
         return;
     }
@@ -1093,7 +1212,11 @@ static void choose(void) {
         break;
     case PP_SELECT_MAINTENANCE:
         pp_navigation_open(&navigation, PP_SCREEN_MAINTENANCE);
-        set_status("维护操作");
+        set_status("");
+        break;
+    case PP_SELECT_PAIRING_RESET:
+        pp_navigation_open(&navigation, PP_SCREEN_PAIRING_RESET);
+        set_status("");
         break;
     case PP_SELECT_HOME:
         home(NULL);
@@ -1114,16 +1237,22 @@ static void choose(void) {
         else
             set_status(settings.keep_online ? "保持在线已开启" : "空闲后自动休眠");
         break;
+    case PP_SELECT_STANDBY_WIFI:
+        if (pp_preference(PP_PREF_STANDBY_WIFI, !settings.standby_wifi, &settings) != ESP_OK)
+            set_status("设置保存失败");
+        else
+            set_status(settings.standby_wifi ? "熄屏后保持 Wi-Fi" : "熄屏后关 Wi-Fi");
+        break;
     case PP_SELECT_RELOAD:
         set_status(pp_net_connected() && pp_net_send(command("configuration.reload"))
                        ? "正在获取配置"
-                       : "离线，联网后才能重载");
+                       : "请先连上 PA 再同步");
         break;
     case PP_SELECT_REPAIR:
         if (pp_net_rejected())
             confirm_maintenance(action);
         else
-            set_status("仅在 PA 拒绝身份后重新配对");
+            set_status("仅在配对被拒后可用");
         break;
     case PP_SELECT_RETRY:
         if (pp_net_connected()) {
@@ -1136,7 +1265,6 @@ static void choose(void) {
         }
         home(NULL);
         pp_net_retry();
-        set_status("正在重试连接");
         break;
     case PP_SELECT_REPROVISION:
         if (pp_provision_active()) {
@@ -1158,6 +1286,17 @@ static void choose(void) {
 static pp_route_t current_route(void) {
     return pp_navigation_route(&navigation, dangerous_confirm, setup_home(),
                                input_state.phase == PP_INPUT_CONFIRM);
+}
+static bool can_jump_to_latest(pp_route_t route) {
+    return route == PP_ROUTE_SESSION && input_state.phase == PP_INPUT_IDLE &&
+           (navigation.screen == PP_SCREEN_CHAT || browsing);
+}
+static void handle_arrow_hold(pp_route_t route, uint32_t now) {
+    switch (pp_navigation_arrow_tick(&navigation, now, can_jump_to_latest(route))) {
+    case PP_ARROW_UP: home(NULL); break;
+    case PP_ARROW_DOWN: jump_to_latest(); break;
+    case PP_ARROW_NONE: break;
+    }
 }
 static void local_ok(pp_route_t route) {
     if (route == PP_ROUTE_CONFIRM) {
@@ -1312,10 +1451,13 @@ static void dispatch_key(pp_event_t event, pp_route_t route) {
             actions(event.button == BSP_BTN_PRESS
                         ? pp_press(&button_state, now_ms(), speech_session)
                         : pp_release(&button_state, now_ms()));
-    } else if (event.key == BSP_BTN_UP && event.button == BSP_BTN_PRESS) {
-        pp_navigation_up_press(&navigation, now_ms());
+    } else if (event.button == BSP_BTN_PRESS) {
+        pp_navigation_arrow_press(&navigation, event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN,
+                                  now_ms(), can_jump_to_latest(route));
     } else if (event.button == BSP_BTN_RELEASE) {
-        if (event.key == BSP_BTN_UP && !pp_navigation_up_release(&navigation))
+        handle_arrow_hold(route, now_ms());
+        pp_arrow_t key = event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN;
+        if (!pp_navigation_arrow_release(&navigation, key))
             return;
         if (route == PP_ROUTE_CONFIRM || route == PP_ROUTE_LOCAL ||
             route == PP_ROUTE_SETUP) {
@@ -1362,11 +1504,7 @@ static void dispatch_key(pp_event_t event, pp_route_t route) {
             if (!pp_net_connected()) {
                 body[0] = 0;
                 view = PP_UI_IDLE;
-                if (settings.offline_cache && pp_history_cache_recent())
-                    set_status("正在读取最近缓存记录");
-                else
-                    set_status(settings.offline_cache ? "本地读取忙，请稍后重试"
-                                                      : "离线缓存已关闭");
+                request_recent_history();
             } else if (latest_message[0])
                 request_page(latest_message, 0, event.key == BSP_BTN_UP);
             else {
@@ -1531,7 +1669,7 @@ static void send_audio_batch(void) {
     }
     sequence++;
     if (input_state.audio_bytes == input_state.max_audio_bytes)
-        input_limit_reached(true);
+        stop_capture_upload(true);
 }
 
 static void finish_audio(void) {
@@ -1567,10 +1705,11 @@ static void poll_audio(void) {
     unsigned consumed = pp_audio_take_credit();
     if (playing && consumed)
         credit(consumed);
-    if (playing && play_end && pp_audio_play_drained()) {
+    if (playing && pp_audio_play_drained() && pp_net_has_capacity(false)) {
         cJSON *j = command("playback.completed");
         cJSON_AddNumberToObject(j, "generation", play_generation);
-        pp_net_send(j);
+        if (!pp_net_send(j))
+            return;
         next_offset = segment_end;
         playing = false;
         pp_audio_play_stop();
@@ -1582,11 +1721,14 @@ static void poll_audio(void) {
 static void render_screen(void) {
     static uint32_t last_telemetry;
     static int wifi_rssi = -127;
+    static bool last_wifi_connected;
+    const bool wifi_connected = pp_net_wifi_connected();
     if ((!speech_session && navigation.screen != PP_SCREEN_VOLUME) ||
         now_ms() - volume_feedback_at >= 1400)
         volume_feedback_at = 0;
     static char wifi_name[33];
-    if (now_ms() - last_telemetry > 10000 || !last_telemetry) {
+    if (wifi_connected != last_wifi_connected || now_ms() - last_telemetry > 10000 || !last_telemetry) {
+        last_wifi_connected = wifi_connected;
         last_telemetry = now_ms();
         battery = bsp_battery_soc();
         if (!pp_net_wifi_details(wifi_name, sizeof(wifi_name), &wifi_rssi))
@@ -1594,17 +1736,25 @@ static void render_screen(void) {
     }
     const char *labels[10];
     unsigned count = pp_navigation_count(&navigation);
-    char keep_label[48], task_heading[96], title[64];
+    char keep_label[48], standby_label[48], task_heading[96], title[64];
     snprintf(keep_label, sizeof(keep_label), "保持在线 · %s",
              settings.keep_online ? "开" : "关");
-    for (unsigned i = 0; i < count; i++)
-        labels[i] = navigation.screen == PP_SCREEN_SETTINGS && i == 0
-                        ? keep_label
-                        : pp_navigation_label(&navigation, i);
+    snprintf(standby_label, sizeof(standby_label), "熄屏保持 Wi-Fi · %s",
+             settings.standby_wifi ? "开" : "关");
+    for (unsigned i = 0; i < count; i++) {
+        const char *label = pp_navigation_label(&navigation, i);
+        if (navigation.screen == PP_SCREEN_SETTINGS && i == 0)
+            label = keep_label;
+        else if (navigation.screen == PP_SCREEN_SETTINGS && i == 4)
+            label = standby_label;
+        labels[i] = label;
+    }
     bool listening = pp_audio_capturing() && pp_input_listening(&input_state);
     pp_route_t route = current_route();
     bool setup_card = route == PP_ROUTE_SETUP;
     bool network_page = navigation.screen == PP_SCREEN_NETWORK;
+    const bool quiet_wifi = configured && settings.wifi_count && !wifi_connected &&
+                            !pp_provision_active() && !pp_net_rejected();
     const char *details = setup_card ? connection_info() : "";
     if (!setup_card)
         memset(hotspot_info, 0, sizeof(hotspot_info));
@@ -1622,18 +1772,24 @@ static void render_screen(void) {
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
     bool volume_screen = navigation.screen == PP_SCREEN_VOLUME;
+    const bool awaiting_reply = route == PP_ROUTE_SESSION && navigation.screen == PP_SCREEN_CHAT &&
+                                view == PP_UI_INPUT && input_state.phase == PP_INPUT_IDLE &&
+                                waiting && pp_net_connected() && !speech_session &&
+                                !strcmp(status, processing_status);
     pp_ui_frame_t frame = {
         .view = dangerous_confirm                             ? PP_UI_INFO
                 : menu || notice_list                         ? PP_UI_MENU
+                : (setup_card && quiet_wifi)                  ? PP_UI_IDLE
                 : setup_card || network_page || volume_screen ? PP_UI_INFO
                 : navigation.screen == PP_SCREEN_HOME         ? PP_UI_IDLE
                                                               : view,
         .state =
             (setup_card || (navigation.screen == PP_SCREEN_HOME && !pp_net_connected()))
-                ? link_status
-            : new_message && (browsing || navigation.screen == PP_SCREEN_HOME)
+                ? (quiet_wifi ? "" : link_status)
+            : new_message && strcmp(status, speech_unavailable_status) &&
+                      (browsing || navigation.screen == PP_SCREEN_HOME)
                 ? "有新回复 · 上下查看"
-                : status,
+                : awaiting_reply ? "等待回复" : status,
         .body = setup_card                                ? details
                 : network_page                            ? network_details
                 : navigation.screen == PP_SCREEN_QUESTION ? question_text
@@ -1646,6 +1802,7 @@ static void render_screen(void) {
                   : view == PP_UI_INFO ? status
                                        : message_origin,
         .choices = labels,
+        .menu_detail = menu ? pp_navigation_detail(&navigation) : NULL,
         .choice_count = count,
         .selection = navigation.selection,
         .task_context = notice_list || notice_view,
@@ -1654,16 +1811,18 @@ static void render_screen(void) {
         .online = pp_net_connected(),
         .volume = pp_audio_volume(),
         .volume_feedback = volume_screen || volume_feedback_at != 0,
+        .awaiting_reply = awaiting_reply,
         .brightness = settings.brightness,
         .text_size = settings.text_size,
         .battery = battery,
         .wifi = wifi_rssi,
+        .wifi_searching = !wifi_connected && pp_net_wifi_searching(),
         .now = now_ms(),
         .page = setup_card ? 0 : view_page,
         .follow = route == PP_ROUTE_SESSION && message_streaming && !view_page,
         .level = listening ? pp_audio_level() : 0,
         .elapsed = listening ? now_ms() - input_state.started : 0,
-        .hint = setup_card ? (pp_net_rejected() ? "下 重新配对 · OK 设置" : "OK 设置")
+        .hint = setup_card ? (pp_net_rejected() ? "下 更换配对 · OK 设置" : "OK 设置")
                 : route == PP_ROUTE_REVIEW
                     ? (review_reading ? "上下查看 · OK返回" : "上下选择 · OK确认")
                 : notice_view                             ? "OK 返回列表 · 长↑主页"
@@ -1674,14 +1833,14 @@ static void render_screen(void) {
                 : speech_session                          ? "上下音量 · OK停播"
                 : navigation.screen == PP_SCREEN_HOME     ? "按住说 · OK菜单"
                 : navigation.screen == PP_SCREEN_QUESTION ? "按住回答 · 长↑主页"
-                : browsing                                ? "OK 返回 · 长↑主页"
+                : can_jump_to_latest(route)               ? "上下翻页 · 长↓最新"
                                                           : "上下翻页 · 长↑主页"};
     if (dangerous_confirm) {
         bool reprovision = dangerous_action == PP_SELECT_REPROVISION;
         bool repair = dangerous_action == PP_SELECT_REPAIR;
-        frame.origin = frame.state = reprovision ? "重新配网？"
-                                     : repair    ? "重新配对？"
-                                                 : "恢复出厂？";
+        frame.origin = frame.state = reprovision ? "设置 Wi-Fi？"
+                                     : repair    ? "更换 PA 配对？"
+                                                 : "恢复出厂设置？";
         frame.body =
             reprovision ? "将开启设备热点。提交前保留原配置。"
             : repair
@@ -1748,7 +1907,6 @@ void app_main(void) {
     }
     activity = now_ms();
     uint32_t last_render = 0, last_memory = 0;
-    bool provision_saved = false;
     for (;;) {
         if (sleep_failed) {
             pp_ui_frame_t frame = {.view = PP_UI_INFO,
@@ -1764,16 +1922,11 @@ void app_main(void) {
             continue;
         }
         /* Refresh local pairing and Wi-Fi state even if the new PA is unreachable. */
-        bool fresh = configured && pp_settings_refresh(&settings);
-        if (!pp_provision_complete())
-            provision_saved = false;
-        else if (!provision_saved && fresh) {
-            provision_saved = true;
-            strcpy(connection_status, "正在连接 Wi-Fi");
-        }
+        if (configured)
+            pp_settings_refresh(&settings);
         pp_event_t event;
         if (pp_events_take_key_overflow()) {
-            navigation.up_down = navigation.up_consumed = false;
+            navigation.arrow = PP_ARROW_NONE;
             navigation.ok_held = false;
             pp_audio_capture_release();
             abort_record();
@@ -1799,8 +1952,8 @@ void app_main(void) {
             }
             pp_buffer_free(&event.text);
         }
-        if (pp_navigation_up_tick(&navigation, now_ms()))
-            home(NULL);
+        if (navigation.arrow != PP_ARROW_NONE)
+            handle_arrow_hold(current_route(), now_ms());
         pp_objects_allow_io(input_state.phase == PP_INPUT_IDLE && !playing && !speech_session);
         pp_history_cache_poll(input_state.phase == PP_INPUT_IDLE && !waiting && !playing &&
                               !speech_session && !browsing && !notice_view && !notice_list &&
@@ -1809,16 +1962,17 @@ void app_main(void) {
             view = PP_UI_REPLY;
         if (current_route() == PP_ROUTE_SESSION && !notice_list && !notice_view)
             actions(pp_tick(&button_state, now_ms()));
-        if (pp_input_limit(&input_state, now_ms(), 60000))
-            input_limit_reached(false);
         pp_audio_error_t audio_error = pp_audio_take_error();
         bool event_error = pp_events_take_error();
-        if (audio_error != PP_AUDIO_OK || event_error) {
-            bool opening = input_state.phase == PP_INPUT_OPENING;
-            if (audio_error == PP_AUDIO_CAPTURE_OVERFLOW)
-                ESP_LOGW("pa_terminal", "input_overflow phase=%s elapsed_ms=%u blocks=%u frames=%u audio_bytes=%u",
-                         pp_input_name(input_state.phase), (unsigned)(now_ms() - input_state.started),
-                         pp_audio_recorded_count(), sequence, (unsigned)input_state.audio_bytes);
+        if (audio_error == PP_AUDIO_CAPTURE_OVERFLOW)
+            ESP_LOGW("pa_terminal",
+                     "input_overflow phase=%s elapsed_ms=%u blocks=%u frames=%u audio_bytes=%u",
+                     pp_input_name(input_state.phase), (unsigned)(now_ms() - input_state.started),
+                     pp_audio_recorded_count(), sequence, (unsigned)input_state.audio_bytes);
+        if (!event_error && audio_error == PP_AUDIO_CAPTURE_OVERFLOW &&
+            input_begin_queued && pp_input_truncate(&input_state)) {
+            stop_capture_upload(false);
+        } else if (audio_error != PP_AUDIO_OK || event_error) {
             if (audio_error == PP_AUDIO_CODEC_FAILURE)
                 audio_available = false;
             if (input_state.phase == PP_INPUT_PREBUFFER || input_state.phase == PP_INPUT_OPENING ||
@@ -1827,9 +1981,18 @@ void app_main(void) {
             if ((event_error || audio_error == PP_AUDIO_CODEC_FAILURE) && (playing || speech_session))
                 stop_play();
             set_status(audio_error == PP_AUDIO_CODEC_FAILURE ? "音频不可用，仍可查看消息"
-                       : audio_error == PP_AUDIO_CAPTURE_OVERFLOW ? (opening ? "语音通道准备过慢，请重新说"
-                                                                            : "录音传输跟不上，请重新说")
+                       : !event_error && audio_error == PP_AUDIO_CAPTURE_OVERFLOW
+                           ? "录音缓冲超限，本次未发送"
                                                                   : "消息缓冲错误，未重试");
+        }
+        if (pp_input_limit(&input_state, now_ms(), 60000))
+            stop_capture_upload(false);
+        if ((input_state.phase == PP_INPUT_OPENING || input_state.phase == PP_INPUT_DRAINING) &&
+            input_state.released && now_ms() - input_upload_started >= PP_INPUT_UPLOAD_TIMEOUT_MS) {
+            ESP_LOGW("pa_terminal", "input_upload_timeout frames=%u blocks=%u", sequence,
+                     pp_audio_recorded_count());
+            abort_record();
+            set_status("录音上传超时，本次未发送");
         }
         pp_memory_poll(now_ms());
         if (pp_picture_poll(now_ms()) && view == PP_UI_IMAGE)

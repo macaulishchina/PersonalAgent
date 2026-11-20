@@ -36,6 +36,7 @@ void pp_settings_project(const pp_settings_t *s, unsigned revision, pp_terminal_
     v->text_size = s->text_size;
     v->queue = s->queue;
     v->keep_online = s->keep_online;
+    v->standby_wifi = s->standby_wifi;
     v->paired = s->paired;
     v->offline_cache = s->offline_cache;
     v->show_images = s->show_images;
@@ -52,6 +53,9 @@ bool pp_settings_edit_preference(pp_settings_t *s, pp_preference_t key, unsigned
     } else if (key == PP_PREF_KEEP_ONLINE && value <= 1) {
         *previous = s->keep_online;
         s->keep_online = value;
+    } else if (key == PP_PREF_STANDBY_WIFI && value <= 1) {
+        *previous = s->standby_wifi;
+        s->standby_wifi = value;
     } else if (key == PP_PREF_PAIRED && value <= 1) {
         *previous = s->paired;
         s->paired = value;
@@ -268,6 +272,7 @@ char *pp_settings_encode(const pp_settings_t *s) {
               cJSON_AddStringToObject(root, "credential", s->credential) &&
               cJSON_AddStringToObject(root, "binding", s->binding) &&
               cJSON_AddBoolToObject(root, "paired", s->paired) &&
+              cJSON_AddBoolToObject(root, "standby_wifi", s->standby_wifi) &&
               cJSON_AddNumberToObject(values, "volume", s->volume) &&
               cJSON_AddStringToObject(values, "input_mode", s->queue ? "queue" : "steer") &&
               cJSON_AddBoolToObject(values, "keep_online", s->keep_online) &&
@@ -335,15 +340,18 @@ bool pp_settings_decode(const char *raw, pp_settings_t *out) {
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "format"),
                 *values = cJSON_GetObjectItemCaseSensitive(root, "values"),
                 *versions = cJSON_GetObjectItemCaseSensitive(root, "versions"),
-                *paired = cJSON_GetObjectItemCaseSensitive(root, "paired");
+                *paired = cJSON_GetObjectItemCaseSensitive(root, "paired"),
+                *standby_wifi = cJSON_GetObjectItemCaseSensitive(root, "standby_wifi");
     bool ok = integer(version, 2, 2) && cJSON_IsObject(values) &&
               cJSON_GetArraySize(values) <= PP_CONFIG_FIELDS && cJSON_IsArray(versions) &&
               cJSON_GetArraySize(versions) >= 10 &&
               cJSON_GetArraySize(versions) <= PP_CONFIG_FIELDS && cJSON_IsBool(paired) &&
+              (!standby_wifi || cJSON_IsBool(standby_wifi)) &&
               string_field(root, "device_id", out->device, sizeof(out->device), false) &&
               string_field(root, "credential", out->credential, sizeof(out->credential), false) &&
               string_field(root, "binding", out->binding, sizeof(out->binding), false);
     out->paired = cJSON_IsTrue(paired);
+    out->standby_wifi = !standby_wifi || cJSON_IsTrue(standby_wifi);
     for (unsigned i = 0; ok && i < 7; i++)
         if (!cJSON_GetObjectItemCaseSensitive(values, fields[i]))
             ok = false;

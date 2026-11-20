@@ -12,8 +12,9 @@
 
 static void (*worker_entry)(void *);
 static jmp_buf finished;
-static bool test_mute, overflowing = true;
-static unsigned reads, writes, failed_mutes, polls, alloc_limit;
+static bool test_mute, test_drain, small_heap, overflowing = true;
+static uint32_t tx_position;
+static unsigned reads, writes, failed_mutes, polls, alloc_limit, capture_frames;
 static char task;
 
 void *pp_test_realloc(void *pointer, size_t size) {
@@ -46,7 +47,7 @@ int bsp_audio_set_volume(unsigned volume) {
     return ESP_OK;
 }
 int bsp_audio_set_format(unsigned rate, unsigned bits, unsigned channels) {
-    assert(rate == (test_mute ? PP_PLAYBACK_RATE : PP_CAPTURE_RATE));
+    assert(rate == (test_mute || test_drain ? PP_PLAYBACK_RATE : PP_CAPTURE_RATE));
     assert(bits == 16 && channels == 1);
     return ESP_OK;
 }
@@ -58,16 +59,29 @@ int bsp_audio_read(void *pcm, size_t size) {
     return ESP_OK;
 }
 int bsp_audio_write(const void *pcm, size_t size) {
-    assert(test_mute && pcm && size == 2);
+    assert((test_mute || test_drain) && pcm && size == 2);
     writes++;
-    pp_audio_play_stop(); /* UI stops while this I2S write is outstanding. */
-    assert(!pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    if (test_mute) {
+        pp_audio_play_stop(); /* UI stops while this I2S write is outstanding. */
+        assert(!pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    }
     return ESP_OK;
 }
+uint32_t bsp_audio_tx_position(void) { return tx_position; }
+bool bsp_audio_tx_drained(uint32_t position) { return tx_position - position >= 7u; }
 
 void ulTaskNotifyTake(int clear, unsigned wait) {
     assert(clear && wait == portMAX_DELAY && ++polls <= 5);
-    if (test_mute) {
+    if (test_drain) {
+        assert(writes == 1 && pp_audio_take_credit() == 2);
+        assert(!pp_audio_play_drained());
+        tx_position = 6;
+        assert(!pp_audio_play_drained());
+        tx_position = 7;
+        assert(pp_audio_play_drained());
+        pp_audio_play_stop();
+        assert(!pp_audio_play_drained() && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    } else if (test_mute) {
         /* The failed device stays parked when woken, sends one status and
          * continues to acknowledge a later sleep request. */
         if (polls == 1) {
@@ -84,19 +98,21 @@ void ulTaskNotifyTake(int clear, unsigned wait) {
         if (overflowing) {
             assert(pp_audio_take_error() == PP_AUDIO_CAPTURE_OVERFLOW);
             assert(!pp_audio_capturing());
-            assert(reads == PP_CAPTURE_FRAMES + 1 && pp_audio_recorded_count() == PP_CAPTURE_FRAMES);
-            for (unsigned i = 1; i <= PP_CAPTURE_FRAMES; i++) {
+            assert(reads == capture_frames + 1 && pp_audio_recorded_count() == capture_frames);
+            for (unsigned i = 1; i <= capture_frames; i++) {
                 assert(pp_audio_recorded(&frame));
                 assert(frame.pcm[0] == i && frame.pcm[sizeof(frame.pcm) - 1] == i);
             }
             pp_audio_capture_discard();
             assert(!pp_memory_stats().live[PP_MEMORY_CAPTURE]);
+            assert(!pp_audio_recording_capacity());
             overflowing = false;
+            alloc_limit = UINT32_MAX;
             assert(pp_audio_capture_begin());
             return;
         }
         assert(pp_audio_take_error() == PP_AUDIO_OK);
-        assert(reads == PP_CAPTURE_FRAMES + 2 && pp_audio_recorded(&frame) && pp_audio_capture_drained());
+        assert(reads == capture_frames + 2 && pp_audio_recorded(&frame) && pp_audio_capture_drained());
         assert(frame.pcm[0] == reads);
         pp_audio_capture_discard();
         assert(!pp_memory_stats().live[PP_MEMORY_CAPTURE]);
@@ -107,7 +123,9 @@ void ulTaskNotifyTake(int clear, unsigned wait) {
 int main(int argc, char **argv) {
     assert(argc == 2);
     test_mute = !strcmp(argv[1], "mute");
-    assert(test_mute || !strcmp(argv[1], "overflow"));
+    test_drain = !strcmp(argv[1], "drain");
+    small_heap = !strcmp(argv[1], "small-heap");
+    assert(test_mute || test_drain || small_heap || !strcmp(argv[1], "overflow"));
     assert(pp_audio_start(45));
     assert(!pp_memory_stats().live[PP_MEMORY_CAPTURE] && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = 2;
@@ -115,14 +133,20 @@ int main(int argc, char **argv) {
     alloc_limit = 2;
     assert(!pp_audio_play_begin(1) && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = UINT32_MAX;
-    if (test_mute) {
+    if (test_mute || test_drain) {
         const int16_t sample = 0;
         assert(pp_audio_play_begin(1));
         assert(pp_memory_stats().live[PP_MEMORY_PLAYBACK] == PP_PLAYBACK_WINDOW);
         assert(pp_play_pcm(1, &sample, sizeof(sample)));
+        assert(!pp_audio_play_drained());
+        pp_audio_play_end(1);
     } else {
+        capture_frames = small_heap ? PP_CAPTURE_FRAMES : PP_CAPTURE_MAX_FRAMES;
+        if (small_heap)
+            alloc_limit = PP_CAPTURE_FRAMES / 4; /* Only the base capture blocks fit. */
         assert(pp_audio_capture_begin());
-        assert(pp_memory_stats().live[PP_MEMORY_CAPTURE] == PP_CAPTURE_FRAMES * PP_CAPTURE_BYTES);
+        assert(pp_audio_recording_capacity() == capture_frames);
+        assert(pp_memory_stats().live[PP_MEMORY_CAPTURE] == capture_frames * PP_CAPTURE_BYTES);
     }
     if (!setjmp(finished))
         worker_entry(NULL);

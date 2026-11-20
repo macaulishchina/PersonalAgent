@@ -14,11 +14,15 @@ static const option_t settings[] = {{"保持在线", PP_SELECT_KEEP_ONLINE},
                                     {"网络状态", PP_SELECT_NETWORK},
                                     {"休眠", PP_SELECT_SLEEP},
                                     {"设备维护", PP_SELECT_MAINTENANCE},
+                                    {"熄屏保持 Wi-Fi", PP_SELECT_STANDBY_WIFI},
                                     {"返回上级", PP_SELECT_BACK}};
 static const option_t maintenance[] = {
-    {"重载配置", PP_SELECT_RELOAD},      {"重试连接", PP_SELECT_RETRY},
-    {"重新配网", PP_SELECT_REPROVISION}, {"重新配对", PP_SELECT_REPAIR},
-    {"恢复出厂", PP_SELECT_FACTORY},     {"返回上级", PP_SELECT_BACK}};
+    {"同步 PA 设置", PP_SELECT_RELOAD}, {"连接已存网络", PP_SELECT_RETRY},
+    {"设置 Wi-Fi", PP_SELECT_REPROVISION}, {"配对与重置 >", PP_SELECT_PAIRING_RESET},
+    {"返回上级", PP_SELECT_BACK}};
+static const option_t pairing_reset[] = {
+    {"更换 PA 配对", PP_SELECT_REPAIR}, {"恢复出厂设置", PP_SELECT_FACTORY},
+    {"返回设备维护", PP_SELECT_BACK}};
 /* Screen metadata defines return paths and which pages own local input even
  * while PA is disconnected or sending a new handshake. */
 typedef struct {
@@ -38,6 +42,7 @@ static const page_t pages[PP_SCREEN_COUNT] = {
     [PP_SCREEN_MENU] = {"操作菜单", PP_SCREEN_HOME, MENU(root)},
     [PP_SCREEN_SETTINGS] = {"设置", PP_SCREEN_MENU, MENU(settings)},
     [PP_SCREEN_MAINTENANCE] = {"设备维护", PP_SCREEN_SETTINGS, MENU(maintenance)},
+    [PP_SCREEN_PAIRING_RESET] = {"配对与重置", PP_SCREEN_MAINTENANCE, MENU(pairing_reset)},
     [PP_SCREEN_VOLUME] = {"音量", PP_SCREEN_MENU, NULL, 0, true},
     [PP_SCREEN_NETWORK] = {"网络状态", PP_SCREEN_SETTINGS, NULL, 0, true},
     [PP_SCREEN_QUESTION] = {"等待回答", PP_SCREEN_HOME},
@@ -80,6 +85,17 @@ const char *pp_navigation_label(const pp_navigation_t *n, unsigned i) {
     return i < pp_navigation_count(n) ? pages[n->screen].options[i].label : "";
 }
 const char *pp_navigation_title(const pp_navigation_t *n) { return pages[n->screen].title; }
+const char *pp_navigation_detail(const pp_navigation_t *n) {
+    switch (pp_navigation_selected(n)) {
+    case PP_SELECT_RELOAD: return "从 PA 获取设备设置";
+    case PP_SELECT_RETRY: return "用已存 Wi-Fi 连接 PA";
+    case PP_SELECT_REPROVISION: return "开启热点，手机填写网络";
+    case PP_SELECT_PAIRING_RESET: return "配对管理和出厂重置";
+    case PP_SELECT_REPAIR: return "保留 Wi-Fi，绑定新会话";
+    case PP_SELECT_FACTORY: return "清除本机网络与配对";
+    default: return NULL;
+    }
+}
 pp_selection_t pp_navigation_selected(const pp_navigation_t *n) {
     return n->selection < pp_navigation_count(n) ? pages[n->screen].options[n->selection].action
                                                  : PP_SELECT_NONE;
@@ -107,22 +123,29 @@ void pp_navigation_ok_transition(pp_navigation_t *n, uint32_t now) {
     n->transition_click = true;
     n->transition_at = now;
 }
-void pp_navigation_up_press(pp_navigation_t *n, uint32_t now) {
-    if (!n->up_down) {
-        n->up_down = true;
-        n->up_consumed = false;
-        n->up_started = now;
-    }
+void pp_navigation_arrow_press(pp_navigation_t *n, pp_arrow_t key, uint32_t now,
+                               bool can_jump) {
+    if (n->arrow != PP_ARROW_NONE)
+        return;
+    n->arrow = key;
+    n->arrow_consumed = false;
+    n->arrow_can_jump = key == PP_ARROW_DOWN && can_jump;
+    n->arrow_started = now;
+    n->arrow_epoch = n->page_epoch;
 }
-bool pp_navigation_up_tick(pp_navigation_t *n, uint32_t now) {
-    if (!n->up_down || n->up_consumed || now - n->up_started < 650)
+pp_arrow_t pp_navigation_arrow_tick(pp_navigation_t *n, uint32_t now, bool can_jump) {
+    if (n->arrow == PP_ARROW_NONE || n->arrow_consumed || now - n->arrow_started < 650)
+        return PP_ARROW_NONE;
+    if (n->arrow == PP_ARROW_DOWN && !n->arrow_can_jump)
+        return PP_ARROW_NONE;
+    n->arrow_consumed = true;
+    return n->arrow == PP_ARROW_UP || (can_jump && n->arrow_epoch == n->page_epoch)
+               ? n->arrow : PP_ARROW_NONE;
+}
+bool pp_navigation_arrow_release(pp_navigation_t *n, pp_arrow_t key) {
+    if (n->arrow != key)
         return false;
-    n->up_consumed = true;
-    return true;
-}
-bool pp_navigation_up_release(pp_navigation_t *n) {
-    bool short_press = n->up_down && !n->up_consumed;
-    n->up_down = false;
-    n->up_consumed = false;
+    bool short_press = !n->arrow_consumed && (!n->arrow_can_jump || n->arrow_epoch == n->page_epoch);
+    n->arrow = PP_ARROW_NONE;
     return short_press;
 }

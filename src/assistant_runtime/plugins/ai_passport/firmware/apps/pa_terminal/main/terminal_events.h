@@ -17,5 +17,6 @@ typedef struct {
 bool pp_events_init(void);
 void pp_events_key(bsp_btn_t key, bsp_btn_ev_t action, void *arg);
 bool pp_events_next(pp_event_t *event);
+void pp_events_wait_for_wake(void);
 bool pp_events_take_key_overflow(void);
 bool pp_events_take_error(void);
