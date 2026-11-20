@@ -2,6 +2,7 @@
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "image_model.h"
+#include "terminal_limits.h"
 #include "text_layout.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -11,6 +12,7 @@
 
 LV_FONT_DECLARE(terminal_zh_16);
 LV_FONT_DECLARE(terminal_zh_18);
+LV_FONT_DECLARE(terminal_battery_12);
 #define ASSET(name) extern const uint8_t name[] asm("_binary_" #name "_start")
 ASSET(cat_idle_open_rgb565a8);
 ASSET(cat_idle_blink_rgb565a8);
@@ -35,11 +37,11 @@ static const lv_area_t image_viewport = {12, 66, 12 + PP_IMAGE_VIEW_WIDTH - 1,
                                        66 + PP_IMAGE_VIEW_HEIGHT - 1};
 static lv_area_t stream_area;
 static lv_display_t *display;
-static lv_obj_t *screen, *clock_label, *wifi, *volume, *battery, *battery_text, *mode;
+static lv_obj_t *screen, *clock_label, *wifi, *volume, *battery, *mode;
 static lv_obj_t *origin, *state, *content, *footer, *avatar, *photo, *strip_photo, *bars[5], *items[7];
 static lv_obj_t *volume_track, *volume_fill;
 static pp_ui_view_t previous_view = (pp_ui_view_t)-1;
-static bool previous_menu_detail;
+static bool previous_menu_detail, previous_menu_grid;
 static const lv_image_dsc_t *previous_avatar;
 static unsigned filtered_level;
 static bool photo_available;
@@ -48,6 +50,9 @@ static bool invalidating_strip, strip_done;
 static const lv_font_t *body_font = &terminal_zh_16;
 /* Backlight starts off until the first populated frame has been drawn. */
 static unsigned current_brightness;
+enum { BATTERY_BODY_W = 25, BATTERY_H = 13, BATTERY_CAP_W = 2, BATTERY_CAP_GAP = 1 };
+static int battery_percent = -1;
+static char battery_value[4] = "--";
 
 bool pp_ui_standby(bool enabled) {
     if (bsp_lvgl_standby(enabled) != ESP_OK)
@@ -85,6 +90,65 @@ static void text_color(lv_obj_t *object, uint32_t rgb) {
     lv_color_t color = lv_color_hex(rgb);
     if (!lv_color_eq(lv_obj_get_style_text_color(object, 0), color))
         lv_obj_set_style_text_color(object, color, 0);
+}
+static void draw_battery(lv_event_t *event) {
+    lv_area_t body;
+    lv_obj_get_coords(lv_event_get_current_target(event), &body);
+    body.x2 = body.x1 + BATTERY_BODY_W - 1;
+    const lv_area_t cap = {body.x2 + BATTERY_CAP_GAP + 1, body.y1 + 4,
+                           body.x2 + BATTERY_CAP_GAP + BATTERY_CAP_W, body.y1 + 8};
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    rect.bg_opa = LV_OPA_COVER;
+    rect.bg_color = lv_color_hex(0x718479);
+    rect.radius = 1;
+    lv_draw_rect(layer, &rect, &cap);
+    rect.bg_color = lv_color_hex(0x46594f);
+    rect.radius = 3;
+    lv_draw_rect(layer, &rect, &body);
+
+    lv_draw_label_dsc_t digits;
+    lv_draw_label_dsc_init(&digits);
+    digits.text = battery_value;
+    digits.font = &terminal_battery_12;
+    digits.align = LV_TEXT_ALIGN_CENTER;
+    const int number_y = body.y1 + (BATTERY_H - digits.font->line_height) / 2;
+    const lv_area_t number = {body.x1, number_y, body.x2, number_y + digits.font->line_height - 1};
+    /* The same centered text crosses both halves of the rounded fill. */
+    const lv_area_t original_clip = layer->_clip_area;
+    const lv_area_t clip = {LV_MAX(body.x1, original_clip.x1), LV_MAX(body.y1, original_clip.y1),
+                            LV_MIN(body.x2, original_clip.x2), LV_MIN(body.y2, original_clip.y2)};
+    if (clip.x1 > clip.x2 || clip.y1 > clip.y2)
+        return;
+    const int width = battery_percent > 0 ? LV_MAX(1, battery_percent * BATTERY_BODY_W / 100) : 0;
+    const int split = body.x1 + width;
+    if (clip.x1 < split) {
+        layer->_clip_area = clip;
+        layer->_clip_area.x2 = LV_MIN(clip.x2, split - 1);
+        rect.bg_color = lv_color_hex(battery_percent <= 20 ? 0xed817a : 0xdce8da);
+        lv_draw_rect(layer, &rect, &body);
+        digits.color = lv_color_hex(0x172923);
+        lv_draw_label(layer, &digits, &number);
+    }
+    if (clip.x2 >= split) {
+        layer->_clip_area = clip;
+        layer->_clip_area.x1 = LV_MAX(clip.x1, split);
+        digits.color = lv_color_hex(battery_percent == 0 ? 0xffc4be : 0xf1f5ed);
+        lv_draw_label(layer, &digits, &number);
+    }
+    layer->_clip_area = original_clip;
+}
+static void update_battery(int percent) {
+    percent = percent < 0 ? -1 : LV_MIN(percent, 100);
+    if (percent == battery_percent)
+        return;
+    battery_percent = percent;
+    if (percent < 0)
+        strcpy(battery_value, "--");
+    else
+        snprintf(battery_value, sizeof(battery_value), "%u", (unsigned)percent);
+    lv_obj_invalidate(battery);
 }
 static void activity_indicator(const pp_ui_frame_t *f, bool input) {
     const bool show_wait = f->awaiting_reply && !f->volume_feedback;
@@ -164,19 +228,12 @@ bool pp_ui_init(void) {
     clock_label = label(12, 6, 65, 21, false);
     volume = label(144, 8, 20, 17, true);
     wifi = label(172, 8, 20, 17, true);
-    enum { BATTERY_X = 200, BATTERY_Y = 8, BATTERY_WIDTH = 27, BATTERY_HEIGHT = 14 };
     battery = lv_obj_create(screen);
     lv_obj_remove_style_all(battery);
-    lv_obj_set_pos(battery, BATTERY_X, BATTERY_Y);
-    lv_obj_set_size(battery, BATTERY_WIDTH, BATTERY_HEIGHT);
-    lv_obj_set_style_border_width(battery, 1, 0);
-    lv_obj_set_style_border_color(battery, lv_color_hex(0xa8b8a6), 0);
-    lv_obj_set_style_radius(battery, 2, 0);
+    lv_obj_set_pos(battery, 200, 9);
+    lv_obj_set_size(battery, BATTERY_BODY_W + BATTERY_CAP_GAP + BATTERY_CAP_W, BATTERY_H);
     lv_obj_remove_flag(battery, LV_OBJ_FLAG_SCROLLABLE);
-    /* Center the visible digits rather than the font's full line box. */
-    battery_text = label(BATTERY_X, BATTERY_Y - 1, BATTERY_WIDTH,
-                         lv_font_montserrat_14.line_height, true);
-    lv_obj_set_style_text_align(battery_text, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_event_cb(battery, draw_battery, LV_EVENT_DRAW_MAIN, NULL);
     rule(29);
     rule(288);
     origin = label(12, 38, 216, 22, false);
@@ -336,10 +393,11 @@ size_t pp_ui_previous(const char *value, size_t start) {
 size_t pp_ui_render(const pp_ui_frame_t *f) {
     if (!screen || !bsp_lvgl_lock(100))
         return f->page;
+    const bool brightness_edit = f->view == PP_UI_BRIGHTNESS;
     const lv_font_t *wanted_font = f->text_size == 18 ? &terminal_zh_18 : &terminal_zh_16;
-    if (body_font != wanted_font) {
+    if (body_font != wanted_font || previous_view != f->view) {
         body_font = wanted_font;
-        lv_obj_set_style_text_font(content, body_font, 0);
+        lv_obj_set_style_text_font(content, brightness_edit ? &terminal_zh_18 : body_font, 0);
     }
     struct tm clock;
     time_t now = time(NULL);
@@ -360,11 +418,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     text_color(wifi, f->wifi_searching ? wifi_pulse[f->now / 240 % 4]
                                       : f->wifi > -70 ? 0xb6cfa4
                                       : f->wifi > -90 ? 0x839278 : 0x526158);
-    if (f->battery < 0)
-        strcpy(value, "--");
-    else
-        snprintf(value, sizeof(value), "%d", f->battery > 100 ? 100 : f->battery);
-    text(battery_text, value);
+    update_battery(f->battery);
     text(mode, f->queue ? LV_SYMBOL_LIST : LV_SYMBOL_NEW_LINE);
     bool input = f->view == PP_UI_INPUT, idle = f->view == PP_UI_IDLE;
     bool menu_detail = f->view == PP_UI_MENU && f->menu_detail;
@@ -376,9 +430,17 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     visible(state, true);
     text_color(origin, f->task_context ? 0xa7c7e8 : 0xb6cfa4);
     if (previous_view != f->view || previous_menu_detail != menu_detail) {
-        lv_obj_set_pos(content, menu_detail ? 18 : 12, menu_detail ? 222 : input ? 145 : 66);
-        lv_obj_set_height(content, menu_detail ? 28 : input ? 110 : 198);
+        lv_obj_set_pos(content, menu_detail ? 18 : 12,
+                       brightness_edit ? 111 : menu_detail ? 222 : input ? 145 : 66);
+        lv_obj_set_height(content, brightness_edit ? 33 : menu_detail ? 28 : input ? 110 : 198);
+        lv_obj_set_style_text_align(content, brightness_edit ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT,
+                                    0);
         lv_obj_set_pos(origin, 12, input ? 123 : 38);
+    }
+    if ((previous_view == PP_UI_BRIGHTNESS) != brightness_edit) {
+        lv_obj_set_pos(volume_track, brightness_edit ? 36 : 108, brightness_edit ? 170 : 274);
+        lv_obj_set_size(volume_track, brightness_edit ? 168 : 120, brightness_edit ? 6 : 4);
+        lv_obj_set_height(volume_fill, brightness_edit ? 6 : 4);
     }
     previous_view = f->view;
     previous_menu_detail = menu_detail;
@@ -400,7 +462,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
                  : f->view == PP_UI_MENU     ? "操作菜单"
                  : f->view == PP_UI_IMAGE    ? "图片"
                                              : "回复");
-    if (f->volume_feedback)
+    if (f->volume_feedback && !brightness_edit)
         snprintf(value, sizeof(value), "音量 %u", f->volume);
     else if (input && f->elapsed)
         snprintf(value, sizeof(value), "%.1f 秒", f->elapsed / 1000.0);
@@ -410,28 +472,48 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         value[0] = 0;
     text(state, value);
     text_color(state, f->volume_feedback ? 0xb6cfa4 : 0x9aaa99);
-    visible(volume_track, f->volume_feedback);
-    if (f->volume_feedback) {
+    visible(volume_track, f->volume_feedback || brightness_edit);
+    if (brightness_edit) {
+        const unsigned level = f->brightness - PP_BRIGHTNESS_MIN;
+        visible(volume_fill, level > 0);
+        lv_obj_set_width(volume_fill, level * 168 / (PP_BRIGHTNESS_MAX - PP_BRIGHTNESS_MIN));
+    } else if (f->volume_feedback) {
         unsigned percent = f->volume > 100 ? 100 : f->volume;
         visible(volume_fill, percent > 0);
         lv_obj_set_width(volume_fill, percent * 120 / 100);
     }
+    const bool grid = f->view == PP_UI_MENU && f->menu_grid;
+    const unsigned first = f->selection >= 7 ? f->selection - 6 : 0;
     for (unsigned i = 0; i < 7; i++) {
-        unsigned first = f->selection >= 7 ? f->selection - 6 : 0;
-        bool show = f->view == PP_UI_MENU && first + i < f->choice_count;
+        const bool tile = grid && i < PP_MENU_GRID_TILES;
+        if (previous_menu_grid != grid) {
+            lv_obj_set_pos(items[i], tile ? 18 + (i % 2) * 106 : 18,
+                           tile ? 66 + (i / 2) * 66
+                                : grid ? 198 + (i - PP_MENU_GRID_TILES) * 29 : 61 + i * 29);
+            lv_obj_set_size(items[i], tile ? 98 : 204, tile ? 58 : 26);
+            lv_obj_set_style_pad_top(items[i], tile ? 18 : 3, 0);
+            lv_obj_set_style_pad_right(items[i], tile ? 6 : 0, 0);
+            lv_obj_set_style_text_align(items[i], grid ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT, 0);
+        }
+        const bool show = f->view == PP_UI_MENU && first + i < f->choice_count;
         visible(items[i], show);
         if (show) {
             text(items[i], f->choices[first + i]);
-            lv_obj_set_style_bg_color(items[i], lv_color_hex(f->task_context ? 0x263c47 : 0x2a3c31),
-                                      0);
-            lv_obj_set_style_bg_opa(items[i],
-                                    first + i == f->selection ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+            const bool selected = first + i == f->selection;
+            const uint32_t color = f->task_context ? 0x263c47
+                                   : grid ? (selected ? 0x355843 : 0x233c30)
+                                          : 0x2a3c31;
+            lv_obj_set_style_bg_color(items[i], lv_color_hex(color), 0);
+            lv_obj_set_style_bg_opa(items[i], selected || tile ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         }
     }
+    previous_menu_grid = grid;
     char page[1152];
     const char *body = f->body ? f->body : "";
     pp_text_layout_t layout = {.next = f->page};
-    if (f->follow || input)
+    if (brightness_edit)
+        snprintf(page, sizeof(page), "%u%%", f->brightness);
+    else if (f->follow || input)
         pp_layout_tail(page, sizeof(page), body, 216, body_rows(input), measure, NULL);
     else
         layout =
@@ -447,8 +529,8 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
         lv_refr_now(lv_obj_get_display(screen));
     bsp_lvgl_unlock();
     unsigned brightness = f->brightness;
-    if (brightness < 40 || brightness > 100)
-        brightness = first_frame ? 65 : current_brightness;
+    if (brightness < PP_BRIGHTNESS_MIN || brightness > PP_BRIGHTNESS_MAX)
+        brightness = first_frame ? PP_BRIGHTNESS_DEFAULT : current_brightness;
     if (brightness != current_brightness) {
         bsp_display_backlight(brightness);
         current_brightness = brightness;

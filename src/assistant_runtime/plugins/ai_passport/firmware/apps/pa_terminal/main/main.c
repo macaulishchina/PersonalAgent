@@ -1185,11 +1185,12 @@ static void adjust_volume(int delta) {
     pp_audio_set_volume(value < 0 ? 0 : value > 100 ? 100 : (unsigned)value);
     preference_changed = volume_feedback_at = now_ms();
 }
+static unsigned brightness_preview;
 static void choose(void) {
     pp_selection_t action = pp_navigation_selected(&navigation);
-    if (!configured && action != PP_SELECT_SETTINGS && action != PP_SELECT_MAINTENANCE &&
+    if (!configured && action != PP_SELECT_CONNECTIVITY && action != PP_SELECT_MAINTENANCE &&
         action != PP_SELECT_NETWORK && action != PP_SELECT_HOME && action != PP_SELECT_BACK &&
-        action != PP_SELECT_PAIRING_RESET && action != PP_SELECT_FACTORY) {
+        action != PP_SELECT_FACTORY) {
         set_status("本地设置读取失败");
         return;
     }
@@ -1203,6 +1204,11 @@ static void choose(void) {
         body[0] = 0;
         set_status("上下调整音量");
         break;
+    case PP_SELECT_BRIGHTNESS:
+        brightness_preview = settings.brightness;
+        pp_navigation_open(&navigation, PP_SCREEN_BRIGHTNESS);
+        set_status("");
+        break;
     case PP_SELECT_CANCEL:
         if (active_id[0]) {
             set_status(pp_net_connected() && send_id("execution.cancel", active_id)
@@ -1211,16 +1217,20 @@ static void choose(void) {
         } else
             set_status("没有当前执行");
         break;
-    case PP_SELECT_SETTINGS:
-        pp_navigation_open(&navigation, PP_SCREEN_SETTINGS);
-        set_status("选择设置");
+    case PP_SELECT_SOUND:
+        pp_navigation_open(&navigation, PP_SCREEN_SOUND);
+        set_status("");
+        break;
+    case PP_SELECT_CONNECTIVITY:
+        pp_navigation_open(&navigation, PP_SCREEN_CONNECTIVITY);
+        set_status("");
+        break;
+    case PP_SELECT_POWER:
+        pp_navigation_open(&navigation, PP_SCREEN_POWER);
+        set_status("");
         break;
     case PP_SELECT_MAINTENANCE:
         pp_navigation_open(&navigation, PP_SCREEN_MAINTENANCE);
-        set_status("");
-        break;
-    case PP_SELECT_PAIRING_RESET:
-        pp_navigation_open(&navigation, PP_SCREEN_PAIRING_RESET);
         set_status("");
         break;
     case PP_SELECT_HOME:
@@ -1240,7 +1250,7 @@ static void choose(void) {
         if (pp_preference(PP_PREF_KEEP_ONLINE, !settings.keep_online, &settings) != ESP_OK)
             set_status("设置保存失败");
         else
-            set_status(settings.keep_online ? "保持在线已开启" : "空闲后自动休眠");
+            set_status(settings.keep_online ? "自动休眠已关闭" : "空闲后自动休眠");
         break;
     case PP_SELECT_STANDBY_WIFI:
         if (pp_preference(PP_PREF_STANDBY_WIFI, !settings.standby_wifi, &settings) != ESP_OK)
@@ -1328,10 +1338,18 @@ static void local_ok(pp_route_t route) {
             break;
         }
     } else if (route == PP_ROUTE_SETUP) {
-        pp_navigation_open(&navigation, PP_SCREEN_SETTINGS);
-        set_status("选择设置");
+        pp_navigation_open(&navigation, PP_SCREEN_MENU);
+        set_status("");
     } else if (menu) {
         choose();
+    } else if (navigation.screen == PP_SCREEN_BRIGHTNESS) {
+        if (pp_preference(PP_PREF_BRIGHTNESS, brightness_preview, &settings) == ESP_OK) {
+            pp_navigation_back(&navigation);
+            set_status("亮度已保存");
+        } else {
+            brightness_preview = settings.brightness;
+            set_status("亮度保存失败");
+        }
     } else {
         pp_navigation_back(&navigation);
         set_status("请选择");
@@ -1346,6 +1364,13 @@ static void local_move(pp_route_t route, int direction) {
         pp_navigation_move(&navigation, direction);
     else if (navigation.screen == PP_SCREEN_VOLUME)
         adjust_volume(-5 * direction);
+    else if (navigation.screen == PP_SCREEN_BRIGHTNESS) {
+        int value = (int)brightness_preview - 5 * direction;
+        brightness_preview = value < (int)PP_BRIGHTNESS_MIN ? PP_BRIGHTNESS_MIN
+                           : value > (int)PP_BRIGHTNESS_MAX ? PP_BRIGHTNESS_MAX
+                                                           : (unsigned)value;
+        set_status("");
+    }
     else if (navigation.screen == PP_SCREEN_NETWORK) {
         if (direction < 0 && view_page)
             view_page = pp_ui_previous(network_details, view_page);
@@ -1355,7 +1380,8 @@ static void local_move(pp_route_t route, int direction) {
 }
 static void apply_configuration(void) {
     if (!pending_configuration || pp_audio_capturing() || pp_audio_busy() || speech_session || waiting ||
-        input_state.phase != PP_INPUT_IDLE || dangerous_confirm || button_state.down)
+        input_state.phase != PP_INPUT_IDLE || dangerous_confirm || button_state.down ||
+        navigation.screen == PP_SCREEN_BRIGHTNESS)
         return;
     if (preference_changed) {
         if (pp_preference(PP_PREF_VOLUME, pp_audio_volume(), &settings) != ESP_OK) {
@@ -1396,7 +1422,7 @@ static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
     if (event.key == BSP_BTN_OK) {
         if (event.button == BSP_BTN_PRESS && speech_session &&
             (menu || notice_list || notice_view ||
-             navigation.screen == PP_SCREEN_VOLUME ||
+             navigation.screen == PP_SCREEN_VOLUME || navigation.screen == PP_SCREEN_BRIGHTNESS ||
              navigation.screen == PP_SCREEN_NETWORK)) {
             stop_play();
             button_state.wake_guard = true;
@@ -1631,6 +1657,7 @@ static void handle_key(pp_event_t event) {
 
 static void handle_link(pp_event_t event) {
     if (!event.online) {
+        active_id[0] = 0;
         reset_record_controls();
         if (pp_input_disconnect(&input_state))
             view = PP_UI_INFO;
@@ -1780,18 +1807,20 @@ static void render_screen(void) {
     }
     const char *labels[10];
     unsigned count = pp_navigation_count(&navigation);
-    char keep_label[48], standby_label[48], task_heading[96], title[64];
-    snprintf(keep_label, sizeof(keep_label), "保持在线 · %s",
-             settings.keep_online ? "开" : "关");
-    snprintf(standby_label, sizeof(standby_label), "熄屏保持 Wi-Fi · %s",
-             settings.standby_wifi ? "开" : "关");
+    char setting_labels[2][32], task_heading[96], title[64];
+    if (navigation.screen == PP_SCREEN_POWER) {
+        snprintf(setting_labels[0], sizeof(setting_labels[0]), "自动休眠 · %s",
+                 settings.keep_online ? "关" : "开");
+        snprintf(setting_labels[1], sizeof(setting_labels[1]), "熄屏保持 Wi-Fi · %s",
+                 settings.standby_wifi ? "开" : "关");
+    } else if (navigation.screen == PP_SCREEN_SOUND) {
+        snprintf(setting_labels[0], sizeof(setting_labels[0]), "音量 · %u%%", pp_audio_volume());
+        snprintf(setting_labels[1], sizeof(setting_labels[1]), "屏幕亮度 · %u%%", settings.brightness);
+    }
     for (unsigned i = 0; i < count; i++) {
-        const char *label = pp_navigation_label(&navigation, i);
-        if (navigation.screen == PP_SCREEN_SETTINGS && i == 0)
-            label = keep_label;
-        else if (navigation.screen == PP_SCREEN_SETTINGS && i == 4)
-            label = standby_label;
-        labels[i] = label;
+        labels[i] = (navigation.screen == PP_SCREEN_POWER || navigation.screen == PP_SCREEN_SOUND) &&
+                            i < 2
+                        ? setting_labels[i] : pp_navigation_label(&navigation, i);
     }
     bool listening = pp_audio_capturing() && pp_input_listening(&input_state);
     pp_route_t route = current_route();
@@ -1816,12 +1845,14 @@ static void render_screen(void) {
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
     bool volume_screen = navigation.screen == PP_SCREEN_VOLUME;
+    bool brightness_screen = navigation.screen == PP_SCREEN_BRIGHTNESS;
     const bool awaiting_reply = route == PP_ROUTE_SESSION && navigation.screen == PP_SCREEN_CHAT &&
                                 view == PP_UI_INPUT && input_state.phase == PP_INPUT_IDLE &&
                                 waiting && pp_net_connected() && !speech_session &&
                                 !strcmp(status, processing_status);
     pp_ui_frame_t frame = {
         .view = dangerous_confirm                             ? PP_UI_INFO
+                : brightness_screen                           ? PP_UI_BRIGHTNESS
                 : menu || notice_list                         ? PP_UI_MENU
                 : (setup_card && quiet_wifi)                  ? PP_UI_IDLE
                 : setup_card || network_page || volume_screen ? PP_UI_INFO
@@ -1840,7 +1871,7 @@ static void render_screen(void) {
                                                           : body,
         .origin = setup_card                                ? "设备连接"
                   : navigation.screen == PP_SCREEN_QUESTION ? "等待回答"
-                  : menu || notice_list || notice_view || volume_screen ||
+                  : menu || notice_list || notice_view || volume_screen || brightness_screen ||
                           navigation.screen == PP_SCREEN_NETWORK
                       ? pp_navigation_title(&navigation)
                   : view == PP_UI_INFO ? status
@@ -1849,6 +1880,7 @@ static void render_screen(void) {
         .menu_detail = menu ? pp_navigation_detail(&navigation) : NULL,
         .choice_count = count,
         .selection = navigation.selection,
+        .menu_grid = navigation.screen == PP_SCREEN_MENU,
         .task_context = notice_list || notice_view,
         .local_page_hint = network_page && !dangerous_confirm,
         .queue = settings.queue,
@@ -1856,7 +1888,7 @@ static void render_screen(void) {
         .volume = pp_audio_volume(),
         .volume_feedback = volume_screen || volume_feedback_at != 0,
         .awaiting_reply = awaiting_reply,
-        .brightness = settings.brightness,
+        .brightness = brightness_screen ? brightness_preview : settings.brightness,
         .text_size = settings.text_size,
         .battery = battery,
         .wifi = wifi_rssi,
@@ -1866,11 +1898,12 @@ static void render_screen(void) {
         .follow = route == PP_ROUTE_SESSION && message_streaming && !view_page,
         .level = listening ? pp_audio_level() : 0,
         .elapsed = listening ? now_ms() - input_state.started : 0,
-        .hint = setup_card ? (pp_net_rejected() ? "下 更换配对 · OK 设置" : "OK 设置")
+        .hint = setup_card ? (pp_net_rejected() ? "下 更换配对 · OK 菜单" : "OK 菜单")
                 : route == PP_ROUTE_REVIEW
                     ? (review_reading ? "上下查看 · OK返回" : "上下选择 · OK确认")
                 : notice_view                             ? "OK 返回列表 · 长↑主页"
                 : menu || notice_list                     ? "OK 确认 · 长↑主页"
+                : brightness_screen                       ? "上下调整 · OK 保存"
                 : volume_screen                           ? "上下音量 · OK返回"
                 : navigation.screen == PP_SCREEN_NETWORK  ? "OK 返回 · 长↑主页"
                 : listening                               ? "正在听 · 松开结束"
@@ -1968,6 +2001,7 @@ void app_main(void) {
         /* Refresh local pairing and Wi-Fi state even if the new PA is unreachable. */
         if (configured)
             pp_settings_refresh(&settings);
+        pp_navigation_set_execution(&navigation, pp_net_connected() && active_id[0]);
         pp_event_t event;
         if (pp_events_take_key_overflow()) {
             navigation.arrow = PP_ARROW_NONE;

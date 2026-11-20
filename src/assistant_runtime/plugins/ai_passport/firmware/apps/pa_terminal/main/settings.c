@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "terminal_limits.h"
 #include "bootloader_random.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
@@ -76,7 +77,7 @@ static esp_err_t load_record(pp_settings_t *s) {
         memset(s, 0, sizeof(*s));
         s->magic = PP_SETTINGS_MAGIC;
         s->volume = 45;
-        s->brightness = 65;
+        s->brightness = PP_BRIGHTNESS_DEFAULT;
         s->text_size = 16;
         s->sleep_seconds = 120;
         s->offline_cache = s->show_images = s->standby_wifi = true;

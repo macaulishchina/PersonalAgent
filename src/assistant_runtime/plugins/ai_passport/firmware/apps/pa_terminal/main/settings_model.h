@@ -34,7 +34,8 @@ typedef struct {
 void pp_settings_project(const pp_settings_t *source, unsigned revision, pp_terminal_settings_t *view);
 
 typedef enum {
-    PP_PREF_VOLUME, PP_PREF_QUEUE, PP_PREF_KEEP_ONLINE, PP_PREF_PAIRED, PP_PREF_STANDBY_WIFI
+    PP_PREF_VOLUME, PP_PREF_QUEUE, PP_PREF_KEEP_ONLINE, PP_PREF_PAIRED, PP_PREF_STANDBY_WIFI,
+    PP_PREF_BRIGHTNESS
 } pp_preference_t;
 /* On success, previous is suitable for rollback while the caller holds its lock. */
 bool pp_settings_edit_preference(pp_settings_t *settings, pp_preference_t key, unsigned value,

@@ -6,23 +6,26 @@ typedef struct {
     pp_selection_t action;
 } option_t;
 static const option_t root[] = {{"任务消息", PP_SELECT_TASKS},
-                                {"音量", PP_SELECT_VOLUME},
+                                {"声音与屏幕", PP_SELECT_SOUND},
+                                {"网络与配对", PP_SELECT_CONNECTIVITY},
+                                {"电源与待机", PP_SELECT_POWER},
                                 {"取消当前执行", PP_SELECT_CANCEL},
-                                {"设置", PP_SELECT_SETTINGS},
                                 {"返回主页", PP_SELECT_HOME}};
-static const option_t settings[] = {{"保持在线", PP_SELECT_KEEP_ONLINE},
-                                    {"网络状态", PP_SELECT_NETWORK},
-                                    {"休眠", PP_SELECT_SLEEP},
-                                    {"设备维护", PP_SELECT_MAINTENANCE},
-                                    {"熄屏保持 Wi-Fi", PP_SELECT_STANDBY_WIFI},
-                                    {"返回上级", PP_SELECT_BACK}};
+static const option_t sound[] = {{"音量", PP_SELECT_VOLUME},
+                                 {"屏幕亮度", PP_SELECT_BRIGHTNESS},
+                                 {"返回上级", PP_SELECT_BACK}};
+static const option_t connectivity[] = {{"网络状态", PP_SELECT_NETWORK},
+                                        {"重试连接", PP_SELECT_RETRY},
+                                        {"设置 Wi-Fi", PP_SELECT_REPROVISION},
+                                        {"PA 与维护", PP_SELECT_MAINTENANCE},
+                                        {"返回上级", PP_SELECT_BACK}};
+static const option_t power[] = {{"自动休眠", PP_SELECT_KEEP_ONLINE},
+                                 {"熄屏保持 Wi-Fi", PP_SELECT_STANDBY_WIFI},
+                                 {"立即休眠", PP_SELECT_SLEEP},
+                                 {"返回上级", PP_SELECT_BACK}};
 static const option_t maintenance[] = {
-    {"同步 PA 设置", PP_SELECT_RELOAD}, {"连接已存网络", PP_SELECT_RETRY},
-    {"设置 Wi-Fi", PP_SELECT_REPROVISION}, {"配对与重置 >", PP_SELECT_PAIRING_RESET},
-    {"返回上级", PP_SELECT_BACK}};
-static const option_t pairing_reset[] = {
-    {"更换 PA 配对", PP_SELECT_REPAIR}, {"恢复出厂设置", PP_SELECT_FACTORY},
-    {"返回设备维护", PP_SELECT_BACK}};
+    {"同步 PA 设置", PP_SELECT_RELOAD}, {"更换 PA 配对", PP_SELECT_REPAIR},
+    {"恢复出厂设置", PP_SELECT_FACTORY}, {"返回上级", PP_SELECT_BACK}};
 /* Screen metadata defines return paths and which pages own local input even
  * while PA is disconnected or sending a new handshake. */
 typedef struct {
@@ -40,17 +43,16 @@ static const page_t pages[PP_SCREEN_COUNT] = {
     [PP_SCREEN_TASKS] = {"任务消息", PP_SCREEN_MENU},
     [PP_SCREEN_TASK] = {"任务报告", PP_SCREEN_TASKS},
     [PP_SCREEN_MENU] = {"操作菜单", PP_SCREEN_HOME, MENU(root)},
-    [PP_SCREEN_SETTINGS] = {"设置", PP_SCREEN_MENU, MENU(settings)},
-    [PP_SCREEN_MAINTENANCE] = {"设备维护", PP_SCREEN_SETTINGS, MENU(maintenance)},
-    [PP_SCREEN_PAIRING_RESET] = {"配对与重置", PP_SCREEN_MAINTENANCE, MENU(pairing_reset)},
-    [PP_SCREEN_VOLUME] = {"音量", PP_SCREEN_MENU, NULL, 0, true},
-    [PP_SCREEN_NETWORK] = {"网络状态", PP_SCREEN_SETTINGS, NULL, 0, true},
+    [PP_SCREEN_SOUND] = {"声音与屏幕", PP_SCREEN_MENU, MENU(sound)},
+    [PP_SCREEN_CONNECTIVITY] = {"网络与配对", PP_SCREEN_MENU, MENU(connectivity)},
+    [PP_SCREEN_POWER] = {"电源与待机", PP_SCREEN_MENU, MENU(power)},
+    [PP_SCREEN_MAINTENANCE] = {"PA 与维护", PP_SCREEN_CONNECTIVITY, MENU(maintenance)},
+    [PP_SCREEN_VOLUME] = {"音量", PP_SCREEN_SOUND, NULL, 0, true},
+    [PP_SCREEN_BRIGHTNESS] = {"屏幕亮度", PP_SCREEN_SOUND, NULL, 0, true},
+    [PP_SCREEN_NETWORK] = {"网络状态", PP_SCREEN_CONNECTIVITY, NULL, 0, true},
     [PP_SCREEN_QUESTION] = {"等待回答", PP_SCREEN_HOME},
 };
 static void open_page(pp_navigation_t *n, pp_screen_t screen, bool restore_focus) {
-    if (screen == PP_SCREEN_SETTINGS &&
-        (n->screen == PP_SCREEN_HOME || n->screen == PP_SCREEN_MENU))
-        n->settings_parent = n->screen;
     n->focus[n->screen] = n->selection;
     if (n->screen != screen)
         n->page_epoch++;
@@ -61,8 +63,7 @@ void pp_navigation_open(pp_navigation_t *n, pp_screen_t screen) {
     open_page(n, screen, false);
 }
 void pp_navigation_back(pp_navigation_t *n) {
-    open_page(n, n->screen == PP_SCREEN_SETTINGS ? n->settings_parent : pages[n->screen].parent,
-              true);
+    open_page(n, pages[n->screen].parent, true);
 }
 bool pp_navigation_local(const pp_navigation_t *n) { return pages[n->screen].local; }
 pp_route_t pp_navigation_route(const pp_navigation_t *n, bool confirmation, bool setup,
@@ -80,9 +81,19 @@ bool pp_navigation_audio(const pp_navigation_t *n) {
     return n->screen == PP_SCREEN_HOME || n->screen == PP_SCREEN_CHAT ||
            n->screen == PP_SCREEN_HISTORY || n->screen == PP_SCREEN_QUESTION;
 }
-unsigned pp_navigation_count(const pp_navigation_t *n) { return pages[n->screen].count; }
+unsigned pp_navigation_count(const pp_navigation_t *n) {
+    return pages[n->screen].count - (n->screen == PP_SCREEN_MENU && !n->can_cancel);
+}
+static const option_t *option_at(const pp_navigation_t *n, unsigned i) {
+    if (i >= pp_navigation_count(n))
+        return NULL;
+    if (n->screen == PP_SCREEN_MENU && !n->can_cancel && i == PP_MENU_GRID_TILES)
+        i++; /* Skip cancellation; return stays last. */
+    return &pages[n->screen].options[i];
+}
 const char *pp_navigation_label(const pp_navigation_t *n, unsigned i) {
-    return i < pp_navigation_count(n) ? pages[n->screen].options[i].label : "";
+    const option_t *option = option_at(n, i);
+    return option ? option->label : "";
 }
 const char *pp_navigation_title(const pp_navigation_t *n) { return pages[n->screen].title; }
 const char *pp_navigation_detail(const pp_navigation_t *n) {
@@ -90,20 +101,31 @@ const char *pp_navigation_detail(const pp_navigation_t *n) {
     case PP_SELECT_RELOAD: return "从 PA 获取设备设置";
     case PP_SELECT_RETRY: return "用已存 Wi-Fi 连接 PA";
     case PP_SELECT_REPROVISION: return "开启热点，手机填写网络";
-    case PP_SELECT_PAIRING_RESET: return "配对管理和出厂重置";
     case PP_SELECT_REPAIR: return "保留 Wi-Fi，绑定新会话";
     case PP_SELECT_FACTORY: return "清除本机网络与配对";
     default: return NULL;
     }
 }
 pp_selection_t pp_navigation_selected(const pp_navigation_t *n) {
-    return n->selection < pp_navigation_count(n) ? pages[n->screen].options[n->selection].action
-                                                 : PP_SELECT_NONE;
+    const option_t *option = option_at(n, n->selection);
+    return option ? option->action : PP_SELECT_NONE;
 }
 void pp_navigation_move(pp_navigation_t *n, int direction) {
     unsigned count = pp_navigation_count(n);
     if (count)
         n->selection = (n->selection + (direction < 0 ? count - 1 : 1)) % count;
+}
+void pp_navigation_set_execution(pp_navigation_t *n, bool can_cancel) {
+    if (n->can_cancel == can_cancel)
+        return;
+    if (n->focus[PP_SCREEN_MENU] >= PP_MENU_GRID_TILES)
+        n->focus[PP_SCREEN_MENU] = PP_MENU_GRID_TILES + can_cancel;
+    if (n->screen == PP_SCREEN_MENU && n->selection >= PP_MENU_GRID_TILES) {
+        if (!can_cancel && n->selection == PP_MENU_GRID_TILES)
+            n->page_epoch++; /* An OK held on cancellation must not exit instead. */
+        n->selection = PP_MENU_GRID_TILES + can_cancel;
+    }
+    n->can_cancel = can_cancel;
 }
 bool pp_navigation_ok_press(pp_navigation_t *n, pp_route_t route, uint32_t now,
                             bool wifi_retry) {

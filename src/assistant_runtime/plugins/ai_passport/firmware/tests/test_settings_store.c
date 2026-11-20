@@ -106,11 +106,21 @@ static void check_publication(pp_terminal_settings_t *ui) {
     assert(pp_settings_decode(nvs.settings, &full) && full.volume == 45);
     nvs.fail_settings_commit = false;
     assert(pp_preference(PP_PREF_VOLUME, 77, ui) == ESP_OK && ui->volume == 77);
+    revision = ui->revision;
+    nvs.fail_settings_commit = true;
+    assert(pp_preference(PP_PREF_BRIGHTNESS, 70, ui) == ESP_FAIL);
+    assert(pp_settings_refresh(ui) && ui->revision == revision && ui->brightness == 65);
+    nvs.fail_settings_commit = false;
+    assert(pp_preference(PP_PREF_BRIGHTNESS, 39, ui) == ESP_ERR_INVALID_ARG);
+    assert(pp_preference(PP_PREF_BRIGHTNESS, 101, ui) == ESP_ERR_INVALID_ARG);
+    assert(pp_preference(PP_PREF_BRIGHTNESS, 70, ui) == ESP_OK && ui->brightness == 70);
+    assert(pp_settings_decode(nvs.settings, &full) && full.brightness == 70);
     assert(pp_preference(PP_PREF_PAIRED, 1, NULL) == ESP_OK && !ui->paired);
     assert(pp_settings_refresh(ui) && ui->paired);
 }
 static void check_cloud_receipt(pp_terminal_settings_t *ui) {
-    cJSON *fields = cJSON_Parse("{\"text_size\":{\"version\":1,\"value\":18}}");
+    cJSON *fields = cJSON_Parse("{\"text_size\":{\"version\":1,\"value\":18},"
+                               "\"brightness\":{\"version\":1,\"value\":60}}");
     cJSON *receipt = NULL;
     bool reconnect;
     nvs.fail_settings_commit = true;
@@ -119,10 +129,14 @@ static void check_cloud_receipt(pp_terminal_settings_t *ui) {
     assert(receipt == NULL && ui->revision == revision && ui->text_size == 16);
     nvs.fail_settings_commit = false;
     assert(pp_settings_cloud(fields, &receipt, &reconnect, ui) == ESP_OK);
-    assert(!reconnect && ui->text_size == 18);
+    assert(!reconnect && ui->text_size == 18 && ui->brightness == 60);
     assert(cJSON_IsObject(cJSON_GetObjectItem(receipt, "actual")));
     cJSON *versions = cJSON_GetObjectItem(receipt, "versions");
     assert(cJSON_GetNumberValue(cJSON_GetObjectItem(versions, "text_size")) == 1);
+    cJSON_Delete(receipt);
+    assert(pp_preference(PP_PREF_BRIGHTNESS, 80, ui) == ESP_OK);
+    assert(pp_settings_cloud(fields, &receipt, &reconnect, ui) == ESP_OK);
+    assert(!reconnect && ui->brightness == 80);
     cJSON_Delete(receipt);
     cJSON_Delete(fields);
 }

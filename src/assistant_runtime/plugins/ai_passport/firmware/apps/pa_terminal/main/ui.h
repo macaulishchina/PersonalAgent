@@ -9,7 +9,8 @@ typedef enum {
     PP_UI_REPLY,
     PP_UI_INFO,
     PP_UI_MENU,
-    PP_UI_IMAGE
+    PP_UI_IMAGE,
+    PP_UI_BRIGHTNESS
 } pp_ui_view_t;
 typedef struct {
     pp_ui_view_t view;
@@ -18,7 +19,7 @@ typedef struct {
     const char *menu_detail;
     unsigned choice_count, selection;
     bool queue, follow, online, volume_feedback, task_context, local_page_hint, awaiting_reply,
-        wifi_searching;
+        wifi_searching, menu_grid;
     unsigned volume, level, elapsed, now, brightness, text_size;
     int battery, wifi;
     size_t page;

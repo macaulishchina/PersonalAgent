@@ -1,9 +1,10 @@
-"""Generate the terminal's GB2312 Chinese + punctuation and ASCII font, LVGL 9.5.0."""
+"""Generate the terminal's text and battery fonts for LVGL 9.5.0."""
 
 import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parent
@@ -11,6 +12,10 @@ FIRMWARE = ROOT.parents[1]
 
 
 def generate(converter):
+    executable = shutil.which(converter)
+    if executable is None:
+        raise FileNotFoundError(converter)
+    converter = str(Path(executable).resolve())
     if subprocess.check_output([converter, "--version"], text=True).strip() != "1.5.3":
         raise ValueError("Use lv_font_conv 1.5.3")
     font = FIRMWARE / "managed_components/lvgl__lvgl/scripts/built_in_font/SourceHanSansSC-Normal.otf"
@@ -24,16 +29,21 @@ def generate(converter):
     symbols.update("".join(p.read_text() for p in (ROOT / "main").glob("*.c")))
     symbols = "".join(sorted(c for c in symbols if ord(c) > 127))
     target = ROOT / "main/fonts"
-    for size in (16, 18):
+    faces = (
+        ("terminal_zh_16", 16, ("-r", "0x20-0x7e"), symbols),
+        ("terminal_zh_18", 18, ("-r", "0x20-0x7e"), symbols),
+        ("terminal_battery_12", 12, (), "0123456789-"),
+    )
+    for name, size, ranges, glyphs in faces:
+        output = target / f"{name}.c"
         subprocess.run(
             [
                 converter,
                 "--font",
-                str(font),
-                "-r",
-                "0x20-0x7e",
+                str(Path("../..") / font.relative_to(FIRMWARE)),
+                *ranges,
                 "--symbols",
-                symbols,
+                glyphs,
                 "--size",
                 str(size),
                 "--bpp",
@@ -44,13 +54,13 @@ def generate(converter):
                 "--lv-include",
                 "lvgl.h",
                 "--lv-font-name",
-                f"terminal_zh_{size}",
+                name,
                 "-o",
-                str(target / f"terminal_zh_{size}.c"),
+                str(output.relative_to(ROOT)),
             ],
+            cwd=ROOT,
             check=True,
         )
-        output = target / f"terminal_zh_{size}.c"
         output.write_text(output.read_text().rstrip() + "\n")
     (target / "LICENSE.txt").write_text(
         (font.parent / "font_license/SourceHanSansSC/LICENSE.txt").read_text()

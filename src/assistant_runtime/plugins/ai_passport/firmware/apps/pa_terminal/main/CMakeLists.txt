@@ -9,7 +9,8 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES bsp pp_board esp_event esp_timer esp_wifi esp_netif esp_http_client esp_websocket_client esp_pm
              nvs_flash json esp_app_format esp_hw_support mbedtls esp_http_server bootloader_support joltwallet__littlefs)
-target_sources(${COMPONENT_LIB} PRIVATE "fonts/terminal_zh_16.c" "fonts/terminal_zh_18.c")
+target_sources(${COMPONENT_LIB} PRIVATE
+    "fonts/terminal_zh_16.c" "fonts/terminal_zh_18.c" "fonts/terminal_battery_12.c")
 target_add_binary_data(${COMPONENT_LIB} "assets/cat_idle_open.rgb565a8" BINARY)
 target_add_binary_data(${COMPONENT_LIB} "assets/cat_idle_blink.rgb565a8" BINARY)
 target_add_binary_data(${COMPONENT_LIB} "assets/cat_input_open.rgb565a8" BINARY)

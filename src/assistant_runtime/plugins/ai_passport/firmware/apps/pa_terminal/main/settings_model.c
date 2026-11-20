@@ -1,4 +1,5 @@
 #include "settings_model.h"
+#include "terminal_limits.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -47,6 +48,9 @@ bool pp_settings_edit_preference(pp_settings_t *s, pp_preference_t key, unsigned
     if (key == PP_PREF_VOLUME && value <= 100) {
         *previous = s->volume;
         s->volume = value;
+    } else if (key == PP_PREF_BRIGHTNESS && value >= PP_BRIGHTNESS_MIN && value <= PP_BRIGHTNESS_MAX) {
+        *previous = s->brightness;
+        s->brightness = value;
     } else if (key == PP_PREF_QUEUE && value <= 1) {
         *previous = s->queue;
         s->queue = value;
@@ -71,7 +75,8 @@ void pp_settings_forget_binding(pp_settings_t *s) {
 bool pp_settings_valid(const pp_settings_t *s) {
     if (s->magic != PP_SETTINGS_MAGIC || s->wifi_count > PP_WIFI_MAX || s->volume > 100 ||
         s->sleep_seconds < 30 || s->sleep_seconds > 3600 || s->speech_mode > 2 ||
-        s->brightness < 40 || s->brightness > 100 || (s->text_size != 16 && s->text_size != 18) ||
+        s->brightness < PP_BRIGHTNESS_MIN || s->brightness > PP_BRIGHTNESS_MAX ||
+        (s->text_size != 16 && s->text_size != 18) ||
         !bounded_string(s->url, sizeof(s->url)) || !bounded_string(s->ca, sizeof(s->ca)) ||
         !bounded_string(s->binding, sizeof(s->binding)) ||
         !bounded_string(s->device, sizeof(s->device)) || strlen(s->device) != 32 ||
@@ -168,7 +173,7 @@ static bool apply_value(pp_settings_t *s, unsigned i, const cJSON *v) {
         strcpy(s->ca, v->valuestring);
         break;
     case 10:
-        if (!integer(v, 40, 100))
+        if (!integer(v, PP_BRIGHTNESS_MIN, PP_BRIGHTNESS_MAX))
             return false;
         s->brightness = v->valueint;
         break;
@@ -335,7 +340,7 @@ bool pp_settings_decode(const char *raw, pp_settings_t *out) {
         return false;
     memset(out, 0, sizeof(*out));
     out->magic = PP_SETTINGS_MAGIC;
-    out->brightness = 65;
+    out->brightness = PP_BRIGHTNESS_DEFAULT;
     out->text_size = 16;
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "format"),
                 *values = cJSON_GetObjectItemCaseSensitive(root, "values"),
