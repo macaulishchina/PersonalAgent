@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "status_widgets.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "image_model.h"
@@ -230,15 +231,16 @@ bool pp_ui_init(void) {
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(screen, lv_color_hex(0xe6eddf), 0);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    clock_label = label(12, 6, 65, 21, false);
-    volume = label(144, 8, 20, 17, true);
-    wifi = label(172, 8, 20, 17, true);
+    clock_label = label(12, 6, 44, 21, false);
+    volume = label(58, 8, 20, 17, true);
+    wifi = label(142, 8, 20, 17, true);
     battery = lv_obj_create(screen);
     lv_obj_remove_style_all(battery);
     lv_obj_set_pos(battery, 200, 9);
     lv_obj_set_size(battery, BATTERY_BODY_W + BATTERY_CAP_GAP + BATTERY_CAP_W, BATTERY_H);
     lv_obj_remove_flag(battery, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(battery, draw_battery, LV_EVENT_DRAW_MAIN, NULL);
+    pp_status_widgets_create(screen);
     rule(29);
     rule(288);
     origin = label(12, 38, 216, 22, false);
@@ -313,6 +315,8 @@ bool pp_ui_image(const void *pixels, unsigned width, unsigned height) {
     lv_image_cache_drop(&photo_descriptor);
     photo_available = pixels != NULL;
     if (pixels) {
+        lv_obj_set_pos(photo, image_viewport.x1, image_viewport.y1);
+        lv_obj_set_size(photo, PP_IMAGE_VIEW_WIDTH, PP_IMAGE_VIEW_HEIGHT);
         photo_descriptor = (lv_image_dsc_t){.header = {.magic = LV_IMAGE_HEADER_MAGIC,
                                                        .cf = LV_COLOR_FORMAT_RGB565,
                                                        .w = width,
@@ -344,7 +348,11 @@ bool pp_ui_stream_begin(unsigned width, unsigned height) {
     stream_area.y1 = image_viewport.y1 + (PP_IMAGE_VIEW_HEIGHT - height) / 2;
     stream_area.x2 = stream_area.x1 + width - 1;
     stream_area.y2 = stream_area.y1 + height - 1;
-    visible(photo, false);
+    if (photo_available) {
+        lv_obj_set_pos(photo, stream_area.x1, stream_area.y1);
+        lv_obj_set_size(photo, width, height);
+    }
+    visible(photo, photo_available);
     stream_view = STREAM_CLEARING;
     lv_obj_invalidate_area(screen, &image_viewport);
     bsp_lvgl_unlock();
@@ -424,6 +432,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
                                       : f->wifi > -70 ? 0xb6cfa4
                                       : f->wifi > -90 ? 0x839278 : 0x526158);
     update_battery(f->battery);
+    pp_status_widgets_update(&f->meter);
     text(mode, f->queue ? LV_SYMBOL_LIST : LV_SYMBOL_NEW_LINE);
     bool input = f->view == PP_UI_INPUT, idle = f->view == PP_UI_IDLE;
     bool menu_detail = f->view == PP_UI_MENU && f->menu_detail;

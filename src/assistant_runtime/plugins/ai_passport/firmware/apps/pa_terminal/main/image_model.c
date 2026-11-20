@@ -22,9 +22,12 @@ bool pp_image_strip_parse(pp_image_strip_t *strip, const void *frame, size_t byt
     return true;
 }
 
-bool pp_image_has_headroom(size_t available, size_t bytes, bool background) {
+size_t pp_image_headroom(bool background) {
     /* Background prefetch preserves more headroom for the next gesture. */
-    const size_t headroom = background ? 20000u : 16u * 1024u;
+    return background ? 20000u : 16u * 1024u;
+}
+bool pp_image_has_headroom(size_t available, size_t bytes, bool background) {
+    const size_t headroom = pp_image_headroom(background);
     return available >= headroom && bytes <= available - headroom;
 }
 

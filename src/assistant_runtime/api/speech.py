@@ -27,6 +27,11 @@ class RecognitionUpdates(RecognitionStream, Protocol):
     async def wait_update(self, previous: str) -> str: ...
 
 
+def recognition_upload_window(max_seconds: int, received_seconds: float) -> float:
+    """Wall time allowed to transfer bounded PCM, earned by actual audio progress."""
+    return max_seconds + 10 + 2 * min(received_seconds, max_seconds)
+
+
 @dataclass(frozen=True)
 class RecognitionRequest:
     """Provider contract, independently bound from synthesis."""

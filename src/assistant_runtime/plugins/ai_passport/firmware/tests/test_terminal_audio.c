@@ -19,6 +19,8 @@ static unsigned reads, writes, failed_mutes, polls, alloc_limit, capture_frames;
 static unsigned cue_reads, release_writes;
 static char task;
 
+int64_t esp_timer_get_time(void) { return 0; }
+
 void *pp_test_realloc(void *pointer, size_t size) {
     if (!alloc_limit)
         return NULL;
@@ -210,15 +212,15 @@ int main(int argc, char **argv) {
     alloc_limit = 2;
     assert(!pp_audio_capture_begin() && !pp_memory_stats().live[PP_MEMORY_CAPTURE]);
     alloc_limit = 2;
-    assert(!pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW) && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    assert(!pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW, true) && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = PP_PLAYBACK_WINDOW / PP_PLAYBACK_BLOCK_BYTES;
-    assert(pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW) == PP_PLAYBACK_WINDOW);
+    assert(pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW, true) == PP_PLAYBACK_WINDOW);
     pp_audio_play_stop();
     assert(!pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = UINT32_MAX;
     if (test_mute || test_drain) {
         const int16_t sample = 0;
-        assert(pp_audio_play_begin(1, PP_PLAYBACK_WINDOW) == PP_PLAYBACK_WINDOW);
+        assert(pp_audio_play_begin(1, PP_PLAYBACK_WINDOW, true) == PP_PLAYBACK_WINDOW);
         assert(pp_memory_stats().live[PP_MEMORY_PLAYBACK] == PP_PLAYBACK_WINDOW);
         assert(pp_play_pcm(1, &sample, sizeof(sample)));
         assert(!pp_audio_play_drained());

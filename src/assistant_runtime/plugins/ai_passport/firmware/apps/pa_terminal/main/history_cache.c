@@ -1,3 +1,4 @@
+#include "terminal_limits.h"
 #include "history_cache.h"
 #include "network.h"
 #include "pictures.h"
@@ -19,10 +20,11 @@ typedef struct {
     uint32_t started;
     bool active;
 } read_t;
-static entry_t recent[PP_CACHE_RECENT];
+static const pp_object_write_t page_policy = {.disk_reserve = 32u * 1024u};
+static entry_t recent[PP_CACHE_PIN_LIMIT];
 static unsigned count, serial, warm_index, warm_offset, warm_pages;
-static unsigned warm_offsets[PP_CACHE_RECENT];
-static bool warm_done[PP_CACHE_RECENT];
+static unsigned warm_offsets[PP_CACHE_PIN_LIMIT];
+static bool warm_done[PP_CACHE_PIN_LIMIT];
 static char *pending_catalog;
 static unsigned pending_next;
 static char pending_image[33];
@@ -31,7 +33,7 @@ static unsigned index_write_ticket, index_write_failures;
 static unsigned recent_ticket;
 static bool enabled, warming, images_enabled;
 static bool catalog_changed;
-static char warm_images[PP_CACHE_RECENT][33];
+static char warm_images[PP_CACHE_PIN_LIMIT][33];
 static unsigned warm_image;
 static char scope[65];
 static read_t foreground, background;
@@ -50,8 +52,8 @@ static void deliver(cJSON *j) {
     }
 }
 static void configure(void) {
-    const char *owners[PP_CACHE_RECENT];
-    char values[PP_CACHE_RECENT][192];
+    const char *owners[PP_CACHE_PIN_LIMIT];
+    char values[PP_CACHE_PIN_LIMIT][192];
     for (unsigned i = 0; i < count; i++) {
         snprintf(values[i], sizeof(values[i]), "%s/%.17g", recent[i].id, recent[i].revision);
         owners[i] = values[i];
@@ -69,7 +71,8 @@ void pp_history_cache_bind(const char *url, const char *device, const char *bind
         warming = true;
     }
     images_enabled = images;
-    bool valid = pp_objects_identity(url, device, binding, next);
+    const char *parts[] = {url, device, binding};
+    bool valid = pp_objects_identity(parts, 3, next);
     active = active && binding[0] && valid;
     if (strcmp(scope, next) || enabled != active) {
         count = 0;
@@ -139,7 +142,9 @@ static bool begin(read_t *read, const char *id, unsigned offset, bool prefetch) 
     char key[256];
     if (enabled && pp_history_cache_revision(id, &read->revision)) {
         page_key(key, id, read->revision, offset);
-        if (pp_objects_read(key, read->ticket, prefetch ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL))
+        pp_object_read_t policy = {.priority = prefetch ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL,
+                                   .heap_reserve = PP_PLAYBACK_WINDOW};
+        if (pp_objects_read(key, read->ticket, policy))
             return true;
         read->active = false;
         return false; /* Keep foreground data and retry the same background cursor. */
@@ -156,16 +161,17 @@ bool pp_history_cache_page(const char *id, unsigned offset) {
 }
 bool pp_history_cache_recent(void) {
     unsigned ticket = (++serial << 2) | 2u;
-    if (!enabled || !pp_objects_read("recent", ticket, PP_MEMORY_NORMAL))
+    pp_object_read_t policy = {.priority = PP_MEMORY_NORMAL, .heap_reserve = PP_PLAYBACK_WINDOW, .index = true};
+    if (!enabled || !pp_objects_read("recent", ticket, policy))
         return false;
     recent_ticket = ticket;
     return true;
 }
 static bool catalog(const cJSON *j) {
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(j, "items"), *item;
-    if (!cJSON_IsArray(items) || cJSON_GetArraySize(items) > (int)PP_CACHE_RECENT)
+    if (!cJSON_IsArray(items) || cJSON_GetArraySize(items) > (int)PP_CACHE_PIN_LIMIT)
         return false;
-    entry_t next[PP_CACHE_RECENT] = {0};
+    entry_t next[PP_CACHE_PIN_LIMIT] = {0};
     unsigned size = 0;
     cJSON_ArrayForEach(item, items) {
         const char *id = text(item, "id"), *role = text(item, "role"),
@@ -269,7 +275,7 @@ bool pp_history_cache_receive(cJSON *j, pp_buffer_t *frame) {
             page_key(key, page.id, page.revision, page.offset);
             if (pp_history_cache_owner(page.id, owner)) {
                 pp_buffer_t data = payload(j, frame);
-                if (pp_objects_write(key, owner, false, &data, NULL, 0, background.ticket)) {
+                if (pp_objects_write(key, owner, page_policy, &data, NULL, 0, background.ticket)) {
                     background.started = now();
                     return true;
                 }
@@ -295,7 +301,7 @@ bool pp_history_cache_receive(cJSON *j, pp_buffer_t *frame) {
             page_key(key, id, revision, (unsigned)offset->valuedouble);
             if (pp_history_cache_owner(id, owner)) {
                 pp_buffer_t data = payload(j, frame);
-                pp_objects_write(key, owner, false, &data, NULL, 0, 0);
+                pp_objects_write(key, owner, page_policy, &data, NULL, 0, 0);
             }
         }
     }
@@ -415,7 +421,7 @@ void pp_history_cache_poll(bool idle) {
             if (pp_buffer_reserve(&data, length, PP_MEMORY_BACKGROUND, PP_MEMORY_CACHE)) {
                 memcpy(data.data, pending_catalog, length);
                 data.size = length;
-                if (pp_objects_write("recent", "", true, &data, NULL, 0, ticket))
+                if (pp_objects_write("recent", "", (pp_object_write_t){.index = true}, &data, NULL, 0, ticket))
                     index_write_ticket = ticket;
                 else
                     retry_after = now() + 500;

@@ -22,35 +22,22 @@ static uint32_t pcm_crc32(uint32_t crc, const uint8_t *pcm, size_t bytes) {
 #endif
 }
 
-static size_t block_span(size_t position, size_t remaining) {
-    size_t span = PP_PLAYBACK_BLOCK_BYTES - position % PP_PLAYBACK_BLOCK_BYTES;
-    return span < remaining ? span : remaining;
-}
-static char *block_at(pp_playback_buffer_t *b, size_t position) {
-    return b->blocks[position / PP_PLAYBACK_BLOCK_BYTES].data + position % PP_PLAYBACK_BLOCK_BYTES;
-}
-
 void pp_playback_reset(pp_playback_buffer_t *b, uint32_t generation, size_t capacity) {
     b->epoch++;
     b->report = (pp_playback_report_t){.generation = generation, .window_bytes = capacity};
     b->active = b->priming = capacity != 0;
-    b->ended = false;
-    b->head = b->queued = b->writing = b->credit = 0;
+    b->ended = b->repeated_gap = false;
+    b->last_underrun_i2s = 0;
+    b->prefill_first_bytes = 0;
+    b->queued = b->writing_ram = b->writing = b->credit = 0;
+    pp_stream_reset(&b->queue, b->blocks, PP_PLAYBACK_BLOCK_BYTES, capacity);
 }
 bool pp_playback_append(pp_playback_buffer_t *b, uint32_t generation, const void *pcm, size_t bytes) {
     if (!b->active || b->ended || generation != b->report.generation)
         return true;
-    size_t window = b->report.window_bytes;
-    if (!pcm || !bytes || bytes % 2 || bytes > window - b->queued - b->writing)
+    if (!pcm || !bytes || bytes % 2 || bytes + b->writing_ram > pp_stream_room(&b->queue) ||
+        !pp_stream_append(&b->queue, pcm, bytes))
         return false;
-    size_t tail = (b->head + b->queued) % window;
-    const unsigned char *source = pcm;
-    for (size_t copied = 0; copied < bytes;) {
-        size_t n = block_span(tail, bytes - copied);
-        memcpy(block_at(b, tail), source + copied, n);
-        copied += n;
-        tail = (tail + n) % window;
-    }
     b->queued += bytes;
     b->report.received_bytes += bytes;
     b->report.received_crc32 = pcm_crc32(b->report.received_crc32, pcm, bytes);
@@ -60,34 +47,61 @@ void pp_playback_finish(pp_playback_buffer_t *b, uint32_t generation) {
     if (b->active && b->report.generation == generation)
         b->ended = true;
 }
+/* Sample only while accumulating PCM: synthesis startup and time between
+ * playback requests should not influence the next utterance. */
+static bool prefilled(pp_playback_buffer_t *b, uint32_t now_ms) {
+    if (!b->queued)
+        return false;
+    if (!b->prefill_first_bytes) {
+        b->prefill_started_ms = now_ms;
+        b->prefill_first_bytes = b->queued;
+    }
+    uint32_t elapsed = now_ms - b->prefill_started_ms;
+    size_t window = b->report.window_bytes;
+    size_t normal = window > PP_PLAYBACK_WINDOW ? window - PP_PLAYBACK_BLOCK_BYTES
+                                                : PP_PLAYBACK_PREFILL_BYTES;
+    if (b->queued < normal)
+        return false;
+    const unsigned bytes_per_second = PP_PLAYBACK_RATE * 2u;
+    /* Ignore sub-packet timing jitter. A sustained rate below 80% of PCM
+     * consumption warrants a longer contiguous run. A second underrun also
+     * catches bursty sources that briefly refill at full line speed. */
+    size_t arrived = b->queued - b->prefill_first_bytes;
+    uint64_t delivered = (uint64_t)arrived * 1000;
+    uint64_t realtime = (uint64_t)elapsed * bytes_per_second;
+    bool slow = elapsed >= 120 && delivered < realtime * 4 / 5;
+    if (!slow && !b->repeated_gap)
+        return true;
+    /* Stop the additional wait on EOF (caller), a time bound, or when the
+     * FIFO cannot accept any more. RAM-only peers must always make progress. */
+    size_t target = bytes_per_second * (b->repeated_gap ? 3u : 2u);
+    size_t limit = pp_stream_capacity(&b->queue);
+    if (target > limit)
+        target = limit;
+    unsigned wait_ms = b->repeated_gap || delivered < realtime / 2 ? 8000u : 6000u;
+    return b->queued >= target || elapsed >= wait_ms;
+}
+
 size_t pp_playback_take(pp_playback_buffer_t *b, void *pcm, size_t capacity,
-                        bool dma_empty, uint32_t *epoch) {
+                        bool dma_empty, uint32_t now_ms, uint32_t *epoch) {
     if (!b->active || b->writing)
         return 0;
-    if (dma_empty && !b->priming && !b->ended) {
+    if (dma_empty && !b->priming && (!b->ended || b->queued)) {
+        /* Forget old stalls after two seconds of uninterrupted output. */
+        b->repeated_gap = b->report.underruns &&
+            b->report.i2s_bytes - b->last_underrun_i2s < PP_PLAYBACK_RATE * 2u * 2u;
+        b->last_underrun_i2s = b->report.i2s_bytes;
         b->report.underruns++;
         b->priming = true;
+        b->prefill_first_bytes = 0;
     }
-    size_t window = b->report.window_bytes;
-    size_t prefill = window > PP_PLAYBACK_WINDOW ? window - PP_PLAYBACK_BLOCK_BYTES
-                                                : PP_PLAYBACK_PREFILL_BYTES;
-    if (b->priming && !b->ended && b->queued < prefill)
+    if (b->priming && !b->ended && !prefilled(b, now_ms))
         return 0;
     size_t n = capacity < b->queued ? capacity : b->queued;
-    if (n > window - b->head)
-        n = window - b->head;
-    n &= ~(size_t)1;
+    n = pp_stream_read(&b->queue, pcm, n & ~(size_t)1, &b->writing_ram);
     if (!n)
         return 0;
     b->priming = false;
-    unsigned char *target = pcm;
-    for (size_t copied = 0; copied < n;) {
-        size_t pos = b->head + copied;
-        size_t span = block_span(pos, n - copied);
-        memcpy(target + copied, block_at(b, pos), span);
-        copied += span;
-    }
-    b->head = (b->head + n) % window;
     b->queued -= n;
     b->writing = n;
     *epoch = b->epoch;
@@ -104,8 +118,8 @@ void pp_playback_written(pp_playback_buffer_t *b, uint32_t epoch, const void *pc
         b->report.i2s_crc32 = pcm_crc32(b->report.i2s_crc32, pcm, written);
     }
     if (success && written == b->writing)
-        b->credit += b->writing;
+        b->credit += b->writing_ram;
     else
         b->active = false;
-    b->writing = 0;
+    b->writing_ram = b->writing = 0;
 }

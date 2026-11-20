@@ -22,10 +22,11 @@ class PackageTest(unittest.TestCase):
         records = [
             (1, 2, 0x9000, 0x6000, b"nvs"),
             (1, 1, 0xF000, 0x1000, b"phy_init"),
-            (0, 0, 0x10000, 0x770000 if cache else 0x7F0000, b"factory"),
+            (0, 0, 0x10000, 0x3F0000 if cache else 0x7F0000, b"factory"),
         ]
         if cache:
-            records.append((1, 0x83, 0x780000, 0x80000, b"pp_cache"))
+            records.append((1, 0x40, 0x400000, 0x300000, b"pp_stream"))
+            records.append((1, 0x83, 0x700000, 0x100000, b"pp_cache"))
         return (
             b"".join(
                 struct.pack("<HBBII16sI", 0x50AA, kind, subtype, start, size, name, 0)
@@ -35,13 +36,27 @@ class PackageTest(unittest.TestCase):
         )
 
     def test_actual_partition_boundary_protects_cache_region(self):
-        self.assertEqual(module.application_size(self.partition_table(True)), 0x770000)
+        self.assertEqual(module.application_size(self.partition_table(True), terminal=True), 0x3F0000)
         self.assertEqual(module.application_size(self.partition_table(False)), 0x7F0000)
         table = self.partition_table(False)[:-32] + self.partition_table(True)[-64:]
         with self.assertRaisesRegex(ValueError, "Overlapping"):
             module.application_size(table)
         with self.assertRaisesRegex(ValueError, "partition"):
             module.application_size(b"not a partition table")
+
+    def test_four_mib_reservation_and_exact_image_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            table, app = Path(directory) / "table", Path(directory) / "app"
+            table.write_bytes(self.partition_table(True))
+            with app.open("wb") as f:
+                f.truncate(0x3F0000)
+            module.check_terminal_layout(table, app)
+            with app.open("ab") as f:
+                f.write(b"x")
+            with self.assertRaisesRegex(ValueError, "limit"):
+                module.check_terminal_layout(table, app)
+            with self.assertRaisesRegex(ValueError, "4 MiB"):
+                module.application_size(self.partition_table(False), terminal=True)
 
     def test_unexpected_nvs_offset_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -139,6 +154,8 @@ class PackageTest(unittest.TestCase):
                                     posixpath.join(posixpath.dirname(name), link.split("#")[0])
                                 )
                                 self.assertIn(target, archive.namelist(), (name, link))
+                    if project == "pa_terminal":
+                        self.assertEqual(manifest["upgrade_policy"], "pp-data-v2")
                     self.assertEqual(manifest["hardware_acceptance"], "pending")
                     self.assertEqual(archive.read("build-info/sdkconfig"), config.read_bytes())
                     self.assertEqual("SourceHanSansSC.LICENSE.txt" in archive.namelist(), chinese)

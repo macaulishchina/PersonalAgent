@@ -35,7 +35,7 @@ target_include_directories(test_navigation PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_navigation PRIVATE -Wall -Wextra -Werror)
 add_test(NAME navigation COMMAND test_navigation)
 
-add_executable(test_playback_buffer test_playback_buffer.c ../apps/pa_terminal/main/playback_buffer.c
+add_executable(test_playback_buffer test_playback_buffer.c ../apps/pa_terminal/main/cache_stream.c ../apps/pa_terminal/main/playback_buffer.c
                ../apps/pa_terminal/main/byte_buffer.c)
 target_include_directories(test_playback_buffer PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_playback_buffer PRIVATE -Wall -Wextra -Werror)
@@ -155,7 +155,7 @@ foreach(header bsp_audio freertos/FreeRTOS freertos/queue freertos/task)
 endforeach()
 file(WRITE "${audio_stubs}/cJSON.h" "typedef struct cJSON cJSON;\n")
 add_executable(test_terminal_audio test_terminal_audio.c ../apps/pa_terminal/main/terminal_audio.c
-               ../apps/pa_terminal/main/playback_buffer.c ../apps/pa_terminal/main/byte_buffer.c)
+               ../apps/pa_terminal/main/cache_stream.c ../apps/pa_terminal/main/playback_buffer.c ../apps/pa_terminal/main/byte_buffer.c)
 target_compile_definitions(test_terminal_audio PRIVATE realloc=pp_test_realloc)
 target_include_directories(test_terminal_audio PRIVATE "${audio_stubs}" stubs ../apps/pa_terminal/main)
 target_compile_options(test_terminal_audio PRIVATE -Wall -Wextra -Werror)
@@ -172,3 +172,20 @@ add_executable(test_cache_resident test_cache_resident.c ../apps/pa_terminal/mai
 target_include_directories(test_cache_resident PRIVATE ../apps/pa_terminal/main)
 target_compile_options(test_cache_resident PRIVATE -Wall -Wextra -Werror)
 add_test(NAME cache_resident COMMAND test_cache_resident)
+
+add_executable(test_cache_stream test_cache_stream.c ../apps/pa_terminal/main/cache_stream.c
+               ../apps/pa_terminal/main/byte_buffer.c)
+target_include_directories(test_cache_stream PRIVATE ../apps/pa_terminal/main)
+target_compile_options(test_cache_stream PRIVATE -Wall -Wextra -Werror)
+add_test(NAME cache_stream COMMAND test_cache_stream)
+
+add_executable(test_cache_stream_capacity test_cache_stream_capacity.c
+               ../apps/pa_terminal/main/cache_stream.c ../apps/pa_terminal/main/byte_buffer.c)
+target_include_directories(test_cache_stream_capacity PRIVATE ../apps/pa_terminal/main)
+target_compile_options(test_cache_stream_capacity PRIVATE -Wall -Wextra -Werror)
+add_test(NAME cache_stream_capacity COMMAND test_cache_stream_capacity)
+
+add_executable(test_status_meter test_status_meter.c ../apps/pa_terminal/main/status_meter.c)
+target_include_directories(test_status_meter PRIVATE ../apps/pa_terminal/main)
+target_compile_options(test_status_meter PRIVATE -Wall -Wextra -Werror)
+add_test(NAME status_meter COMMAND test_status_meter)

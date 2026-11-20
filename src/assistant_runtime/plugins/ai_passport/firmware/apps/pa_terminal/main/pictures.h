@@ -11,6 +11,7 @@ bool pp_picture_close(void);
 bool pp_picture_receive(const cJSON *response);
 void pp_picture_receive_strip(pp_buffer_t *frame);
 bool pp_picture_active(void);
+bool pp_picture_disconnected(void);
 bool pp_picture_loading(void);
 unsigned pp_picture_displayed_bytes(void);
 bool pp_picture_poll(uint32_t now); /* True when a foreground transfer failed. */

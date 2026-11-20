@@ -1,4 +1,5 @@
 #pragma once
+#include "status_meter.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -14,6 +15,7 @@ typedef enum {
 } pp_ui_view_t;
 typedef struct {
     pp_ui_view_t view;
+    pp_meter_t meter;
     const char *body, *state, *hint, *origin;
     const char *const *choices;
     const char *menu_detail;

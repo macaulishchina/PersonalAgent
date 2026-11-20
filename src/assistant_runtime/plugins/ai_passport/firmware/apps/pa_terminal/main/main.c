@@ -14,12 +14,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "network.h"
+#include "net_traffic.h"
 #include "provision.h"
 #include "esp_system.h"
 #include <sys/time.h>
 #include "nvs_flash.h"
 #include "settings.h"
 #include "diagnostics.h"
+#include "cache_flash.h"
 #include "navigation.h"
 #include "notification_model.h"
 #include "terminal_model.h"
@@ -43,7 +45,8 @@ static pp_navigation_t navigation;
 static bool playing;
 static unsigned play_generation;
 static unsigned playback_window = PP_PLAYBACK_WINDOW;
-static bool playback_metrics;
+static bool playback_metrics, playback_progress;
+static uint32_t last_progress_at, last_progress_bytes;
 static pp_ui_view_t view = PP_UI_INFO;
 static size_t view_page, view_next;
 static bool message_streaming;
@@ -90,7 +93,7 @@ static char active_notice_title[64], dismissed_input[37];
 static char question_text[1024];
 static uint8_t input_audio_id[PP_INPUT_AUDIO_ID_BYTES];
 static bool input_audio_ids, input_begin_queued;
-static uint32_t input_upload_started;
+static uint32_t input_upload_progress_at;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static cJSON *command(const char *type) {
@@ -319,10 +322,14 @@ static void stop_play(void) {
     reset_play();
     pp_net_send(command("playback.stop"));
 }
-static void reset_record_controls(void) {
+static void discard_capture(void) {
     pp_audio_capture_discard();
+    pp_net_close_audio();
+}
+static void reset_record_controls(void) {
+    discard_capture();
     input_begin_queued = false;
-    input_upload_started = 0;
+    input_upload_progress_at = 0;
     review_reading = review_pending = false;
     button_state = (pp_button_t){.wake_guard = button_state.wake_guard || button_state.down};
 }
@@ -344,9 +351,9 @@ static void stop_capture_upload(bool discard_excess) {
     pp_audio_capture_release();
     button_state = (pp_button_t){.wake_guard = button_state.down || button_state.wake_guard};
     if (discard_excess)
-        pp_audio_capture_discard();
-    if (!input_upload_started)
-        input_upload_started = now_ms();
+        discard_capture();
+    if (!input_upload_progress_at)
+        input_upload_progress_at = now_ms();
     set_status(input_state.truncated ? "网络慢，上传已录部分"
                : input_state.limited ? "录音达上限，正在上传"
                                      : "正在上传录音");
@@ -467,8 +474,8 @@ static void actions(unsigned mask) {
             return;
         }
         request_id[0] = 0;
-        input_upload_started = 0;
-        if (!pp_audio_capture_begin()) {
+        input_upload_progress_at = 0;
+        if (!pp_net_open_audio() || !pp_audio_capture_begin()) {
             abort_record();
             set_status("录音缓冲暂不可用，请重新说");
             return;
@@ -477,7 +484,7 @@ static void actions(unsigned mask) {
          * hold is established. A double click must leave the page unchanged. */
     }
     if (mask & PP_DISCARD) {
-        pp_audio_capture_discard();
+        discard_capture();
 
         if (input_state.phase == PP_INPUT_PREBUFFER) {
             pp_input_abort(&input_state);
@@ -592,6 +599,7 @@ static void request_notice_page(unsigned offset) {
     }
 }
 static void receive_hello(cJSON *j, uint32_t generation) {
+    const bool same_binding = !strcmp(settings.binding, string(j, "binding"));
     if (number(j, "protocol") != PP_PROTOCOL_VERSION || number(j, "input_rate") != PP_CAPTURE_RATE ||
         number(j, "output_rate") != PP_PLAYBACK_RATE ||
         pp_settings_binding(string(j, "binding"), &settings) != ESP_OK ||
@@ -600,6 +608,8 @@ static void receive_hello(cJSON *j, uint32_t generation) {
         set_status(connection_status);
         return;
     }
+    if (view == PP_UI_IMAGE && !same_binding)
+        close_image();
     /* A full event queue could have dropped the preceding link-down notice. */
     reset_record_controls();
     pp_input_disconnect(&input_state);
@@ -611,6 +621,7 @@ static void receive_hello(cJSON *j, uint32_t generation) {
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "notification_list_ids"));
     input_audio_ids = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "input_audio_ids"));
     playback_window = number(j, "playback_window");
+    playback_progress = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "playback_progress"));
     playback_metrics = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "playback_metrics"));
     pp_picture_stream_supported(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "image_strips")));
     if (notice_list && !notice_directory.pending && !notice_directory.viewing_older)
@@ -623,7 +634,7 @@ static void receive_hello(cJSON *j, uint32_t generation) {
     pp_audio_play_stop();
     if (!notice_list)
         set_status(audio_available ? "就绪" : "音频不可用");
-    if ((navigation.screen == PP_SCREEN_HOME || navigation.screen == PP_SCREEN_CHAT) &&
+    if (view != PP_UI_IMAGE && (navigation.screen == PP_SCREEN_HOME || navigation.screen == PP_SCREEN_CHAT) &&
         !dangerous_confirm && input_state.phase == PP_INPUT_IDLE) {
         body[0] = 0;
         view = PP_UI_IDLE;
@@ -655,7 +666,7 @@ static void receive_input_receipt(cJSON *j) {
     if (!ident[0] || strcmp(ident, request_id)) {
         return;
     }
-    pp_audio_capture_discard();
+    discard_capture();
     const char *state = string(j, "state");
     if (!strcmp(state, "review")) {
         pp_text(request_id, sizeof(request_id), ident);
@@ -694,7 +705,8 @@ static void receive_message(cJSON *j) {
     pp_history_page_t decoded;
     pp_text(latest_message, sizeof(latest_message), string(j, "message_id"));
     pp_history_page_t *page = pp_timeline_decode(&decoded, j);
-    if (navigation.screen != PP_SCREEN_CHAT ||
+    if ((view == PP_UI_IMAGE && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "restored"))) ||
+        navigation.screen != PP_SCREEN_CHAT ||
         (view == PP_UI_INPUT && input_state.phase != PP_INPUT_IDLE)) {
         if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "restored")))
             new_message = true;
@@ -703,6 +715,8 @@ static void receive_message(cJSON *j) {
     if (!close_image()) {
         return;
     }
+    /* A late page read must not replace a newer live message. */
+    page_pending = false;
     view = PP_UI_REPLY;
     view_page = view_next = 0;
     message_streaming = !strcmp(string(j, "status"), "streaming");
@@ -719,10 +733,9 @@ static void receive_message(cJSON *j) {
     }
     waiting = false;
     set_status("回复");
-    if (page && page->image_only && image_count) {
-        pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
+    /* Auto-open follows live chat. Only explicit browsing pins a history page. */
+    if (page && page->image_only && image_count)
         open_image(0);
-    }
 }
 
 static void receive_notifications(cJSON *j) {
@@ -1077,7 +1090,9 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         } else {
             play_generation = number(j, "generation");
             pp_objects_allow_io(false);
-            unsigned window = pp_audio_play_begin(play_generation, playback_window);
+            last_progress_bytes = 0;
+            last_progress_at = now_ms();
+            unsigned window = pp_audio_play_begin(play_generation, playback_window, playback_progress);
             if (!window) {
                 stop_play();
                 set_status("播报缓冲暂不可用，可查看文字");
@@ -1151,6 +1166,7 @@ static void standby_now(void) {
         esp_restart();
     if (bsp_audio_wake() != ESP_OK || !pp_ui_standby(false))
         esp_restart();
+    pp_traffic_new_window();
     pp_audio_resume();
     navigation.arrow = PP_ARROW_NONE;
     navigation.ok_held = navigation.transition_click = false;
@@ -1182,6 +1198,7 @@ static void sleep_now(bool explicit, bool allow_held_key) {
         set_status("音频尚未停止");
         return;
     }
+    pp_objects_allow_io(false);
     sleep_failed = true;
     if (!pp_net_stop()) {
         set_status("网络未正常停止，请重启");
@@ -1574,6 +1591,7 @@ static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
                 view_page = view_next;
         } else if (message_id[0] || notice_view) {
             if (view == PP_UI_IMAGE) {
+                pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
                 if (pp_picture_loading()) {
                     close_image();
                     pp_net_send(command("image.close"));
@@ -1689,8 +1707,10 @@ static void handle_link(pp_event_t event) {
         notice_read.pending = false;
         notice_directory.pending = false;
         index_direction = 0;
-        close_image();
-        if (settings.offline_cache) {
+        bool keep_image = pp_picture_disconnected() && view == PP_UI_IMAGE;
+        if (!keep_image)
+            close_image();
+        if (settings.offline_cache && !keep_image) {
             if (browsing) {
                 body[0] = 0;
                 view = PP_UI_IDLE;
@@ -1738,7 +1758,7 @@ static void send_audio_batch(void) {
     packet.size = header + bytes;
     bool sent = bytes && pp_input_audio(&input_state, bytes) &&
                 pp_net_send_audio(&packet, generation);
-    pp_buffer_free(&packet);
+    pp_net_return_audio(&packet);
     if (!bytes)
         return;
     if (!sent) {
@@ -1746,6 +1766,8 @@ static void send_audio_batch(void) {
         return;
     }
     sequence++;
+    if (input_state.released)
+        input_upload_progress_at = now_ms();
     if (input_state.audio_bytes == input_state.max_audio_bytes)
         stop_capture_upload(true);
 }
@@ -1754,7 +1776,7 @@ static void finish_audio(void) {
     if (input_state.phase != PP_INPUT_DRAINING || !pp_audio_capture_drained() ||
         !pp_net_has_capacity(false))
         return;
-    pp_audio_capture_discard();
+    discard_capture();
     /* Only finishing can lead to automatic submission. Save its receipt ID after
      * recording, so a flash write cannot consume the opening audio budget. */
     if (pp_pending(request_id) != ESP_OK) {
@@ -1783,6 +1805,17 @@ static void poll_audio(void) {
     unsigned consumed = pp_audio_take_credit();
     if (playing && consumed)
         credit(consumed);
+    if (playing && playback_progress && now_ms() - last_progress_at >= 1000 && pp_net_has_capacity(false)) {
+        unsigned written = pp_audio_playback_report().i2s_bytes;
+        if (written > last_progress_bytes) {
+            cJSON *j = command("playback.progress");
+            cJSON_AddNumberToObject(j, "generation", play_generation);
+            cJSON_AddNumberToObject(j, "i2s_bytes", written);
+            if (pp_net_send(j))
+                last_progress_bytes = written;
+        }
+        last_progress_at = now_ms();
+    }
     if (playing && pp_audio_play_drained() && pp_net_has_capacity(false)) {
         cJSON *j = command("playback.completed");
         cJSON_AddNumberToObject(j, "generation", play_generation);
@@ -1809,6 +1842,21 @@ static void poll_audio(void) {
         activity = now_ms();
         set_status("回复");
     }
+}
+
+static pp_meter_t status_meter(bool wifi_connected) {
+    static pp_rate_sample_t rate_sample;
+    static pp_meter_t meter;
+    if (pp_meter_sample(&rate_sample, &meter, now_ms(), wifi_connected, pp_traffic_read())) {
+        const unsigned caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        const unsigned total = heap_caps_get_total_size(caps);
+        const unsigned free_bytes = heap_caps_get_free_size(caps);
+        meter.sram = pp_meter_percent(total > free_bytes ? total - free_bytes : 0, total);
+        const pp_cache_usage_t cache = pp_cache_usage();
+        meter.flash = pp_meter_percent(cache.used, cache.capacity);
+        meter.flash_valid = cache.capacity != 0;
+    }
+    return meter;
 }
 
 static void render_screen(void) {
@@ -1880,6 +1928,7 @@ static void render_screen(void) {
                                 waiting && pp_net_connected() && !speech_session &&
                                 !strcmp(status, processing_status);
     pp_ui_frame_t frame = {
+        .meter = status_meter(wifi_connected),
         .view = dangerous_confirm                             ? PP_UI_INFO
                 : brightness_screen                           ? PP_UI_BRIGHTNESS
                 : menu || notice_list                         ? PP_UI_MENU
@@ -1997,6 +2046,7 @@ void app_main(void) {
         return;
     pp_picture_init(set_status);
     configured = pp_settings_load(&settings) == ESP_OK;
+    pp_cache_init();
     pp_history_cache_init(pp_received);
     pp_history_cache_bind(settings.url, settings.device, settings.binding,
                           settings.paired && settings.offline_cache, settings.show_images);
@@ -2022,6 +2072,7 @@ void app_main(void) {
     for (;;) {
         if (sleep_failed) {
             pp_ui_frame_t frame = {.view = PP_UI_INFO,
+                                   .meter = status_meter(pp_net_wifi_connected()),
                                    .state = status,
                                    .body = body,
                                    .origin = "设备状态",
@@ -2095,9 +2146,10 @@ void app_main(void) {
             if (input_state.phase == PP_INPUT_PREBUFFER || input_state.phase == PP_INPUT_OPENING ||
                 input_state.phase == PP_INPUT_RECORDING || input_state.phase == PP_INPUT_DRAINING)
                 abort_record();
-            if ((event_error || audio_error == PP_AUDIO_CODEC_FAILURE) && (playing || speech_session))
+            if ((event_error || audio_error == PP_AUDIO_CODEC_FAILURE || audio_error == PP_AUDIO_STORAGE_FAILURE) && (playing || speech_session))
                 stop_play();
-            set_status(audio_error == PP_AUDIO_CODEC_FAILURE ? "音频不可用，仍可查看消息"
+            set_status(audio_error == PP_AUDIO_STORAGE_FAILURE ? "缓存读取失败"
+                       : audio_error == PP_AUDIO_CODEC_FAILURE ? "音频不可用，仍可查看消息"
                        : !event_error && audio_error == PP_AUDIO_CAPTURE_OVERFLOW
                            ? "录音缓冲超限，本次未发送"
                                                                   : "消息缓冲错误，未重试");
@@ -2105,7 +2157,7 @@ void app_main(void) {
         if (pp_input_limit(&input_state, now_ms(), 60000))
             stop_capture_upload(false);
         if ((input_state.phase == PP_INPUT_OPENING || input_state.phase == PP_INPUT_DRAINING) &&
-            input_state.released && now_ms() - input_upload_started >= PP_INPUT_UPLOAD_TIMEOUT_MS) {
+            input_state.released && now_ms() - input_upload_progress_at >= PP_INPUT_UPLOAD_TIMEOUT_MS) {
             ESP_LOGW("pa_terminal", "input_upload_timeout frames=%u blocks=%u", sequence,
                      pp_audio_recorded_count());
             abort_record();

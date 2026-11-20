@@ -24,9 +24,9 @@ static pending_t pending[8];
 static unsigned pending_count;
 static cJSON *request, *incoming[32];
 int64_t esp_timer_get_time(void) { return 1000000; }
-bool pp_objects_identity(const char *url, const char *device, const char *binding, char identity[65]) {
+bool pp_objects_identity(const char *const parts[], unsigned count, char identity[65]) {
     unsigned hash = 1;
-    const char *parts[] = {url, device, binding};
+    assert(count == 3);
     for (unsigned i = 0; i < 3; i++)
         for (unsigned j = 0; j <= strlen(parts[i]); j++)
             hash = hash * 31 + (unsigned char)parts[i][j];
@@ -35,12 +35,12 @@ bool pp_objects_identity(const char *url, const char *device, const char *bindin
 }
 void pp_objects_configure(const char *value, const char *const owners[], unsigned count, bool active) {
     (void)owners;
-    assert(count <= PP_CACHE_RECENT);
+    assert(count <= PP_CACHE_PIN_LIMIT);
     strcpy(scope, value);
     enabled = active;
 }
-bool pp_objects_read(const char *key, unsigned ticket, pp_memory_priority_t priority) {
-    (void)priority;
+bool pp_objects_read(const char *key, unsigned ticket, pp_object_read_t options) {
+    assert(options.heap_reserve && options.index == !strcmp(key, "recent"));
     assert(pending_count < 8);
     pending_t *job = &pending[pending_count++];
     *job = (pending_t){.ticket = ticket};
@@ -72,10 +72,10 @@ static bool save(const char *key, const char *owner, bool index, const void *dat
     strcpy(record->scope, scope);
     return true;
 }
-bool pp_objects_write(const char *key, const char *owner, bool index, pp_buffer_t *buffer,
+bool pp_objects_write(const char *key, const char *owner, pp_object_write_t options, pp_buffer_t *buffer,
                       const void *aux, size_t aux_size, unsigned ticket) {
     (void)aux; (void)aux_size;
-    bool ok = !fail_next_write && save(key, owner, index, buffer->data, buffer->size);
+    bool ok = !fail_next_write && save(key, owner, options.index, buffer->data, buffer->size);
     pp_buffer_free(buffer);
     fail_next_write = false;
     assert(pending_count < 8);

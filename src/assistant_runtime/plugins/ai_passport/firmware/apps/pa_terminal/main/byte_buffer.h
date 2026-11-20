@@ -30,7 +30,27 @@ void pp_buffer_set_use(pp_buffer_t *buffer, pp_memory_use_t use);
  * The caller owns an empty array until the complete set can be published. */
 bool pp_buffers_acquire(pp_buffer_t *blocks, size_t count, size_t bytes,
                         pp_memory_priority_t priority, pp_memory_use_t use);
+/* Optional working sets are all-or-none. Leave free heap for transport,
+ * control and drivers. The destination slots must be empty. */
+bool pp_buffers_try_acquire(pp_buffer_t *blocks, size_t count, size_t bytes,
+                            size_t free_floor, pp_memory_use_t use);
 void pp_buffers_release(pp_buffer_t *blocks, size_t count);
+
+/* Fixed, per-session working set. Controller opens/closes. Workers may take
+ * and return concurrently. Late returns after close release their own memory. */
+typedef struct {
+    pp_buffer_t idle;
+    const char *loan;
+} pp_buffer_slot_t;
+typedef struct {
+    bool open;
+    pp_buffer_slot_t *slots;
+    size_t count;
+} pp_buffer_pool_t;
+bool pp_pool_open(pp_buffer_pool_t *pool, size_t capacity, pp_memory_use_t use);
+pp_buffer_t pp_pool_take(pp_buffer_pool_t *pool);
+void pp_pool_return(pp_buffer_pool_t *pool, pp_buffer_t *buffer);
+void pp_pool_close(pp_buffer_pool_t *pool);
 
 /* Register once before starting worker tasks. Reclaim only unborrowed memory. */
 void pp_memory_on_pressure(pp_buffer_t (*take)(size_t, pp_memory_priority_t),

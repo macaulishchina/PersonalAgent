@@ -4,7 +4,12 @@ import asyncio
 import time
 from collections import deque
 
-from assistant_runtime.api.speech import SpeechError, RecognitionRequest, SynthesisRequest
+from assistant_runtime.api.speech import (
+    SpeechError,
+    RecognitionRequest,
+    SynthesisRequest,
+    recognition_upload_window,
+)
 
 INPUT_BYTES_PER_SECOND = 32000  # 16 kHz, signed 16-bit mono
 RECOGNITION_BUFFER_BYTES = 8 * INPUT_BYTES_PER_SECOND
@@ -103,8 +108,19 @@ class InputStream:
         self.max_seconds = max_seconds
         self.sequence = self.size = 0
         self.closed = False
-        self.started = time.monotonic()
+        self.started = self.last_pcm = time.monotonic()
+        self.update_timeout = None
+        self.upload_ended = asyncio.Event()
         self.lock = asyncio.Lock()
+
+    def upload_remaining(self):
+        # Media duration is capped by max_bytes. Allow two additional seconds
+        # of transport time per accepted second, with a bounded idle window.
+        elapsed_audio = self.size / INPUT_BYTES_PER_SECOND
+        deadline = self.started + recognition_upload_window(self.max_seconds, elapsed_audio)
+        if self.size:
+            deadline = min(deadline, self.last_pcm + 30)
+        return deadline - time.monotonic()
 
     @property
     def partial(self):
@@ -116,7 +132,20 @@ class InputStream:
         update = getattr(self.upstream, "wait_update", None)
         if not callable(update):
             raise StopAsyncIteration
-        return await update(previous)
+        return await self._watch_upload(update(previous))
+
+    async def _watch_upload(self, awaitable):
+        loop = asyncio.get_running_loop()
+        async with asyncio.timeout_at(loop.time() + self.upload_remaining()) as timer:
+            self.update_timeout = timer
+            try:
+                return await awaitable
+            finally:
+                self.update_timeout = None
+
+    async def wait_upload_end(self):
+        # Final-only providers have no partials to wake the terminal watcher.
+        await self._watch_upload(self.upload_ended.wait())
 
     async def accept(self, sequence, pcm):
         async with self.lock:
@@ -130,7 +159,7 @@ class InputStream:
                 else "speech_input_limit"
                 if self.size + len(pcm) > self.max_bytes
                 else "speech_input_deadline"
-                if time.monotonic() - self.started > self.max_seconds + 10
+                if self.upload_remaining() <= 0
                 else None
             )
             if code:
@@ -140,6 +169,11 @@ class InputStream:
             self.size += len(pcm)
             try:
                 await asyncio.wait_for(self.upstream.send(pcm), 10)
+                self.last_pcm = time.monotonic()
+                if self.update_timeout and not self.update_timeout.expired():
+                    self.update_timeout.reschedule(
+                        asyncio.get_running_loop().time() + self.upload_remaining()
+                    )
             except BaseException:
                 await self.close()
                 raise
@@ -160,6 +194,7 @@ class InputStream:
     async def close(self):
         if not self.closed:
             self.closed = True
+            self.upload_ended.set()
             try:
                 await self.upstream.close()
             finally:

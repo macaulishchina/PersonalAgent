@@ -1,5 +1,6 @@
 #include "terminal_limits.h"
 #include "network.h"
+#include "net_traffic.h"
 #include "object_cache.h"
 #include "image_model.h"
 #include "network_model.h"
@@ -38,6 +39,8 @@ typedef struct {
 static esp_websocket_client_handle_t client;
 static QueueHandle_t outgoing;
 static atomic_uint pcm_in_flight;
+static pp_buffer_slot_t pcm_slots[2];
+static pp_buffer_pool_t pcm_packets = {.slots = pcm_slots, .count = sizeof(pcm_slots) / sizeof(*pcm_slots)};
 static atomic_uint expected_image;
 static EventGroupHandle_t network;
 static pp_link_t ws_link;
@@ -85,6 +88,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         xEventGroupSetBits(network, WIFI_READY);
         memory_stage("wifi_ready");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        pp_traffic_new_window();
         bool had_ip = (xEventGroupClearBits(network, WIFI_READY) & WIFI_READY) != 0;
         xEventGroupSetBits(network, WIFI_FAILED | (had_ip ? CONTROL : 0));
         pp_link_close(&ws_link, pp_link_generation(&ws_link));
@@ -431,9 +435,11 @@ static bool connect_wifi(const pp_connection_settings_t *s, pp_wifi_plan_t *plan
     return false;
 }
 static void release_packet(packet_t *p) {
-    pp_buffer_free(&p->buffer);
-    if (p->binary)
+    if (p->binary) {
+        pp_pool_return(&pcm_packets, &p->buffer);
         pcm_in_flight--;
+    } else
+        pp_buffer_free(&p->buffer);
 }
 
 static void discard_outgoing(void) {
@@ -718,11 +724,18 @@ bool pp_net_send(cJSON *command) {
 void pp_net_expect_image(uint32_t request) {
     atomic_store(&expected_image, request);
 }
+bool pp_net_open_audio(void) {
+    return pp_pool_open(&pcm_packets, PP_INPUT_TAGGED_HEADER_BYTES + PP_INPUT_BATCH_BYTES, PP_MEMORY_AUDIO);
+}
+void pp_net_close_audio(void) { pp_pool_close(&pcm_packets); }
+void pp_net_return_audio(pp_buffer_t *packet) { pp_pool_return(&pcm_packets, packet); }
 size_t pp_net_audio_header(const uint8_t *input_id, uint32_t sequence, pp_buffer_t *packet,
                            size_t pcm_capacity) {
     size_t prefix = input_id ? PP_INPUT_TAGGED_HEADER_BYTES - 4 : 0;
-    if (!pcm_capacity || pcm_capacity > PP_INPUT_BATCH_BYTES || pcm_capacity % 2 ||
-        !pp_buffer_reserve(packet, prefix + 4 + pcm_capacity, PP_MEMORY_CRITICAL, PP_MEMORY_AUDIO))
+    if (!pcm_capacity || pcm_capacity > PP_INPUT_BATCH_BYTES || pcm_capacity % 2)
+        return 0;
+    *packet = pp_pool_take(&pcm_packets);
+    if (!packet->data)
         return 0;
     unsigned char *data = (unsigned char *)packet->data;
     if (input_id) {
@@ -738,14 +751,14 @@ size_t pp_net_audio_header(const uint8_t *input_id, uint32_t sequence, pp_buffer
 bool pp_net_send_audio(pp_buffer_t *packet, uint32_t generation) {
     if (pp_net_has_capacity(true))
         return enqueue(packet, true, generation);
-    pp_buffer_free(packet);
+    pp_net_return_audio(packet);
     return false;
 }
 bool pp_net_has_capacity(bool pcm) {
     /* The application produces both PCM and commands. Leave room for the
      * terminal command even when the network worker is draining slowly. */
     return pp_net_connected() && outgoing && uxQueueSpacesAvailable(outgoing) > (pcm ? 1 : 0) &&
-           (!pcm || pcm_in_flight < 2);
+           (!pcm || pcm_in_flight < pcm_packets.count);
 }
 void pp_net_interrupt_input(void) {
     uint32_t generation = pp_link_ready(&ws_link);
@@ -832,7 +845,9 @@ bool pp_net_start(void) {
         return false;
     if (esp_netif_init() != ESP_OK || esp_event_loop_create_default() != ESP_OK)
         return false;
-    if (!esp_netif_create_default_wifi_sta() || !esp_netif_create_default_wifi_ap())
+    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
+    pp_traffic_attach(sta);
+    if (!sta || !esp_netif_create_default_wifi_ap())
         return false;
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&init) != ESP_OK || esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK ||

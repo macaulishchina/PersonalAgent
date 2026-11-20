@@ -69,12 +69,14 @@ bool pp_cache_store_open(pp_cache_store_t *s, const char *root, size_t budget) {
     s->budget = budget;
     return true;
 }
+static size_t charge(size_t bytes) { return (bytes + 4095u) / 4096u * 4096u; }
 bool pp_cache_store_recover(pp_cache_store_t *s) {
     if (!allowed(s))
         return false;
     DIR *dir = opendir(s->root);
     if (!dir)
         return false;
+    size_t used = 0;
     char path[192];
     struct dirent *entry;
     while ((entry = readdir(dir))) {
@@ -94,6 +96,8 @@ bool pp_cache_store_recover(pp_cache_store_t *s) {
             closedir(dir);
             return false;
         }
+        if (valid)
+            used += charge(sizeof(h) + h.size);
         if (valid && h.sequence > s->sequence)
             s->sequence = h.sequence;
     }
@@ -102,12 +106,13 @@ bool pp_cache_store_recover(pp_cache_store_t *s) {
         return false;
     if (path_for(s, ".pending", path) && unlink(path) && errno != ENOENT)
         return false;
+    s->used = used;
     return true;
 }
 void pp_cache_store_scope(pp_cache_store_t *s, const unsigned char scope[16],
                           const unsigned char pins[][16], unsigned count) {
     memcpy(s->scope, scope, sizeof(s->scope));
-    s->pin_count = count > PP_CACHE_RECENT ? PP_CACHE_RECENT : count;
+    s->pin_count = count > PP_CACHE_PIN_LIMIT ? PP_CACHE_PIN_LIMIT : count;
     if (s->pin_count)
         memcpy(s->pins, pins, s->pin_count * 16);
 }
@@ -154,8 +159,9 @@ static bool protected(const pp_cache_store_t *s, const header_t *h) {
             return true;
     return false;
 }
-static size_t charge(size_t bytes) { return (bytes + 4095u) / 4096u * 4096u; }
 static pp_cache_status_t room(pp_cache_store_t *s, const char *replaced, size_t bytes, size_t limit) {
+    if (charge(bytes) > limit)
+        return PP_CACHE_FULL;
     for (unsigned attempt = 0; attempt <= PP_CACHE_OBJECTS; attempt++) {
         if (!allowed(s))
             return PP_CACHE_BUSY;
@@ -165,6 +171,7 @@ static pp_cache_status_t room(pp_cache_store_t *s, const char *replaced, size_t 
         size_t used = 0;
         unsigned count = 0;
         bool replacing = false;
+        size_t victim_bytes = 0;
         uint64_t oldest = UINT64_MAX;
         char victim[65] = "", path[192];
         struct dirent *entry;
@@ -196,9 +203,11 @@ static pp_cache_status_t room(pp_cache_store_t *s, const char *replaced, size_t 
             if (strcmp(replaced, entry->d_name) && !protected(s, &h) && h.sequence < oldest) {
                 strcpy(victim, entry->d_name);
                 oldest = h.sequence;
+                victim_bytes = charge(sizeof(h) + h.size);
             }
         }
         closedir(dir);
+        s->used = used;
         /* Include the staged replacement too. Half of the physical partition
          * stays outside the data budget for filesystem metadata and COW. */
         if (used + charge(bytes) <= limit &&
@@ -210,12 +219,13 @@ static pp_cache_status_t room(pp_cache_store_t *s, const char *replaced, size_t 
             return PP_CACHE_FULL;
         if (!path_for(s, victim, path) || unlink(path))
             return PP_CACHE_IO_ERROR;
+        s->used -= victim_bytes;
     }
     return PP_CACHE_FULL;
 }
 pp_cache_status_t pp_cache_store_write(pp_cache_store_t *s, const char key[65], const unsigned char owner[16],
                         bool index, const void *data, size_t size, const void *aux,
-                        size_t aux_size) {
+                        size_t aux_size, size_t reserve) {
     if (!key_valid(key) || !data || size > PP_CACHE_VALUE_MAX || aux_size > PP_CACHE_AUX_MAX ||
         (aux_size && !aux) || s->sequence == UINT64_MAX)
         return PP_CACHE_IO_ERROR;
@@ -235,10 +245,14 @@ pp_cache_status_t pp_cache_store_write(pp_cache_store_t *s, const char key[65], 
     memcpy(h.owner, owner, sizeof(h.owner));
     if (aux_size)
         memcpy(h.aux, aux, aux_size);
+    size_t prior_bytes = 0;
     FILE *old = fopen(path, "rb");
     if (old) {
         header_t prior;
-        bool same = header(old, &prior) && prior.size == size && prior.data_crc == h.data_crc &&
+        bool valid = header(old, &prior);
+        if (valid)
+            prior_bytes = charge(sizeof(prior) + prior.size);
+        bool same = valid && prior.size == size && prior.data_crc == h.data_crc &&
                     prior.aux_size == aux_size && !memcmp(prior.scope, h.scope, sizeof(h.scope)) &&
                     !memcmp(prior.aux, h.aux, aux_size);
         same = same && valid_body(s, old, &prior);
@@ -247,12 +261,7 @@ pp_cache_status_t pp_cache_store_write(pp_cache_store_t *s, const char key[65], 
         if (same)
             return PP_CACHE_HIT;
     }
-    /* Small LittleFS files may still occupy one whole Flash block. Charge
-     * conservatively, not merely by payload length, and reserve previews space
-     * so a long text reply cannot consume the entire offline image allowance. */
-    size_t limit = s->budget;
-    if (!index && !aux_size && limit >= 65536)
-        limit -= 32768;
+    size_t limit = reserve < s->budget ? s->budget - reserve : 0;
     pp_cache_status_t capacity = room(s, key, sizeof(h) + size, limit);
     if (capacity != PP_CACHE_HIT)
         return capacity;
@@ -278,13 +287,15 @@ pp_cache_status_t pp_cache_store_write(pp_cache_store_t *s, const char key[65], 
         ok = false;
     if (!ok)
         unlink(staged);
-    else
+    else {
         s->sequence = h.sequence;
+        s->used = s->used - prior_bytes + charge(sizeof(h) + size);
+    }
     return ok ? PP_CACHE_HIT : (commit ? PP_CACHE_IO_ERROR : PP_CACHE_BUSY);
 }
 bool pp_cache_store_put(pp_cache_store_t *s, const char key[65], const unsigned char owner[16],
                         bool index, const void *data, size_t size, const void *aux, size_t aux_size) {
-    return pp_cache_store_write(s, key, owner, index, data, size, aux, aux_size) == PP_CACHE_HIT;
+    return pp_cache_store_write(s, key, owner, index, data, size, aux, aux_size, 0) == PP_CACHE_HIT;
 }
 bool pp_cache_store_clear(pp_cache_store_t *s) {
     DIR *dir = opendir(s->root);
@@ -298,5 +309,7 @@ bool pp_cache_store_clear(pp_cache_store_t *s) {
             path_for(s, entry->d_name, path) && unlink(path))
             ok = false;
     closedir(dir);
+    if (ok)
+        s->used = 0;
     return ok;
 }

@@ -43,6 +43,8 @@ class _PreparedSpeech:
 
 
 class Connection:
+    PLAYBACK_IDLE_SECONDS = 30
+
     def __init__(self, owner, device, session, ws):
         self.owner, self.context = owner, owner.context
         self.device, self.session, self.ws = device, session, ws
@@ -63,7 +65,7 @@ class Connection:
         self.started = time.time()
         self.send_lock = asyncio.Lock()
         self.credit = 0
-        self.credit_changed = asyncio.Event()
+        self.playback_changed = asyncio.Event()
         self.last_state = None
         self.last_notices = None
         self.legacy_notice_before = None
@@ -122,6 +124,7 @@ class Connection:
             image_strips=True,
             playback_window=protocol.PLAYBACK_MAX_WINDOW,
             playback_metrics=True,
+            playback_progress=True,
         )
         await self.send_configuration()
         await self.send("history.index", **history)
@@ -327,7 +330,20 @@ class Connection:
                 if self.credit + credit > protocol.PLAYBACK_MAX_WINDOW:
                     raise ValueError("Playback window exceeded")
                 self.credit += credit
-                self.credit_changed.set()
+                self.playback_changed.set()
+        elif kind == "playback.progress":
+            if self.playing and data.get("generation") == self.generation:
+                played = data.get("i2s_bytes")
+                if (
+                    type(played) is not int
+                    or played < 0
+                    or played % 2
+                    or played > self.playing.get("dispatched", 0)
+                ):
+                    raise ValueError("Invalid playback progress")
+                if played > self.playing.get("played_bytes", 0):
+                    self.playing["played_bytes"] = played
+                    self.playback_changed.set()
         elif kind == "playback.stop":
             await self.stop_playback()
         elif kind == "playback.completed":
@@ -356,6 +372,7 @@ class Connection:
                 self.credit = 0
                 self.playing = None
                 self.playback_completed.set()
+                self.playback_changed.set()
         elif kind == "message.page":
             await self.display.message_page(data)
         elif kind == "execution.cancel":
@@ -589,18 +606,21 @@ class Connection:
     async def watch_transcript(self, stream, ident):
         try:
             previous = ""
-            async with asyncio.timeout(stream.max_seconds + 10):
-                while self.input is stream and self.input_id == ident:
+            while self.input is stream and self.input_id == ident:
+                try:
                     text = await stream.wait_update(previous)
-                    if self.input is not stream or self.input_id != ident:
-                        return
-                    previous = text
-                    await self.send(
-                        "transcript.partial",
-                        request_id=ident,
-                        text=text[-240:],
-                        offset=max(0, len(text) - 240),
-                    )
+                except StopAsyncIteration:
+                    await stream.wait_upload_end()
+                    return
+                if self.input is not stream or self.input_id != ident:
+                    return
+                previous = text
+                await self.send(
+                    "transcript.partial",
+                    request_id=ident,
+                    text=text[-240:],
+                    offset=max(0, len(text) - 240),
+                )
         except (StopAsyncIteration, asyncio.CancelledError):
             return
         except Exception as exc:
@@ -854,7 +874,7 @@ class Connection:
                 end_offset=lambda: voice["offset"],
             )
             if started and generation == self.generation:
-                await asyncio.wait_for(self.playback_completed.wait(), 30)
+                await self.wait_playback(generation, self.playback_completed.is_set)
                 if playing.get("integrity_failed"):
                     raise SpeechError("speech_playback_integrity")
             if not self.closed and self.voice is voice and generation == self.generation:
@@ -920,8 +940,14 @@ class Connection:
             logging.INFO if intact else logging.WARNING,
             "passport_playback_pcm device=%s generation=%s window=%d sent=%d crc=%08x "
             "received=%d crc=%08x i2s=%d crc=%08x underruns=%d intact=%s",
-            self.device, self.generation, pcm["window_bytes"], *sent, *received, *written,
-            pcm["underruns"], intact,
+            self.device,
+            self.generation,
+            pcm["window_bytes"],
+            *sent,
+            *received,
+            *written,
+            pcm["underruns"],
+            intact,
         )
 
     async def finish_audio(self, generation, end_offset, sent_pcm):
@@ -929,9 +955,24 @@ class Connection:
         self.playing["sent_pcm"] = sent_pcm
         self.context.log.info(
             "passport_playback_sent device=%s generation=%s bytes=%d crc=%08x",
-            self.device, generation, *sent_pcm,
+            self.device,
+            generation,
+            *sent_pcm,
         )
         await self.send("playback.end", generation=generation, next_offset=end_offset())
+
+    async def wait_playback(self, generation, ready):
+        """A blocked writer or drain gets 30 seconds without actual I2S progress."""
+        loop = asyncio.get_running_loop()
+        played = (self.playing or {}).get("played_bytes", 0)
+        deadline = loop.time() + self.PLAYBACK_IDLE_SECONDS
+        while generation == self.generation and not self.closed and not ready():
+            current = (self.playing or {}).get("played_bytes", 0)
+            if current > played:
+                played, deadline = current, loop.time() + self.PLAYBACK_IDLE_SECONDS
+            self.playback_changed.clear()
+            async with asyncio.timeout_at(deadline):
+                await self.playback_changed.wait()
 
     async def send_audio(self, audio, generation, offset, *, end_offset):
         started = False
@@ -948,7 +989,7 @@ class Connection:
                         self.playing["failed"] = True
                         await self.finish_audio(generation, end_offset, (sent_bytes, sent_crc))
                         try:
-                            await asyncio.wait_for(self.playback_completed.wait(), 30)
+                            await self.wait_playback(generation, self.playback_completed.is_set)
                         except TimeoutError:
                             pass
                     raise
@@ -967,21 +1008,22 @@ class Connection:
                     started = True
                 cursor = 0
                 while cursor < len(pcm):
-                    async with asyncio.timeout(30):
-                        while not self.credit:
-                            self.credit_changed.clear()
-                            await self.credit_changed.wait()
+                    await self.wait_playback(generation, lambda: self.credit > 0)
                     if generation != self.generation or self.closed:
                         return False
                     count = min(self.credit, len(pcm) - cursor, protocol.PLAYBACK_CHUNK)
                     self.credit -= count
                     chunk = pcm[cursor : cursor + count]
+                    self.playing["dispatched"] = sent_bytes + count
                     try:
                         await self.send_binary(struct.pack("!I", generation) + chunk)
                     except (ConnectionError, TimeoutError):
                         self.context.log.warning(
                             "passport_playback_send_interrupted device=%s generation=%s bytes=%d crc=%08x",
-                            self.device, generation, sent_bytes, sent_crc,
+                            self.device,
+                            generation,
+                            sent_bytes,
+                            sent_crc,
                         )
                         raise
                     sent_bytes += count
@@ -1018,7 +1060,7 @@ class Connection:
         if self.voice:
             self.owner.devices.playback_state(self.device, self.voice["id"], 0, "stopped")
         self.credit = 0
-        self.credit_changed.set()
+        self.playback_changed.set()
         if self.play_task and not self.play_task.done():
             self.play_task.cancel()
             await asyncio.gather(self.play_task, return_exceptions=True)

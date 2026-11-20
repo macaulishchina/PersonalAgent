@@ -29,6 +29,7 @@ _COMMAND_FIELDS = {
     "input.receipt": {"request_id"},
     "input.transcript": {"request_id", "offset"},
     "playback.stop": set(),
+    "playback.progress": {"generation", "i2s_bytes"},
     "playback.credit": {"generation", "bytes"},
     "playback.completed": {"generation", "pcm"},
     "message.page": {"message_id", "offset", "prefetch"},
@@ -48,7 +49,12 @@ _COMMAND_FIELDS = {
 }
 
 _PLAYBACK_PCM_FIELDS = {
-    "window_bytes", "received_bytes", "received_crc32", "i2s_bytes", "i2s_crc32", "underruns"
+    "window_bytes",
+    "received_bytes",
+    "received_crc32",
+    "i2s_bytes",
+    "i2s_crc32",
+    "underruns",
 }
 
 

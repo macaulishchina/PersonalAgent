@@ -3,6 +3,17 @@
 #include <stdatomic.h>
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+static portMUX_TYPE pool_lock = portMUX_INITIALIZER_UNLOCKED;
+#define POOL_LOCK() portENTER_CRITICAL(&pool_lock)
+#define POOL_UNLOCK() portEXIT_CRITICAL(&pool_lock)
+#else
+#include <threads.h>
+static once_flag pool_once = ONCE_FLAG_INIT;
+static mtx_t pool_lock;
+static void pool_init(void) { mtx_init(&pool_lock, mtx_plain); }
+#define POOL_LOCK() do { call_once(&pool_once, pool_init); mtx_lock(&pool_lock); } while (0)
+#define POOL_UNLOCK() mtx_unlock(&pool_lock)
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -93,9 +104,87 @@ bool pp_buffers_acquire(pp_buffer_t *blocks, size_t count, size_t bytes,
     }
     return true;
 }
+bool pp_buffers_try_acquire(pp_buffer_t *blocks, size_t count, size_t bytes,
+                            size_t free_floor, pp_memory_use_t use) {
+    if (!count || !bytes || count > (SIZE_MAX - free_floor) / bytes)
+        return false;
+#ifdef ESP_PLATFORM
+    if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < free_floor + count * bytes)
+        return false;
+#endif
+    if (!pp_buffers_acquire(blocks, count, bytes, PP_MEMORY_BACKGROUND, use))
+        return false;
+#ifdef ESP_PLATFORM
+    if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < free_floor) {
+        pp_buffers_release(blocks, count);
+        return false;
+    }
+#endif
+    return true;
+}
 void pp_buffers_release(pp_buffer_t *blocks, size_t count) {
     for (size_t i = 0; i < count; i++)
         pp_buffer_free(&blocks[i]);
+}
+void pp_pool_close(pp_buffer_pool_t *pool) {
+    POOL_LOCK();
+    pool->open = false;
+    POOL_UNLOCK();
+    for (size_t i = 0; i < pool->count; i++) {
+        POOL_LOCK();
+        pool->slots[i].loan = NULL;
+        pp_buffer_t idle = pp_buffer_take(&pool->slots[i].idle);
+        POOL_UNLOCK();
+        pp_buffer_free(&idle);
+    }
+}
+
+bool pp_pool_open(pp_buffer_pool_t *pool, size_t capacity, pp_memory_use_t use) {
+    pp_pool_close(pool);
+    for (size_t i = 0; i < pool->count; i++) {
+        pp_buffer_t block = {0};
+        if (!pp_buffer_reserve(&block, capacity, PP_MEMORY_CRITICAL, use)) {
+            pp_pool_close(pool);
+            return false;
+        }
+        POOL_LOCK();
+        pool->slots[i].idle = block;
+        POOL_UNLOCK();
+    }
+    POOL_LOCK();
+    pool->open = true;
+    POOL_UNLOCK();
+    return true;
+}
+
+pp_buffer_t pp_pool_take(pp_buffer_pool_t *pool) {
+    pp_buffer_t result = {0};
+    POOL_LOCK();
+    for (size_t i = 0; i < pool->count; i++) {
+        if (pool->open && pool->slots[i].idle.data) {
+            result = pp_buffer_take(&pool->slots[i].idle);
+            pool->slots[i].loan = result.data;
+            break;
+        }
+    }
+    POOL_UNLOCK();
+    return result;
+}
+
+void pp_pool_return(pp_buffer_pool_t *pool, pp_buffer_t *buffer) {
+    if (!buffer->data)
+        return;
+    POOL_LOCK();
+    for (size_t i = 0; i < pool->count; i++) {
+        if (pool->slots[i].loan == buffer->data) {
+            pool->slots[i].loan = NULL;
+            buffer->size = 0;
+            pool->slots[i].idle = pp_buffer_take(buffer);
+            break;
+        }
+    }
+    POOL_UNLOCK();
+    pp_buffer_free(buffer);
 }
 pp_memory_stats_t pp_memory_stats(void) {
     pp_memory_stats_t s = {.waits = atomic_load(&waited), .expired = atomic_load(&expired)};

@@ -56,11 +56,12 @@ int main(void) {
     assert(pp_cache_store_put(&store, pinned_key, pinned[0], false, data, sizeof(data), "aux", 4));
     uint64_t once = store.sequence;
     assert(pp_cache_store_put(&store, pinned_key, pinned[0], false, data, sizeof(data), "aux", 4));
+    assert(store.used == used(root));
     assert(store.sequence == once); /* Identical reconnects do not wear Flash. */
     for (unsigned i = 2; i < 200; i++) {
         key(i, name);
         assert(pp_cache_store_put(&store, name, old, false, data, sizeof(data), NULL, 0));
-        assert(used(root) <= 8192);
+        assert(store.used == used(root) && store.used <= 8192);
     }
     pp_cache_value_t value;
     assert(PP_CACHE_HIT == read_value(&store, pinned_key, &value));
@@ -83,6 +84,7 @@ int main(void) {
     pp_cache_store_t reopened;
     assert(pp_cache_store_open(&reopened, root, 8192));
     assert(pp_cache_store_recover(&reopened));
+    assert(reopened.used == used(root));
     pp_cache_store_scope(&reopened, scope, pinned, 1);
     assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
     pp_buffer_free(&value.bytes);
@@ -100,7 +102,7 @@ int main(void) {
     char replacement[1024];
     memset(replacement, 'y', sizeof(replacement));
     assert(pp_cache_store_write(&reopened, pinned_key, pinned[0], false, replacement,
-                                  sizeof(replacement), NULL, 0) == PP_CACHE_BUSY);
+                                  sizeof(replacement), NULL, 0, 0) == PP_CACHE_BUSY);
     reopened.allowed = NULL;
     assert(read_value(&reopened, pinned_key, &value) == PP_CACHE_HIT);
     assert(value.bytes.size == sizeof(data) && value.bytes.data[0] == 'x');
@@ -123,6 +125,7 @@ int main(void) {
     /* A cache full of protected recent records refuses growth, never evicts
      * those records merely because somebody browses unrelated old history. */
     assert(pp_cache_store_clear(&reopened));
+    assert(reopened.used == 0);
     for (unsigned i = 1; i <= 2; i++) {
         key(i, name);
         assert(pp_cache_store_put(&reopened, name, pinned[0], false, data, sizeof(data), NULL, 0));
@@ -133,6 +136,7 @@ int main(void) {
     assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
     pp_buffer_free(&value.bytes);
     assert(pp_cache_store_clear(&reopened));
+    assert(reopened.used == 0);
     assert(used(root) == 0);
     /* Charge Flash blocks, reserve image space, and keep accepting previews
      * after protected recent text has reached its sub-budget. */
@@ -141,11 +145,15 @@ int main(void) {
     unsigned text_pages = 0;
     for (unsigned i = 1; i < 20; i++) {
         key(i, name);
-        if (!pp_cache_store_put(&reopened, name, pinned[0], false, data, sizeof(data), NULL, 0))
+        if (pp_cache_store_write(&reopened, name, pinned[0], false, data, sizeof(data), NULL, 0, 32768) != PP_CACHE_HIT)
             break;
         text_pages++;
     }
     assert(text_pages == 8 && used(root) == 32768);
+    key(99, name);
+    assert(pp_cache_store_write(&reopened, name, old, false, data, sizeof(data),
+                                NULL, 0, reopened.budget) == PP_CACHE_FULL);
+    assert(used(root) == 32768);
     char preview[3000] = {0};
     for (unsigned i = 100; i < 103; i++) {
         key(i, name);
@@ -154,6 +162,7 @@ int main(void) {
     }
     assert(used(root) <= 65536);
     assert(pp_cache_store_clear(&reopened));
+    assert(reopened.used == 0);
     assert(!rmdir(root));
     return 0;
 }

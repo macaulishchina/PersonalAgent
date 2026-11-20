@@ -7,6 +7,9 @@
 bool pp_net_start(void);
 bool pp_net_send(cJSON *command); /* Consumes JSON on all paths. */
 void pp_net_expect_image(uint32_t request); /* Zero closes the receive window. */
+bool pp_net_open_audio(void);
+void pp_net_close_audio(void);
+void pp_net_return_audio(pp_buffer_t *packet);
 size_t pp_net_audio_header(const uint8_t *input_id, uint32_t sequence, pp_buffer_t *packet,
                            size_t pcm_capacity);
 bool pp_net_send_audio(pp_buffer_t *packet, uint32_t generation);

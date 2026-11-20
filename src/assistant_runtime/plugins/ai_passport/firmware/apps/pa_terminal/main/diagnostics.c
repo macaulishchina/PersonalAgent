@@ -17,12 +17,15 @@
 static void report_memory(void) {
     pp_memory_stats_t m = pp_memory_stats();
     pp_cache_info_t cache = pp_objects_info();
+    pp_stream_stats_t stream = pp_stream_stats();
     /* Each entry is [held, reclaimable, peak, allocation failures], in bytes
      * except for the final count. Driver memory is included in heap pressure,
      * but is outside these application buffer counters. */
 #define USE(use, reclaimable) m.live[use], (unsigned)(reclaimable), m.peak[use], m.failures[use]
     printf("{\"app\":\"PA-Terminal-memory\",\"heap\":%u,\"largest\":%u,\"minimum\":%u,"
            "\"connected\":%s,\"cache_in_flight\":%u,\"displayed_image\":%u,"
+           "\"stream_stored\":%u,\"stream_peak\":%u,\"stream_writes\":%u,\"stream_reads\":%u,\"stream_errors\":%u,"
+           "\"stream_workspace\":%u,\"stream_ram_only\":%u,\"stream_full\":%u,"
            "\"fields\":[\"held\",\"reclaimable\",\"peak\",\"failures\"],"
            "\"capture\":[%u,%u,%u,%u],\"playback\":[%u,%u,%u,%u],"
            "\"image\":[%u,%u,%u,%u],\"network_setup\":[%u,%u,%u,%u],"
@@ -32,6 +35,8 @@ static void report_memory(void) {
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
            pp_net_connected() ? "true" : "false", cache.in_flight, pp_picture_displayed_bytes(),
+           stream.stored_bytes, stream.peak_bytes, stream.writes, stream.reads, stream.errors,
+           stream.workspace_bytes, stream.ram_only, stream.full,
            USE(PP_MEMORY_CAPTURE, 0), USE(PP_MEMORY_PLAYBACK, 0),
            USE(PP_MEMORY_IMAGE, 0), USE(PP_MEMORY_NETWORK_SETUP, 0),
            USE(PP_MEMORY_TLS_CERT, 0), USE(PP_MEMORY_WIRE, 0),
@@ -87,7 +92,7 @@ static void usb_task(void *arg) {
                        "\"cache_misses\":%u,"
                        "\"cache_write_failures\":%u,\"cache_busy\":%u,\"cache_ram_hits\":%u,"
                        "\"cache_flash_hits\":%u,\"cache_recoverable\":%u,\"cache_in_flight\":%u,"
-                       "\"cache_io_peak_ms\":%u,\"memory_waits\":%u,\"memory_wait_expired\":%u,"
+                       "\"cache_io_peak_ms\":%u,\"cache_stack_min_free\":%u,\"memory_waits\":%u,\"memory_wait_expired\":%u,"
                        "\"memory_peak\":{\"wire\":%u,\"audio\":%u,\"image\":%u,\"cache\":%u},"
                        "\"memory_failures\":{\"wire\":%u,\"audio\":%u,\"image\":%u,\"cache\":%u}}\n",
                        PP_PROTOCOL_VERSION, app->version, elf_sha256,
@@ -101,7 +106,7 @@ static void usb_task(void *arg) {
                        (unsigned)esp_sleep_get_wakeup_cause(),
                        cache.ready ? "true" : "false", cache.hits, cache.misses,
                        cache.write_failures, cache.busy, cache.ram_hits, cache.flash_hits,
-                       cache.recoverable, cache.in_flight, cache.io_peak_ms, memory.waits, memory.expired,
+                       cache.recoverable, cache.in_flight, cache.io_peak_ms, cache.stack_min_free, memory.waits, memory.expired,
                        memory.peak[PP_MEMORY_WIRE], memory.peak[PP_MEMORY_AUDIO],
                        memory.peak[PP_MEMORY_IMAGE], memory.peak[PP_MEMORY_CACHE],
                        memory.failures[PP_MEMORY_WIRE], memory.failures[PP_MEMORY_AUDIO],

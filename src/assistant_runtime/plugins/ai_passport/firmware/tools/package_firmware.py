@@ -10,9 +10,10 @@ from pathlib import Path
 import zipfile
 
 
-def application_size(table: bytes) -> int:
+def application_size(table: bytes, *, terminal: bool = False) -> int:
     """Read the actual built partition table, including its cache boundary."""
     partitions = []
+    layout = set()
     application = None
     entry = struct.Struct("<HBBII16sI")
     for offset in range(0, len(table) - entry.size + 1, entry.size):
@@ -24,11 +25,28 @@ def application_size(table: bytes) -> int:
         if any(start < end and begin < start + size for begin, end in partitions):
             raise ValueError("Overlapping built partitions")
         partitions.append((start, start + size))
+        layout.add((name.rstrip(b"\0"), kind, subtype, start, size))
         if kind == 0 and subtype == 0 and start == 0x10000:
             application = size
     if application is None:
         raise ValueError("Missing actual factory application partition")
+    if terminal and layout != {
+        (b"nvs", 1, 2, 0x9000, 0x6000),
+        (b"phy_init", 1, 1, 0xF000, 0x1000),
+        (b"factory", 0, 0, 0x10000, 0x3F0000),
+        (b"pp_stream", 1, 0x40, 0x400000, 0x300000),
+        (b"pp_cache", 1, 0x83, 0x700000, 0x100000),
+    }:
+        raise ValueError("PA-Terminal requires 4 MiB of cache and the preserved NVS/history layout")
     return application
+
+
+def check_terminal_layout(table: Path, image: Path) -> None:
+    limit = application_size(table.read_bytes(), terminal=True)
+    used = image.stat().st_size
+    if not 0 < used <= limit:
+        raise ValueError(f"Application uses {used} bytes, limit {limit} with 4 MiB cache reserved")
+    print(f"PA-Terminal flash: app {used}/{limit}, growth {limit - used}, cache 4194304 bytes")
 
 
 def package(build: Path, destination: Path) -> None:
@@ -59,10 +77,16 @@ def package(build: Path, destination: Path) -> None:
         "hardware_acceptance": "pending",
         "flash_files": [],
     }
+    if project == "pa_terminal":
+        manifest["upgrade_policy"] = "pp-data-v2"
     table = (build / files[0x8000]).resolve()
     if not table.is_relative_to(build):
         raise ValueError("Partition image must belong to this build")
-    limits = {0: 0x8000, 0x8000: 0x1000, 0x10000: application_size(table.read_bytes())}
+    limits = {
+        0: 0x8000,
+        0x8000: 0x1000,
+        0x10000: application_size(table.read_bytes(), terminal=project == "pa_terminal"),
+    }
     for offset, name in sorted(files.items()):
         path = (build / name).resolve()
         if not path.is_relative_to(build) or not path.is_file():
@@ -137,5 +161,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, default=Path("build"))
     parser.add_argument("--output", type=Path, default=Path("build/ppdemo-0.2.0.zip"))
+    parser.add_argument("--check-terminal-layout", type=Path, nargs=2, metavar=("TABLE", "APP"))
     options = parser.parse_args()
+    if options.check_terminal_layout:
+        check_terminal_layout(*options.check_terminal_layout)
+        raise SystemExit(0)
     package(options.build, options.output)

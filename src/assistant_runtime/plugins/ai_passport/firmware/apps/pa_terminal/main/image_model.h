@@ -25,6 +25,7 @@ void pp_image_preview_rows(unsigned char *out, unsigned w, unsigned h, const uns
                            unsigned width, unsigned height, unsigned row, unsigned rows);
 
 /* Pixel storage is separate from the heap needed by transport and audio. */
+size_t pp_image_headroom(bool background);
 bool pp_image_has_headroom(size_t available, size_t bytes, bool background);
 bool pp_image_request_size(size_t available, size_t largest, size_t limit, bool background,
                            unsigned *width, unsigned *height);

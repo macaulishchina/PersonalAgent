@@ -66,6 +66,25 @@ int main(void) {
     assert(!pp_buffer_append(&b, "x", 1, 8191));
     pp_buffer_free(&b);
     pp_buffer_free(&b);
+    pp_buffer_slot_t slots[2] = {0};
+    pp_buffer_pool_t pool = {.slots = slots, .count = 2};
+    assert(pp_pool_open(&pool, 1280, PP_MEMORY_AUDIO));
+    reject_allocation = true;
+    pp_buffer_t old = pp_pool_take(&pool);
+    pp_buffer_t neighbor = pp_pool_take(&pool);
+    assert(old.data && neighbor.data && !pp_pool_take(&pool).data);
+    pp_pool_return(&pool, &neighbor);
+    neighbor = pp_pool_take(&pool);
+    assert(neighbor.data);
+    pp_pool_return(&pool, &neighbor);
+    assert(!pp_pool_open(&pool, 1280, PP_MEMORY_AUDIO));
+    assert(!pp_pool_take(&pool).data && pp_memory_stats().live[PP_MEMORY_AUDIO] == 1280);
+    reject_allocation = false;
+    assert(pp_pool_open(&pool, 640, PP_MEMORY_AUDIO));
+    pp_pool_return(&pool, &old);
+    assert(pp_memory_stats().live[PP_MEMORY_AUDIO] == 1280);
+    pp_pool_close(&pool);
+    assert(!pp_memory_stats().live[PP_MEMORY_AUDIO]);
     wait_order();
     return 0;
 }

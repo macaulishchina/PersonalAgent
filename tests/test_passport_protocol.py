@@ -768,6 +768,27 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         stream.close.assert_not_awaited()
         self.assertEqual(self.calls, [])
 
+    async def test_playback_wait_accepts_only_current_advancing_i2s_progress(self):
+        c = self.connection
+        c.PLAYBACK_IDLE_SECONDS = 0.1
+        c.playing = {"dispatched": 32}
+
+        async def report(amount, generation=0):
+            await c.command({"type": "playback.progress", "generation": generation, "i2s_bytes": amount})
+
+        waiter = asyncio.create_task(c.wait_playback(0, lambda: c.credit > 0))
+        for amount in (2, 4, 6, 8):
+            await asyncio.sleep(0.04)
+            await report(amount)
+        self.assertFalse(waiter.done())
+        await report(12, 1)
+        await report(8)
+        self.assertEqual(c.playing["played_bytes"], 8)
+        with self.assertRaises(ValueError):
+            await report(34)
+        with self.assertRaises(TimeoutError):
+            await waiter
+
     async def test_async_provider_failure_drains_audio_and_releases_input_for_next_attempt(self):
         failed, following = (str(uuid.uuid4()) for _ in range(2))
         upstream = AsyncMock()

@@ -3,12 +3,14 @@ idf_component_register(
         "main.c" "terminal_events.c" "diagnostics.c"
         "terminal_model.c" "navigation.c" "notification_model.c"
         "terminal_audio.c" "playback_buffer.c"
-        "ui.c" "text_layout.c" "timeline.c" "image_model.c" "pictures.c"
+        "status_meter.c" "status_widgets.c" "net_traffic.c" "ui.c" "text_layout.c" "timeline.c" "image_model.c" "pictures.c"
         "network.c" "network_model.c" "provision.c" "provision_access.c" "byte_buffer.c"
-        "settings.c" "settings_model.c" "cache_store.c" "cache_disk.c" "cache_resident.c" "history_cache.c"
+        "settings.c" "settings_model.c" "cache_store.c" "cache_disk.c" "cache_flash.c" "cache_stream.c" "cache_resident.c" "history_cache.c"
     INCLUDE_DIRS "."
     REQUIRES bsp pp_board esp_event esp_timer esp_wifi esp_netif esp_http_client esp_websocket_client esp_pm
              nvs_flash json esp_app_format esp_hw_support mbedtls esp_http_server bootloader_support joltwallet__littlefs)
+target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_netif_transmit_wrap"
+                                               "-Wl,--wrap=esp_netif_receive")
 target_sources(${COMPONENT_LIB} PRIVATE
     "fonts/terminal_zh_16.c" "fonts/terminal_zh_18.c" "fonts/terminal_battery_12.c")
 target_add_binary_data(${COMPONENT_LIB} "assets/cat_idle_open.rgb565a8" BINARY)

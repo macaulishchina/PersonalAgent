@@ -68,6 +68,32 @@ class SpeechIntegrityTest(unittest.IsolatedAsyncioTestCase):
             upstream.send.assert_not_awaited()
             upstream.finish.assert_not_awaited()
 
+    async def test_slow_upload_earns_time_only_for_accepted_audio(self):
+        upstream = AsyncMock()
+        stream = InputStream(upstream, 60, lambda _: None)
+        for sequence in range(200):
+            await stream.accept(sequence, bytes(6400))
+        # 40 seconds of media already received after 90 seconds on the wire.
+        stream.started -= 90
+        await stream.accept(200, bytes(640))
+        stream.last_pcm -= 31
+        with self.assertRaisesRegex(SpeechError, "speech_input_deadline"):
+            await stream.accept(201, bytes(640))
+        self.assertTrue(stream.closed)
+
+    async def test_final_only_watcher_expires_or_releases_on_close(self):
+        upstream = SimpleNamespace(close=AsyncMock())
+        stream = InputStream(upstream, 1, lambda _: None)
+        stream.started -= 12
+        with self.assertRaises(TimeoutError):
+            await stream.wait_upload_end()
+        await stream.close()
+        other = InputStream(upstream, 1, lambda _: None)
+        watcher = asyncio.create_task(other.wait_upload_end())
+        await asyncio.sleep(0)
+        await other.close()
+        await asyncio.wait_for(watcher, 1)
+
     async def test_partial_updates_are_optional_for_final_only_providers(self):
         class FinalOnly:
             def __init__(self):

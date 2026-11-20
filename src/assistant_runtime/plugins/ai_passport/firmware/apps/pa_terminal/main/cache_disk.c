@@ -1,7 +1,8 @@
 #include "object_cache.h"
 #include "cache_store.h"
+#include "cache_flash.h"
+#include "cache_stream.h"
 #include "cache_resident.h"
-#include "image_model.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -11,19 +12,22 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lfs.h"
-#include "terminal_limits.h"
 #include "mbedtls/sha256.h"
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
 
 #define QUEUE_SIZE 2u
+/* A LittleFS directory split nests compaction, traversal and the SPI flash
+ * writer. Size the worker for that path as well as ordinary page reads. */
+#define CACHE_WORKER_STACK_BYTES 7168u
 typedef struct {
     unsigned ticket, generation, revision, pin_count;
     pp_memory_priority_t priority;
+    size_t reserve;
     bool read, index;
     char key[65];
-    unsigned char scope[16], owner[16], pins[PP_CACHE_RECENT][16];
+    unsigned char scope[16], owner[16], pins[PP_CACHE_PIN_LIMIT][16];
     pp_cache_value_t value;
 } job_t;
 typedef struct {
@@ -39,8 +43,9 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static pp_cache_resident_t resident;
 static atomic_uint generation, index_revision, in_flight;
 static atomic_bool quiet = true, reconnecting, storage_ready;
+static atomic_uint disk_bytes;
 static atomic_uint hits, misses, write_failures, busy, ram_hits, flash_hits, io_peak_ms;
-static unsigned char scope[16], pins[PP_CACHE_RECENT][16];
+static unsigned char scope[16], pins[PP_CACHE_PIN_LIMIT][16];
 static unsigned pin_count, outstanding; /* Controller owns admission/completion. */
 static bool enabled, initialized;
 static bool rebuilt;
@@ -49,13 +54,12 @@ static void digest(const void *data, size_t size, unsigned char result[32]) {
     if (mbedtls_sha256(data, size, result, 0))
         memset(result, 0, 32);
 }
-bool pp_objects_identity(const char *url, const char *device, const char *binding, char identity[65]) {
+bool pp_objects_identity(const char *const parts[], unsigned count, char identity[65]) {
     mbedtls_sha256_context ctx;
     unsigned char hash[32];
-    const char *parts[] = {url, device, binding};
     mbedtls_sha256_init(&ctx);
     int result = mbedtls_sha256_starts(&ctx, 0);
-    for (unsigned i = 0; i < 3 && result == 0; i++)
+    for (unsigned i = 0; i < count && result == 0; i++)
         result = mbedtls_sha256_update(&ctx, (const unsigned char *)parts[i], strlen(parts[i]) + 1);
     if (result == 0)
         result = mbedtls_sha256_finish(&ctx, hash);
@@ -107,9 +111,9 @@ static bool confirmed_corrupt(const esp_partition_t *partition) {
 static bool mount_store(pp_cache_store_t *store, bool *mounted) {
     const esp_partition_t *partition = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_LITTLEFS, "pp_cache");
-    if (!partition || partition->address != 0x780000 || partition->size != 512 * 1024)
+    if (!partition || partition->address != 0x700000 || partition->size != 1024 * 1024)
         return false;
-    esp_vfs_littlefs_conf_t cfg = {.base_path = "/ppcache", .partition_label = "pp_cache"};
+    esp_vfs_littlefs_conf_t cfg = {.base_path = "/ppcache", .partition_label = "pp_cache", .grow_on_mount = true};
     if (!*mounted) {
         esp_err_t status = esp_vfs_littlefs_register(&cfg);
         if (status == ESP_FAIL && !rebuilt && confirmed_corrupt(partition) &&
@@ -139,10 +143,7 @@ static bool charge(size_t bytes) {
 static bool reserve_read(pp_buffer_t *buffer, size_t capacity, void *context) {
     const job_t *job = context;
     size_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    bool picture = (job->ticket & 3u) == 3u;
-    bool fits = picture
-                    ? pp_image_has_headroom(available, capacity, job->priority == PP_MEMORY_BACKGROUND)
-                    : available >= capacity + PP_PLAYBACK_WINDOW;
+    bool fits = available >= job->reserve && capacity <= available - job->reserve;
     if (!fits || !charge(capacity))
         return false;
     if (pp_buffer_reserve(buffer, capacity, job->priority, PP_MEMORY_CACHE))
@@ -213,7 +214,17 @@ static void worker(void *unused) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         job_t job;
-        while (dequeue(&job)) {
+        for (;;) {
+            if (pp_stream_service())
+                continue;
+            if (!dequeue(&job)) {
+                if (atomic_load(&quiet) && !atomic_load(&reconnecting) && pp_stream_idle() &&
+                    pp_stream_flash_prepare()) {
+                    vTaskDelay(1);
+                    continue;
+                }
+                break;
+            }
             reply_t reply = {.generation = job.generation, .revision = job.revision, .index = job.index,
                              .result = {.ticket = job.ticket, .written = !job.read,
                                         .status = PP_CACHE_BUSY}};
@@ -229,6 +240,7 @@ static void worker(void *unused) {
                     store.context = &job;
                     ready = pp_cache_store_recover(&store);
                 }
+                atomic_store(&disk_bytes, ready ? store.used : 0);
                 atomic_store(&storage_ready, ready);
             }
             if (may_run(&job)) {
@@ -249,7 +261,8 @@ static void worker(void *unused) {
                     } else {
                         r->status = pp_cache_store_write(&store, job.key, job.owner, job.index,
                                                          job.value.bytes.data, job.value.bytes.size,
-                                                         job.value.aux, job.value.aux_size);
+                                                         job.value.aux, job.value.aux_size, job.reserve);
+                        atomic_store(&disk_bytes, store.used);
                         if (job.index && r->status == PP_CACHE_HIT) {
                             portENTER_CRITICAL(&lock);
                             pp_resident_invalidate(&resident, job.key);
@@ -291,21 +304,39 @@ static bool start(void) {
     if (worker_task)
         return true;
     results = xQueueCreate(QUEUE_SIZE, sizeof(reply_t));
-    if (results && xTaskCreate(worker, "pp_cache", 4096, NULL, 1, &worker_task) == pdPASS)
+    if (results && xTaskCreate(worker, "pp_cache", CACHE_WORKER_STACK_BYTES, NULL, 1, &worker_task) == pdPASS)
         return true;
     if (results)
         vQueueDelete(results);
     results = NULL;
     return false;
 }
+static void wake_worker(void) {
+    xTaskNotifyGive(worker_task);
+}
+pp_cache_usage_t pp_cache_usage(void) {
+    const pp_stream_stats_t stream = pp_stream_stats();
+    pp_cache_usage_t usage = {.used = stream.stored_bytes, .capacity = stream.capacity_bytes};
+    if (atomic_load(&storage_ready)) {
+        usage.used += atomic_load(&disk_bytes);
+        usage.capacity += PP_CACHE_BUDGET;
+    }
+    return usage;
+}
+void pp_cache_init(void) {
+    if (!start() || !pp_stream_flash_attach(wake_worker))
+        ESP_LOGW("pp_cache", "Flash stream unavailable; using RAM queues");
+    else
+        wake_worker();
+}
 void pp_objects_configure(const char *binding, const char *const owners[], unsigned count,
                           bool active) {
-    unsigned char hash[32], next_pins[PP_CACHE_RECENT][16] = {0};
+    unsigned char hash[32], next_pins[PP_CACHE_PIN_LIMIT][16] = {0};
     digest(binding, strlen(binding), hash);
     bool changed = memcmp(scope, hash, sizeof(scope)) || enabled != active;
     memcpy(scope, hash, sizeof(scope));
     enabled = active;
-    count = count > PP_CACHE_RECENT ? PP_CACHE_RECENT : count;
+    count = count > PP_CACHE_PIN_LIMIT ? PP_CACHE_PIN_LIMIT : count;
     for (unsigned i = 0; i < count; i++) {
         digest(owners[i], strlen(owners[i]), hash);
         memcpy(next_pins[i], hash, 16);
@@ -360,13 +391,14 @@ static bool submit(const job_t *job) {
     }
     return accepted;
 }
-bool pp_objects_read(const char *key, unsigned ticket, pp_memory_priority_t priority) {
+bool pp_objects_read(const char *key, unsigned ticket, pp_object_read_t options) {
     if (!enabled || !ticket || outstanding == QUEUE_SIZE)
         return false;
-    job_t job = job_for(key, priority);
+    job_t job = job_for(key, options.priority);
+    job.reserve = options.heap_reserve;
     job.ticket = ticket;
     job.read = true;
-    job.index = !strcmp(key, "recent");
+    job.index = options.index;
     reply_t reply = {.generation = job.generation, .revision = job.revision, .index = job.index,
                      .result = {.ticket = ticket, .status = PP_CACHE_HIT}};
     portENTER_CRITICAL(&lock);
@@ -384,11 +416,12 @@ bool pp_objects_read(const char *key, unsigned ticket, pp_memory_priority_t prio
     }
     return may_run(&job) && start() && submit(&job);
 }
-bool pp_objects_write(const char *key, const char *owner, bool index, pp_buffer_t *buffer,
+bool pp_objects_write(const char *key, const char *owner, pp_object_write_t options, pp_buffer_t *buffer,
                        const void *aux, size_t aux_size, unsigned ticket) {
     pp_buffer_t data = pp_buffer_take(buffer);
     job_t job = job_for(key, PP_MEMORY_BACKGROUND);
-    job.index = index;
+    job.index = options.index;
+    job.reserve = options.disk_reserve;
     if (!enabled || !data.data || data.size > data.capacity || aux_size > PP_CACHE_AUX_MAX ||
         (aux_size && !aux) || !may_run(&job) ||
         !start() || !charge(data.capacity)) {
@@ -450,11 +483,15 @@ bool pp_objects_retain(const pp_cache_result_t *result, pp_cache_result_t *retai
 }
 void pp_objects_allow_io(bool allowed) {
     bool was_allowed = atomic_exchange(&quiet, allowed);
+    if (allowed && !was_allowed && worker_task)
+        wake_worker();
     if (!allowed && was_allowed)
         reclaim(PP_CACHE_RESIDENT_BYTES, PP_MEMORY_CRITICAL);
 }
 void pp_objects_connecting(bool connecting) {
-    atomic_store(&reconnecting, connecting);
+    bool was_connecting = atomic_exchange(&reconnecting, connecting);
+    if (!connecting && was_connecting && worker_task)
+        wake_worker();
     if (connecting)
         reclaim(PP_CACHE_RESIDENT_BYTES, PP_MEMORY_CRITICAL);
 }
@@ -466,5 +503,6 @@ pp_cache_info_t pp_objects_info(void) {
         .misses = atomic_load(&misses), .write_failures = atomic_load(&write_failures),
         .busy = atomic_load(&busy), .ram_hits = atomic_load(&ram_hits), .flash_hits = atomic_load(&flash_hits),
         .recoverable = recoverable, .in_flight = atomic_load(&in_flight),
-        .io_peak_ms = atomic_load(&io_peak_ms)};
+        .io_peak_ms = atomic_load(&io_peak_ms),
+        .stack_min_free = worker_task ? uxTaskGetStackHighWaterMark(worker_task) : 0};
 }

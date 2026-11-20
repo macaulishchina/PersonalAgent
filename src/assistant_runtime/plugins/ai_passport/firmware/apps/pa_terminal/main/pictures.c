@@ -28,16 +28,17 @@ static bool loading, shown, remote_active;
 static atomic_uint displayed_bytes;
 static enum { PICTURE_WAITING, PICTURE_REQUEST, PICTURE_ALLOCATE } pending;
 static size_t request_limit;
-static bool stream_supported, preview_only;
+static bool stream_supported, hd_attempted;
 static uint32_t stream_sequence;
 static struct {
     enum { STREAM_OFF, STREAM_OPEN, STREAM_METADATA, STREAM_SCREEN, STREAM_NEXT,
            STREAM_RECEIVE, STREAM_DRAW, STREAM_SHOWN } state;
+    const char *failure;
     uint32_t request;
     unsigned row, rows;
     bool screen;
     pp_buffer_t strip, preview;
-    pp_image_transfer_t thumb;
+    pp_image_transfer_t raster, thumb;
     mbedtls_sha256_context digest;
 } stream;
 static bool verified, prefetch;
@@ -63,7 +64,7 @@ static unsigned number(const cJSON *j, const char *key) {
 void pp_picture_init(void (*callback)(const char *)) { status = callback; }
 void pp_picture_stream_supported(bool supported) { stream_supported = supported; }
 bool pp_picture_active(void) { return loading || shown; }
-bool pp_picture_loading(void) { return loading; }
+bool pp_picture_loading(void) { return loading && !shown; }
 unsigned pp_picture_displayed_bytes(void) { return displayed_bytes; }
 static void release_pixels(void) {
     pp_objects_release(&borrowed_pixels);
@@ -116,7 +117,7 @@ static bool cache_preview(pp_buffer_t *buffer, pp_image_transfer_t *image) {
     if (buffer->capacity > image->bytes)
         (void)pp_buffer_reserve(buffer, image->bytes, PP_MEMORY_BACKGROUND, PP_MEMORY_IMAGE);
     unsigned ticket = prefetch ? (++cache_serial << 2) | 3u : 0;
-    if (!pp_objects_write(key, owner, false, buffer, image, sizeof(*image), ticket))
+    if (!pp_objects_write(key, owner, (pp_object_write_t){0}, buffer, image, sizeof(*image), ticket))
         return false;
     if (ticket) {
         prefetch_write = ticket;
@@ -142,7 +143,7 @@ bool pp_picture_close(void) {
     displayed_bytes = 0;
     loading = shown = false;
     pending = PICTURE_WAITING;
-    preview_only = false;
+    hd_attempted = false;
     verified = prefetch = false;
     cache_ticket = 0;
     memset(&transfer, 0, sizeof(transfer));
@@ -173,7 +174,7 @@ static bool choose_size(size_t limit, size_t *available, size_t *largest) {
 }
 static void request_remote(size_t limit) {
     const size_t preview_limit = PP_IMAGE_PREVIEW_WIDTH * PP_IMAGE_PREVIEW_HEIGHT * 2u;
-    if (preview_only && limit > preview_limit)
+    if (limit > preview_limit)
         limit = preview_limit;
     request_limit = limit;
     pending = PICTURE_REQUEST;
@@ -227,16 +228,11 @@ static bool open_picture(const char *message, const char *image, bool background
         status("正在读取图片");
     char key[256];
     revision_known = pp_history_cache_revision(message, &opened_revision);
-    if (!background && stream_supported && pp_net_connected()) {
-        if (++stream_sequence == 0)
-            ++stream_sequence;
-        stream.request = stream_sequence;
-        stream.state = STREAM_OPEN;
-        return true;
-    }
     if (pp_history_cache_image_key(message, image, key)) {
         cache_ticket = (++cache_serial << 2) | 3u;
-        if (pp_objects_read(key, cache_ticket, background ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL))
+        pp_object_read_t policy = {.priority = background ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL,
+                                   .heap_reserve = pp_image_headroom(background)};
+        if (pp_objects_read(key, cache_ticket, policy))
             return true;
         cache_ticket = 0;
         if (background || !pp_net_connected()) {
@@ -252,6 +248,18 @@ bool pp_picture_open(const char *message, const char *image) {
 }
 bool pp_picture_prefetch(const char *message, const char *image) {
     return !pp_picture_active() && open_picture(message, image, true);
+}
+static bool start_hd(void) {
+    if (stream.state != STREAM_OFF || prefetch || hd_attempted || !stream_supported || !pp_net_connected())
+        return false;
+    close_remote();
+    if (++stream_sequence == 0)
+        ++stream_sequence;
+    stream.request = stream_sequence;
+    stream.state = STREAM_OPEN;
+    hd_attempted = loading = true;
+    started = (uint32_t)(esp_timer_get_time() / 1000);
+    return true;
 }
 static bool pixels_verified(void) {
     unsigned char digest[32];
@@ -283,23 +291,31 @@ static bool show_complete(void) {
     return true;
 }
 static void stream_failed(const char *reason) {
-    ESP_LOGW("pp_picture", "stream stopped at row=%u", stream.row);
-    if ((stream.screen || stream.state == STREAM_SCREEN) && !pp_ui_image(NULL, 0, 0)) {
+    if (!stream.failure) {
+        ESP_LOGW("pp_picture", "stream stopped at row=%u", stream.row);
+        stream.failure = reason;
+    }
+    if (!shown || !verified || !pixels) {
         picture_error(reason);
         return;
     }
-    release_stream();
-    preview_only = true;
-    displayed_bytes = 0;
-    memset(&transfer, 0, sizeof(transfer));
-    char key[256];
-    cache_ticket = (++cache_serial << 2) | 3u;
-    if (pp_history_cache_image_key(message_id, image_id, key) &&
-        pp_objects_read(key, cache_ticket, PP_MEMORY_NORMAL)) {
-        started = (uint32_t)(esp_timer_get_time() / 1000);
+    /* LVGL may still reference the last strip. Detach it before releasing RAM. */
+    if (!pp_ui_image(pixels, transfer.width, transfer.height))
         return;
-    }
-    picture_error(reason);
+    release_stream();
+    loading = false;
+    displayed_bytes = transfer.bytes;
+    status(pp_net_connected() ? "高清暂不可用，显示预览" : "离线图片");
+}
+
+bool pp_picture_disconnected(void) {
+    stream_supported = false;
+    if (!shown)
+        return false;
+    if (loading)
+        stream_failed("图片传输中断");
+    hd_attempted = stream.state == STREAM_SHOWN;
+    return true;
 }
 
 static void stream_metadata(const cJSON *j) {
@@ -307,7 +323,7 @@ static void stream_metadata(const cJSON *j) {
         return;
     mbedtls_sha256_init(&stream.digest);
     if (strcmp(string(j, "message_id"), message_id) || strcmp(string(j, "image_id"), image_id) ||
-        !pp_image_begin(&transfer, string(j, "format"), string(j, "version"),
+        !pp_image_begin(&stream.raster, string(j, "format"), string(j, "version"),
                         number(j, "width"), number(j, "height"), number(j, "bytes"),
                         PP_IMAGE_VIEW_WIDTH, PP_IMAGE_VIEW_HEIGHT) ||
         mbedtls_sha256_starts(&stream.digest, 0) != 0) {
@@ -327,7 +343,7 @@ void pp_picture_receive_strip(pp_buffer_t *frame) {
         return; /* Already navigated to a different picture. */
     pp_image_strip_t strip;
     unsigned char hash[32];
-    if (!pp_image_strip_parse(&strip, p, frame->size, transfer.width, transfer.height) ||
+    if (!pp_image_strip_parse(&strip, p, frame->size, stream.raster.width, stream.raster.height) ||
         strip.row != stream.row ||
         mbedtls_sha256(p + PP_IMAGE_STRIP_HEADER, frame->size - PP_IMAGE_STRIP_HEADER, hash, 0) ||
         memcmp(hash, p + 12, 8)) {
@@ -341,17 +357,19 @@ void pp_picture_receive_strip(pp_buffer_t *frame) {
 }
 
 static void stream_poll(void) {
-    if (stream.state == STREAM_OPEN) {
+    if (stream.failure) {
+        stream_failed(stream.failure);
+    } else if (stream.state == STREAM_OPEN) {
         if (stream_command("image.stream.open", 0))
             stream.state = STREAM_METADATA;
         else
             stream_failed("高清图片请求失败，可重试");
     } else if (stream.state == STREAM_SCREEN) {
-        if (!pp_ui_stream_begin(transfer.width, transfer.height))
+        if (!pp_ui_stream_begin(stream.raster.width, stream.raster.height))
             return;
         stream.screen = true;
-        if (revision_known) {
-            pp_image_preview_dimensions(transfer.width, transfer.height,
+        if (revision_known && !verified) {
+            pp_image_preview_dimensions(stream.raster.width, stream.raster.height,
                                          &stream.thumb.width, &stream.thumb.height);
             stream.thumb.bytes = stream.thumb.width * stream.thumb.height * 2u;
             if (pp_image_has_headroom(heap_caps_get_free_size(MALLOC_CAP_8BIT),
@@ -376,12 +394,12 @@ static void stream_poll(void) {
         }
         if (stream.preview.data)
             pp_image_preview_rows((unsigned char *)stream.preview.data, stream.thumb.width,
-                                   stream.thumb.height, pixels, transfer.width, transfer.height,
+                                   stream.thumb.height, pixels, stream.raster.width, stream.raster.height,
                                    stream.row, stream.rows);
         pp_buffer_free(&stream.strip);
         stream.row += stream.rows;
-        displayed_bytes = (unsigned)stream.row * transfer.width * 2;
-        if (stream.row < transfer.height) {
+        displayed_bytes = (unsigned)stream.row * stream.raster.width * 2;
+        if (stream.row < stream.raster.height) {
             stream.state = STREAM_NEXT;
             return;
         }
@@ -393,7 +411,7 @@ static void stream_poll(void) {
         }
         for (unsigned i = 0; i < 32; i++)
             snprintf(hex + i * 2, 3, "%02x", hash[i]);
-        if (strcmp(hex, transfer.version)) {
+        if (strcmp(hex, stream.raster.version)) {
             stream_failed("高清图片校验失败，可重试");
             return;
         }
@@ -403,7 +421,7 @@ static void stream_poll(void) {
         stream.state = STREAM_SHOWN;
         loading = false;
         shown = true;
-        ESP_LOGI("pp_picture", "display %ux%u source=stream heap=%u", transfer.width, transfer.height,
+        ESP_LOGI("pp_picture", "display %ux%u source=stream heap=%u", stream.raster.width, stream.raster.height,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
         status("图片");
     }
@@ -479,6 +497,17 @@ bool pp_picture_receive(const cJSON *j) {
             stream_failed("高清图片暂不可用，可重试");
         return true;
     }
+    if (!strcmp(type, "error") && (!strcmp(string(j, "operation"), "image.open") ||
+                                   !strcmp(string(j, "operation"), "image.chunk"))) {
+        if (remote_active) {
+            close_remote();
+            release_pixels();
+            pending = PICTURE_WAITING;
+            if (!start_hd())
+                picture_error("图片预览暂不可用");
+        }
+        return true;
+    }
     if (!strcmp(type, "image.open")) {
         if (!loading || !remote_active || strcmp(string(j, "message_id"), message_id) ||
             strcmp(string(j, "image_id"), image_id))
@@ -492,7 +521,7 @@ bool pp_picture_receive(const cJSON *j) {
             pending = PICTURE_ALLOCATE;
         return true;
     }
-    if (strcmp(type, "image.chunk") || !loading || !pixels ||
+    if (strcmp(type, "image.chunk") || !remote_active || !loading || !pixels ||
         strcmp(string(j, "version"), transfer.version))
         return false;
     const char *encoded = string(j, "data");
@@ -514,13 +543,21 @@ bool pp_picture_receive(const cJSON *j) {
     return true;
 }
 bool pp_picture_poll(uint32_t now) {
-    if (!loading)
+    if (!loading) {
+        if (shown)
+            start_hd();
         return false;
+    }
     bool background = prefetch;
     if (now - started > 20000) {
         if (stream.state != STREAM_OFF) {
             stream_failed("高清图片读取超时，可重试");
             return !pp_picture_active();
+        }
+        if (remote_active && start_hd()) {
+            release_pixels();
+            pending = PICTURE_WAITING;
+            return false;
         }
         picture_error("图片读取超时，可翻页后重新查看");
         return !background;
@@ -533,7 +570,7 @@ bool pp_picture_poll(uint32_t now) {
      * been released, so neither counts against the image's allocation. */
     if (pending == PICTURE_REQUEST) {
         pending = PICTURE_WAITING;
-        if (!remote_open(request_limit))
+        if (!remote_open(request_limit) && !start_hd())
             pp_picture_close();
     } else if (pending == PICTURE_ALLOCATE) {
         pending = PICTURE_WAITING;

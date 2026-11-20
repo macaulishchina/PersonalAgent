@@ -9,7 +9,12 @@ import time
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, WSServerHandshakeError
 
-from assistant_runtime.api.speech import SpeechError, RecognitionRequest, SynthesisRequest
+from assistant_runtime.api.speech import (
+    SpeechError,
+    RecognitionRequest,
+    SynthesisRequest,
+    recognition_upload_window,
+)
 from .declaration import DECLARATION
 
 
@@ -26,7 +31,9 @@ class Duplex:
         self.partial = ""
         self.updated = asyncio.Event()
         self.deadline = time.monotonic() + (
-            request.max_seconds + 45 if request.action == "recognize" else 120
+            recognition_upload_window(request.max_seconds, request.max_seconds) + 35
+            if request.action == "recognize"
+            else 120
         )
 
     async def command(self, action, payload):
@@ -65,7 +72,10 @@ class Duplex:
                 )
                 self.owner.context.log.warning(
                     "speech_asr_rejected code=%s audio_bytes=%d finish_sent=%s provider_timeout=%s",
-                    safe_code, self.bytes, self.finish_sent, bool(timeout),
+                    safe_code,
+                    self.bytes,
+                    self.finish_sent,
+                    bool(timeout),
                 )
                 if timeout:
                     raise SpeechError("speech_provider_timeout")
