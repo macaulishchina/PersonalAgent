@@ -16,8 +16,7 @@ static bool test_mute, test_drain, small_heap, overflowing = true;
 static bool test_cues, early_voice;
 static uint32_t tx_position;
 static unsigned reads, writes, failed_mutes, polls, alloc_limit, capture_frames;
-static unsigned cue_reads;
-static int16_t first_cue[512];
+static unsigned cue_reads, release_writes;
 static char task;
 
 void *pp_test_realloc(void *pointer, size_t size) {
@@ -80,24 +79,34 @@ int bsp_audio_read(void *pcm, size_t size) {
 }
 int bsp_audio_write(const void *pcm, size_t size, size_t *written) {
     if (test_cues) {
-        assert(pcm && size == sizeof(first_cue) && !cue_reads);
         const int16_t *samples = pcm;
-        assert(samples[0] == 0 && samples[511] == 0);
-        assert(memcmp(samples, (const int16_t[512]){0}, size));
+        const size_t count = size / sizeof(*samples);
+        assert(samples && size == 512 * sizeof(*samples) && !cue_reads);
+        int peak = 0;
+        for (size_t i = 0; i < count; i++) {
+            const int amplitude = abs(samples[i]);
+            if (amplitude > peak)
+                peak = amplitude;
+        }
+        assert(peak > 100 && peak <= 3000);
         const bool opening = !early_voice && !writes;
         if (opening) {
             assert(pp_audio_capturing() && !pp_audio_capture_ready());
-            memcpy(first_cue, pcm, size);
+            assert(samples[0] == 0 && samples[count - 1] == 0);
+            cue_reads = 3;
         } else {
-            pp_recording_t frame;
             assert(!pp_audio_capturing());
-            assert(pp_audio_recorded(&frame) && frame.pcm[0] == (early_voice ? 0x10 : 0));
-            assert(pp_audio_recorded(&frame) && frame.pcm[0] == 2);
-            assert(pp_audio_capture_drained());
-            if (!early_voice)
-                assert(memcmp(first_cue, pcm, size));
+            if (++release_writes == 1) {
+                pp_recording_t frame;
+                assert(samples[0] == 0);
+                assert(pp_audio_recorded(&frame) && frame.pcm[0] == (early_voice ? 0x10 : 0));
+                assert(pp_audio_recorded(&frame) && frame.pcm[0] == 2);
+                assert(pp_audio_capture_drained());
+            } else {
+                assert(release_writes == 2 && samples[count - 1] == 0);
+                cue_reads = 3;
+            }
         }
-        cue_reads = 3;
         *written = size;
         writes++;
         return ESP_OK;
@@ -117,7 +126,7 @@ bool bsp_audio_tx_drained(uint32_t position) { return tx_position - position >= 
 void ulTaskNotifyTake(int clear, unsigned wait) {
     assert(clear && wait == portMAX_DELAY && ++polls <= 5);
     if (test_cues) {
-        assert(writes == (early_voice ? 1u : 2u) && !cue_reads);
+        assert(release_writes == 2 && writes == (early_voice ? 2u : 3u) && !cue_reads);
         assert(pp_audio_capture_drained() && !pp_audio_playback_report().i2s_bytes);
     } else if (test_drain) {
         assert(writes == 1 && pp_audio_take_credit() == 2);

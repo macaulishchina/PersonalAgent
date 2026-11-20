@@ -16,6 +16,7 @@
 /* Optional audio capacity must leave room for TLS and control messages. */
 #define AUDIO_HEAP_RESERVE (32u * 1024u)
 #define EARLY_VOICE_LEVEL 32u
+#define AUDIO_WORK_SAMPLES 512u
 _Static_assert(PP_CAPTURE_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 _Static_assert(PP_CAPTURE_MAX_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 
@@ -249,34 +250,63 @@ static bool set_format(codec_state_t *codec, unsigned rate, unsigned volume) {
     }
     return set_volume(codec, volume);
 }
+
+static int cue_sine(unsigned phase) {
+    static const int16_t wave[] = {
+        0, 995, 1838, 2402, 2600, 2402, 1838, 995,
+        0, -995, -1838, -2402, -2600, -2402, -1838, -995,
+    };
+    const unsigned index = (phase >> 12) & 15u;
+    const int fraction = (int)(phase & 4095u);
+    return wave[index] + (wave[(index + 1) & 15u] - wave[index]) * fraction / 4096;
+}
+
 static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
     const unsigned volume = target_volume;
     if (!volume)
         return true;
     if (!set_format(codec, PP_CAPTURE_RATE, volume))
         return false;
-    /* A short rounded sweep with a soft attack and release. All samples use
-     * the worker's existing I2S scratch buffer. */
-    static const int16_t wave[] = {
-        0, 1567, 2896, 3784, 4096, 3784, 2896, 1567,
-        0, -1567, -2896, -3784, -4096, -3784, -2896, -1567,
-    };
-    enum { SAMPLES = 512, ATTACK = 64, TAIL = 160 };
-    unsigned phase = 0;
-    for (unsigned i = 0; i < SAMPLES; i++) {
-        unsigned shape = i < ATTACK ? i * 256 / ATTACK
-                         : i >= SAMPLES - TAIL ? (SAMPLES - 1 - i) * 256 / TAIL : 256;
-        unsigned hz = opening ? 720 + i * 400 / SAMPLES : 980 - i * 390 / SAMPLES;
-        pcm[i] = wave[(phase >> 12) & 15u] * (int)shape / 256;
-        phase += (hz << 16) / PP_CAPTURE_RATE;
+    /* The press is a damped tap. Release is a soft puff with a late crest.
+     * Keep press latency at 32 ms and reuse the same buffer for release. */
+    const unsigned samples = opening ? AUDIO_WORK_SAMPLES : 2 * AUDIO_WORK_SAMPLES;
+    const unsigned attack = (opening ? 3u : 46u) * (PP_CAPTURE_RATE / 1000);
+    const unsigned tap_step = (520u << 16) / PP_CAPTURE_RATE;
+    const unsigned overtone_step = (1000u << 16) / PP_CAPTURE_RATE;
+    const size_t block_bytes = AUDIO_WORK_SAMPLES * sizeof(*pcm);
+    uint32_t noise = 1;
+    int low = 0, band = 0;
+    bool queued = false;
+    for (unsigned offset = 0; offset < samples; offset += AUDIO_WORK_SAMPLES) {
+        for (unsigned i = 0; i < AUDIO_WORK_SAMPLES; i++) {
+            const unsigned at = offset + i;
+            const int ramp = (int)(at < attack ? at * 256 / attack
+                                  : (samples - 1 - at) * 256 / (samples - 1 - attack));
+            if (opening) {
+                /* Two short resonances keep the tap audible on the small speaker. */
+                const int body = 3 * cue_sine(at * tap_step) / 4 + cue_sine(at * overtone_step) / 6;
+                pcm[i] = body * ramp * ramp / (256 * 256);
+            } else {
+                /* Damped band-pass around 2 kHz gives the puff its airy texture. */
+                noise = noise * 1664525u + 1013904223u;
+                low += band * 3 / 4;
+                const int high = (int)(noise >> 20) - 2048 - low - band * 7 / 8;
+                band += high * 3 / 4;
+                const int envelope = ramp * ramp * (768 - 2 * ramp) / (256 * 256);
+                pcm[i] = band * envelope * 3 / (256 * 4);
+            }
+        }
+        size_t written = 0;
+        const int result = bsp_audio_write(pcm, block_bytes, &written);
+        queued |= written > 0;
+        if (result != ESP_OK || written != block_bytes)
+            break;
     }
-    size_t written = 0;
-    (void)bsp_audio_write(pcm, SAMPLES * sizeof(*pcm), &written);
     const uint32_t position = bsp_audio_tx_position();
     /* Drain RX while the cue leaves the speaker so queued mic blocks cannot
      * carry the cue into this recording or the next one. */
     bool ok = true;
-    for (unsigned i = 0; written && i < 10 && !bsp_audio_tx_drained(position); i++) {
+    for (unsigned i = 0; queued && i < 10 && !bsp_audio_tx_drained(position); i++) {
         if (bsp_audio_read(pcm, PP_CAPTURE_BYTES) != ESP_OK) {
             ok = false;
             break;
@@ -285,7 +315,7 @@ static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
     if (!set_volume(codec, 0))
         return false;
     /* Discard the in-flight frame and give the acoustic tail a frame to settle. */
-    for (unsigned i = 0; written && ok && i < 2; i++)
+    for (unsigned i = 0; queued && ok && i < 2; i++)
         ok = bsp_audio_read(pcm, PP_CAPTURE_BYTES) == ESP_OK;
     return ok;
 }
@@ -340,7 +370,7 @@ static void audio_worker(void *arg) {
         }
         parked = false;
         busy = true;
-        int16_t pcm[512];
+        int16_t pcm[AUDIO_WORK_SAMPLES];
         capture_reading = true;
         if (capturing) {
             unsigned generation = capture_generation;
