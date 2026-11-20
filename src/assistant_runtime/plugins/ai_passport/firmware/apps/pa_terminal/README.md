@@ -136,5 +136,4 @@ USB 串口 115200 下输入 `pp.status`，返回版本、协议、连接状态�
 或恢复出厂命令。日志与 JSON 共用串口；记录日志不能只查以 `{` 开头的行。
 
 修改猫形象时，使用 `generate_avatar.py --open <PNG> --blink <PNG>` 离线生成原生资源；
-源文件摘要、尺寸和生成文件摘要见 `main/assets/avatar.json`。日常构建直接使用这些资源，
-不依赖 PP 交互演示仓库、PNG 解码器或图片转换服务。
+源文件摘要、尺寸和生成文件摘要见 `main/assets/avatar.json`。日常构建直接嵌入已生成的原生资源。

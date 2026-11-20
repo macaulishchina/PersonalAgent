@@ -1,6 +1,6 @@
 # PP 开发架构
 
-一次按住说话，涉及三个执行环境。ESP32-C3 负责按键、采音、屏幕和扬声器。PA 插件验证设备身份、管理设备会话，将输入交给对话和语音能力。浏览器中的 PP 交互演示用相同的操作和页面做交互回归。开发新功能时，先确定状态由哪一端拥有，再决定需要传输的数据。
+ESP32-C3 负责按键、采音、屏幕和扬声器。PA 插件验证设备身份、管理设备会话，将输入交给对话和语音能力。PassportSim 执行同一份固件，供开发者在浏览器或命令行验证界面和按键。开发新功能时，先确定状态由哪一端拥有，再决定需要传输的数据。
 
 ## 从按键到播放
 
@@ -14,7 +14,7 @@
 
 | 修改内容 | 首选模块 | 回归方式 |
 | --- | --- | --- |
-| 页面、按键规则、长按和确认 | 终端 `navigation`、`terminal_model`、主循环的按键分派，外观由 `ui` 绘制 | C 状态机、PP 交互演示、三键真机 |
+| 页面、按键规则、长按和确认 | 终端 `navigation`、`terminal_model`、主循环的按键分派，外观由 `ui` 绘制 | C 状态机、PassportSim 固件场景、三键真机 |
 | 配对、云配置、本地偏好 | PA 的 `settings.py`、`repository.py`；固件 `settings` 拥有 NVS、`provision` 拥有热点表单 | NVS 故障注入、配对与回执回归 |
 | 回复、历史、任务消息、图片 | PA 的 `display.py`、终端的 `timeline`、`notification_model`、`pictures`、`history_cache` | 分页、断网缓存、分块和旧图释放 |
 | 音频格式、背压或中止 | `terminal_audio`、`playback_buffer`，服务端协议变更对应 `protocol.py` 和 `connection.py` | 字节窗口、真实 WebSocket、真机 I2S 延迟 |
@@ -31,6 +31,6 @@ ESP32-C3 有 8 MB Flash，无 PSRAM。屏幕 DMA、音频 DMA、两端音频缓�
 
 ## 验证入口
 
-固件站仓库执行 `python3 tools/pp_lab.py run unit integration demo candidate`。主机 C 测试验证真实模块在故障和边界输入下的行为；集成测试使用真实 PA/Pi 和合成语音、模型服务；浏览器回归覆盖操作路径；候选构建检查锁定工具链、固件映像与安装包。实机按键手感、音频尾音、TLS 连接时堆峰值、休眠电流和唤醒须单独记录。新版本的验收不能沿用旧固件的实测数值。
+固件站仓库执行 `python3 tools/pp_lab.py run unit integration candidate`。主机 C 测试覆盖故障和边界输入，集成测试使用真实 PA/Pi 和合成语音、模型服务，候选构建检查锁定工具链、固件映像与安装包。用 `pp_lab.py sim run --candidate CANDIDATE_RUN --case CASE` 在 PassportSim 验证固件操作路径。每个待验收版本单独记录实体按键、音频尾音、TLS 连接时堆峰值、休眠电流和唤醒结果。
 
 详见[硬件平台说明](hardware-platform.md)、[线协议](protocol.md)和[硬件验收](hardware-acceptance.md)。
