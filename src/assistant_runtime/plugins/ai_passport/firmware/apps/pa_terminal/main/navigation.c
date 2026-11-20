@@ -25,7 +25,8 @@ static const option_t power[] = {{"自动休眠", PP_SELECT_KEEP_ONLINE},
                                  {"返回上级", PP_SELECT_BACK}};
 static const option_t maintenance[] = {
     {"同步 PA 设置", PP_SELECT_RELOAD}, {"更换 PA 配对", PP_SELECT_REPAIR},
-    {"恢复出厂设置", PP_SELECT_FACTORY}, {"返回上级", PP_SELECT_BACK}};
+    {"关于设备", PP_SELECT_ABOUT}, {"恢复出厂设置", PP_SELECT_FACTORY},
+    {"返回上级", PP_SELECT_BACK}};
 /* Screen metadata defines return paths and which pages own local input even
  * while PA is disconnected or sending a new handshake. */
 typedef struct {
@@ -50,6 +51,7 @@ static const page_t pages[PP_SCREEN_COUNT] = {
     [PP_SCREEN_VOLUME] = {"音量", PP_SCREEN_SOUND, NULL, 0, true},
     [PP_SCREEN_BRIGHTNESS] = {"屏幕亮度", PP_SCREEN_SOUND, NULL, 0, true},
     [PP_SCREEN_NETWORK] = {"网络状态", PP_SCREEN_CONNECTIVITY, NULL, 0, true},
+    [PP_SCREEN_ABOUT] = {"关于设备", PP_SCREEN_MAINTENANCE, NULL, 0, true},
     [PP_SCREEN_QUESTION] = {"等待回答", PP_SCREEN_HOME},
 };
 static void open_page(pp_navigation_t *n, pp_screen_t screen, bool restore_focus) {
@@ -102,6 +104,7 @@ const char *pp_navigation_detail(const pp_navigation_t *n) {
     case PP_SELECT_RETRY: return "用已存 Wi-Fi 连接 PA";
     case PP_SELECT_REPROVISION: return "开启热点，手机填写网络";
     case PP_SELECT_REPAIR: return "保留 Wi-Fi，绑定新会话";
+    case PP_SELECT_ABOUT: return "查看硬件和固件版本";
     case PP_SELECT_FACTORY: return "清除本机网络与配对";
     default: return NULL;
     }
@@ -180,9 +183,15 @@ pp_arrow_t pp_navigation_arrow_tick(pp_navigation_t *n, uint32_t now, bool can_j
         return n->arrow_can_sleep ? PP_ARROW_NONE : PP_ARROW_UP;
     return can_jump && n->arrow_epoch == n->page_epoch ? n->arrow : PP_ARROW_NONE;
 }
+static bool owns_standby(const pp_navigation_t *n) {
+    return n->arrow == PP_ARROW_UP && n->arrow_can_sleep && n->arrow_epoch == n->page_epoch;
+}
+bool pp_navigation_standby_hint(const pp_navigation_t *n, uint32_t now) {
+    return owns_standby(n) && now - n->arrow_started >= PP_STANDBY_HINT_MS &&
+           now - n->arrow_started < PP_STANDBY_HOLD_MS;
+}
 bool pp_navigation_standby_ready(const pp_navigation_t *n, uint32_t now) {
-    return n->arrow == PP_ARROW_UP && n->arrow_can_sleep && n->arrow_epoch == n->page_epoch &&
-           now - n->arrow_started >= PP_STANDBY_HOLD_MS;
+    return owns_standby(n) && now - n->arrow_started >= PP_STANDBY_HOLD_MS;
 }
 bool pp_navigation_arrow_release(pp_navigation_t *n, pp_arrow_t key) {
     if (n->arrow != key)

@@ -10,6 +10,7 @@
 #include "pictures.h"
 #include "settings.h"
 #include "terminal_audio.h"
+#include "terminal_limits.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -78,7 +79,7 @@ static void usb_task(void *arg) {
                 (void)pp_settings_device_status(device, &offline_cache);
                 pp_cache_info_t cache = pp_objects_info();
                 pp_memory_stats_t memory = pp_memory_stats();
-                printf("{\"app\":\"PA-Terminal\",\"protocol\":2,\"version\":\"%s\","
+                printf("{\"app\":\"PA-Terminal\",\"protocol\":%u,\"version\":\"%s\","
                        "\"elf_sha256\":\"%s\",\"connected\":%"
                        "s,\"wifi_connected\":%s,\"wifi_standby\":%s,\"device_id\":\"%s\","
                        "\"offline_cache\":%s,\"heap\":%u,\"largest\":%u,"
@@ -89,7 +90,7 @@ static void usb_task(void *arg) {
                        "\"cache_io_peak_ms\":%u,\"memory_waits\":%u,\"memory_wait_expired\":%u,"
                        "\"memory_peak\":{\"wire\":%u,\"audio\":%u,\"image\":%u,\"cache\":%u},"
                        "\"memory_failures\":{\"wire\":%u,\"audio\":%u,\"image\":%u,\"cache\":%u}}\n",
-                       app->version, elf_sha256,
+                       PP_PROTOCOL_VERSION, app->version, elf_sha256,
                        pp_net_connected() ? "true" : "false",
                        pp_net_wifi_connected() ? "true" : "false",
                        pp_net_in_standby() ? "true" : "false",

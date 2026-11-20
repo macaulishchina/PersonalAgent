@@ -17,6 +17,7 @@ typedef enum {
     PP_SCREEN_VOLUME,
     PP_SCREEN_BRIGHTNESS,
     PP_SCREEN_NETWORK,
+    PP_SCREEN_ABOUT,
     PP_SCREEN_QUESTION,
     PP_SCREEN_COUNT
 } pp_screen_t;
@@ -40,6 +41,7 @@ typedef enum {
     PP_SELECT_RETRY,
     PP_SELECT_REPROVISION,
     PP_SELECT_REPAIR,
+    PP_SELECT_ABOUT,
     PP_SELECT_FACTORY
 } pp_selection_t;
 /* Navigation owns presentation only. Returning home never cancels accepted work. */
@@ -89,6 +91,7 @@ void pp_navigation_ok_transition(pp_navigation_t *nav, uint32_t now);
 void pp_navigation_arrow_press(pp_navigation_t *nav, pp_arrow_t key, uint32_t now,
                                bool can_jump, bool can_sleep);
 pp_arrow_t pp_navigation_arrow_tick(pp_navigation_t *nav, uint32_t now, bool can_jump);
+bool pp_navigation_standby_hint(const pp_navigation_t *nav, uint32_t now);
 bool pp_navigation_standby_ready(const pp_navigation_t *nav, uint32_t now);
 /* A consumed hold never also emits a short action. */
 bool pp_navigation_arrow_release(pp_navigation_t *nav, pp_arrow_t key);

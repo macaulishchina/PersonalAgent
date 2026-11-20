@@ -1,7 +1,8 @@
 #pragma once
 
-/* Protocol 2 limits shared by the transport, audio adapter and controller.
+/* Protocol limits shared by the transport, audio adapter and controller.
  * Audio uses signed 16-bit mono samples. Credit is counted in PCM bytes. */
+#define PP_PROTOCOL_VERSION 2u
 #define PP_WIRE_MESSAGE_BYTES 16384u
 #define PP_CAPTURE_RATE 16000u
 #define PP_CAPTURE_BYTES (PP_CAPTURE_RATE * 2u / 50u)
@@ -19,7 +20,8 @@
 #define PP_OK_DOUBLE_WINDOW_MS 300u
 #define PP_OK_HOLD_MS 200u
 #define PP_ARROW_HOLD_MS 650u
-#define PP_STANDBY_HOLD_MS 3000u
+#define PP_STANDBY_HINT_MS 1000u
+#define PP_STANDBY_HOLD_MS 2000u
 #define PP_TERMINAL_READ_TIMEOUT_MS 15000u
 #define PP_MENU_GRID_TILES 4u
 #define PP_BRIGHTNESS_MIN 40u

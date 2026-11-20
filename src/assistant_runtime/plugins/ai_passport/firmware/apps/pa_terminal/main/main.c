@@ -4,6 +4,7 @@
 #include "bsp_battery.h"
 #include "bsp_audio.h"
 #include "bsp_button.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_pm.h"
@@ -105,7 +106,7 @@ static bool send_id(const char *type, const char *id) {
 static void set_status(const char *text) { pp_text(status, sizeof(status), text); }
 /* The home card describes connectivity. Menus keep their own route and never
  * borrow the chat body for credentials, network diagnostics or pairing codes. */
-static char network_details[640];
+static char local_details[640];
 static char connection_status[160], hotspot_info[192], pairing_info[128];
 static bool setup_home(void) {
     return !configured || !settings.paired || pp_provision_active() || pp_net_rejected();
@@ -512,6 +513,7 @@ static void actions(unsigned mask) {
             return;
         }
         input_begin_queued = true;
+        pp_audio_capture_confirm();
         sequence = 0;
         ESP_LOGI("pa_terminal", "input_begin elapsed_ms=%u blocks=%u capacity=%u early=%d",
                  (unsigned)(now_ms() - input_state.started), pp_audio_recorded_count(),
@@ -522,6 +524,7 @@ static void actions(unsigned mask) {
         if (input_state.phase == PP_INPUT_OPENING || input_state.phase == PP_INPUT_RECORDING) {
             pp_input_release(&input_state);
             stop_capture_upload(false);
+            pp_audio_recording_released();
         }
     }
     if (mask & PP_TOGGLE) {
@@ -589,7 +592,8 @@ static void request_notice_page(unsigned offset) {
     }
 }
 static void receive_hello(cJSON *j, uint32_t generation) {
-    if (number(j, "protocol") != 2 || number(j, "input_rate") != PP_CAPTURE_RATE || number(j, "output_rate") != PP_PLAYBACK_RATE ||
+    if (number(j, "protocol") != PP_PROTOCOL_VERSION || number(j, "input_rate") != PP_CAPTURE_RATE ||
+        number(j, "output_rate") != PP_PLAYBACK_RATE ||
         pp_settings_binding(string(j, "binding"), &settings) != ESP_OK ||
         !pp_net_accept_protocol(number(j, "protocol"), generation)) {
         strcpy(connection_status, "协议或设备绑定不匹配，请检查服务版本");
@@ -1198,8 +1202,8 @@ static unsigned brightness_preview;
 static void choose(void) {
     pp_selection_t action = pp_navigation_selected(&navigation);
     if (!configured && action != PP_SELECT_CONNECTIVITY && action != PP_SELECT_MAINTENANCE &&
-        action != PP_SELECT_NETWORK && action != PP_SELECT_HOME && action != PP_SELECT_BACK &&
-        action != PP_SELECT_FACTORY) {
+        action != PP_SELECT_NETWORK && action != PP_SELECT_ABOUT && action != PP_SELECT_HOME &&
+        action != PP_SELECT_BACK && action != PP_SELECT_FACTORY) {
         set_status("本地设置读取失败");
         return;
     }
@@ -1254,6 +1258,9 @@ static void choose(void) {
         view = PP_UI_INFO;
         view_page = view_next = 0;
         set_status("网络状态");
+        break;
+    case PP_SELECT_ABOUT:
+        pp_navigation_open(&navigation, PP_SCREEN_ABOUT);
         break;
     case PP_SELECT_KEEP_ONLINE:
         if (pp_preference(PP_PREF_KEEP_ONLINE, !settings.keep_online, &settings) != ESP_OK)
@@ -1387,7 +1394,7 @@ static void local_move(pp_route_t route, int direction) {
     }
     else if (navigation.screen == PP_SCREEN_NETWORK) {
         if (direction < 0 && view_page)
-            view_page = pp_ui_previous(network_details, view_page);
+            view_page = pp_ui_previous(local_details, view_page);
         else if (direction > 0 && view_next)
             view_page = view_next;
     }
@@ -1837,10 +1844,13 @@ static void render_screen(void) {
                             i < 2
                         ? setting_labels[i] : pp_navigation_label(&navigation, i);
     }
-    bool listening = pp_audio_capturing() && pp_input_listening(&input_state);
+    bool listening = pp_audio_capture_ready() && pp_input_listening(&input_state);
+    bool preparing_record = pp_audio_capturing() && !listening && pp_input_listening(&input_state);
     pp_route_t route = current_route();
     bool setup_card = route == PP_ROUTE_SETUP;
     bool network_page = navigation.screen == PP_SCREEN_NETWORK;
+    bool about_page = navigation.screen == PP_SCREEN_ABOUT;
+    bool info_page = network_page || about_page;
     const bool quiet_wifi = configured && settings.wifi_count && !wifi_connected &&
                             !pp_provision_active() && !pp_net_rejected();
     const char *details = setup_card ? connection_info() : "";
@@ -1853,11 +1863,15 @@ static void render_screen(void) {
         char signal[24] = "未连接";
         if (wifi_rssi != -127)
             snprintf(signal, sizeof(signal), "%d dBm", wifi_rssi);
-        snprintf(network_details, sizeof(network_details),
+        snprintf(local_details, sizeof(local_details),
                  "Wi-Fi %s\n%s\n信号 %s\n可用内存 %u\n最大连续块 %u",
                  wifi_rssi == -127 ? "未连接" : wifi_name, link_status, signal,
                  (unsigned)esp_get_free_heap_size(),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    } else if (about_page) {
+        snprintf(local_details, sizeof(local_details),
+                 "FoloToy AI Passport\n芯片 ESP32-C3\n闪存 %s\n固件 %s\n协议 %u",
+                 CONFIG_ESPTOOLPY_FLASHSIZE, esp_app_get_description()->version, PP_PROTOCOL_VERSION);
     }
     bool volume_screen = navigation.screen == PP_SCREEN_VOLUME;
     bool brightness_screen = navigation.screen == PP_SCREEN_BRIGHTNESS;
@@ -1870,7 +1884,7 @@ static void render_screen(void) {
                 : brightness_screen                           ? PP_UI_BRIGHTNESS
                 : menu || notice_list                         ? PP_UI_MENU
                 : (setup_card && quiet_wifi)                  ? PP_UI_IDLE
-                : setup_card || network_page || volume_screen ? PP_UI_INFO
+                : setup_card || info_page || volume_screen    ? PP_UI_INFO
                 : navigation.screen == PP_SCREEN_HOME         ? PP_UI_IDLE
                                                               : view,
         .state =
@@ -1879,15 +1893,17 @@ static void render_screen(void) {
             : new_message && strcmp(status, speech_unavailable_status) &&
                       (browsing || navigation.screen == PP_SCREEN_HOME)
                 ? "有新回复 · 上下查看"
+                : about_page ? ""
+                : preparing_record ? "准备收音"
                 : awaiting_reply ? "等待回复" : status,
         .body = setup_card                                ? details
-                : network_page                            ? network_details
+                : info_page                               ? local_details
                 : navigation.screen == PP_SCREEN_QUESTION ? question_text
                                                           : body,
         .origin = setup_card                                ? "设备连接"
                   : navigation.screen == PP_SCREEN_QUESTION ? "等待回答"
                   : menu || notice_list || notice_view || volume_screen || brightness_screen ||
-                          navigation.screen == PP_SCREEN_NETWORK
+                          info_page
                       ? pp_navigation_title(&navigation)
                   : view == PP_UI_INFO ? status
                                        : message_origin,
@@ -1909,7 +1925,7 @@ static void render_screen(void) {
         .wifi = wifi_rssi,
         .wifi_searching = !wifi_connected && pp_net_wifi_searching(),
         .now = now_ms(),
-        .page = setup_card ? 0 : view_page,
+        .page = setup_card || about_page ? 0 : view_page,
         .follow = route == PP_ROUTE_SESSION && message_streaming && !view_page,
         .level = listening ? pp_audio_level() : 0,
         .elapsed = listening ? now_ms() - input_state.started : 0,
@@ -1920,9 +1936,13 @@ static void render_screen(void) {
                 : menu || notice_list                     ? "OK 确认 · 长↑主页"
                 : brightness_screen                       ? "上下调整 · OK 保存"
                 : volume_screen                           ? "上下音量 · OK返回"
-                : navigation.screen == PP_SCREEN_NETWORK  ? "OK 返回 · 长↑主页"
+                : info_page                               ? "OK 返回 · 长↑主页"
                 : listening                               ? "正在听 · 松开结束"
+                : preparing_record                        ? "继续按住 OK"
                 : speech_session                          ? "上下音量 · OK停播"
+                : route == PP_ROUTE_SESSION && pp_navigation_standby_hint(&navigation, now_ms()) &&
+                          sleep_available()
+                    ? "继续长按将休眠"
                 : navigation.screen == PP_SCREEN_HOME     ? "按住说 · OK菜单"
                 : navigation.screen == PP_SCREEN_QUESTION ? "按住回答 · 长↑主页"
                 : can_jump_to_latest(route)               ? "上下翻页 · 长↓最新"

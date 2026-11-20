@@ -1,4 +1,5 @@
 #include "network_model.h"
+#include "terminal_limits.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -112,7 +113,7 @@ bool pp_link_open(pp_link_t *link, uint32_t generation) {
 }
 bool pp_link_accept(pp_link_t *link, uint32_t generation, unsigned protocol) {
     uint32_t handshake = generation | LINK_CONNECTED;
-    return generation && protocol == 2 &&
+    return generation && protocol == PP_PROTOCOL_VERSION &&
            atomic_compare_exchange_strong(&link->state, &handshake, generation | LINK_READY);
 }
 void pp_link_close(pp_link_t *link, uint32_t generation) {

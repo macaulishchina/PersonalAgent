@@ -296,7 +296,7 @@ static bool pairing(pp_connection_settings_t *settings, const char *pem) {
     if (!pp_server_endpoint(settings->url, "pair", false, address, sizeof(address)))
         return false;
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddNumberToObject(body, "protocol", 2);
+    cJSON_AddNumberToObject(body, "protocol", PP_PROTOCOL_VERSION);
     cJSON_AddStringToObject(body, "device_id", settings->device);
     cJSON_AddStringToObject(body, "credential", settings->credential);
     char *raw = cJSON_PrintUnformatted(body);
@@ -331,7 +331,7 @@ static bool pairing(pp_connection_settings_t *settings, const char *pem) {
         if (e == ESP_OK && status == 200 && !response.overflow) {
             cJSON *answer = cJSON_Parse(response.text),
                   *protocol = cJSON_GetObjectItemCaseSensitive(answer, "protocol");
-            if (cJSON_IsNumber(protocol) && protocol->valuedouble == 2) {
+            if (cJSON_IsNumber(protocol) && protocol->valuedouble == PP_PROTOCOL_VERSION) {
                 paired = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(answer, "paired"));
                 cJSON *code = cJSON_GetObjectItemCaseSensitive(answer, "code");
                 if (!paired && cJSON_IsString(code) && strlen(code->valuestring) == 8) {

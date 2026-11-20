@@ -13,8 +13,11 @@
 static void (*worker_entry)(void *);
 static jmp_buf finished;
 static bool test_mute, test_drain, small_heap, overflowing = true;
+static bool test_cues, early_voice;
 static uint32_t tx_position;
 static unsigned reads, writes, failed_mutes, polls, alloc_limit, capture_frames;
+static unsigned cue_reads;
+static int16_t first_cue[512];
 static char task;
 
 void *pp_test_realloc(void *pointer, size_t size) {
@@ -53,12 +56,52 @@ int bsp_audio_set_format(unsigned rate, unsigned bits, unsigned channels) {
 }
 int bsp_audio_read(void *pcm, size_t size) {
     reads++;
+    if (test_cues) {
+        if (reads == 1) {
+            memset(pcm, early_voice ? 0x10 : 0, size);
+            pp_audio_capture_confirm();
+            assert(!pp_audio_capture_ready());
+        } else if (cue_reads) {
+            cue_reads--;
+            tx_position += 7;
+            memset(pcm, 0x7f, size); /* Simulate the speaker entering the mic. */
+        } else {
+            assert(pp_audio_capture_ready());
+            memset(pcm, 2, size);
+            pp_audio_capture_release();
+            pp_audio_recording_released();
+        }
+        return ESP_OK;
+    }
     memset(pcm, reads, size);
     if (!overflowing)
         pp_audio_capture_release(); /* Key released during the hardware read. */
     return ESP_OK;
 }
 int bsp_audio_write(const void *pcm, size_t size, size_t *written) {
+    if (test_cues) {
+        assert(pcm && size == sizeof(first_cue) && !cue_reads);
+        const int16_t *samples = pcm;
+        assert(samples[0] == 0 && samples[511] == 0);
+        assert(memcmp(samples, (const int16_t[512]){0}, size));
+        const bool opening = !early_voice && !writes;
+        if (opening) {
+            assert(pp_audio_capturing() && !pp_audio_capture_ready());
+            memcpy(first_cue, pcm, size);
+        } else {
+            pp_recording_t frame;
+            assert(!pp_audio_capturing());
+            assert(pp_audio_recorded(&frame) && frame.pcm[0] == (early_voice ? 0x10 : 0));
+            assert(pp_audio_recorded(&frame) && frame.pcm[0] == 2);
+            assert(pp_audio_capture_drained());
+            if (!early_voice)
+                assert(memcmp(first_cue, pcm, size));
+        }
+        cue_reads = 3;
+        *written = size;
+        writes++;
+        return ESP_OK;
+    }
     assert((test_mute || test_drain) && pcm && size == 2);
     *written = size;
     writes++;
@@ -73,7 +116,10 @@ bool bsp_audio_tx_drained(uint32_t position) { return tx_position - position >= 
 
 void ulTaskNotifyTake(int clear, unsigned wait) {
     assert(clear && wait == portMAX_DELAY && ++polls <= 5);
-    if (test_drain) {
+    if (test_cues) {
+        assert(writes == (early_voice ? 1u : 2u) && !cue_reads);
+        assert(pp_audio_capture_drained() && !pp_audio_playback_report().i2s_bytes);
+    } else if (test_drain) {
         assert(writes == 1 && pp_audio_take_credit() == 2);
         assert(!pp_audio_play_drained());
         tx_position = 6;
@@ -130,7 +176,9 @@ int main(int argc, char **argv) {
     test_mute = !strcmp(argv[1], "mute");
     test_drain = !strcmp(argv[1], "drain");
     small_heap = !strcmp(argv[1], "small-heap");
-    assert(test_mute || test_drain || small_heap || !strcmp(argv[1], "overflow"));
+    early_voice = !strcmp(argv[1], "early-voice");
+    test_cues = early_voice || !strcmp(argv[1], "cues");
+    assert(test_mute || test_drain || test_cues || small_heap || !strcmp(argv[1], "overflow"));
     assert(pp_audio_start(45));
     assert(!pp_memory_stats().live[PP_MEMORY_CAPTURE] && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = 2;

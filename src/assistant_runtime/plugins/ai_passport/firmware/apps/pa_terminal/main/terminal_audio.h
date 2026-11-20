@@ -16,9 +16,12 @@ bool pp_audio_start(unsigned volume);
 bool pp_audio_quiesce(void);
 void pp_audio_resume(void);
 bool pp_audio_capture_begin(void);
+void pp_audio_capture_confirm(void);
+void pp_audio_recording_released(void);
 void pp_audio_capture_release(void); /* Nonblocking, also called by the key callback. */
 void pp_audio_capture_discard(void);
 bool pp_audio_capturing(void);
+bool pp_audio_capture_ready(void);
 bool pp_audio_recorded(pp_recording_t *block);
 unsigned pp_audio_recorded_count(void);
 unsigned pp_audio_recording_capacity(void);

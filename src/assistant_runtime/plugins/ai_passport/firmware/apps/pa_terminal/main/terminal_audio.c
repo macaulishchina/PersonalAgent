@@ -15,6 +15,7 @@
 #define CAPTURE_BLOCK_BYTES (CAPTURE_FRAMES_PER_BLOCK * PP_CAPTURE_BYTES)
 /* Optional audio capacity must leave room for TLS and control messages. */
 #define AUDIO_HEAP_RESERVE (32u * 1024u)
+#define EARLY_VOICE_LEVEL 32u
 _Static_assert(PP_CAPTURE_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 _Static_assert(PP_CAPTURE_MAX_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 
@@ -28,11 +29,14 @@ static uint32_t output_tx_position;
 static bool output_has_written;
 static portMUX_TYPE output_lock = portMUX_INITIALIZER_UNLOCKED;
 static atomic_bool capturing, busy, codec_failed, pause_requested, parked;
+static atomic_bool capture_reading, end_cue_pending;
 static atomic_int fault;
 static atomic_uint capture_generation, target_volume, input_level;
 static atomic_uint capture_releases;
+static atomic_uint start_cue_generation;
 
 bool pp_audio_capturing(void) { return capturing; }
+bool pp_audio_capture_ready(void) { return capturing && !start_cue_generation; }
 bool pp_audio_busy(void) { return busy; }
 unsigned pp_audio_level(void) { return input_level; }
 unsigned pp_audio_volume(void) { return target_volume; }
@@ -43,11 +47,24 @@ void pp_audio_capture_release(void) {
     capture_releases++;
     capturing = false;
 }
+void pp_audio_capture_confirm(void) {
+    if (!worker || !capturing || !target_volume)
+        return;
+    start_cue_generation = capture_generation;
+    xTaskNotifyGive(worker);
+}
+void pp_audio_recording_released(void) {
+    if (!worker || codec_failed || !target_volume)
+        return;
+    end_cue_pending = true;
+    xTaskNotifyGive(worker);
+}
 void pp_audio_capture_discard(void) {
     pp_buffer_t returned[CAPTURE_MAX_BLOCKS];
     portENTER_CRITICAL(&record_lock);
     capturing = false;
     capture_generation++;
+    start_cue_generation = 0;
     int overflow = PP_AUDIO_CAPTURE_OVERFLOW;
     atomic_compare_exchange_strong(&fault, &overflow, PP_AUDIO_OK);
     unsigned blocks = record_capacity / CAPTURE_FRAMES_PER_BLOCK;
@@ -59,6 +76,7 @@ void pp_audio_capture_discard(void) {
 }
 bool pp_audio_capture_begin(void) {
     pp_audio_capture_discard();
+    end_cue_pending = false;
     if (!worker || codec_failed)
         return false;
     unsigned releases = capture_releases;
@@ -115,7 +133,8 @@ unsigned pp_audio_recording_capacity(void) {
     return capacity;
 }
 bool pp_audio_capture_drained(void) {
-    return !capturing && !busy && !codec_failed && fault == PP_AUDIO_OK && !pp_audio_recorded_count();
+    return !capturing && !capture_reading && !codec_failed && fault == PP_AUDIO_OK &&
+           !pp_audio_recorded_count();
 }
 
 unsigned pp_audio_play_begin(uint32_t generation, unsigned max_window) {
@@ -230,6 +249,46 @@ static bool set_format(codec_state_t *codec, unsigned rate, unsigned volume) {
     }
     return set_volume(codec, volume);
 }
+static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
+    const unsigned volume = target_volume;
+    if (!volume)
+        return true;
+    if (!set_format(codec, PP_CAPTURE_RATE, volume))
+        return false;
+    /* A short rounded sweep with a soft attack and release. All samples use
+     * the worker's existing I2S scratch buffer. */
+    static const int16_t wave[] = {
+        0, 1567, 2896, 3784, 4096, 3784, 2896, 1567,
+        0, -1567, -2896, -3784, -4096, -3784, -2896, -1567,
+    };
+    enum { SAMPLES = 512, ATTACK = 64, TAIL = 160 };
+    unsigned phase = 0;
+    for (unsigned i = 0; i < SAMPLES; i++) {
+        unsigned shape = i < ATTACK ? i * 256 / ATTACK
+                         : i >= SAMPLES - TAIL ? (SAMPLES - 1 - i) * 256 / TAIL : 256;
+        unsigned hz = opening ? 720 + i * 400 / SAMPLES : 980 - i * 390 / SAMPLES;
+        pcm[i] = wave[(phase >> 12) & 15u] * (int)shape / 256;
+        phase += (hz << 16) / PP_CAPTURE_RATE;
+    }
+    size_t written = 0;
+    (void)bsp_audio_write(pcm, SAMPLES * sizeof(*pcm), &written);
+    const uint32_t position = bsp_audio_tx_position();
+    /* Drain RX while the cue leaves the speaker so queued mic blocks cannot
+     * carry the cue into this recording or the next one. */
+    bool ok = true;
+    for (unsigned i = 0; written && i < 10 && !bsp_audio_tx_drained(position); i++) {
+        if (bsp_audio_read(pcm, PP_CAPTURE_BYTES) != ESP_OK) {
+            ok = false;
+            break;
+        }
+    }
+    if (!set_volume(codec, 0))
+        return false;
+    /* Discard the in-flight frame and give the acoustic tail a frame to settle. */
+    for (unsigned i = 0; written && ok && i < 2; i++)
+        ok = bsp_audio_read(pcm, PP_CAPTURE_BYTES) == ESP_OK;
+    return ok;
+}
 static pp_audio_error_t read_block(codec_state_t *codec, unsigned generation) {
     pp_recording_t block = {.generation = generation};
     if (!set_format(codec, PP_CAPTURE_RATE, 0) ||
@@ -272,6 +331,7 @@ static void disable_codec(void) {
 static void audio_worker(void *arg) {
     (void)arg;
     codec_state_t codec = {.volume = UINT32_MAX};
+    unsigned audible_capture = 0;
     for (;;) {
         if (pause_requested || codec_failed) {
             parked = true;
@@ -280,15 +340,37 @@ static void audio_worker(void *arg) {
         }
         parked = false;
         busy = true;
-        unsigned generation = capture_generation;
+        int16_t pcm[512];
+        capture_reading = true;
         if (capturing) {
+            unsigned generation = capture_generation;
+            unsigned cue_generation = start_cue_generation;
+            if (cue_generation && cue_generation == generation) {
+                capture_reading = false;
+                /* Protect words that already arrived in pre-roll. Otherwise
+                 * play the start cue before accepting the next mic frame. */
+                if (audible_capture != generation && capturing && !play_record_cue(&codec, pcm, true))
+                    disable_codec();
+                atomic_compare_exchange_strong(&start_cue_generation, &generation, 0);
+                busy = false;
+                continue;
+            }
             pp_audio_error_t error = read_block(&codec, generation);
             if (error == PP_AUDIO_CODEC_FAILURE)
+                disable_codec();
+            else if (error == PP_AUDIO_OK && generation == capture_generation &&
+                     input_level >= EARLY_VOICE_LEVEL)
+                audible_capture = generation;
+            capture_reading = busy = false;
+            continue;
+        }
+        capture_reading = false;
+        if (atomic_exchange(&end_cue_pending, false)) {
+            if (!play_record_cue(&codec, pcm, false))
                 disable_codec();
             busy = false;
             continue;
         }
-        uint8_t pcm[1024];
         uint32_t epoch = 0;
         portENTER_CRITICAL(&output_lock);
         bool dma_empty = output_has_written && bsp_audio_tx_drained(output_tx_position);

@@ -45,6 +45,14 @@ int main(void) {
     pp_navigation_move(&nav, 1);
     assert(pp_navigation_selected(&nav) == PP_SELECT_REPAIR);
     pp_navigation_move(&nav, 1);
+    assert(pp_navigation_selected(&nav) == PP_SELECT_ABOUT);
+    pp_navigation_open(&nav, PP_SCREEN_ABOUT);
+    assert(!pp_navigation_menu(&nav) && !pp_navigation_audio(&nav));
+    assert(pp_navigation_route(&nav, false, true, false) == PP_ROUTE_LOCAL);
+    assert(!strcmp(pp_navigation_title(&nav), "关于设备"));
+    pp_navigation_back(&nav);
+    assert(nav.screen == PP_SCREEN_MAINTENANCE && pp_navigation_selected(&nav) == PP_SELECT_ABOUT);
+    pp_navigation_move(&nav, 1);
     assert(pp_navigation_selected(&nav) == PP_SELECT_FACTORY);
     pp_navigation_back(&nav);
     assert(nav.screen == PP_SCREEN_CONNECTIVITY);
@@ -131,6 +139,9 @@ int main(void) {
 
     pp_navigation_arrow_press(&nav, PP_ARROW_UP, 7000, false, true);
     assert(pp_navigation_arrow_tick(&nav, 7000 + PP_ARROW_HOLD_MS, false) == PP_ARROW_NONE);
+    assert(!pp_navigation_standby_hint(&nav, 7000 + PP_STANDBY_HINT_MS - 1));
+    assert(pp_navigation_standby_hint(&nav, 7000 + PP_STANDBY_HINT_MS));
+    assert(!pp_navigation_standby_hint(&nav, 7000 + PP_STANDBY_HOLD_MS));
     assert(!pp_navigation_standby_ready(&nav, 7000 + PP_STANDBY_HOLD_MS - 1));
     assert(pp_navigation_standby_ready(&nav, 7000 + PP_STANDBY_HOLD_MS));
     assert(!pp_navigation_arrow_release(&nav, PP_ARROW_UP));
