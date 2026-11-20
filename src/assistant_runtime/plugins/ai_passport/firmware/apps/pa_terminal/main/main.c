@@ -1158,13 +1158,18 @@ static void standby_now(void) {
     pp_net_leave_standby();
     ESP_LOGI("pa_terminal", "wifi_standby_wake associated=%d", pp_net_wifi_connected());
 }
-static void sleep_now(bool explicit) {
-    if (sleep_failed || pp_audio_capturing() || input_state.phase != PP_INPUT_IDLE || waiting ||
-        speech_session || !pp_board_keys_released()) {
+static bool sleep_available(void) {
+    return !sleep_failed && !pp_audio_capturing() && input_state.phase == PP_INPUT_IDLE &&
+           !waiting && !speech_session;
+}
+static void sleep_now(bool explicit, bool allow_held_key) {
+    if (!sleep_available() || (!allow_held_key && !pp_board_keys_released())) {
         if (explicit)
             set_status("当前交互未结束，暂不休眠");
         return;
     }
+    if (allow_held_key)
+        pp_ui_blank();
     if (configured && settings.standby_wifi && settings.wifi_count && !pp_provision_active()) {
         standby_now();
         return;
@@ -1178,6 +1183,10 @@ static void sleep_now(bool explicit) {
         set_status("网络未正常停止，请重启");
         return;
     }
+    /* GPIO0 is a level wake source. Keep the display dark until the held key
+     * is released, then arm it without treating that release as a wake. */
+    while (allow_held_key && !pp_board_keys_released())
+        vTaskDelay(pdMS_TO_TICKS(20));
     pp_board_enter_deep_sleep();
 }
 static void adjust_volume(int delta) {
@@ -1292,7 +1301,7 @@ static void choose(void) {
         confirm_maintenance(action);
         break;
     case PP_SELECT_SLEEP:
-        sleep_now(true);
+        sleep_now(true, false);
         break;
     default:
         break;
@@ -1307,6 +1316,11 @@ static bool can_jump_to_latest(pp_route_t route) {
            (navigation.screen == PP_SCREEN_CHAT || browsing);
 }
 static void handle_arrow_hold(pp_route_t route, uint32_t now) {
+    if (route == PP_ROUTE_SESSION && pp_navigation_standby_ready(&navigation, now)) {
+        navigation.arrow = PP_ARROW_NONE;
+        sleep_now(true, true);
+        return;
+    }
     switch (pp_navigation_arrow_tick(&navigation, now, can_jump_to_latest(route))) {
     case PP_ARROW_UP: home(NULL); break;
     case PP_ARROW_DOWN: jump_to_latest(); break;
@@ -1487,7 +1501,8 @@ static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
         }
     } else if (event.button == BSP_BTN_PRESS) {
         pp_navigation_arrow_press(&navigation, event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN,
-                                  now, can_jump_to_latest(route));
+                                  now, can_jump_to_latest(route),
+                                  route == PP_ROUTE_SESSION && sleep_available());
     } else if (event.button == BSP_BTN_RELEASE) {
         handle_arrow_hold(route, now);
         pp_arrow_t key = event.key == BSP_BTN_UP ? PP_ARROW_UP : PP_ARROW_DOWN;
@@ -2102,7 +2117,7 @@ void app_main(void) {
         if (configured && !setup_home() && settings.wifi_count &&
             current_route() == PP_ROUTE_SESSION && !settings.keep_online &&
             now_ms() - activity > settings.sleep_seconds * 1000)
-            sleep_now(false);
+            sleep_now(false, false);
         if (preference_changed && now_ms() - preference_changed >= 500) {
             preference_changed = 0;
             if (pp_preference(PP_PREF_VOLUME, pp_audio_volume(), &settings) != ESP_OK)

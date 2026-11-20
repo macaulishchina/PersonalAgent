@@ -160,28 +160,35 @@ void pp_navigation_ok_transition(pp_navigation_t *n, uint32_t now) {
     n->transition_at = now;
 }
 void pp_navigation_arrow_press(pp_navigation_t *n, pp_arrow_t key, uint32_t now,
-                               bool can_jump) {
+                               bool can_jump, bool can_sleep) {
     if (n->arrow != PP_ARROW_NONE)
         return;
     n->arrow = key;
     n->arrow_consumed = false;
     n->arrow_can_jump = key == PP_ARROW_DOWN && can_jump;
+    n->arrow_can_sleep = key == PP_ARROW_UP && n->screen == PP_SCREEN_HOME && can_sleep;
     n->arrow_started = now;
     n->arrow_epoch = n->page_epoch;
 }
 pp_arrow_t pp_navigation_arrow_tick(pp_navigation_t *n, uint32_t now, bool can_jump) {
-    if (n->arrow == PP_ARROW_NONE || n->arrow_consumed || now - n->arrow_started < 650)
+    if (n->arrow == PP_ARROW_NONE || n->arrow_consumed || now - n->arrow_started < PP_ARROW_HOLD_MS)
         return PP_ARROW_NONE;
     if (n->arrow == PP_ARROW_DOWN && !n->arrow_can_jump)
         return PP_ARROW_NONE;
     n->arrow_consumed = true;
-    return n->arrow == PP_ARROW_UP || (can_jump && n->arrow_epoch == n->page_epoch)
-               ? n->arrow : PP_ARROW_NONE;
+    if (n->arrow == PP_ARROW_UP)
+        return n->arrow_can_sleep ? PP_ARROW_NONE : PP_ARROW_UP;
+    return can_jump && n->arrow_epoch == n->page_epoch ? n->arrow : PP_ARROW_NONE;
+}
+bool pp_navigation_standby_ready(const pp_navigation_t *n, uint32_t now) {
+    return n->arrow == PP_ARROW_UP && n->arrow_can_sleep && n->arrow_epoch == n->page_epoch &&
+           now - n->arrow_started >= PP_STANDBY_HOLD_MS;
 }
 bool pp_navigation_arrow_release(pp_navigation_t *n, pp_arrow_t key) {
     if (n->arrow != key)
         return false;
-    bool short_press = !n->arrow_consumed && (!n->arrow_can_jump || n->arrow_epoch == n->page_epoch);
+    bool owned = !(n->arrow_can_jump || n->arrow_can_sleep) || n->arrow_epoch == n->page_epoch;
+    bool short_press = !n->arrow_consumed && owned;
     n->arrow = PP_ARROW_NONE;
     return short_press;
 }

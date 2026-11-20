@@ -58,7 +58,7 @@ typedef struct {
     uint8_t focus[PP_SCREEN_COUNT];
     uint32_t page_epoch;
     pp_arrow_t arrow;
-    bool arrow_consumed, arrow_can_jump;
+    bool arrow_consumed, arrow_can_jump, arrow_can_sleep;
     uint32_t arrow_started, arrow_epoch;
     bool ok_held, ok_wifi_retry, ok_consumed, transition_click;
     pp_route_t ok_route;
@@ -87,7 +87,8 @@ bool pp_navigation_ok_wifi_tick(pp_navigation_t *nav, pp_route_t route, uint32_t
 bool pp_navigation_ok_release(pp_navigation_t *nav, pp_route_t route);
 void pp_navigation_ok_transition(pp_navigation_t *nav, uint32_t now);
 void pp_navigation_arrow_press(pp_navigation_t *nav, pp_arrow_t key, uint32_t now,
-                               bool can_jump);
+                               bool can_jump, bool can_sleep);
 pp_arrow_t pp_navigation_arrow_tick(pp_navigation_t *nav, uint32_t now, bool can_jump);
+bool pp_navigation_standby_ready(const pp_navigation_t *nav, uint32_t now);
 /* A consumed hold never also emits a short action. */
 bool pp_navigation_arrow_release(pp_navigation_t *nav, pp_arrow_t key);

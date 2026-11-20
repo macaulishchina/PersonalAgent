@@ -25,6 +25,7 @@ typedef struct {
     size_t page;
 } pp_ui_frame_t;
 bool pp_ui_init(void);
+void pp_ui_blank(void);
 bool pp_ui_standby(bool enabled);
 /* Returns the next local page's UTF-8 offset, zero at the end. */
 size_t pp_ui_render(const pp_ui_frame_t *frame);

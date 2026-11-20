@@ -54,6 +54,11 @@ enum { BATTERY_BODY_W = 25, BATTERY_H = 13, BATTERY_CAP_W = 2, BATTERY_CAP_GAP =
 static int battery_percent = -1;
 static char battery_value[4] = "--";
 
+void pp_ui_blank(void) {
+    bsp_display_backlight(0);
+    current_brightness = 0;
+}
+
 bool pp_ui_standby(bool enabled) {
     if (bsp_lvgl_standby(enabled) != ESP_OK)
         return false;
