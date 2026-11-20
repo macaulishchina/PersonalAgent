@@ -16,6 +16,7 @@
 /* Optional audio capacity must leave room for TLS and control messages. */
 #define AUDIO_HEAP_RESERVE (32u * 1024u)
 #define EARLY_VOICE_LEVEL 32u
+#define EARLY_VOICE_STRONG_LEVEL (3u * EARLY_VOICE_LEVEL)
 #define AUDIO_WORK_SAMPLES 512u
 _Static_assert(PP_CAPTURE_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 _Static_assert(PP_CAPTURE_MAX_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
@@ -270,9 +271,9 @@ static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
     /* The press is a damped tap. Release is a soft puff with a late crest.
      * Keep press latency at 32 ms and reuse the same buffer for release. */
     const unsigned samples = opening ? AUDIO_WORK_SAMPLES : 2 * AUDIO_WORK_SAMPLES;
-    const unsigned attack = (opening ? 3u : 46u) * (PP_CAPTURE_RATE / 1000);
-    const unsigned tap_step = (520u << 16) / PP_CAPTURE_RATE;
-    const unsigned overtone_step = (1000u << 16) / PP_CAPTURE_RATE;
+    const unsigned attack = (opening ? 5u : 46u) * (PP_CAPTURE_RATE / 1000);
+    const unsigned tap_step = (1060u << 16) / PP_CAPTURE_RATE;
+    const unsigned overtone_step = (1520u << 16) / PP_CAPTURE_RATE;
     const size_t block_bytes = AUDIO_WORK_SAMPLES * sizeof(*pcm);
     uint32_t noise = 1;
     int low = 0, band = 0;
@@ -282,17 +283,17 @@ static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
             const unsigned at = offset + i;
             const int ramp = (int)(at < attack ? at * 256 / attack
                                   : (samples - 1 - at) * 256 / (samples - 1 - attack));
+            const int envelope = ramp * ramp * (768 - 2 * ramp) / (256 * 256);
             if (opening) {
                 /* Two short resonances keep the tap audible on the small speaker. */
-                const int body = 3 * cue_sine(at * tap_step) / 4 + cue_sine(at * overtone_step) / 6;
-                pcm[i] = body * ramp * ramp / (256 * 256);
+                const int body = 5 * cue_sine(at * tap_step) / 4 + cue_sine(at * overtone_step) / 6;
+                pcm[i] = body * envelope / 256;
             } else {
                 /* Damped band-pass around 2 kHz gives the puff its airy texture. */
                 noise = noise * 1664525u + 1013904223u;
                 low += band * 3 / 4;
                 const int high = (int)(noise >> 20) - 2048 - low - band * 7 / 8;
                 band += high * 3 / 4;
-                const int envelope = ramp * ramp * (768 - 2 * ramp) / (256 * 256);
                 pcm[i] = band * envelope * 3 / (256 * 4);
             }
         }
@@ -319,6 +320,11 @@ static bool play_record_cue(codec_state_t *codec, int16_t *pcm, bool opening) {
         ok = bsp_audio_read(pcm, PP_CAPTURE_BYTES) == ESP_OK;
     return ok;
 }
+
+static int pcm_sample(const unsigned char *bytes) {
+    return (int16_t)(bytes[0] | ((unsigned)bytes[1] << 8));
+}
+
 static pp_audio_error_t read_block(codec_state_t *codec, unsigned generation) {
     pp_recording_t block = {.generation = generation};
     if (!set_format(codec, PP_CAPTURE_RATE, 0) ||
@@ -341,12 +347,19 @@ static pp_audio_error_t read_block(codec_state_t *codec, unsigned generation) {
     memcpy(capture_slot(tail), block.pcm, sizeof(block.pcm));
     record_count++;
     portEXIT_CRITICAL(&record_lock);
+    /* A DC offset is not acoustic activity. Remove it from the meter and
+     * cue decision while keeping the transmitted PCM unchanged. */
+    enum { STRIDE = 16, POINTS = PP_CAPTURE_BYTES / STRIDE };
+    int mean = 0;
+    for (unsigned i = 0; i < sizeof(block.pcm); i += STRIDE)
+        mean += pcm_sample(&block.pcm[i]);
+    mean /= POINTS;
     unsigned amplitude = 0;
-    for (unsigned i = 0; i < sizeof(block.pcm); i += 16) {
-        int sample = (int16_t)(block.pcm[i] | ((unsigned)block.pcm[i + 1] << 8));
+    for (unsigned i = 0; i < sizeof(block.pcm); i += STRIDE) {
+        const int sample = pcm_sample(&block.pcm[i]) - mean;
         amplitude += sample < 0 ? -sample : sample;
     }
-    input_level = amplitude / (sizeof(block.pcm) / 16) / 12;
+    input_level = amplitude / POINTS / 12;
     return PP_AUDIO_OK;
 }
 
@@ -361,7 +374,8 @@ static void disable_codec(void) {
 static void audio_worker(void *arg) {
     (void)arg;
     codec_state_t codec = {.volume = UINT32_MAX};
-    unsigned audible_capture = 0;
+    unsigned preroll_generation = 0;
+    bool previous_loud = false, early_voice = false;
     for (;;) {
         if (pause_requested || codec_failed) {
             parked = true;
@@ -374,12 +388,16 @@ static void audio_worker(void *arg) {
         capture_reading = true;
         if (capturing) {
             unsigned generation = capture_generation;
+            if (preroll_generation != generation) {
+                preroll_generation = generation;
+                previous_loud = early_voice = false;
+            }
             unsigned cue_generation = start_cue_generation;
             if (cue_generation && cue_generation == generation) {
                 capture_reading = false;
                 /* Protect words that already arrived in pre-roll. Otherwise
                  * play the start cue before accepting the next mic frame. */
-                if (audible_capture != generation && capturing && !play_record_cue(&codec, pcm, true))
+                if (!early_voice && capturing && !play_record_cue(&codec, pcm, true))
                     disable_codec();
                 atomic_compare_exchange_strong(&start_cue_generation, &generation, 0);
                 busy = false;
@@ -388,9 +406,14 @@ static void audio_worker(void *arg) {
             pp_audio_error_t error = read_block(&codec, generation);
             if (error == PP_AUDIO_CODEC_FAILURE)
                 disable_codec();
-            else if (error == PP_AUDIO_OK && generation == capture_generation &&
-                     input_level >= EARLY_VOICE_LEVEL)
-                audible_capture = generation;
+            else if (error == PP_AUDIO_OK && generation == capture_generation) {
+                /* A bump at the beginning of the hold must not suppress the
+                 * cue later. Keep protecting speech near confirmation. */
+                const unsigned level = input_level;
+                const bool loud = level >= EARLY_VOICE_LEVEL;
+                early_voice = level >= EARLY_VOICE_STRONG_LEVEL || (loud && previous_loud);
+                previous_loud = loud;
+            }
             capture_reading = busy = false;
             continue;
         }

@@ -13,7 +13,7 @@
 static void (*worker_entry)(void *);
 static jmp_buf finished;
 static bool test_mute, test_drain, small_heap, overflowing = true;
-static bool test_cues, early_voice;
+static bool test_cues, early_voice, press_noise;
 static uint32_t tx_position;
 static unsigned reads, writes, failed_mutes, polls, alloc_limit, capture_frames;
 static unsigned cue_reads, release_writes;
@@ -56,10 +56,20 @@ int bsp_audio_set_format(unsigned rate, unsigned bits, unsigned channels) {
 int bsp_audio_read(void *pcm, size_t size) {
     reads++;
     if (test_cues) {
-        if (reads == 1) {
-            memset(pcm, early_voice ? 0x10 : 0, size);
-            pp_audio_capture_confirm();
-            assert(!pp_audio_capture_ready());
+        const unsigned preroll = press_noise ? 3u : 1u;
+        if (reads <= preroll) {
+            unsigned char *bytes = pcm;
+            const int amplitude = early_voice ? 4096 : press_noise && reads == 1 ? 768 : 0;
+            const int bias = press_noise && reads > 1 ? 1792 : 0;
+            for (size_t i = 0; i < size; i += 2) {
+                const uint16_t sample = (uint16_t)(bias + ((i / 16) % 2 ? -amplitude : amplitude));
+                bytes[i] = (unsigned char)sample;
+                bytes[i + 1] = (unsigned char)(sample >> 8);
+            }
+            if (reads == preroll) {
+                pp_audio_capture_confirm();
+                assert(!pp_audio_capture_ready());
+            }
         } else if (cue_reads) {
             cue_reads--;
             tx_position += 7;
@@ -88,18 +98,24 @@ int bsp_audio_write(const void *pcm, size_t size, size_t *written) {
             if (amplitude > peak)
                 peak = amplitude;
         }
-        assert(peak > 100 && peak <= 3000);
         const bool opening = !early_voice && !writes;
         if (opening) {
             assert(pp_audio_capturing() && !pp_audio_capture_ready());
+            assert(peak >= 2800 && peak <= 3800);
             assert(samples[0] == 0 && samples[count - 1] == 0);
             cue_reads = 3;
         } else {
             assert(!pp_audio_capturing());
+            assert(peak > 100 && peak <= 3000);
             if (++release_writes == 1) {
                 pp_recording_t frame;
                 assert(samples[0] == 0);
-                assert(pp_audio_recorded(&frame) && frame.pcm[0] == (early_voice ? 0x10 : 0));
+                const unsigned preroll = press_noise ? 3u : 1u;
+                for (unsigned i = 0; i < preroll; i++) {
+                    assert(pp_audio_recorded(&frame) && frame.pcm[0] == 0);
+                    const unsigned high_byte = early_voice ? 16u : press_noise ? (i == 0 ? 3u : 7u) : 0u;
+                    assert(frame.pcm[1] == high_byte);
+                }
                 assert(pp_audio_recorded(&frame) && frame.pcm[0] == 2);
                 assert(pp_audio_capture_drained());
             } else {
@@ -186,7 +202,8 @@ int main(int argc, char **argv) {
     test_drain = !strcmp(argv[1], "drain");
     small_heap = !strcmp(argv[1], "small-heap");
     early_voice = !strcmp(argv[1], "early-voice");
-    test_cues = early_voice || !strcmp(argv[1], "cues");
+    press_noise = !strcmp(argv[1], "press-noise");
+    test_cues = early_voice || press_noise || !strcmp(argv[1], "cues");
     assert(test_mute || test_drain || test_cues || small_heap || !strcmp(argv[1], "overflow"));
     assert(pp_audio_start(45));
     assert(!pp_memory_stats().live[PP_MEMORY_CAPTURE] && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);

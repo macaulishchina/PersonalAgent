@@ -165,6 +165,7 @@ add_test(NAME terminal_audio_capture_small_heap COMMAND test_terminal_audio smal
 add_test(NAME terminal_audio_dma_drain COMMAND test_terminal_audio drain)
 add_test(NAME terminal_audio_recording_cues COMMAND test_terminal_audio cues)
 add_test(NAME terminal_audio_cue_preserves_early_voice COMMAND test_terminal_audio early-voice)
+add_test(NAME terminal_audio_cue_ignores_press_noise COMMAND test_terminal_audio press-noise)
 
 add_executable(test_cache_resident test_cache_resident.c ../apps/pa_terminal/main/cache_resident.c
                ../apps/pa_terminal/main/byte_buffer.c)
