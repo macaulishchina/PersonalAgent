@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import logging
 import struct
 import time
 import uuid
+import zlib
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -118,6 +120,8 @@ class Connection:
             notification_list_ids=True,
             input_audio_ids=True,
             image_strips=True,
+            playback_window=protocol.PLAYBACK_MAX_WINDOW,
+            playback_metrics=True,
         )
         await self.send_configuration()
         await self.send("history.index", **history)
@@ -317,10 +321,10 @@ class Connection:
             await self.display.history_index(data)
         elif kind == "playback.credit":
             credit = data.get("bytes")
-            if type(credit) is not int or credit <= 0 or credit % 2 or credit > protocol.PLAYBACK_WINDOW:
+            if type(credit) is not int or credit <= 0 or credit % 2 or credit > protocol.PLAYBACK_MAX_WINDOW:
                 raise ValueError("Invalid playback credit")
             if data.get("generation") == self.generation:
-                if self.credit + credit > protocol.PLAYBACK_WINDOW:
+                if self.credit + credit > protocol.PLAYBACK_MAX_WINDOW:
                     raise ValueError("Playback window exceeded")
                 self.credit += credit
                 self.credit_changed.set()
@@ -328,6 +332,8 @@ class Connection:
             await self.stop_playback()
         elif kind == "playback.completed":
             if self.playing and data.get("generation") == self.generation and self.playing.get("sent"):
+                if "pcm" in data:
+                    self.verify_playback_pcm(protocol.playback_pcm(data["pcm"]))
                 if not self.playing.get("foreground") and not self.playing.get("failed"):
                     self.owner.devices.played(self.device, self.playing["id"], self.playing["revision"])
                 if self.playing.get("notification") and not self.playing.get("failed"):
@@ -839,7 +845,7 @@ class Connection:
     async def speak_foreground(self, voice):
         generation = self.generation
         self.playback_completed.clear()
-        self.playing = {"id": voice["id"], "revision": 0, "sent": False, "foreground": True}
+        playing = self.playing = {"id": voice["id"], "revision": 0, "sent": False, "foreground": True}
         try:
             started = await self.send_audio(
                 self.foreground_audio(voice, generation),
@@ -849,6 +855,8 @@ class Connection:
             )
             if started and generation == self.generation:
                 await asyncio.wait_for(self.playback_completed.wait(), 30)
+                if playing.get("integrity_failed"):
+                    raise SpeechError("speech_playback_integrity")
             if not self.closed and self.voice is voice and generation == self.generation:
                 self.owner.devices.playback_state(
                     self.device, voice["id"], 0, "played" if started else "unavailable"
@@ -901,12 +909,33 @@ class Connection:
             timeout=35,
         )
 
-    async def finish_audio(self, generation, end_offset):
+    def verify_playback_pcm(self, pcm):
+        sent = self.playing["sent_pcm"]
+        received = pcm["received_bytes"], pcm["received_crc32"]
+        written = pcm["i2s_bytes"], pcm["i2s_crc32"]
+        intact = sent == received == written
+        if not intact:
+            self.playing["integrity_failed"] = self.playing["failed"] = True
+        self.context.log.log(
+            logging.INFO if intact else logging.WARNING,
+            "passport_playback_pcm device=%s generation=%s window=%d sent=%d crc=%08x "
+            "received=%d crc=%08x i2s=%d crc=%08x underruns=%d intact=%s",
+            self.device, self.generation, pcm["window_bytes"], *sent, *received, *written,
+            pcm["underruns"], intact,
+        )
+
+    async def finish_audio(self, generation, end_offset, sent_pcm):
         self.playing["sent"] = True
+        self.playing["sent_pcm"] = sent_pcm
+        self.context.log.info(
+            "passport_playback_sent device=%s generation=%s bytes=%d crc=%08x",
+            self.device, generation, *sent_pcm,
+        )
         await self.send("playback.end", generation=generation, next_offset=end_offset())
 
     async def send_audio(self, audio, generation, offset, *, end_offset):
         started = False
+        sent_bytes = sent_crc = 0
         async with aclosing(audio):
             while True:
                 try:
@@ -917,7 +946,7 @@ class Connection:
                     if started and generation == self.generation and not self.closed:
                         # The provider stopped after sending a prefix. Drain that prefix once.
                         self.playing["failed"] = True
-                        await self.finish_audio(generation, end_offset)
+                        await self.finish_audio(generation, end_offset, (sent_bytes, sent_crc))
                         try:
                             await asyncio.wait_for(self.playback_completed.wait(), 30)
                         except TimeoutError:
@@ -946,10 +975,20 @@ class Connection:
                         return False
                     count = min(self.credit, len(pcm) - cursor, protocol.PLAYBACK_CHUNK)
                     self.credit -= count
-                    await self.send_binary(struct.pack("!I", generation) + pcm[cursor : cursor + count])
+                    chunk = pcm[cursor : cursor + count]
+                    try:
+                        await self.send_binary(struct.pack("!I", generation) + chunk)
+                    except (ConnectionError, TimeoutError):
+                        self.context.log.warning(
+                            "passport_playback_send_interrupted device=%s generation=%s bytes=%d crc=%08x",
+                            self.device, generation, sent_bytes, sent_crc,
+                        )
+                        raise
+                    sent_bytes += count
+                    sent_crc = zlib.crc32(chunk, sent_crc)
                     cursor += count
         if started:
-            await self.finish_audio(generation, end_offset)
+            await self.finish_audio(generation, end_offset, (sent_bytes, sent_crc))
         return started
 
     async def playback_unavailable(self, exc, generation):

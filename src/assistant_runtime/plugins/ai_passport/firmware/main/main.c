@@ -123,7 +123,7 @@ static esp_err_t audio_test(unsigned operation)
             lab_notice(LAB_TEXT("Tone %u Hz\nVolume 45%%\n\nListen for clean sound.", "音调 %u Hz\n音量 45%%\n\n请听声音是否清晰"), tones[tone]);
             for (unsigned block=0; block<16 && !lab_cancelled(); block++) {
                 for (unsigned i=0; i<256; i++) samples[i]=(int16_t)(7000*sinf(6.2831853f*tones[tone]*(block*256+i)/16000));
-                e = bsp_audio_write(samples, sizeof(samples)); if (e != ESP_OK) return e;
+                e = bsp_audio_write(samples, sizeof(samples), NULL); if (e != ESP_OK) return e;
             }
         }
     } else if (operation == 1) {
@@ -148,7 +148,7 @@ static esp_err_t audio_test(unsigned operation)
         if (!clip_samples) return ESP_ERR_INVALID_STATE;
         for (size_t offset=0; offset<clip_samples && !lab_cancelled();) {
             size_t count=clip_samples-offset < 256 ? clip_samples-offset : 256;
-            e=bsp_audio_write(clip+offset, count*sizeof(int16_t)); if (e != ESP_OK) return e;
+            e=bsp_audio_write(clip+offset, count*sizeof(int16_t), NULL); if (e != ESP_OK) return e;
             offset+=count;
         }
     }

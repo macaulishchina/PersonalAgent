@@ -41,7 +41,8 @@ esp_err_t bsp_audio_wake(void);
 
 // 播放 / 录音。bytes 为字节数(16bit 单声道时 = 采样数 x 2)。
 // 等待按PCM时长+50ms有界；部分读写视为失败，不当作完整音频。
-esp_err_t bsp_audio_write(const void *pcm, size_t bytes);
+// written 可为空；提供时即使驱动部分写入失败，也记录实际接收的字节数。
+esp_err_t bsp_audio_write(const void *pcm, size_t bytes, size_t *written);
 esp_err_t bsp_audio_read(void *pcm, size_t bytes);
 
 // 在最后一次成功写入后取标记。DMA 走完整个环及 FIFO 后才算播完。

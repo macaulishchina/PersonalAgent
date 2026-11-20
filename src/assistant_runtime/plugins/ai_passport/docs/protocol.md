@@ -66,8 +66,8 @@ UTF-8 传输。索引只包含浏览所需的元数据。
 | image.stream.next(request_id, row) | 从第 0 行顺序请求。每次只传一块，PP 校验并画完后请求下一块 |
 | image.stream.close(request_id) | 释放该次传输。翻页使用新的请求编号，迟到的旧分块会被丢弃 |
 | playback.stop | 结束本条播报；不提供继续、恢复或重播操作 |
-| playback.credit(generation, bytes) | 播放窗口最多 8192 字节；二进制为 4 字节大端播放版本 + PCM16 |
-| playback.completed(generation) | 设备完整消费本句 PCM 后确认；不等于业务执行结束 |
+| playback.credit(generation, bytes) | 设备按内存授予 8–24 KiB 播放窗口。二进制为 4 字节大端播放版本 + PCM16 |
+| playback.completed(generation, pcm?) | I²S 排空后确认，可附接收、写入和缓冲见底统计 |
 | execution.cancel(request_id) | 使用现有会话取消机制，停止播报不代替取消执行 |
 | notifications.list(before, request_id) | 有归属的任务结果、小页及游标；主动读取不触发播报。PA 在 hello 声明 `notification_list_ids` 后，查询响应原样返回请求 UUID，主动推送不带 UUID |
 | notification.page(id, revision, offset) | 返回同一通知的id、revision、offset、text及next_offset；不使用语音内部消息id |
@@ -106,10 +106,15 @@ UTF-8 传输。索引只包含浏览所需的元数据。
 
 每条回复共用一次 `playback.start` 和一个有界接收窗口。合成服务按小段工作，PA 可以为下一段
 预读一个供应商音频帧，前段传完后复用同一窗口下发，语音流名额不足时按顺序合成。
-`playback.end` 表示下发结束，包含已处理到的源文本偏移。设备首播及断流恢复前在同一个 8 KiB
-窗口攒约 100 毫秒 PCM，结束时不足该长度也会播出。设备在 I²S DMA 和 FIFO 排空后才回
+`playback.end` 表示下发结束，包含已处理到的源文本偏移。PA 在 `hello.playback_window` 公布上限，
+旧版缺字段时仍用 8 KiB。PP 按可用内存借用，首播及断流恢复等预缓冲达到阈值再播，结束时短尾仍会播出。
+8 KiB 窗口保留约 100 毫秒预缓冲，24 KiB 时预缓冲约 469 毫秒。设备在 I²S DMA 和 FIFO 排空后才回
 `playback.completed`，PA 随后发 `playback.finished`。供应商中途失败时让已收到的 PCM 播完，再用
 状态栏提示语音暂不可用，保留文字。按下 OK 终止当前播放版本并关掉预合成流，后续增量不会重新播报。
+
+PA 公布 `hello.playback_metrics` 后，PP 在播放完成时回传 PCM 字节数、CRC32 和缓冲见底次数。
+按同一连接、播放版本核对 PA 已发、PP 已接收和 I²S 驱动实际接受的 PCM。未结束且 DMA 已耗尽时
+每次重新缓冲计一次，正常句尾排空不计。串口 `pp.audio` 可读最近一轮统计。统计不保存音频。
 
 播放收据复用私有仓库，记录 played、stopped、unavailable 或未知。重连不重播历史音频。
 会话增量使用持久事件游标；公共事件只作唤醒，丢唤醒时三十秒恢复核对，不高频扫描数据库。

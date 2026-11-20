@@ -11,6 +11,7 @@ MAX_JSON_BYTES = 16 * 1024
 INPUT_RATE = 16000
 OUTPUT_RATE = 24000
 PLAYBACK_WINDOW = 8192
+PLAYBACK_MAX_WINDOW = 24 * 1024
 PLAYBACK_CHUNK = 4096
 IMAGE_CHUNK = 2048
 IMAGE_STRIP_ROWS = 8
@@ -29,7 +30,7 @@ _COMMAND_FIELDS = {
     "input.transcript": {"request_id", "offset"},
     "playback.stop": set(),
     "playback.credit": {"generation", "bytes"},
-    "playback.completed": {"generation"},
+    "playback.completed": {"generation", "pcm"},
     "message.page": {"message_id", "offset", "prefetch"},
     "history.index": {"before", "after", "limit"},
     "execution.cancel": {"request_id"},
@@ -45,6 +46,21 @@ _COMMAND_FIELDS = {
     "image.stream.next": {"request_id", "row"},
     "image.stream.close": {"request_id"},
 }
+
+_PLAYBACK_PCM_FIELDS = {
+    "window_bytes", "received_bytes", "received_crc32", "i2s_bytes", "i2s_crc32", "underruns"
+}
+
+
+def playback_pcm(data):
+    if (
+        not isinstance(data, dict)
+        or data.keys() != _PLAYBACK_PCM_FIELDS
+        or any(type(n) is not int or not 0 <= n <= 0xFFFFFFFF for n in data.values())
+        or not PLAYBACK_WINDOW <= data["window_bytes"] <= PLAYBACK_MAX_WINDOW
+    ):
+        raise ValueError("Invalid playback PCM report")
+    return data
 
 
 def image_strip(request_id, row, rows, pixels):

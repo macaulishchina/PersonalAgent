@@ -41,6 +41,8 @@ static pp_navigation_t navigation;
 #define notice_view (navigation.screen == PP_SCREEN_TASK)
 static bool playing;
 static unsigned play_generation;
+static unsigned playback_window = PP_PLAYBACK_WINDOW;
+static bool playback_metrics;
 static pp_ui_view_t view = PP_UI_INFO;
 static size_t view_page, view_next;
 static bool message_streaming;
@@ -604,6 +606,8 @@ static void receive_hello(cJSON *j, uint32_t generation) {
     notice_directory.correlated =
         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "notification_list_ids"));
     input_audio_ids = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "input_audio_ids"));
+    playback_window = number(j, "playback_window");
+    playback_metrics = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "playback_metrics"));
     pp_picture_stream_supported(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "image_strips")));
     if (notice_list && !notice_directory.pending && !notice_directory.viewing_older)
         request_notice_list(false);
@@ -1069,7 +1073,8 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
         } else {
             play_generation = number(j, "generation");
             pp_objects_allow_io(false);
-            if (!pp_audio_play_begin(play_generation)) {
+            unsigned window = pp_audio_play_begin(play_generation, playback_window);
+            if (!window) {
                 stop_play();
                 set_status("播报缓冲暂不可用，可查看文字");
                 return;
@@ -1078,7 +1083,7 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
             speech_session = true;
             next_offset = number(j, "offset");
             segment_end = number(j, "next_offset");
-            credit(PP_PLAYBACK_WINDOW);
+            credit(window);
             set_status("播放中");
         }
     } else if (!strcmp(type, "playback.end") && number(j, "generation") == play_generation) {
@@ -1708,8 +1713,23 @@ static void poll_audio(void) {
     if (playing && pp_audio_play_drained() && pp_net_has_capacity(false)) {
         cJSON *j = command("playback.completed");
         cJSON_AddNumberToObject(j, "generation", play_generation);
+        pp_playback_report_t report = pp_audio_playback_report();
+        if (playback_metrics) {
+            cJSON *metrics = cJSON_AddObjectToObject(j, "pcm");
+            cJSON_AddNumberToObject(metrics, "window_bytes", report.window_bytes);
+            cJSON_AddNumberToObject(metrics, "received_bytes", report.received_bytes);
+            cJSON_AddNumberToObject(metrics, "received_crc32", report.received_crc32);
+            cJSON_AddNumberToObject(metrics, "i2s_bytes", report.i2s_bytes);
+            cJSON_AddNumberToObject(metrics, "i2s_crc32", report.i2s_crc32);
+            cJSON_AddNumberToObject(metrics, "underruns", report.underruns);
+        }
         if (!pp_net_send(j))
             return;
+        ESP_LOGI("pa_terminal",
+                 "playback_pcm generation=%u window=%u received=%u crc=%08x i2s=%u crc=%08x underruns=%u",
+                 (unsigned)report.generation, (unsigned)report.window_bytes,
+                 (unsigned)report.received_bytes, (unsigned)report.received_crc32,
+                 (unsigned)report.i2s_bytes, (unsigned)report.i2s_crc32, (unsigned)report.underruns);
         next_offset = segment_end;
         playing = false;
         pp_audio_play_stop();

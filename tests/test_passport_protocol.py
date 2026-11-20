@@ -7,6 +7,7 @@ import sqlite3
 import struct
 import unittest
 import uuid
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -1551,8 +1552,8 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
                 {"type": "input.receipt", "request_id": str(uuid.uuid4()), "session_id": "web"}
             )
         with self.assertRaises(ValueError):
-            await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 8194})
-        await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 8192})
+            await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 24578})
+        await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 24576})
         with self.assertRaises(ValueError):
             await self.connection.command({"type": "playback.credit", "generation": 0, "bytes": 2})
         await self.connection.stop_playback()
@@ -1675,6 +1676,35 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.playback_messages("playback.unavailable")[0]["code"], "speech_provider_rejected:CLIENT_ERROR"
         )
+
+    async def test_pcm_receipt_compares_sent_received_and_actual_i2s(self):
+        for correct in (True, False):
+            with self.subTest(correct=correct):
+                self.messages.clear()
+                _, _, finish_current = self.start_sentence_playback()
+                await self.allow_playback(0)
+                finish_current.set()
+                await self.wait_for_playback(lambda: self.playback_messages("playback.end"))
+                pcm = b"".join(msg[4:] for msg in self.messages if isinstance(msg, bytes))
+                crc = zlib.crc32(pcm)
+                receipt = {
+                    "type": "playback.completed",
+                    "generation": 0,
+                    "pcm": {
+                        "window_bytes": protocol.PLAYBACK_MAX_WINDOW,
+                        "received_bytes": len(pcm),
+                        "received_crc32": crc,
+                        "i2s_bytes": len(pcm),
+                        "i2s_crc32": crc if correct else crc ^ 1,
+                        "underruns": 1,
+                    },
+                }
+                with self.assertLogs(level=logging.INFO) as logs:
+                    await self.connection.command(receipt)
+                await asyncio.wait_for(self.connection.play_task, 2)
+                self.assertEqual(self.playback_messages("playback.receipt")[0]["played"], correct)
+                self.assertTrue(any(f"underruns=1 intact={correct}" in row for row in logs.output))
+                self.assertEqual(bool(self.playback_messages("playback.unavailable")), not correct)
 
     async def test_stop_closes_the_current_and_prefetched_stream_before_accepting_late_receipts(self):
         streams, _, _ = self.start_sentence_playback()

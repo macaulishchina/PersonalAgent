@@ -13,8 +13,8 @@
 #define CAPTURE_BLOCKS (PP_CAPTURE_FRAMES / CAPTURE_FRAMES_PER_BLOCK)
 #define CAPTURE_MAX_BLOCKS (PP_CAPTURE_MAX_FRAMES / CAPTURE_FRAMES_PER_BLOCK)
 #define CAPTURE_BLOCK_BYTES (CAPTURE_FRAMES_PER_BLOCK * PP_CAPTURE_BYTES)
-/* Optional capture capacity must leave room for TLS and control messages. */
-#define CAPTURE_HEAP_RESERVE (32u * 1024u)
+/* Optional audio capacity must leave room for TLS and control messages. */
+#define AUDIO_HEAP_RESERVE (32u * 1024u)
 _Static_assert(PP_CAPTURE_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 _Static_assert(PP_CAPTURE_MAX_FRAMES % CAPTURE_FRAMES_PER_BLOCK == 0, "Whole capture blocks");
 
@@ -23,6 +23,7 @@ static unsigned record_head, record_count, record_capacity;
 static portMUX_TYPE record_lock = portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t worker;
 static pp_playback_buffer_t output;
+static pp_playback_report_t last_output;
 static uint32_t output_tx_position;
 static bool output_has_written;
 static portMUX_TYPE output_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -68,7 +69,7 @@ bool pp_audio_capture_begin(void) {
     unsigned blocks = CAPTURE_BLOCKS;
     while (blocks < CAPTURE_MAX_BLOCKS) {
 #ifdef ESP_PLATFORM
-        if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < CAPTURE_HEAP_RESERVE + CAPTURE_BLOCK_BYTES)
+        if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < AUDIO_HEAP_RESERVE + CAPTURE_BLOCK_BYTES)
             break;
 #endif
         if (!pp_buffer_reserve(&buffers[blocks], CAPTURE_BLOCK_BYTES, PP_MEMORY_BACKGROUND,
@@ -117,34 +118,54 @@ bool pp_audio_capture_drained(void) {
     return !capturing && !busy && !codec_failed && fault == PP_AUDIO_OK && !pp_audio_recorded_count();
 }
 
-bool pp_audio_play_begin(uint32_t generation) {
+unsigned pp_audio_play_begin(uint32_t generation, unsigned max_window) {
     if (!worker || codec_failed)
-        return false;
+        return 0;
+    unsigned limit = max_window / PP_PLAYBACK_BLOCK_BYTES;
+    if (limit > PP_PLAYBACK_BLOCKS)
+        limit = PP_PLAYBACK_BLOCKS;
+    unsigned blocks = PP_PLAYBACK_WINDOW / PP_PLAYBACK_BLOCK_BYTES;
     /* Only the controller changes backing storage. The codec worker copies
      * each write into its own scratch block under the lock. */
     if (output.blocks[0].data) {
         portENTER_CRITICAL(&output_lock);
-        pp_playback_reset(&output, generation, true);
+        while (blocks < limit && output.blocks[blocks].data)
+            blocks++;
+        last_output = output.report;
+        pp_playback_reset(&output, generation, blocks * PP_PLAYBACK_BLOCK_BYTES);
         output_has_written = false;
         portEXIT_CRITICAL(&output_lock);
     } else {
         pp_buffer_t buffers[PP_PLAYBACK_BLOCKS] = {0};
-        if (!pp_buffers_acquire(buffers, PP_PLAYBACK_BLOCKS, PP_PLAYBACK_BLOCK_BYTES,
+        if (!pp_buffers_acquire(buffers, blocks, PP_PLAYBACK_BLOCK_BYTES,
                                 PP_MEMORY_CRITICAL, PP_MEMORY_PLAYBACK))
-            return false;
+            return 0;
+        while (blocks < limit) {
+#ifdef ESP_PLATFORM
+            if (heap_caps_get_free_size(MALLOC_CAP_8BIT) <
+                AUDIO_HEAP_RESERVE + PP_PLAYBACK_BLOCK_BYTES)
+                break;
+#endif
+            if (!pp_buffer_reserve(&buffers[blocks], PP_PLAYBACK_BLOCK_BYTES, PP_MEMORY_BACKGROUND,
+                                   PP_MEMORY_PLAYBACK))
+                break;
+            blocks++;
+        }
         portENTER_CRITICAL(&output_lock);
         memcpy(output.blocks, buffers, sizeof(output.blocks));
-        pp_playback_reset(&output, generation, true);
+        pp_playback_reset(&output, generation, blocks * PP_PLAYBACK_BLOCK_BYTES);
         output_has_written = false;
         portEXIT_CRITICAL(&output_lock);
     }
     xTaskNotifyGive(worker);
-    return true;
+    return blocks * PP_PLAYBACK_BLOCK_BYTES;
 }
 void pp_audio_play_stop(void) {
     pp_buffer_t returned[PP_PLAYBACK_BLOCKS];
     portENTER_CRITICAL(&output_lock);
-    pp_playback_reset(&output, 0, false);
+    if (output.report.window_bytes)
+        last_output = output.report;
+    pp_playback_reset(&output, 0, 0);
     output_has_written = false;
     for (unsigned i = 0; i < PP_PLAYBACK_BLOCKS; i++)
         returned[i] = pp_buffer_take(&output.blocks[i]);
@@ -183,6 +204,12 @@ unsigned pp_audio_take_credit(void) {
     output.credit = 0;
     portEXIT_CRITICAL(&output_lock);
     return bytes;
+}
+pp_playback_report_t pp_audio_playback_report(void) {
+    portENTER_CRITICAL(&output_lock);
+    pp_playback_report_t report = output.report.window_bytes ? output.report : last_output;
+    portEXIT_CRITICAL(&output_lock);
+    return report;
 }
 
 typedef struct {
@@ -267,17 +294,21 @@ static void audio_worker(void *arg) {
         bool dma_empty = output_has_written && bsp_audio_tx_drained(output_tx_position);
         size_t n = pp_playback_take(&output, pcm, sizeof(pcm), dma_empty, &epoch);
         bool active = output.active;
+        /* Wake during a stall so a drain can be observed even before the next
+         * WebSocket message arrives. Once priming, only new data matters. */
+        bool monitor_drain = active && !output.ended && !output.priming;
         portEXIT_CRITICAL(&output_lock);
         if (n) {
+            size_t written = 0;
             bool ok = set_format(&codec, PP_PLAYBACK_RATE, target_volume) &&
-                      bsp_audio_write(pcm, n) == ESP_OK;
+                      bsp_audio_write(pcm, n, &written) == ESP_OK;
             uint32_t position = bsp_audio_tx_position();
             portENTER_CRITICAL(&output_lock);
             if (ok && epoch == output.epoch) {
                 output_tx_position = position;
                 output_has_written = true;
             }
-            pp_playback_written(&output, epoch, ok);
+            pp_playback_written(&output, epoch, pcm, written, ok);
             portEXIT_CRITICAL(&output_lock);
             if (!ok)
                 disable_codec();
@@ -286,7 +317,7 @@ static void audio_worker(void *arg) {
         }
         busy = false;
         if (!n && !codec_failed)
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            ulTaskNotifyTake(pdTRUE, monitor_drain ? pdMS_TO_TICKS(10) : portMAX_DELAY);
     }
 }
 bool pp_audio_start(unsigned volume) {

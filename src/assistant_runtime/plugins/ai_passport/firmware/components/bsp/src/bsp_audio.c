@@ -32,6 +32,7 @@ static esp_err_t s_sleep_result;
 static bool     s_codec_release_failed;
 static uint8_t  s_volume;
 static int      s_io_error;
+static size_t   s_tx_written;
 
 enum { TX_DMA_DESCRIPTORS = 6, DMA_FRAMES = 240 };
 /* On the single-core C3, only the TX ISR writes this aligned word. */
@@ -148,6 +149,7 @@ static int audio_data_write(const audio_codec_data_if_t *data, uint8_t *pcm, int
     unsigned bytes_per_second = s_hz * (s_bits / 8) * s_ch;
     unsigned timeout = bytes_per_second ? (uint64_t)size * 1000 / bytes_per_second + 50 : 100;
     esp_err_t error = i2s_channel_write(s_tx, pcm, (size_t)size, &completed, timeout);
+    s_tx_written = completed;
     return error == ESP_OK && completed == (size_t)size ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
 }
 
@@ -592,9 +594,13 @@ esp_err_t bsp_audio_wake(void) {
     return ESP_OK;
 }
 
-esp_err_t bsp_audio_write(const void *pcm, size_t bytes) {
+esp_err_t bsp_audio_write(const void *pcm, size_t bytes, size_t *written) {
+    if (written) *written = 0;
     if (!s_dev || !s_opened || s_sleeping) return ESP_ERR_INVALID_STATE;
-    return esp_codec_dev_write(s_dev, (void *)pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
+    s_tx_written = 0;
+    int status = esp_codec_dev_write(s_dev, (void *)pcm, bytes);
+    if (written) *written = s_tx_written;
+    return status == ESP_CODEC_DEV_OK ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t bsp_audio_read(void *pcm, size_t bytes) {

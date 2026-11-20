@@ -9,6 +9,7 @@
 #include "network.h"
 #include "pictures.h"
 #include "settings.h"
+#include "terminal_audio.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -53,6 +54,14 @@ static void usb_task(void *arg) {
             line[n] = 0;
             if (!overflow && !strcmp(line, "pp.memory")) {
                 report_memory();
+            } else if (!overflow && !strcmp(line, "pp.audio")) {
+                pp_playback_report_t r = pp_audio_playback_report();
+                printf("{\"app\":\"PA-Terminal-audio\",\"generation\":%u,\"window_bytes\":%u,"
+                       "\"received_bytes\":%u,\"received_crc32\":%u,\"i2s_bytes\":%u,\"i2s_crc32\":%u,"
+                       "\"underruns\":%u}\n",
+                       (unsigned)r.generation, (unsigned)r.window_bytes, (unsigned)r.received_bytes,
+                       (unsigned)r.received_crc32, (unsigned)r.i2s_bytes, (unsigned)r.i2s_crc32,
+                       (unsigned)r.underruns);
             } else if (!overflow && !strcmp(line, "pp.status")) {
                 char device[33] = "";
                 /* The SDK's log helper can truncate this digest to a configured prefix. */

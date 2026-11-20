@@ -58,8 +58,9 @@ int bsp_audio_read(void *pcm, size_t size) {
         pp_audio_capture_release(); /* Key released during the hardware read. */
     return ESP_OK;
 }
-int bsp_audio_write(const void *pcm, size_t size) {
+int bsp_audio_write(const void *pcm, size_t size, size_t *written) {
     assert((test_mute || test_drain) && pcm && size == 2);
+    *written = size;
     writes++;
     if (test_mute) {
         pp_audio_play_stop(); /* UI stops while this I2S write is outstanding. */
@@ -79,7 +80,11 @@ void ulTaskNotifyTake(int clear, unsigned wait) {
         assert(!pp_audio_play_drained());
         tx_position = 7;
         assert(pp_audio_play_drained());
+        pp_playback_report_t report = pp_audio_playback_report();
+        assert(report.generation == 1 && report.received_bytes == 2 && report.i2s_bytes == 2);
+        assert(report.received_crc32 == report.i2s_crc32 && !report.underruns);
         pp_audio_play_stop();
+        assert(pp_audio_playback_report().i2s_bytes == 2);
         assert(!pp_audio_play_drained() && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     } else if (test_mute) {
         /* The failed device stays parked when woken, sends one status and
@@ -131,11 +136,15 @@ int main(int argc, char **argv) {
     alloc_limit = 2;
     assert(!pp_audio_capture_begin() && !pp_memory_stats().live[PP_MEMORY_CAPTURE]);
     alloc_limit = 2;
-    assert(!pp_audio_play_begin(1) && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    assert(!pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW) && !pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
+    alloc_limit = PP_PLAYBACK_WINDOW / PP_PLAYBACK_BLOCK_BYTES;
+    assert(pp_audio_play_begin(1, PP_PLAYBACK_MAX_WINDOW) == PP_PLAYBACK_WINDOW);
+    pp_audio_play_stop();
+    assert(!pp_memory_stats().live[PP_MEMORY_PLAYBACK]);
     alloc_limit = UINT32_MAX;
     if (test_mute || test_drain) {
         const int16_t sample = 0;
-        assert(pp_audio_play_begin(1));
+        assert(pp_audio_play_begin(1, PP_PLAYBACK_WINDOW) == PP_PLAYBACK_WINDOW);
         assert(pp_memory_stats().live[PP_MEMORY_PLAYBACK] == PP_PLAYBACK_WINDOW);
         assert(pp_play_pcm(1, &sample, sizeof(sample)));
         assert(!pp_audio_play_drained());
