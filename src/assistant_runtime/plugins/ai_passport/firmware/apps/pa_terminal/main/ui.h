@@ -1,5 +1,6 @@
 #pragma once
 #include "status_meter.h"
+#include "text_layout.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,6 +32,8 @@ void pp_ui_blank(void);
 bool pp_ui_standby(bool enabled);
 /* Returns the next local page's UTF-8 offset, zero at the end. */
 size_t pp_ui_render(const pp_ui_frame_t *frame);
+bool pp_ui_history_feed(pp_layout_cursor_t *cursor, char *out, size_t capacity, const char *text,
+                        unsigned text_size, pp_text_layout_t *result);
 size_t pp_ui_previous(const char *text, size_t start);
 /* Removes the old image while holding the render lock before the caller frees it. */
 bool pp_ui_image(const void *pixels, unsigned width, unsigned height);

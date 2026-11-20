@@ -22,17 +22,19 @@
  * writer. Size the worker for that path as well as ordinary page reads. */
 #define CACHE_WORKER_STACK_BYTES 7168u
 typedef struct {
-    unsigned ticket, generation, revision, pin_count;
+    unsigned ticket, generation;
     pp_memory_priority_t priority;
     size_t reserve;
-    bool read, index;
+    bool read;
+    pp_object_kind_t kind;
+    pp_cache_seek_t seek;
+    uint64_t cursor;
     char key[65];
-    unsigned char scope[16], owner[16], pins[PP_CACHE_PIN_LIMIT][16];
+    unsigned char scope[16], owner[16];
     pp_cache_value_t value;
 } job_t;
 typedef struct {
-    unsigned generation, revision;
-    bool index;
+    unsigned generation;
     pp_cache_result_t result;
 } reply_t;
 static QueueHandle_t results;
@@ -41,12 +43,12 @@ static job_t queued[QUEUE_SIZE];
 static unsigned queued_count;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static pp_cache_resident_t resident;
-static atomic_uint generation, index_revision, in_flight;
+static atomic_uint generation, in_flight;
 static atomic_bool quiet = true, reconnecting, storage_ready;
 static atomic_uint disk_bytes;
 static atomic_uint hits, misses, write_failures, busy, ram_hits, flash_hits, io_peak_ms;
-static unsigned char scope[16], pins[PP_CACHE_PIN_LIMIT][16];
-static unsigned pin_count, outstanding; /* Controller owns admission/completion. */
+static unsigned char scope[16];
+static unsigned outstanding; /* Controller owns admission/completion. */
 static bool enabled, initialized;
 static bool rebuilt;
 
@@ -126,11 +128,20 @@ static bool mount_store(pp_cache_store_t *store, bool *mounted) {
     }
     return *mounted && pp_cache_store_open(store, "/ppcache", PP_CACHE_BUDGET);
 }
+static bool available_bytes(size_t *result) {
+    size_t total, used;
+    if (esp_littlefs_info("pp_cache", &total, &used) != ESP_OK || used > total)
+        return false;
+    *result = total - used;
+    return true;
+}
 static bool may_run(void *context) {
     const job_t *job = context;
-    return atomic_load(&quiet) && !atomic_load(&reconnecting) &&
-           job->generation == atomic_load(&generation) &&
-           (!job->index || job->revision == atomic_load(&index_revision));
+    /* Browsing a committed object needs no connection. Its bounded buffer
+     * still observes the caller's heap reserve and yields to audio. */
+    bool local_read = job->read && job->priority != PP_MEMORY_BACKGROUND;
+    return atomic_load(&quiet) && (local_read || !atomic_load(&reconnecting)) &&
+           job->generation == atomic_load(&generation);
 }
 static bool charge(size_t bytes) {
     unsigned prior = atomic_load(&in_flight);
@@ -207,7 +218,7 @@ static bool dequeue(job_t *job) {
 }
 static void worker(void *unused) {
     (void)unused;
-    pp_cache_store_t store;
+    static pp_cache_store_t store; /* Persistent worker state, outside the flash call stack. */
     bool mounted = false;
     TickType_t last_mount = 0;
     bool attempted = false;
@@ -225,9 +236,9 @@ static void worker(void *unused) {
                 }
                 break;
             }
-            reply_t reply = {.generation = job.generation, .revision = job.revision, .index = job.index,
-                             .result = {.ticket = job.ticket, .written = !job.read,
-                                        .status = PP_CACHE_BUSY}};
+            reply_t reply = {
+                .generation = job.generation,
+                .result = {.ticket = job.ticket, .written = !job.read, .status = PP_CACHE_BUSY}};
             pp_cache_result_t *r = &reply.result;
             int64_t started = esp_timer_get_time();
             if (may_run(&job) && !atomic_load(&storage_ready) &&
@@ -238,6 +249,8 @@ static void worker(void *unused) {
                 if (ready) {
                     store.allowed = may_run;
                     store.context = &job;
+                    store.available = available_bytes;
+                    pp_cache_store_scope(&store, job.scope);
                     ready = pp_cache_store_recover(&store);
                 }
                 atomic_store(&disk_bytes, ready ? store.used : 0);
@@ -246,11 +259,15 @@ static void worker(void *unused) {
             if (may_run(&job)) {
                 r->status = PP_CACHE_IO_ERROR;
                 if (atomic_load(&storage_ready)) {
-                    pp_cache_store_scope(&store, job.scope, job.pins, job.pin_count);
+                    pp_cache_store_scope(&store, job.scope);
                     store.allowed = may_run;
                     store.context = &job;
                     if (job.read) {
-                        r->status = pp_cache_store_read(&store, job.key, &r->value, reserve_read, &job);
+                        r->status = pp_cache_store_seek(&store, job.key, job.seek, &job.cursor);
+                        if (r->status == PP_CACHE_HIT) {
+                            r->cursor = job.cursor;
+                            r->status = pp_cache_store_read(&store, job.key, &r->value, reserve_read, &job);
+                        }
                         r->charge = r->value.bytes.capacity;
                         if (r->status == PP_CACHE_HIT && may_run(&job)) {
                             pp_cache_value_t stored = r->value;
@@ -259,23 +276,26 @@ static void worker(void *unused) {
                             atomic_fetch_add(&hits, 1);
                         }
                     } else {
-                        r->status = pp_cache_store_write(&store, job.key, job.owner, job.index,
-                                                         job.value.bytes.data, job.value.bytes.size,
-                                                         job.value.aux, job.value.aux_size, job.reserve);
+                        r->status = pp_cache_store_write_ordered(&store, job.key, job.owner, job.kind,
+                                                                 job.value.bytes.data, job.value.bytes.size,
+                                                                 job.value.aux, job.value.aux_size,
+                                                                 job.reserve, job.value.sequence);
                         atomic_store(&disk_bytes, store.used);
-                        if (job.index && r->status == PP_CACHE_HIT) {
-                            portENTER_CRITICAL(&lock);
-                            pp_resident_invalidate(&resident, job.key);
-                            portEXIT_CRITICAL(&lock);
-                        }
                     }
                 }
+            }
+            if (!job.read) {
+                portENTER_CRITICAL(&lock);
+                pp_resident_invalidate(&resident, NULL);
+                portEXIT_CRITICAL(&lock);
             }
             if (job.value.bytes.data) {
                 size_t charged = job.value.bytes.capacity;
                 /* Only a committed object may enter the reclaimable tier. */
-                if (r->status == PP_CACHE_HIT)
+                if (r->status == PP_CACHE_HIT && !job.value.sequence)
                     remember(&job, &job.value, NULL);
+                if (job.ticket && r->status != PP_CACHE_HIT)
+                    r->value.bytes = pp_buffer_take(&job.value.bytes);
                 pp_buffer_free(&job.value.bytes);
                 atomic_fetch_sub(&in_flight, charged);
             }
@@ -329,28 +349,18 @@ void pp_cache_init(void) {
     else
         wake_worker();
 }
-void pp_objects_configure(const char *binding, const char *const owners[], unsigned count,
-                          bool active) {
-    unsigned char hash[32], next_pins[PP_CACHE_PIN_LIMIT][16] = {0};
+void pp_objects_configure(const char *binding, bool active) {
+    unsigned char hash[32];
     digest(binding, strlen(binding), hash);
     bool changed = memcmp(scope, hash, sizeof(scope)) || enabled != active;
     memcpy(scope, hash, sizeof(scope));
     enabled = active;
-    count = count > PP_CACHE_PIN_LIMIT ? PP_CACHE_PIN_LIMIT : count;
-    for (unsigned i = 0; i < count; i++) {
-        digest(owners[i], strlen(owners[i]), hash);
-        memcpy(next_pins[i], hash, 16);
-    }
-    portENTER_CRITICAL(&lock);
-    if (changed)
+    if (changed) {
+        portENTER_CRITICAL(&lock);
         atomic_fetch_add(&generation, 1);
-    if (changed || pin_count != count || memcmp(next_pins, pins, sizeof(pins))) {
-        atomic_fetch_add(&index_revision, 1);
         pp_resident_invalidate(&resident, NULL);
+        portEXIT_CRITICAL(&lock);
     }
-    portEXIT_CRITICAL(&lock);
-    pin_count = count;
-    memcpy(pins, next_pins, sizeof(pins));
     if (changed)
         reclaim(PP_CACHE_RESIDENT_BYTES, PP_MEMORY_CRITICAL);
     /* Binding is called once at startup before the other tasks start allocating. */
@@ -360,10 +370,8 @@ void pp_objects_configure(const char *binding, const char *const owners[], unsig
     }
 }
 static job_t job_for(const char *key, pp_memory_priority_t priority) {
-    job_t job = {.generation = atomic_load(&generation), .pin_count = pin_count,
-                 .priority = priority, .revision = atomic_load(&index_revision)};
+    job_t job = {.generation = atomic_load(&generation), .priority = priority};
     memcpy(job.scope, scope, sizeof(scope));
-    memcpy(job.pins, pins, sizeof(pins));
     mbedtls_sha256_context ctx;
     unsigned char hash[32];
     mbedtls_sha256_init(&ctx);
@@ -398,11 +406,11 @@ bool pp_objects_read(const char *key, unsigned ticket, pp_object_read_t options)
     job.reserve = options.heap_reserve;
     job.ticket = ticket;
     job.read = true;
-    job.index = options.index;
-    reply_t reply = {.generation = job.generation, .revision = job.revision, .index = job.index,
-                     .result = {.ticket = ticket, .status = PP_CACHE_HIT}};
+    job.seek = options.seek;
+    job.cursor = options.cursor;
+    reply_t reply = {.generation = job.generation, .result = {.ticket = ticket, .status = PP_CACHE_HIT}};
     portENTER_CRITICAL(&lock);
-    bool hit = pp_resident_borrow(&resident, job.key, &reply.result);
+    bool hit = options.seek == PP_SEEK_EXACT && pp_resident_borrow(&resident, job.key, &reply.result);
     portEXIT_CRITICAL(&lock);
     if (hit) {
         if (xQueueSend(results, &reply, 0) == pdTRUE) {
@@ -416,31 +424,40 @@ bool pp_objects_read(const char *key, unsigned ticket, pp_object_read_t options)
     }
     return may_run(&job) && start() && submit(&job);
 }
-bool pp_objects_write(const char *key, const char *owner, pp_object_write_t options, pp_buffer_t *buffer,
-                       const void *aux, size_t aux_size, unsigned ticket) {
-    pp_buffer_t data = pp_buffer_take(buffer);
+bool pp_objects_try_write(const char *key, const char *owner, pp_object_write_t options,
+                          pp_buffer_t *buffer, const void *aux, size_t aux_size, unsigned ticket) {
+    pp_buffer_t data = *buffer;
     job_t job = job_for(key, PP_MEMORY_BACKGROUND);
-    job.index = options.index;
+    job.kind = options.kind;
+    job.value.sequence = options.import_order;
     job.reserve = options.disk_reserve;
     if (!enabled || !data.data || data.size > data.capacity || aux_size > PP_CACHE_AUX_MAX ||
         (aux_size && !aux) || !may_run(&job) ||
         !start() || !charge(data.capacity)) {
-        pp_buffer_free(&data);
         return false;
     }
     unsigned char hash[32];
     digest(owner, strlen(owner), hash);
     memcpy(job.owner, hash, sizeof(job.owner));
     job.ticket = ticket;
-    pp_buffer_set_use(&data, PP_MEMORY_CACHE);
+    pp_buffer_set_use(buffer, PP_MEMORY_CACHE);
+    data = *buffer;
     job.value.bytes = data;
     job.value.aux_size = aux_size;
     if (aux_size)
         memcpy(job.value.aux, aux, aux_size);
-    if (submit(&job))
+    if (submit(&job)) {
+        *buffer = (pp_buffer_t){0};
         return true;
+    }
     atomic_fetch_sub(&in_flight, data.capacity);
-    pp_buffer_free(&data);
+    return false;
+}
+bool pp_objects_write(const char *key, const char *owner, pp_object_write_t options, pp_buffer_t *buffer,
+                      const void *aux, size_t aux_size, unsigned ticket) {
+    if (pp_objects_try_write(key, owner, options, buffer, aux, aux_size, ticket))
+        return true;
+    pp_buffer_free(buffer);
     return false;
 }
 bool pp_objects_next(pp_cache_result_t *result) {
@@ -449,8 +466,6 @@ bool pp_objects_next(pp_cache_result_t *result) {
         outstanding--;
         if (reply.generation == atomic_load(&generation)) {
             *result = reply.result;
-            if (reply.index && reply.revision != atomic_load(&index_revision))
-                result->status = PP_CACHE_BUSY;
             return true;
         }
         bool image_write = reply.result.written && (reply.result.ticket & 3u) == 3u;

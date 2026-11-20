@@ -48,7 +48,7 @@ int main(void) {
     const unsigned char scope[16] = {1}, other[16] = {2};
     const unsigned char pinned[][16] = {{3}};
     const unsigned char old[16] = {4};
-    pp_cache_store_scope(&store, scope, pinned, 1);
+    pp_cache_store_scope(&store, scope);
     char name[65], pinned_key[65], path[192];
     key(1, pinned_key);
     char data[600];
@@ -58,11 +58,6 @@ int main(void) {
     assert(pp_cache_store_put(&store, pinned_key, pinned[0], false, data, sizeof(data), "aux", 4));
     assert(store.used == used(root));
     assert(store.sequence == once); /* Identical reconnects do not wear Flash. */
-    for (unsigned i = 2; i < 200; i++) {
-        key(i, name);
-        assert(pp_cache_store_put(&store, name, old, false, data, sizeof(data), NULL, 0));
-        assert(store.used == used(root) && store.used <= 8192);
-    }
     pp_cache_value_t value;
     assert(PP_CACHE_HIT == read_value(&store, pinned_key, &value));
     assert(value.bytes.size == sizeof(data) && value.aux_size == 4 && !memcmp(value.aux, "aux", 4));
@@ -72,9 +67,9 @@ int main(void) {
     key(2, name);
     assert(PP_CACHE_MISSING == read_value(&store, name, &value));
     /* Namespace isolation applies even to a caller using the same storage key. */
-    pp_cache_store_scope(&store, other, NULL, 0);
+    pp_cache_store_scope(&store, other);
     assert(PP_CACHE_MISSING == read_value(&store, pinned_key, &value));
-    pp_cache_store_scope(&store, scope, pinned, 1);
+    pp_cache_store_scope(&store, scope);
     /* A torn staged write cannot replace the last committed value. */
     snprintf(path, sizeof(path), "%s/.pending", root);
     FILE *file = fopen(path, "wb");
@@ -85,7 +80,7 @@ int main(void) {
     assert(pp_cache_store_open(&reopened, root, 8192));
     assert(pp_cache_store_recover(&reopened));
     assert(reopened.used == used(root));
-    pp_cache_store_scope(&reopened, scope, pinned, 1);
+    pp_cache_store_scope(&reopened, scope);
     assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
     pp_buffer_free(&value.bytes);
     assert(access(path, F_OK));
@@ -122,47 +117,70 @@ int main(void) {
     assert(!pp_cache_store_put(&reopened, invalid, old, false, data, sizeof(data), NULL, 0));
     assert(!pp_cache_store_put(&reopened, pinned_key, old, false, data, PP_CACHE_VALUE_MAX + 1,
                                NULL, 0));
-    /* A cache full of protected recent records refuses growth, never evicts
-     * those records merely because somebody browses unrelated old history. */
+    /* A single turn cannot discard its own first page to grow past budget. */
     assert(pp_cache_store_clear(&reopened));
-    assert(reopened.used == 0);
     for (unsigned i = 1; i <= 2; i++) {
         key(i, name);
         assert(pp_cache_store_put(&reopened, name, pinned[0], false, data, sizeof(data), NULL, 0));
     }
-    key(1000, name);
-    char large[4096] = {0};
-    assert(!pp_cache_store_put(&reopened, name, old, false, large, sizeof(large), NULL, 0));
-    assert(PP_CACHE_HIT == read_value(&reopened, pinned_key, &value));
-    pp_buffer_free(&value.bytes);
-    assert(pp_cache_store_clear(&reopened));
-    assert(reopened.used == 0);
-    assert(used(root) == 0);
-    /* Charge Flash blocks, reserve image space, and keep accepting previews
-     * after protected recent text has reached its sub-budget. */
-    assert(pp_cache_store_open(&reopened, root, 65536));
-    pp_cache_store_scope(&reopened, scope, pinned, 1);
-    unsigned text_pages = 0;
-    for (unsigned i = 1; i < 20; i++) {
-        key(i, name);
-        if (pp_cache_store_write(&reopened, name, pinned[0], false, data, sizeof(data), NULL, 0, 32768) != PP_CACHE_HIT)
-            break;
-        text_pages++;
-    }
-    assert(text_pages == 8 && used(root) == 32768);
     key(99, name);
-    assert(pp_cache_store_write(&reopened, name, old, false, data, sizeof(data),
-                                NULL, 0, reopened.budget) == PP_CACHE_FULL);
-    assert(used(root) == 32768);
-    char preview[3000] = {0};
-    for (unsigned i = 100; i < 103; i++) {
-        key(i, name);
-        assert(pp_cache_store_put(&reopened, name, pinned[0], false, preview, sizeof(preview),
-                                  "image", 6));
-    }
-    assert(used(root) <= 65536);
+    assert(pp_cache_store_write(&reopened, name, pinned[0], PP_HISTORY_PART, data, sizeof(data), NULL, 0,
+                                0) == PP_CACHE_FULL);
+    assert(used(root) == 8192);
     assert(pp_cache_store_clear(&reopened));
-    assert(reopened.used == 0);
+    assert(pp_cache_store_open(&reopened, root, 65536));
+    pp_cache_store_scope(&reopened, scope);
+    /* Four turns with a prompt, reply, continuation and preview apiece.
+     * Interrupt deletion and reopen before allowing the incoming fifth turn. */
+    for (unsigned turn = 1; turn <= 4; turn++) {
+        unsigned char owner[16] = {turn};
+        for (unsigned part = 0; part < 4; part++) {
+            key(10 * turn + part, name);
+            assert(pp_cache_store_write(&reopened, name, owner,
+                                        part < 2 ? PP_HISTORY_HEAD : PP_HISTORY_PART, data, sizeof(data),
+                                        NULL, 0, 0) == PP_CACHE_HIT);
+        }
+    }
+    key(50, name);
+    snprintf(path, sizeof(path), "%s/.prune", root);
+    reopened.allowed = before_pause;
+    reopened.context = path;
+    assert(pp_cache_store_write(&reopened, name, (unsigned char[16]){5}, PP_HISTORY_HEAD, data,
+                                sizeof(data), NULL, 0, 0) == PP_CACHE_BUSY);
+    assert(access(path, F_OK) == 0);
+    assert(pp_cache_store_open(&reopened, root, 65536));
+    assert(pp_cache_store_recover(&reopened) && reopened.used == 8 * 4096);
+    pp_cache_store_scope(&reopened, scope);
+    assert(pp_cache_store_write(&reopened, name, (unsigned char[16]){5}, PP_HISTORY_HEAD, data,
+                                sizeof(data), NULL, 0, 0) == PP_CACHE_HIT);
+    for (unsigned turn = 1; turn <= 4; turn++) {
+        for (unsigned part = 0; part < 4; part++) {
+            key(10 * turn + part, name);
+            assert(read_value(&reopened, name, &value) == (turn <= 2 ? PP_CACHE_MISSING : PP_CACHE_HIT));
+            pp_buffer_free(&value.bytes);
+        }
+    }
+    /* Adopting an old local head after a live write cannot overwrite or reorder it. */
+    key(50, name);
+    assert(pp_cache_store_write_ordered(&reopened, name, (unsigned char[16]){5}, PP_HISTORY_HEAD, "old", 3,
+                                        NULL, 0, 0, 1) == PP_CACHE_HIT);
+    assert(read_value(&reopened, name, &value) == PP_CACHE_HIT && value.bytes.size == sizeof(data));
+    pp_buffer_free(&value.bytes);
+    char expected[65];
+    key(50, expected);
+    assert(pp_cache_store_seek(&reopened, name, PP_SEEK_LATEST, NULL) == PP_CACHE_HIT && !strcmp(name, expected));
+    uint64_t cursor = 0;
+    key(41, expected);
+    assert(pp_cache_store_seek(&reopened, name, PP_SEEK_PREVIOUS, &cursor) == PP_CACHE_HIT &&
+           !strcmp(name, expected));
+    /* A selected record whose body cannot supply an ID remains navigable. */
+    assert(cursor > 0);
+    strcpy(name, "");
+    key(50, expected);
+    assert(pp_cache_store_seek(&reopened, name, PP_SEEK_NEXT, &cursor) == PP_CACHE_HIT && !strcmp(name, expected));
+    pp_cache_store_scope(&reopened, other);
+    assert(pp_cache_store_seek(&reopened, name, PP_SEEK_LATEST, NULL) == PP_CACHE_MISSING);
+    assert(pp_cache_store_clear(&reopened));
     assert(!rmdir(root));
     return 0;
 }

@@ -177,13 +177,13 @@
       },
       "offline_cache": {
         "type": "boolean",
-        "title": "离线缓存聊天记录",
-        "description": "在设备独立 Flash 分区缓存最近三条已完成消息及缩略图，重启后保留。固定占用预算 256 KiB（按 Flash 块计算）；长内容可能仅缓存部分。关闭后停止使用和写入缓存，已有缓存不等于安全擦除。"
+        "title": "本地历史记录",
+        "description": "设备滚动保存实际收到的提问、回复及已查看图片的预览。重连不补历史。历史区空间不足时按轮次清理最旧的一半。关闭后停止保存和浏览本地历史。"
       },
       "show_images": {
         "type": "boolean",
         "title": "显示图片",
-        "description": "仅下载适合 PP 的会话授权缩略图，不下载原始图片。"
+        "description": "查看历史图片时先显示本地预览；联网时可按屏幕尺寸分块加载高清图。"
       },
       "wifi_networks": {
         "type": "object",

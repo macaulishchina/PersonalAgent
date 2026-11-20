@@ -1,5 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
 #include "history_cache.h"
-#include "network.h"
 #include "pictures.h"
 #include <assert.h>
 #include <stdio.h>
@@ -12,9 +12,9 @@ typedef struct {
 } record_t;
 static record_t records[128];
 static char scope[640];
-static bool online = true, enabled;
+static bool enabled;
 static bool fail_next_write;
-static unsigned reads, requests, incoming_count;
+
 typedef struct {
     unsigned ticket;
     bool written, success;
@@ -22,8 +22,11 @@ typedef struct {
 } pending_t;
 static pending_t pending[8];
 static unsigned pending_count;
-static cJSON *request, *incoming[32];
-int64_t esp_timer_get_time(void) { return 1000000; }
+
+int64_t esp_timer_get_time(void) {
+    static int64_t t;
+    return t += 200000;
+}
 bool pp_objects_identity(const char *const parts[], unsigned count, char identity[65]) {
     unsigned hash = 1;
     assert(count == 3);
@@ -33,19 +36,16 @@ bool pp_objects_identity(const char *const parts[], unsigned count, char identit
     snprintf(identity, 65, "%064x", hash);
     return true;
 }
-void pp_objects_configure(const char *value, const char *const owners[], unsigned count, bool active) {
-    (void)owners;
-    assert(count <= PP_CACHE_PIN_LIMIT);
+void pp_objects_configure(const char *value, bool active) {
     strcpy(scope, value);
     enabled = active;
 }
 bool pp_objects_read(const char *key, unsigned ticket, pp_object_read_t options) {
-    assert(options.heap_reserve && options.index == !strcmp(key, "recent"));
+    assert(options.heap_reserve);
     assert(pending_count < 8);
     pending_t *job = &pending[pending_count++];
     *job = (pending_t){.ticket = ticket};
     strcpy(job->key, key);
-    reads++;
     return true;
 }
 static bool save(const char *key, const char *owner, bool index, const void *data, size_t bytes) {
@@ -72,10 +72,14 @@ static bool save(const char *key, const char *owner, bool index, const void *dat
     strcpy(record->scope, scope);
     return true;
 }
-bool pp_objects_write(const char *key, const char *owner, pp_object_write_t options, pp_buffer_t *buffer,
-                      const void *aux, size_t aux_size, unsigned ticket) {
+bool pp_objects_try_write(const char *key, const char *owner, pp_object_write_t options,
+                          pp_buffer_t *buffer, const void *aux, size_t aux_size, unsigned ticket) {
     (void)aux; (void)aux_size;
-    bool ok = !fail_next_write && save(key, owner, options.index, buffer->data, buffer->size);
+    if (fail_next_write) {
+        fail_next_write = false;
+        return false;
+    }
+    bool ok = save(key, owner, options.kind, buffer->data, buffer->size);
     pp_buffer_free(buffer);
     fail_next_write = false;
     assert(pending_count < 8);
@@ -113,147 +117,94 @@ bool pp_objects_next(pp_cache_result_t *result) {
     return true;
 }
 void pp_objects_release(pp_cache_result_t *result) { pp_buffer_free(&result->value.bytes); }
-bool pp_net_connected(void) { return online; }
-bool pp_net_send(cJSON *command) {
-    if (!online) {
-        cJSON_Delete(command);
-        return false;
-    }
-    cJSON_Delete(request);
-    request = command;
-    requests++;
-    return true;
-}
-void pp_picture_cached(pp_cache_result_t *result) {
-    (void)result;
+void pp_picture_cached(pp_cache_result_t *r) {
+    (void)r;
     assert(false);
 }
-bool pp_picture_prefetch(const char *message, const char *image) {
-    (void)message;
-    (void)image;
-    return false;
+static pp_history_page_t page;
+static pp_cache_status_t status;
+static void receive(pp_cache_status_t result, const pp_history_page_t *record) {
+    status = result;
+    static char text[256];
+    if (record) {
+        page = *record;
+        snprintf(text, sizeof(text), "%s", record->text);
+        page.text = text;
+    }
 }
-static void receive(const char *text, size_t bytes) {
-    (void)bytes;
-    assert(incoming_count < 32);
-    incoming[incoming_count++] = cJSON_Parse(text);
-    assert(incoming[incoming_count - 1]);
+static void warning(const char *why) {
+    (void)why;
+    assert(false);
 }
-static const char *text(const cJSON *j, const char *key) {
-    const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, key);
-    return cJSON_IsString(v) ? v->valuestring : "";
-}
-static void catalog(unsigned revision) {
-    char raw[1024];
-    snprintf(
-        raw, sizeof(raw),
-        "{\"type\":\"cache.index\",\"items\":["
-        "{\"id\":\"one\",\"cursor\":\"a\",\"role\":\"user\",\"status\":\"complete\",\"updated\":1},"
-        "{\"id\":\"two\",\"cursor\":\"b\",\"role\":\"assistant\",\"status\":\"complete\","
-        "\"updated\":1},"
-        "{\"id\":\"three\",\"cursor\":\"c\",\"role\":\"user\",\"status\":\"complete\",\"updated\":%"
-        "u}]}",
-        revision);
+static void record(unsigned i) {
+    char raw[256];
+    snprintf(raw, sizeof(raw),
+             "{\"message_id\":\"msg-%u\",\"group\":\"turn\",\"status\":\"complete\","
+             "\"role\":\"user\",\"offset\":0,\"updated\":1,\"text\":\"正文%u\"}",
+             i, i);
+    pp_buffer_t frame = pp_buffer_adopt(strdup(raw), strlen(raw), strlen(raw) + 1, PP_MEMORY_CACHE);
     cJSON *j = cJSON_Parse(raw);
-    assert(j && pp_history_cache_receive(j, NULL));
+    pp_history_page_t parsed;
+    assert(pp_timeline_decode(&parsed, j));
+    pp_history_cache_record(&parsed, &frame);
+    assert(!frame.data);
     cJSON_Delete(j);
 }
-static void network_page(const char *id, unsigned revision, bool prefetch) {
-    cJSON *page = cJSON_CreateObject();
-    cJSON_AddStringToObject(page, "type", "message.page");
-    cJSON_AddStringToObject(page, "message_id", id);
-    cJSON_AddStringToObject(page, "text", "完整正文");
-    cJSON_AddStringToObject(page, "role", "user");
-    cJSON_AddStringToObject(page, "status", "complete");
-    cJSON_AddNumberToObject(page, "updated", revision);
-    cJSON_AddNumberToObject(page, "offset", 0);
-    cJSON_AddNumberToObject(page, "total", 4);
-    cJSON_AddNullToObject(page, "next_offset");
-    if (prefetch)
-        cJSON_AddBoolToObject(page, "prefetch", true);
-    assert(pp_history_cache_receive(page, NULL) == prefetch);
-    cJSON_Delete(page);
-}
 int main(void) {
-    pp_history_cache_init(receive);
-    pp_history_cache_bind("http://pa:8047", "device", "session", true, true);
-    pp_history_cache_poll(false); /* Empty disk is not presented while online. */
-    catalog(1);
-    const char *ids[] = {"one", "two", "three"};
+    pp_history_cache_init(receive, warning);
+    pp_history_cache_bind("url", "dev", "binding", true, true);
+    assert(enabled);
+    const char *dir = "{\"items\":[{\"id\":\"old\",\"updated\":2}]}";
+    assert(save("recent", "", true, dir, strlen(dir)));
     for (unsigned i = 0; i < 3; i++) {
-        pp_history_cache_poll(true);
-        pp_history_cache_poll(false);
-        assert(request && !strcmp(text(request, "message_id"), ids[i]));
-        assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(request, "prefetch")));
-        network_page(ids[i], 1, true);
+        char body[200], key[40];
+        snprintf(key, sizeof(key), "page/old/2/%u", i * 80);
+        snprintf(body, sizeof(body),
+                 "{\"message_id\":\"old\",\"updated\":2,\"status\":\"complete\","
+                 "\"offset\":%u,\"text\":\"part-%u\"}",
+                 i * 80, i);
+        assert(save(key, "old/2", false, body, strlen(body)));
     }
-    for (unsigned i = 0; i < 5; i++)
+    for (unsigned i = 0; i < 20; i++)
         pp_history_cache_poll(true);
-    assert(requests == 3);
-    unsigned before = requests;
-    /* Browsing unrelated old history does not replace the recent directory. */
-    assert(pp_history_cache_page("very-old", 0));
-    assert(requests == before + 1 && !strcmp(text(request, "message_id"), "very-old"));
-    network_page("very-old", 1, false);
-    assert(pp_history_cache_page("three", 0));
+    assert(pp_history_cache_read("old", 2, false, 0, PP_SEEK_EXACT));
     pp_history_cache_poll(false);
-    cJSON *hit = incoming[incoming_count - 1];
-    assert(!strcmp(text(hit, "type"), "message.page"));
-    assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(hit, "cached")));
-    assert(!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(hit, "prefetch")));
-    assert(!pp_history_cache_receive(hit, NULL));
-    assert(requests == before + 1);
-    online = false;
-    assert(pp_history_cache_recent());
-    pp_history_cache_poll(false);
-    assert(!strcmp(text(incoming[incoming_count - 1], "type"), "cache.restored"));
-    fail_next_read = PP_CACHE_NO_MEMORY;
-    assert(pp_history_cache_recent());
-    pp_history_cache_poll(false);
-    assert(!strcmp(text(incoming[incoming_count - 1], "type"), "cache.busy"));
-    double revision;
-    assert(pp_history_cache_revision("three", &revision) && revision == 1);
-    for (unsigned i = 0; i < 3; i++) {
-        assert(pp_history_cache_page(ids[i], 0));
+    for (unsigned i = 1; i <= 2; i++) {
+        assert(status == PP_CACHE_HIT && page.legacy && !strcmp(page.group, "old/2"));
+        assert(pp_history_cache_read(page.id, page.revision, page.legacy, i * 80, PP_SEEK_EXACT));
         pp_history_cache_poll(false);
-        hit = incoming[incoming_count - 1];
-        assert(!strcmp(text(hit, "message_id"), ids[i]));
-        assert(!strcmp(text(hit, "text"), "完整正文"));
-        assert(!pp_history_cache_receive(hit, NULL));
     }
-    assert(requests == before + 1); /* Offline navigation performs no network call. */
-    online = true;
-    catalog(2);
-    assert(pp_history_cache_page("three", 0));
+    assert(status == PP_CACHE_HIT && page.legacy && !strcmp(page.text, "part-2"));
+    assert(pp_history_cache_read(page.id, page.revision, true, 163, PP_SEEK_EXACT));
     pp_history_cache_poll(false);
-    assert(requests == before + 2); /* Old revision cannot satisfy a new one. */
-    network_page("three", 2, false);
-    /* A new instance/session cannot expose the previous device's cached body. */
-    pp_history_cache_bind("http://other:8047", "device", "another-session", true, true);
-    online = false;
+    assert(status == PP_CACHE_HIT && page.offset == 163 && !strcmp(page.text, "t-2"));
+    for (unsigned i = 0; i < 7; i++)
+        record(i);
     pp_history_cache_poll(false);
-    assert(!strcmp(text(incoming[incoming_count - 1], "type"), "cache.empty"));
-    /* A failed page commit must not publish an index claiming that message is
-     * cached. A network receipt alone is insufficient. */
-    online = true;
-    catalog(1);
-    pp_history_cache_poll(true);
-    pp_history_cache_poll(false);
+    assert(!pending_count);
     fail_next_write = true;
-    network_page("one", 1, true);
-    pp_history_cache_poll(true);
-    unsigned after_failure = requests;
-    for (unsigned i = 0; i < 5; i++)
+    for (int i = 0; i < 22; i++)
         pp_history_cache_poll(true);
-    assert(requests == after_failure); /* No invisible read/model retry loop. */
-    online = false;
-    assert(pp_history_cache_recent());
+    for (unsigned i = 0; i < 7; i++) {
+        char id[32], body[32];
+        snprintf(id, sizeof(id), "msg-%u", i);
+        snprintf(body, sizeof(body), "正文%u", i);
+        assert(pp_history_cache_read(id, 1, false, 0, PP_SEEK_EXACT));
+        pp_history_cache_poll(false);
+        assert(status == PP_CACHE_HIT && !strcmp(page.text, body) && page.user &&
+               !strcmp(page.group, "turn"));
+    }
+    fail_next_read = PP_CACHE_BUSY;
+    assert(pp_history_cache_read("msg-2", 1, false, 0, PP_SEEK_EXACT));
+    for (unsigned i = 0; i < 5; i++)
+        pp_history_cache_poll(false);
+    assert(status == PP_CACHE_HIT && !strcmp(page.id, "msg-2"));
+    pp_history_cache_bind("url", "dev", "another", true, true);
+    assert(pp_history_cache_read("msg-1", 1, false, 0, PP_SEEK_EXACT));
     pp_history_cache_poll(false);
-    assert(!strcmp(text(incoming[incoming_count - 1], "type"), "cache.empty"));
-    assert(reads > 3);
-    cJSON_Delete(request);
-    for (unsigned i = 0; i < incoming_count; i++)
-        cJSON_Delete(incoming[i]);
+    assert(status == PP_CACHE_MISSING);
+    pp_history_cache_bind("url", "dev", "binding", false, true);
+    assert(!pp_history_cache_read("msg-1", 1, false, 0, PP_SEEK_EXACT));
     for (unsigned i = 0; i < 128; i++)
         free(records[i].value);
     return 0;

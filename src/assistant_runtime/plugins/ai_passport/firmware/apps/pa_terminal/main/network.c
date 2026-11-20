@@ -585,13 +585,13 @@ static void worker(void *arg) {
             interruptible_wait(3000);
             continue;
         }
-        char uri[600], headers[180];
+        char uri[600], headers[216];
         if (!pp_server_endpoint(settings->url, "stream", true, uri, sizeof(uri))) {
             report_offline("PA 地址无效，请检查设置");
             invalid_address = true;
             continue;
         }
-        snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\nX-Device-Id: %s\r\n",
+        snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\nX-Device-Id: %s\r\nX-PP-Live-Previews: 1\r\n",
                  settings->credential, settings->device);
         pp_buffer_free(&setup);
         pp_buffer_free(&received);

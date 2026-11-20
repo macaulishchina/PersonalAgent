@@ -1,7 +1,6 @@
 """Acceptance-rig safeguards and real-Pi fixtures, without USB or paid providers."""
 
 import asyncio
-import base64
 from collections import deque
 import hashlib
 import json
@@ -143,6 +142,29 @@ class RigTest(unittest.IsolatedAsyncioTestCase):
                                 event = await ws.receive()
                                 self.assertIn(event.type, (WSMsgType.TEXT, WSMsgType.BINARY))
                                 if event.type == WSMsgType.BINARY:
+                                    if event.data.startswith(b"\xff" * 4):
+                                        _, ident, row, rows, digest = struct.unpack(
+                                            "!4sIHH8s", event.data[:20]
+                                        )
+                                        pixels = event.data[20:]
+                                        self.assertEqual(ident, 1)
+                                        self.assertEqual(row * image_meta["width"] * 2, len(image_data))
+                                        self.assertEqual(hashlib.sha256(pixels).digest()[:8], digest)
+                                        image_data.extend(pixels)
+                                        if len(image_data) == image_meta["bytes"]:
+                                            self.assertEqual(
+                                                hashlib.sha256(image_data).hexdigest(), image_meta["version"]
+                                            )
+                                            image_done = True
+                                        else:
+                                            await ws.send_json(
+                                                {
+                                                    "type": "image.stream.next",
+                                                    "request_id": 1,
+                                                    "row": row + rows,
+                                                }
+                                            )
+                                        continue
                                     generation = struct.unpack("!I", event.data[:4])[0]
                                     await ws.send_json(
                                         {
@@ -169,35 +191,19 @@ class RigTest(unittest.IsolatedAsyncioTestCase):
                                 elif kind == "message" and value.get("images") and not image_meta:
                                     await ws.send_json(
                                         {
-                                            "type": "image.open",
+                                            "type": "image.stream.open",
+                                            "request_id": 1,
                                             "message_id": value["message_id"],
                                             "image_id": value["images"][0]["id"],
                                             "width": 96,
                                             "height": 64,
                                         }
                                     )
-                                elif kind == "image.open":
+                                elif kind == "image.stream.open":
                                     image_meta = value
                                     await ws.send_json(
-                                        {"type": "image.chunk", "version": value["version"], "offset": 0}
+                                        {"type": "image.stream.next", "request_id": 1, "row": 0}
                                     )
-                                elif kind == "image.chunk":
-                                    image_data.extend(base64.b64decode(value["data"]))
-                                    if value["next_offset"] is None:
-                                        self.assertEqual(len(image_data), image_meta["bytes"])
-                                        self.assertEqual(
-                                            hashlib.sha256(image_data).hexdigest(), image_meta["version"]
-                                        )
-                                        image_done = True
-                                        await ws.send_json({"type": "image.close"})
-                                    else:
-                                        await ws.send_json(
-                                            {
-                                                "type": "image.chunk",
-                                                "version": value["version"],
-                                                "offset": value["next_offset"],
-                                            }
-                                        )
                                 elif kind == "playback.start":
                                     await ws.send_json(
                                         {

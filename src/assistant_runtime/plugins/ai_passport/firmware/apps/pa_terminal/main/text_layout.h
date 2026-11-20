@@ -10,6 +10,17 @@ typedef struct {
     bool more;
 } pp_text_layout_t;
 
+/* A screen can span multiple flash blocks. Feed each block while it is borrowed;
+ * next counts source bytes in this block, characters counts original Unicode offsets. */
+typedef struct {
+    size_t written;
+    unsigned x, lines, characters;
+    bool paragraph_break;
+} pp_layout_cursor_t;
+pp_text_layout_t pp_layout_feed(pp_layout_cursor_t *cursor, char *out, size_t capacity,
+                                const char *text, unsigned width, unsigned rows,
+                                pp_glyph_width_t measure, void *context);
+
 /* Explicit whole lines. No scrolling viewport or partially clipped top row.
  * Width comes from the installed font; no assumption that ASCII and CJK match. */
 pp_text_layout_t pp_layout_page(char *out, size_t capacity, const char *text, size_t start,

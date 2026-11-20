@@ -78,6 +78,7 @@ class Connection:
         self.speech_changed = asyncio.Event()
         self.playback_completed = asyncio.Event()
         self.voice = None
+        self.live_previews = False
         self.display = TerminalDisplay(self.conversation, self.send, self.settings, self.send_binary)
 
     async def send(self, event_type, **data):
@@ -110,8 +111,7 @@ class Connection:
         await self.send("configuration", fields=self.owner.configuration_for(self.device))
 
     async def run(self):
-        history = await self.conversation("history_index", limit=3)
-        self.cursor = history["cursor"]
+        self.cursor = (await self.conversation("event_cursor"))["cursor"]
         await self.send(
             "hello",
             protocol=protocol.VERSION,
@@ -127,11 +127,6 @@ class Connection:
             playback_progress=True,
         )
         await self.send_configuration()
-        await self.send("history.index", **history)
-        await self.display.cache_index(history)
-        # Reconnection displays history without replaying historical speech.
-        for message in history["items"]:
-            await self.display.restore_message(message)
         if self.closed:
             return
         self.watch_task = self.spawn(self.watch(), "state")
@@ -296,7 +291,7 @@ class Connection:
                 raise SpeechError("speech_input_closed")
             return
         if kind.startswith("image."):
-            await self.display.image(kind, data)
+            await self.display.image_stream(kind, data)
         elif kind == "configuration.reload":
             await self.send_configuration()
         elif kind == "configuration.applied":
@@ -320,8 +315,6 @@ class Connection:
                 raise ValueError("Invalid device preferences")
             self.owner.devices.configuration_receipt(self.device, versions, actual)
             await self.send("configuration.receipt")
-        elif kind == "history.index":
-            await self.display.history_index(data)
         elif kind == "playback.credit":
             credit = data.get("bytes")
             if type(credit) is not int or credit <= 0 or credit % 2 or credit > protocol.PLAYBACK_MAX_WINDOW:
@@ -373,8 +366,6 @@ class Connection:
                 self.playing = None
                 self.playback_completed.set()
                 self.playback_changed.set()
-        elif kind == "message.page":
-            await self.display.message_page(data)
         elif kind == "execution.cancel":
             result = await self.conversation("cancel", request_id=data.get("request_id"))
             await self.send("execution.cancelled", result=result)
@@ -575,28 +566,22 @@ class Connection:
                     await self.send("state", **public)
                     self.last_state = public
                 changes = await self.conversation("events", cursor=self.cursor)
-                if changes["events"] is None:
-                    history = await self.conversation("history_index", limit=3)
-                    self.cursor = history["cursor"]
-                    await self.display.cache_index(history)
-                    for m in history["items"]:
-                        await self.display.restore_message(m)
-                else:
-                    refresh_history = False
-                    for event in changes["events"]:
-                        m = event.get("data")
-                        if isinstance(m, dict) and "role" in m:
-                            await self.present(m, speak=True)
-                            refresh_history = refresh_history or m.get("status") != "streaming"
-                    self.cursor = changes["cursor"]
-                    if refresh_history:
-                        # Keep the small directory current for offline navigation.
-                        # Its snapshot cursor must not skip undelivered events.
-                        index = await self.conversation("history_index", limit=3)
-                        await self.send("history.index", pushed=True, **index)
-                        await self.display.cache_index(index)
-                    if len(changes["events"]) >= 100:
-                        self.changed.set()
+                # A gap advances to the live edge. Reconnection never replays chat history.
+                events = changes["events"] or []
+                # The event log resolves every revision to the current message.
+                # Multiple rows in a batch can therefore carry the same final body.
+                delivered = {}
+                for event in events:
+                    message = event.get("data")
+                    if not isinstance(message, dict) or "role" not in message:
+                        continue
+                    ident = message["id"]
+                    if delivered.get(ident) != message:
+                        await self.present(message, speak=True)
+                        delivered[ident] = message
+                self.cursor = changes["cursor"]
+                if len(events) >= 100:
+                    self.changed.set()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -654,7 +639,7 @@ class Connection:
         if terminal and self.voice and self.voice["id"] == message["id"]:
             await self.stop_playback()
         if (
-            message.get("role") != "assistant"
+            message.get("role") not in {"user", "assistant"}
             or message.get("status")
             not in {"streaming", "complete", "failed", "cancelled", "interrupted", "unknown"}
             or (message.get("kind", "message") != "message" and not message.get("attachments"))
@@ -664,26 +649,38 @@ class Connection:
         # Durable event cursors and playback claims own deduplication. A
         # presentation update may deliberately keep the original timestamp.
         text_body = message["text"] if message.get("kind") != "detail" else ""
-        offset = max(0, len(text_body) - 160) if message["status"] == "streaming" else 0
-        await self.send(
-            "message",
-            message_id=message["id"],
-            role=message["role"],
-            text=text_body[offset : offset + 160],
-            total=len(text_body),
-            offset=offset,
-            more_before=offset > 0,
-            more=len(text_body) > offset + 160,
-            next_offset=offset + 160 if len(text_body) > offset + 160 else None,
-            status=message["status"],
-            updated=message.get("updated", ""),
-            kind="image" if message.get("kind") == "detail" and message.get("attachments") else "message",
-            images=[
-                {k: ref[k] for k in ("id", "type") if k in ref}
-                for ref in message.get("attachments", [])
-                if ref.get("type", "").startswith("image/")
-            ][:4],
-        )
+        streaming = message["status"] == "streaming"
+        # Completed text is delivered once as live content, in bounded UTF-8
+        # frames. The first block is also the normal on-screen reply.
+        block = 160 if streaming else protocol.LIVE_BLOCK_CHARS
+        start = max(0, len(text_body) - block) if streaming else 0
+        images = [
+            {k: ref[k] for k in ("id", "type") if k in ref}
+            for ref in message.get("attachments", [])
+            if ref.get("id") and ref.get("type", "").startswith("image/")
+        ][:4]
+        if images and not streaming and self.live_previews:
+            prefs = self.settings()
+            if prefs.get("show_images", True) and prefs.get("offline_cache", True):
+                await self.display.deliver_previews(message, images)
+        for offset in range(start, max(len(text_body), 1), block):
+            end = offset + block
+            await self.send(
+                "message" if streaming or not offset else "message.part",
+                message_id=message["id"],
+                role=message["role"],
+                text=text_body[offset:end],
+                total=len(text_body),
+                offset=offset,
+                next_offset=end if end < len(text_body) else None,
+                status=message["status"],
+                updated=message.get("updated", 0),
+                group=message.get("turn_id") or message["id"],
+                kind="image" if message.get("kind") == "detail" and message.get("attachments") else "message",
+                images=images,
+            )
+        if message["role"] == "user":
+            return
         if terminal:
             return
         # Task reports have their own ownership and quiet-hours policy; never treat as a foreground answer.

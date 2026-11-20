@@ -28,64 +28,57 @@ static size_t decode(const char *s, uint32_t *value) {
     return n;
 }
 
+pp_text_layout_t pp_layout_feed(pp_layout_cursor_t *c, char *out, size_t cap, const char *text,
+                                unsigned width, unsigned rows, pp_glyph_width_t measure,
+                                void *context) {
+    size_t pos = 0;
+    while (width && rows && measure && text[pos]) {
+        uint32_t glyph;
+        size_t bytes = decode(text + pos, &glyph);
+        if (glyph == '\r' || glyph == '\n') {
+            c->paragraph_break = c->lines != 0;
+        } else {
+            unsigned advance = measure(glyph == '\t' ? ' ' : glyph, context);
+            bool wrap = c->paragraph_break || (c->x && advance > width - c->x);
+            bool replace = glyph == '?' && (unsigned char)text[pos] >= 0x80;
+            size_t length = replace ? 1 : bytes;
+            if ((wrap && c->lines >= rows) || (cap && c->written + wrap + length >= cap))
+                break;
+            if (wrap) {
+                if (cap)
+                    out[c->written] = '\n';
+                c->written++;
+                c->lines++;
+                c->x = 0;
+                c->paragraph_break = false;
+            }
+            if (!c->lines)
+                c->lines = 1;
+            if (cap) {
+                if (replace || glyph == '\t')
+                    out[c->written] = replace ? '?' : ' ';
+                else
+                    memcpy(out + c->written, text + pos, length);
+            }
+            c->written += length;
+            c->x += advance > width - c->x ? width - c->x : advance;
+        }
+        pos += bytes;
+        c->characters++;
+    }
+    if (cap)
+        out[c->written] = 0;
+    return (pp_text_layout_t){.next = pos, .lines = c->lines, .more = text[pos] != 0};
+}
+
 pp_text_layout_t pp_layout_page(char *out, size_t cap, const char *text, size_t start,
                                 unsigned width, unsigned rows, pp_glyph_width_t measure,
                                 void *context) {
-    pp_text_layout_t result = {.next = start};
-    if (cap)
-        out[0] = 0;
-    if (!rows || !width || !measure || start > strlen(text))
-        return result;
-    size_t written = 0, pos = start;
-    unsigned x = 0, line = 1;
-    while (text[pos]) {
-        uint32_t glyph;
-        size_t bytes = decode(text + pos, &glyph);
-        if (glyph == '\r') {
-            pos += bytes;
-            continue;
-        }
-        bool newline = glyph == '\n';
-        unsigned advance = newline ? 0 : measure(glyph == '\t' ? ' ' : glyph, context);
-        bool wrap = !newline && x && advance > width - x;
-        if (newline || wrap) {
-            if (line >= rows) {
-                if (newline)
-                    pos += bytes;
-                break;
-            }
-            if (cap && written + 1 >= cap)
-                break;
-            if (cap)
-                out[written] = '\n';
-            written++;
-            line++;
-            x = 0;
-            if (newline) {
-                pos += bytes;
-                continue;
-            }
-        }
-        bool replacement = glyph == '?' && (unsigned char)text[pos] >= 0x80;
-        size_t length = replacement || glyph == '\t' ? 1 : bytes;
-        if (cap && written + length >= cap)
-            break;
-        if (cap) {
-            if (replacement || glyph == '\t')
-                out[written] = replacement ? '?' : ' ';
-            else
-                memcpy(out + written, text + pos, length);
-        }
-        written += length;
-        x = advance >= width - x ? width : x + advance;
-        pos += bytes;
-    }
-    if (cap)
-        out[written] = 0;
-    result.next = pos;
-    result.lines = pos > start ? line : 0;
-    result.more = text[pos] != 0;
-    return result;
+    pp_layout_cursor_t cursor = {0};
+    pp_text_layout_t page = pp_layout_feed(&cursor, out, cap, start <= strlen(text) ? text + start : "",
+                                           width, rows, measure, context);
+    page.next += start;
+    return page;
 }
 
 size_t pp_layout_previous(const char *text, size_t start, unsigned width, unsigned rows,

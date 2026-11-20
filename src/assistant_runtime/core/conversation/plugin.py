@@ -90,6 +90,7 @@ class Conversations:
             "message": {"session_id", "message_id", "offset", "limit"},
             "thumbnail": {"session_id", "message_id", "image_id", "width", "height"},
             "image_raster": {"session_id", "message_id", "image_id", "width", "height"},
+            "event_cursor": {"session_id"},
             "events": {"session_id", "cursor"},
             "state": {"session_id"},
             "receipt": {"session_id", "request_id", "include_execution"},
@@ -284,6 +285,8 @@ class Conversations:
                 "cursor": store.cursor(),
                 "before": messages[0]["ordinal"] if len(messages) == 60 else None,
             }
+        if action == "event_cursor":
+            return {"cursor": store.cursor()}
         if action == "events":
             cursor = args.get("cursor", 0)
             if type(cursor) is not int or cursor < 0:

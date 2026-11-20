@@ -195,6 +195,7 @@ class AiPassportPlugin:
             raise web.HTTPServiceUnavailable(text="terminal_capacity")
         ws = web.WebSocketResponse(max_msg_size=protocol.MAX_JSON_BYTES, heartbeat=15)
         connection = Connection(self, ident, session, ws)
+        connection.live_previews = request.headers.get("X-PP-Live-Previews") == "1"
         self.connecting.add(ident)
 
         def release_connection(_=None):

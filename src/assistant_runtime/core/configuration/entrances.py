@@ -51,7 +51,7 @@ class EntranceGateway:
                     cookie_jar=DummyCookieJar(), trust_env=False, timeout=ClientTimeout(total=None, connect=5)
                 )
             headers = {"X-PA-Frontend-Key": endpoint["key"]}
-            for key in ("Authorization", "X-Device-Id"):
+            for key in ("Authorization", "X-Device-Id", "X-PP-Live-Previews"):
                 if key in request.headers:
                     headers[key] = request.headers[key]
             address = f"http://{host}:{port}/{route}"

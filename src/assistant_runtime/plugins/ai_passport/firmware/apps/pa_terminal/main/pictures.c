@@ -6,8 +6,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/base64.h"
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -16,18 +16,11 @@
 
 static pp_image_transfer_t transfer;
 static unsigned char *pixels;
-static pp_buffer_t owned_pixels;
 static pp_cache_result_t borrowed_pixels;
-static unsigned prefetch_write;
-static char prefetch_message[160], prefetch_image[33];
-static double opened_revision, prefetch_write_revision;
-static bool revision_known;
-static char message_id[160], image_id[33];
-static unsigned requested_width, requested_height;
-static bool loading, shown, remote_active;
+static double opened_revision;
+static char message_id[160], image_id[33], owner[192];
+static bool loading, shown, unavailable;
 static atomic_uint displayed_bytes;
-static enum { PICTURE_WAITING, PICTURE_REQUEST, PICTURE_ALLOCATE } pending;
-static size_t request_limit;
 static bool stream_supported, hd_attempted;
 static uint32_t stream_sequence;
 static struct {
@@ -41,7 +34,7 @@ static struct {
     pp_image_transfer_t raster, thumb;
     mbedtls_sha256_context digest;
 } stream;
-static bool verified, prefetch;
+static bool verified;
 static unsigned cache_serial, cache_ticket;
 static uint32_t started;
 static void (*status)(const char *);
@@ -62,24 +55,16 @@ static unsigned number(const cJSON *j, const char *key) {
                : 0;
 }
 void pp_picture_init(void (*callback)(const char *)) { status = callback; }
-void pp_picture_stream_supported(bool supported) { stream_supported = supported; }
-bool pp_picture_active(void) { return loading || shown; }
-bool pp_picture_loading(void) { return loading && !shown; }
+void pp_picture_stream_supported(bool supported) {
+    if (supported && !stream_supported && unavailable)
+        hd_attempted = false;
+    stream_supported = supported;
+}
+bool pp_picture_active(void) { return loading || shown || unavailable; }
 unsigned pp_picture_displayed_bytes(void) { return displayed_bytes; }
 static void release_pixels(void) {
     pp_objects_release(&borrowed_pixels);
-    pp_buffer_free(&owned_pixels);
     pixels = NULL;
-}
-static void prefetch_done(bool completed) {
-    if (prefetch)
-        pp_history_cache_picture_done(message_id, image_id, opened_revision, completed);
-}
-static void close_remote(void) {
-    if (remote_active) {
-        remote_active = false;
-        pp_net_send(command("image.close"));
-    }
 }
 static bool stream_command(const char *type, unsigned row) {
     cJSON *j = command(type);
@@ -103,12 +88,9 @@ static void release_stream(void) {
     memset(&stream, 0, sizeof(stream));
 }
 static bool cache_preview(pp_buffer_t *buffer, pp_image_transfer_t *image) {
-    char key[256], owner[192];
-    double revision;
+    char key[256];
     unsigned char hash[32];
-    if (!revision_known || !pp_history_cache_revision(message_id, &revision) ||
-        revision != opened_revision || !pp_history_cache_image_key(message_id, image_id, key) ||
-        !pp_history_cache_owner(message_id, owner) ||
+    if (!pp_history_cache_image_key(message_id, opened_revision, image_id, key) ||
         mbedtls_sha256((const unsigned char *)buffer->data, image->bytes, hash, 0) != 0)
         return false;
     for (unsigned i = 0; i < 32; i++)
@@ -116,147 +98,74 @@ static bool cache_preview(pp_buffer_t *buffer, pp_image_transfer_t *image) {
     buffer->size = image->received = image->bytes;
     if (buffer->capacity > image->bytes)
         (void)pp_buffer_reserve(buffer, image->bytes, PP_MEMORY_BACKGROUND, PP_MEMORY_IMAGE);
-    unsigned ticket = prefetch ? (++cache_serial << 2) | 3u : 0;
-    if (!pp_objects_write(key, owner, (pp_object_write_t){0}, buffer, image, sizeof(*image), ticket))
-        return false;
-    if (ticket) {
-        prefetch_write = ticket;
-        prefetch_write_revision = opened_revision;
-        strcpy(prefetch_message, message_id);
-        strcpy(prefetch_image, image_id);
-    }
-    return true;
+    return pp_history_cache_preview(key, owner, buffer, image);
 }
-bool pp_picture_close(void) {
+static bool release_view(void) {
     if ((shown || stream.screen || stream.state == STREAM_SCREEN) && !pp_ui_image(NULL, 0, 0)) {
         status("屏幕忙，尚未释放图片");
         return false;
     }
     release_stream();
-    if (owned_pixels.data && verified) {
-        if (!pp_image_preview(&transfer, pixels, PP_IMAGE_PREVIEW_WIDTH, PP_IMAGE_PREVIEW_HEIGHT) ||
-            !cache_preview(&owned_pixels, &transfer))
-            prefetch_done(false);
-    } else if (prefetch && !borrowed_pixels.value.bytes.data)
-        prefetch_done(false);
     release_pixels();
     displayed_bytes = 0;
-    loading = shown = false;
-    pending = PICTURE_WAITING;
+    loading = shown = unavailable = false;
     hd_attempted = false;
-    verified = prefetch = false;
+    verified = false;
     cache_ticket = 0;
     memset(&transfer, 0, sizeof(transfer));
-    message_id[0] = image_id[0] = 0;
-    close_remote();
     return true;
 }
-static void next_chunk(void) {
-    cJSON *j = command("image.chunk");
-    cJSON_AddStringToObject(j, "version", transfer.version);
-    cJSON_AddNumberToObject(j, "offset", transfer.received);
-    if (!pp_net_send(j)) {
-        pp_picture_close();
-        status("图片传输已中断");
-    }
+bool pp_picture_close(void) {
+    if (!release_view())
+        return false;
+    message_id[0] = image_id[0] = 0;
+    return true;
 }
 static void picture_error(const char *reason) {
-    bool background = prefetch;
-    pp_picture_close();
-    if (!background)
+    bool attempted = hd_attempted;
+    if (release_view()) {
+        hd_attempted = attempted;
+        unavailable = true; /* Keep the logical image page navigable, even without pixels. */
         status(reason);
-}
-static bool choose_size(size_t limit, size_t *available, size_t *largest) {
-    *available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    *largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    return pp_image_request_size(*available, *largest, limit, prefetch,
-                                 &requested_width, &requested_height);
-}
-static void request_remote(size_t limit) {
-    const size_t preview_limit = PP_IMAGE_PREVIEW_WIDTH * PP_IMAGE_PREVIEW_HEIGHT * 2u;
-    if (limit > preview_limit)
-        limit = preview_limit;
-    request_limit = limit;
-    pending = PICTURE_REQUEST;
-}
-static bool remote_open(size_t limit) {
-    if (!pp_net_connected()) {
-        if (!prefetch)
-            status("图片未完整缓存，请联网读取");
-        return false;
     }
-    size_t available, largest;
-    bool fits = choose_size(limit, &available, &largest);
-    if (!fits && !prefetch) {
-        pp_memory_reclaim(PP_CACHE_RESIDENT_BYTES, PP_MEMORY_NORMAL);
-        fits = choose_size(limit, &available, &largest);
-    }
-    if (!fits) {
-        if (!prefetch) {
-            ESP_LOGW("pp_picture", "no image buffer heap=%u largest=%u limit=%u",
-                     (unsigned)available, (unsigned)largest, (unsigned)limit);
-            status("图片内存暂不足，请稍后查看");
-        }
-        return false;
-    }
-    if (!prefetch)
-        ESP_LOGI("pp_picture", "request %ux%u heap=%u largest=%u",
-                 requested_width, requested_height, (unsigned)available, (unsigned)largest);
-    cJSON *j = command("image.open");
-    cJSON_AddStringToObject(j, "message_id", message_id);
-    cJSON_AddStringToObject(j, "image_id", image_id);
-    cJSON_AddNumberToObject(j, "width", requested_width);
-    cJSON_AddNumberToObject(j, "height", requested_height);
-    if (pp_net_send(j)) {
-        remote_active = true;
+}
+static bool start_hd(void);
+static bool missing_preview(void) {
+    if (start_hd())
         return true;
-    }
-    if (!prefetch)
-        status("图片请求发送失败，可重新查看");
-    return false;
+    picture_error("此图未保存预览");
+    return true;
 }
-static bool open_picture(const char *message, const char *image, bool background) {
-    if ((background && prefetch_write) || strlen(message) >= sizeof(message_id) || strlen(image) >= sizeof(image_id) ||
+bool pp_picture_open(const char *message, const char *image, double revision, const char *group) {
+    if (strlen(message) >= sizeof(message_id) || strlen(image) != 32 || strlen(group) >= sizeof(owner) ||
         !pp_picture_close())
         return false;
     strcpy(message_id, message);
     strcpy(image_id, image);
-    prefetch = background;
+    strcpy(owner, group);
+    opened_revision = revision;
     loading = true;
     started = (uint32_t)(esp_timer_get_time() / 1000);
-    if (!background)
-        status("正在读取图片");
+    status("正在读取图片");
     char key[256];
-    revision_known = pp_history_cache_revision(message, &opened_revision);
-    if (pp_history_cache_image_key(message, image, key)) {
+    if (pp_history_cache_image_key(message, revision, image, key)) {
         cache_ticket = (++cache_serial << 2) | 3u;
-        pp_object_read_t policy = {.priority = background ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL,
-                                   .heap_reserve = pp_image_headroom(background)};
-        if (pp_objects_read(key, cache_ticket, policy))
+        if (pp_objects_read(
+                key, cache_ticket,
+                (pp_object_read_t){.priority = PP_MEMORY_NORMAL, .heap_reserve = pp_image_headroom(false)}))
             return true;
         cache_ticket = 0;
-        if (background || !pp_net_connected()) {
-            picture_error("本地图片读取忙，请稍后重试");
-            return false;
-        }
     }
-    request_remote(SIZE_MAX);
-    return true;
-}
-bool pp_picture_open(const char *message, const char *image) {
-    return open_picture(message, image, false);
-}
-bool pp_picture_prefetch(const char *message, const char *image) {
-    return !pp_picture_active() && open_picture(message, image, true);
+    return missing_preview();
 }
 static bool start_hd(void) {
-    if (stream.state != STREAM_OFF || prefetch || hd_attempted || !stream_supported || !pp_net_connected())
+    if (stream.state != STREAM_OFF || hd_attempted || !stream_supported || !pp_net_connected())
         return false;
-    close_remote();
     if (++stream_sequence == 0)
         ++stream_sequence;
     stream.request = stream_sequence;
     stream.state = STREAM_OPEN;
+    unavailable = false;
     hd_attempted = loading = true;
     started = (uint32_t)(esp_timer_get_time() / 1000);
     return true;
@@ -274,10 +183,6 @@ static bool show_complete(void) {
     verified = pixels_verified();
     if (!verified)
         return false;
-    if (prefetch) {
-        pp_picture_close(); /* Transfers this buffer to the storage owner. */
-        return true;
-    }
     if (!pp_ui_image(pixels, transfer.width, transfer.height))
         return false;
     ESP_LOGI("pp_picture", "display %ux%u source=%s heap=%u", transfer.width, transfer.height,
@@ -286,8 +191,7 @@ static bool show_complete(void) {
     loading = false;
     shown = true;
     displayed_bytes = transfer.bytes;
-    status(pp_net_connected() ? "图片" : "离线图片");
-    close_remote();
+    status("图片预览");
     return true;
 }
 static void stream_failed(const char *reason) {
@@ -310,8 +214,15 @@ static void stream_failed(const char *reason) {
 
 bool pp_picture_disconnected(void) {
     stream_supported = false;
-    if (!shown)
-        return false;
+    if (unavailable)
+        return true;
+    if (!shown) {
+        if (cache_ticket)
+            return true;
+        if (loading)
+            picture_error("图片传输中断");
+        return unavailable;
+    }
     if (loading)
         stream_failed("图片传输中断");
     hd_attempted = stream.state == STREAM_SHOWN;
@@ -368,7 +279,7 @@ static void stream_poll(void) {
         if (!pp_ui_stream_begin(stream.raster.width, stream.raster.height))
             return;
         stream.screen = true;
-        if (revision_known && !verified) {
+        if (!verified) {
             pp_image_preview_dimensions(stream.raster.width, stream.raster.height,
                                          &stream.thumb.width, &stream.thumb.height);
             stream.thumb.bytes = stream.thumb.width * stream.thumb.height * 2u;
@@ -415,27 +326,18 @@ static void stream_poll(void) {
             stream_failed("高清图片校验失败，可重试");
             return;
         }
-        if (stream.preview.data)
-            (void)cache_preview(&stream.preview, &stream.thumb);
+        bool saved = verified || (stream.preview.data && cache_preview(&stream.preview, &stream.thumb));
         pp_buffer_free(&stream.preview);
         stream.state = STREAM_SHOWN;
         loading = false;
         shown = true;
         ESP_LOGI("pp_picture", "display %ux%u source=stream heap=%u", stream.raster.width, stream.raster.height,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
-        status("图片");
+        status(saved ? "图片" : "此图预览未保存");
     }
 }
 
 void pp_picture_cached(pp_cache_result_t *result) {
-    if (result->written) {
-        if (prefetch_write && result->ticket == prefetch_write) {
-            prefetch_write = 0;
-            pp_history_cache_picture_done(prefetch_message, prefetch_image, prefetch_write_revision,
-                                          result->status == PP_CACHE_HIT || result->status == PP_CACHE_FULL);
-        }
-        return;
-    }
     if (!loading || result->ticket != cache_ticket)
         return;
     cache_ticket = 0;
@@ -459,13 +361,7 @@ void pp_picture_cached(pp_cache_result_t *result) {
         }
         pixels = (unsigned char *)borrowed_pixels.value.bytes.data;
         transfer.received = transfer.bytes;
-        if (prefetch && pixels_verified()) {
-            verified = true;
-            prefetch_done(true);
-            pp_picture_close();
-            return;
-        }
-        if (!prefetch && show_complete())
+        if (show_complete())
             return;
         if (verified) {
             picture_error("图片校验或显示失败");
@@ -476,17 +372,55 @@ void pp_picture_cached(pp_cache_result_t *result) {
     }
     if (result->status == PP_CACHE_BUSY || result->status == PP_CACHE_NO_MEMORY ||
         result->status == PP_CACHE_IO_ERROR) {
-        if (prefetch || !pp_net_connected()) {
+        if (!pp_net_connected()) {
             picture_error(result->status == PP_CACHE_NO_MEMORY
                               ? "本地图片内存暂不足，请稍后查看"
                               : "本地图片读取忙，请稍后重试");
             return;
         }
     }
-    request_remote(SIZE_MAX);
+    missing_preview();
+}
+static void receive_preview(const cJSON *j) {
+    const char *id = string(j, "message_id"), *group = string(j, "group");
+    const cJSON *revision = cJSON_GetObjectItemCaseSensitive(j, "updated");
+    char key[256];
+    if (strlen(id) >= sizeof(message_id) || !*group || strlen(group) >= sizeof(owner) ||
+        !cJSON_IsNumber(revision) || revision->valuedouble < 0 ||
+        !pp_history_cache_image_key(id, revision->valuedouble, string(j, "image_id"), key))
+        return;
+    unsigned width = number(j, "width"), height = number(j, "height");
+    const char *encoded = string(j, "pixels");
+    pp_image_transfer_t meta;
+    pp_buffer_t data = {0};
+    unsigned char digest[32];
+    char hex[65];
+    size_t len = strlen(encoded);
+    bool ok = pp_image_begin(&meta, "rgb565le", string(j, "version"), width, height,
+                             (size_t)width * height * 2, PP_IMAGE_PREVIEW_WIDTH, PP_IMAGE_PREVIEW_HEIGHT) &&
+              len == 4 * ((meta.bytes + 2) / 3) &&
+              pp_buffer_reserve(&data, meta.bytes, PP_MEMORY_BACKGROUND, PP_MEMORY_IMAGE) &&
+              !mbedtls_base64_decode((unsigned char *)data.data, data.capacity, &data.size,
+                                     (const unsigned char *)encoded, len) && data.size == meta.bytes &&
+              !mbedtls_sha256((unsigned char *)data.data, data.size, digest, 0);
+    if (ok) {
+        for (unsigned i = 0; i < sizeof(digest); i++)
+            snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+        meta.received = meta.bytes;
+        ok = !strcmp(hex, meta.version) && pp_history_cache_preview(key, group, &data, &meta);
+    }
+    pp_buffer_free(&data);
+    if (!ok) {
+        ESP_LOGW("pp_picture", "live preview rejected for image %.32s", string(j, "image_id"));
+        status("此图预览未保存");
+    }
 }
 bool pp_picture_receive(const cJSON *j) {
     const char *type = string(j, "type");
+    if (!strcmp(type, "message.preview")) {
+        receive_preview(j);
+        return true;
+    }
     if (!strcmp(type, "image.stream.open")) {
         stream_metadata(j);
         return true;
@@ -497,98 +431,21 @@ bool pp_picture_receive(const cJSON *j) {
             stream_failed("高清图片暂不可用，可重试");
         return true;
     }
-    if (!strcmp(type, "error") && (!strcmp(string(j, "operation"), "image.open") ||
-                                   !strcmp(string(j, "operation"), "image.chunk"))) {
-        if (remote_active) {
-            close_remote();
-            release_pixels();
-            pending = PICTURE_WAITING;
-            if (!start_hd())
-                picture_error("图片预览暂不可用");
-        }
-        return true;
-    }
-    if (!strcmp(type, "image.open")) {
-        if (!loading || !remote_active || strcmp(string(j, "message_id"), message_id) ||
-            strcmp(string(j, "image_id"), image_id))
-            return false;
-        if (pixels || pending != PICTURE_WAITING ||
-            !pp_image_begin(&transfer, string(j, "format"), string(j, "version"),
-                            number(j, "width"), number(j, "height"), number(j, "bytes"),
-                            requested_width, requested_height)) {
-            picture_error("图片格式或尺寸不符合要求");
-        } else
-            pending = PICTURE_ALLOCATE;
-        return true;
-    }
-    if (strcmp(type, "image.chunk") || !remote_active || !loading || !pixels ||
-        strcmp(string(j, "version"), transfer.version))
-        return false;
-    const char *encoded = string(j, "data");
-    size_t length = 0, offset = transfer.received;
-    bool valid =
-        number(j, "offset") == offset && strlen(encoded) <= 2732 &&
-        mbedtls_base64_decode(pixels + offset, transfer.bytes - offset, &length,
-                              (const unsigned char *)encoded, strlen(encoded)) == 0 &&
-        pp_image_chunk(&transfer, string(j, "version"), offset, length, number(j, "next_offset"));
-    if (!valid) {
-        picture_error("图片分块不完整，请重新查看");
-    } else if (transfer.received < transfer.bytes)
-        next_chunk();
-    else {
-        if (!show_complete()) {
-            picture_error("图片校验或显示失败");
-        }
-    }
-    return true;
+    return false;
 }
 bool pp_picture_poll(uint32_t now) {
     if (!loading) {
-        if (shown)
+        if (shown || unavailable)
             start_hd();
         return false;
     }
-    bool background = prefetch;
     if (now - started > 20000) {
-        if (stream.state != STREAM_OFF) {
+        if (stream.state != STREAM_OFF)
             stream_failed("高清图片读取超时，可重试");
-            return !pp_picture_active();
-        }
-        if (remote_active && start_hd()) {
-            release_pixels();
-            pending = PICTURE_WAITING;
-            return false;
-        }
-        picture_error("图片读取超时，可翻页后重新查看");
-        return !background;
-    }
-    if (stream.state != STREAM_OFF) {
-        stream_poll();
-        return !pp_picture_active();
-    }
-    /* Dispatch copied the metadata. The receive frame and JSON tree have now
-     * been released, so neither counts against the image's allocation. */
-    if (pending == PICTURE_REQUEST) {
-        pending = PICTURE_WAITING;
-        if (!remote_open(request_limit) && !start_hd())
-            pp_picture_close();
-    } else if (pending == PICTURE_ALLOCATE) {
-        pending = PICTURE_WAITING;
-        size_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        if (!prefetch && !pp_image_has_headroom(available, transfer.bytes, false)) {
-            pp_memory_reclaim(PP_CACHE_RESIDENT_BYTES, PP_MEMORY_NORMAL);
-            available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        }
-        if (pp_image_has_headroom(available, transfer.bytes, prefetch) &&
-            pp_buffer_reserve(&owned_pixels, transfer.bytes,
-                              prefetch ? PP_MEMORY_BACKGROUND : PP_MEMORY_NORMAL, PP_MEMORY_IMAGE)) {
-            owned_pixels.size = transfer.bytes;
-            pixels = (unsigned char *)owned_pixels.data;
-            next_chunk();
-        } else if (prefetch)
-            pp_picture_close();
         else
-            request_remote(transfer.bytes - 1);
+            picture_error("本地预览读取超时");
+    } else if (stream.state != STREAM_OFF) {
+        stream_poll();
     }
-    return !background && !pp_picture_active();
+    return !pp_picture_active();
 }

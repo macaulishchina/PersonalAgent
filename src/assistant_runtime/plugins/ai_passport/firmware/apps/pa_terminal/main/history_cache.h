@@ -1,20 +1,15 @@
 #pragma once
-#include "cJSON.h"
+#include "timeline.h"
 #include "object_cache.h"
-#include <stdbool.h>
+#include "image_model.h"
 
-/* Data access, shared by live chat and historical browsing. Callback only queues
- * a bounded application event, identical to a network message.page. */
-void pp_history_cache_init(void (*receive)(const char *, size_t));
+typedef void (*pp_history_page_fn)(pp_cache_status_t status, const pp_history_page_t *page);
+void pp_history_cache_init(pp_history_page_fn page, void (*warning)(const char *));
 void pp_history_cache_bind(const char *url, const char *device, const char *binding, bool enabled,
                            bool images);
-bool pp_history_cache_receive(cJSON *message, pp_buffer_t *frame);
-bool pp_history_cache_page(const char *id, unsigned offset);
-bool pp_history_cache_recent(void);
-void pp_history_cache_poll(bool idle);
-bool pp_history_cache_revision(const char *id, double *revision);
-/* Image access shares the same revision/namespace and storage budget. */
-bool pp_history_cache_image_key(const char *message, const char *image, char key[256]);
-bool pp_history_cache_owner(const char *message, char owner[192]);
-void pp_history_cache_picture_done(const char *message, const char *image, double revision,
-                                   bool completed);
+void pp_history_cache_record(const pp_history_page_t *page, pp_buffer_t *frame);
+bool pp_history_cache_preview(const char *key, const char *group, pp_buffer_t *pixels, const pp_image_transfer_t *meta);
+bool pp_history_cache_read(const char *id, double revision, bool legacy, unsigned offset,
+                           pp_cache_seek_t seek);
+void pp_history_cache_poll(bool writable);
+bool pp_history_cache_image_key(const char *message, double revision, const char *image, char key[256]);

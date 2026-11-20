@@ -7,13 +7,13 @@ import struct
 from assistant_runtime.api.speech import SpeechError
 
 VERSION = 2
+LIVE_BLOCK_CHARS = 1600
 MAX_JSON_BYTES = 16 * 1024
 INPUT_RATE = 16000
 OUTPUT_RATE = 24000
 PLAYBACK_WINDOW = 8192
 PLAYBACK_MAX_WINDOW = 24 * 1024
 PLAYBACK_CHUNK = 4096
-IMAGE_CHUNK = 2048
 IMAGE_STRIP_ROWS = 8
 IMAGE_STRIP_WIDTH = 216
 IMAGE_STRIP_HEIGHT = 194
@@ -32,17 +32,12 @@ _COMMAND_FIELDS = {
     "playback.progress": {"generation", "i2s_bytes"},
     "playback.credit": {"generation", "bytes"},
     "playback.completed": {"generation", "pcm"},
-    "message.page": {"message_id", "offset", "prefetch"},
-    "history.index": {"before", "after", "limit"},
     "execution.cancel": {"request_id"},
     "notifications.list": {"before", "request_id"},
     "notification.receipt": {"id", "revision", "action"},
     "notification.page": {"id", "revision", "offset"},
     "configuration.reload": set(),
     "configuration.applied": {"versions", "actual"},
-    "image.open": {"message_id", "image_id", "width", "height"},
-    "image.chunk": {"version", "offset"},
-    "image.close": set(),
     "image.stream.open": {"request_id", "message_id", "image_id", "width", "height"},
     "image.stream.next": {"request_id", "row"},
     "image.stream.close": {"request_id"},

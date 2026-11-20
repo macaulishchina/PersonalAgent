@@ -67,8 +67,10 @@ bool pp_ui_standby(bool enabled) {
     return true;
 }
 
-static unsigned body_rows(bool input) {
-    return (input ? 110u : 198u) / (body_font->line_height + 1);
+enum { BODY_WIDTH = 216, BODY_HEIGHT = 198, INPUT_HEIGHT = 110, LINE_SPACE = 1 };
+
+static unsigned body_rows(const lv_font_t *font, bool input) {
+    return ((input ? INPUT_HEIGHT : BODY_HEIGHT) + LINE_SPACE) / (font->line_height + LINE_SPACE);
 }
 
 static lv_obj_t *label(int x, int y, int w, int h, bool symbols) {
@@ -79,7 +81,7 @@ static lv_obj_t *label(int x, int y, int w, int h, bool symbols) {
     lv_obj_set_style_text_font(object, symbols ? &lv_font_montserrat_14 : &terminal_zh_16, 0);
     lv_label_set_long_mode(object, LV_LABEL_LONG_CLIP);
     /* The installed font's line box is 21px, including its baseline. */
-    lv_obj_set_style_text_line_space(object, 1, 0);
+    lv_obj_set_style_text_line_space(object, LINE_SPACE, 0);
     return object;
 }
 static void text(lv_obj_t *object, const char *value) {
@@ -185,9 +187,9 @@ static void rule(int y) {
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
 }
 static unsigned measure(uint32_t c, void *context) {
-    (void)context;
+    const lv_font_t *font = context ? (const lv_font_t *)context : body_font;
     lv_font_glyph_dsc_t glyph;
-    if (lv_font_get_glyph_dsc(body_font, &glyph, c, 0))
+    if (lv_font_get_glyph_dsc(font, &glyph, c, 0))
         return glyph.adv_w;
     return 16;
 }
@@ -248,7 +250,7 @@ bool pp_ui_init(void) {
     state = label(12, 265, 216, 21, false);
     lv_obj_set_style_text_color(origin, lv_color_hex(0xb6cfa4), 0);
     lv_obj_set_style_text_color(state, lv_color_hex(0x9aaa99), 0);
-    content = label(12, 66, 216, 198, false);
+    content = label(12, 66, BODY_WIDTH, BODY_HEIGHT, false);
     footer = label(12, 294, 196, 22, false);
     lv_obj_set_style_text_color(footer, lv_color_hex(0xb3bfb0), 0);
     mode = label(212, 297, 18, 17, true);
@@ -395,10 +397,21 @@ bool pp_ui_stream_draw(const void *pixels, unsigned row, unsigned rows) {
     return false;
 }
 
+bool pp_ui_history_feed(pp_layout_cursor_t *cursor, char *out, size_t capacity, const char *value,
+                        unsigned text_size, pp_text_layout_t *result) {
+    const lv_font_t *font = text_size == 18 ? &terminal_zh_18 : &terminal_zh_16;
+    if (!bsp_lvgl_lock(100))
+        return false;
+    *result = pp_layout_feed(cursor, out, capacity, value, BODY_WIDTH, body_rows(font, false),
+                             measure, (void *)font);
+    bsp_lvgl_unlock();
+    return true;
+}
+
 size_t pp_ui_previous(const char *value, size_t start) {
     if (!bsp_lvgl_lock(100))
         return start;
-    size_t offset = pp_layout_previous(value, start, 216, body_rows(false), measure, NULL);
+    size_t offset = pp_layout_previous(value, start, BODY_WIDTH, body_rows(body_font, false), measure, NULL);
     bsp_lvgl_unlock();
     return offset;
 }
@@ -446,7 +459,7 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     if (previous_view != f->view || previous_menu_detail != menu_detail) {
         lv_obj_set_pos(content, menu_detail ? 18 : 12,
                        brightness_edit ? 111 : menu_detail ? 222 : input ? 145 : 66);
-        lv_obj_set_height(content, brightness_edit ? 33 : menu_detail ? 28 : input ? 110 : 198);
+        lv_obj_set_height(content, brightness_edit ? 33 : menu_detail ? 28 : input ? INPUT_HEIGHT : BODY_HEIGHT);
         lv_obj_set_style_text_align(content, brightness_edit ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT,
                                     0);
         lv_obj_set_pos(origin, 12, input ? 123 : 38);
@@ -528,10 +541,10 @@ size_t pp_ui_render(const pp_ui_frame_t *f) {
     if (brightness_edit)
         snprintf(page, sizeof(page), "%u%%", f->brightness);
     else if (f->follow || input)
-        pp_layout_tail(page, sizeof(page), body, 216, body_rows(input), measure, NULL);
+        pp_layout_tail(page, sizeof(page), body, BODY_WIDTH, body_rows(body_font, input), measure, NULL);
     else
         layout =
-            pp_layout_page(page, sizeof(page), body, f->page, 216, body_rows(false), measure, NULL);
+            pp_layout_page(page, sizeof(page), body, f->page, BODY_WIDTH, body_rows(body_font, false), measure, NULL);
     text(content, menu_detail ? f->menu_detail : page);
     const char *hint = f->hint && f->hint[0] ? f->hint : "上下翻页 · OK 菜单";
     if (f->local_page_hint && (layout.more || f->page))

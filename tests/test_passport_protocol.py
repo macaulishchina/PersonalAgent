@@ -586,6 +586,19 @@ class EntranceReceiptTest(unittest.IsolatedAsyncioTestCase):
             await self.call("prepare", str(uuid.uuid4()), source="terminal:pp", mode="queue")
         self.assertFalse(self.bindings)
 
+    async def test_terminal_subscription_starts_after_messages_already_in_this_chat(self):
+        store = self.registry.main.store
+        store.put("offline", self.session, text="missed", status="complete")
+        cursor = await self.registry.request(
+            ConversationRequest("event_cursor", {"session_id": self.session})
+        )
+        self.assertEqual(cursor, {"cursor": store.cursor()})
+        store.put("online", self.session, text="live", status="complete")
+        changes = await self.registry.request(
+            ConversationRequest("events", {"session_id": self.session, **cursor})
+        )
+        self.assertEqual([e["data"]["id"] for e in changes["events"]], ["online"])
+
     async def test_history_index_is_bounded_bidirectional_and_session_bound(self):
         store = self.registry.main.store
         for i in range(9):
@@ -858,101 +871,44 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         )
         upstream.close.assert_awaited_once()
 
-    async def test_cache_index_is_a_small_completed_metadata_window_not_a_browsing_cursor(self):
-        items = [
-            {
-                "id": "input",
-                "role": "user",
-                "cursor": "a",
-                "status": "complete",
-                "updated": 1,
-                "preview": "private preview",
-                "kind": "message",
-            },
-            {"id": "old", "role": "assistant", "cursor": "b", "status": "complete", "updated": 2},
-            {"id": "live", "role": "assistant", "cursor": "c", "status": "streaming", "updated": 3},
-        ]
-        self.connection.cursor = 7
-        await self.connection.display.cache_index({"items": items, "cursor": 99})
-        self.assertEqual(self.connection.cursor, 7)
-        index = self.messages[-1]
-        self.assertEqual(index["type"], "cache.index")
-        self.assertEqual([row["id"] for row in index["items"]], ["input", "old"])
-        self.assertNotIn("preview", index["items"][0])
-        self.assertEqual(self.calls, [])
-        self.owner.settings["offline_cache"] = False
-        await self.connection.display.cache_index({"items": items})
-        self.assertEqual(len(self.messages), 1)
-
-    async def test_cache_prefetch_uses_the_same_owned_read_and_preserves_presentation_metadata(self):
-        async def invoke(request, **kwargs):
-            self.calls.append(request)
-            self.assertEqual(request.action, "message")
-            self.assertEqual(
-                request.arguments, {"session_id": "session", "message_id": "owned", "offset": 80, "limit": 80}
+    async def test_live_records_deliver_both_roles_and_all_text_without_history_requests(self):
+        body = "中🙂" * 1700
+        for role in ("assistant", "user"):
+            self.messages.clear()
+            await self.connection.present(
+                {"id": role, "role": role, "turn_id": "turn-1", "status": "complete", "text": body}, False
             )
-            return {
-                "message_id": "owned",
-                "offset": 80,
-                "total": 100,
-                "next_offset": None,
-                "text": "只读正文",
-                "updated": 3,
-                "role": "user",
-                "status": "complete",
-                "images": [],
-            }
+            self.assertEqual([m["type"] for m in self.messages], ["message", "message.part", "message.part"])
+            self.assertEqual([m["offset"] for m in self.messages], [0, 1600, 3200])
+            self.assertEqual("".join(m["text"] for m in self.messages), body)
+            self.assertTrue(all(m["group"] == "turn-1" and m["role"] == role for m in self.messages))
+        self.assertEqual(self.calls, [])
 
-        self.context.invoke = invoke
-        await self.connection.command(
-            {"type": "message.page", "message_id": "owned", "offset": 80, "prefetch": True}
-        )
-        self.assertTrue(self.messages[-1]["prefetch"])
-        self.assertEqual(self.messages[-1]["role"], "user")
-        self.assertEqual(len(self.calls), 1)
-        with self.assertRaisesRegex(ValueError, "prefetch"):
-            await self.connection.command({"type": "message.page", "message_id": "owned", "prefetch": "true"})
-        self.assertEqual(len(self.calls), 1)
+    async def test_device_cannot_request_history_or_download_previews(self):
+        for kind in ("history.index", "message.page", "image.open", "image.chunk", "image.close"):
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                await self.connection.command({"type": kind})
+        self.assertEqual(self.calls, [])
 
-    async def test_background_cache_read_failure_does_not_fail_foreground_or_retry(self):
+    async def test_event_gap_skips_to_live_edge_without_history_replay(self):
         async def invoke(request, **kwargs):
-            self.calls.append(request)
-            raise ValueError("message is not in this session")
-
-        self.context.invoke = invoke
-        args = {"type": "message.page", "message_id": "not-owned", "offset": 0}
-        await self.connection.command({**args, "prefetch": True})
-        self.assertEqual(self.messages[-1]["type"], "cache.prefetch_unavailable")
-        self.assertEqual(len(self.calls), 1)
-        with self.assertRaisesRegex(ValueError, "not in this session"):
-            await self.connection.command(args)
-
-    async def test_completed_reply_refreshes_small_index_without_skipping_events(self):
-        actions = []
-        message = {"id": "new", "role": "assistant", "status": "complete", "text": "结果。", "updated": 1}
-
-        async def invoke(request, **kwargs):
-            actions.append(request.action)
+            self.calls.append(request.action)
             if request.action == "state":
                 return {"queue": []}
-            if request.action == "events":
-                return {"events": [{"data": message}], "cursor": 7}
-            self.assertEqual(request.action, "history_index")
-            self.assertEqual(request.arguments["limit"], 3)
-            return {"items": [{"id": "new", "role": "assistant", "cursor": "bounded"}], "cursor": 99}
+            self.assertEqual(request.action, "events")
+            return {"events": None, "cursor": 71}
 
         self.context.invoke = invoke
-        task = self.connection.spawn(self.connection.watch(), "index-test")
-        async with asyncio.timeout(1):
-            while not any(m.get("type") == "history.index" for m in self.messages):
-                await asyncio.sleep(0)
-        pushed = next(m for m in self.messages if m.get("type") == "history.index")
-        self.assertTrue(pushed["pushed"])
-        self.assertEqual(pushed["items"][0]["id"], "new")
-        self.assertEqual(self.connection.cursor, 7)
-        self.assertEqual(actions, ["state", "events", "history_index"])
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        task = self.connection.spawn(self.connection.watch(), "test")
+        try:
+            async with asyncio.timeout(1):
+                while self.connection.cursor != 71:
+                    await asyncio.sleep(0)
+            self.assertEqual(self.calls, ["state", "events"])
+            self.assertEqual([m["type"] for m in self.messages], ["state"])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def test_failed_capture_drains_late_pcm_without_overwriting_reason_or_accepting_unknown_id(self):
         ident, following, unknown = (str(uuid.uuid4()) for _ in range(3))
@@ -1033,28 +989,6 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
                 for r in self.calls
             )
         )
-
-    async def test_restored_messages_are_explicit_and_never_start_speech(self):
-        page = {
-            "message_id": "prior",
-            "role": "assistant",
-            "text": "之前的回复。",
-            "total": 6,
-            "offset": 0,
-            "next_offset": None,
-            "updated": 1,
-            "status": "complete",
-            "images": [],
-            "kind": "message",
-        }
-        self.context.invoke = AsyncMock(return_value=page)
-        await self.connection.display.restore_message(
-            {"id": "prior", "role": "assistant", "status": "complete"}
-        )
-        self.assertTrue(self.messages[-1]["restored"])
-        self.assertEqual(self.messages[-1]["text"], "之前的回复。")
-        self.assertIsNone(self.connection.play_task)
-        self.assertEqual(self.calls, [])
 
     async def asyncSetUp(self):
         self.messages = []
@@ -1167,8 +1101,8 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
                 return {"queue": []}
             if request.action == "events":
                 return {"cursor": 0, "events": []}
-            self.assertEqual(request.action, "history_index")
-            return {"cursor": 0, "items": []}
+            self.assertEqual(request.action, "event_cursor")
+            return {"cursor": 0}
 
         self.context.invoke = invoke
         self.connection.ws = Frames()
@@ -1245,7 +1179,7 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(spoken).replace(" ", ""), expected)
         self.assertTrue(all(n <= 200 for n in sizes + list(map(len, spoken))))
         self.assertEqual(self.playback_messages("playback.end")[0]["next_offset"], len(body))
-        self.assertEqual(self.playback_messages("message")[0]["text"], body[:160])
+        self.assertEqual(self.playback_messages("message")[0]["text"], body)
         await self.connection.present({**message, "updated": 2}, speak=True)
         self.assertEqual("".join(spoken).replace(" ", ""), expected)
 
@@ -1330,31 +1264,49 @@ class TerminalStreamTest(unittest.IsolatedAsyncioTestCase):
             "stopped",
         )
 
-    async def test_image_chunks_are_bounded_versioned_and_replaced(self):
+    async def test_live_previews_arrive_once_per_attachment_and_do_not_suppress_the_message(self):
         import base64
+        import hashlib
 
-        async def invoke(request, **kwargs):
-            self.assertEqual(request.arguments["session_id"], "session")
-            return {
-                "image_id": "image",
-                "version": "one",
-                "width": 160,
-                "height": 96,
-                "format": "rgb565le",
-                "data": b"\x00\xf8" * 160 * 96,
-                "bytes": 30720,
-            }
+        pixels = b"\xff\x00" * 64
+        refs = [{"id": c * 32, "type": "image/png"} for c in "abc"]
+        msg = dict(
+            id="row",
+            text="",
+            attachments=refs,
+            kind="detail",
+            role="assistant",
+            status="complete",
+            turn_id="turn",
+            updated=2,
+        )
 
-        self.context.invoke = invoke
-        await self.connection.command({"type": "image.open", "message_id": "photo", "image_id": "image"})
-        self.assertNotIn("data", self.messages[-1])
-        await self.connection.command({"type": "image.chunk", "version": "one", "offset": 0})
-        self.assertEqual(len(base64.b64decode(self.messages[-1]["data"])), 2048)
-        with self.assertRaises(ValueError):
-            await self.connection.command({"type": "image.chunk", "version": "stale", "offset": 0})
-        await self.connection.command({"type": "image.close"})
-        with self.assertRaises(ValueError):
-            await self.connection.command({"type": "image.chunk", "version": "one", "offset": 0})
+        async def raster(request):
+            self.assertEqual(request.action, "thumbnail")
+            self.assertEqual((request.arguments["width"], request.arguments["height"]), (64, 32))
+            if request.arguments["image_id"] == refs[1]["id"]:
+                raise ValueError("removed")
+            return dict(width=8, height=8, data=pixels, version=hashlib.sha256(pixels).hexdigest())
+
+        self.context.invoke = AsyncMock(side_effect=raster)
+        await self.connection.present(msg, False)
+        self.context.invoke.assert_not_awaited()
+        self.connection.live_previews = True
+        with self.assertLogs("assistant_runtime.plugins.ai_passport.display", level="WARNING"):
+            await self.connection.present(msg, False)
+        self.assertEqual(
+            [frame["type"] for frame in self.messages],
+            ["message", "message.preview", "message.preview", "message"],
+        )
+        previews = self.messages[1:3]
+        self.assertEqual([f["image_id"] for f in previews], [refs[0]["id"], refs[2]["id"]])
+        for frame in previews:
+            self.assertEqual((frame["group"], frame["message_id"], frame["updated"]), ("turn", "row", 2))
+            self.assertEqual(base64.b64decode(frame["pixels"]), pixels)
+        self.assertEqual(self.messages[-1]["images"], refs)
+        self.owner.settings["offline_cache"] = False
+        await self.connection.present(msg, False)
+        self.assertEqual(self.context.invoke.await_count, 3)
 
     async def test_hd_image_rows_are_bounded_checked_and_scoped_to_the_active_request(self):
         import hashlib
@@ -1949,7 +1901,9 @@ class RealPiTerminalTest(unittest.IsolatedAsyncioTestCase):
                                         await ws.send_json(
                                             {"type": "input.begin", "request_id": ident, "mode": "steer"}
                                         )
-                                if kind == "message":
+                                if kind == "message" and data["role"] == "user":
+                                    self.assertEqual(data["text"], "最终转写")
+                                if kind == "message" and data["role"] == "assistant":
                                     self.assertIn(data["status"], {"streaming", "complete"}, data)
                                     self.assertIn(reply, data["text"])
                                     message_seen |= data["status"] == "complete"

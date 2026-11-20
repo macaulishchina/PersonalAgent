@@ -51,16 +51,16 @@ static pp_ui_view_t view = PP_UI_INFO;
 static size_t view_page, view_next;
 static bool message_streaming;
 static const char *message_origin = "回复";
-static pp_timeline_t timeline;
-static unsigned offline_skips;
-static int offline_direction = -1;
-static bool new_message, page_pending, page_tail, index_boundary;
-enum { INDEX_LATEST = 2, INDEX_LATEST_QUEUED };
-static int index_direction;
-static char latest_message[PP_MESSAGE_ID], requested_page[PP_MESSAGE_ID],
-    history_anchor[PP_MESSAGE_ID];
-static unsigned requested_offset, message_total;
-static char image_ids[4][33];
+static bool new_message, page_pending, message_legacy;
+static double message_revision;
+static char message_group[192];
+static pp_cache_seek_t history_seek;
+static pp_layout_cursor_t history_layout;
+static bool joining_history, unreadable_page;
+enum { HISTORY_BOOKMARKS = 16 };
+static unsigned previous_goal, recent_starts[HISTORY_BOOKMARKS], bookmark_slot, bookmark_font;
+
+static char image_ids[PP_HISTORY_IMAGES][33];
 static unsigned image_count;
 static unsigned image_index;
 static unsigned review_choice, review_offset, review_next, review_requested;
@@ -158,159 +158,168 @@ static bool close_image(void) {
 }
 static void open_image(unsigned index) {
     if (settings.show_images && index < image_count &&
-        pp_picture_open(message_id, image_ids[index])) {
+        pp_picture_open(message_id, image_ids[index], message_revision, message_group)) {
         image_index = index;
         view = PP_UI_IMAGE;
     }
 }
-static void request_page(const char *id, unsigned offset, bool tail);
-static void show_history_page(const pp_history_page_t *page) {
-    if (page_tail && !page->image_only && page->next && pp_net_connected()) {
-        request_page(page->id, (page->total - 1) / 80 * 80, false);
-        return;
-    }
-    if (!close_image())
-        return;
+static void history_metadata(const pp_history_page_t *page) {
+    unreadable_page = false;
     pp_text(message_id, sizeof(message_id), page->id);
-    pp_text(body, sizeof(body), page->text);
+    message_revision = page->revision;
+    message_legacy = page->legacy;
+    pp_text(message_group, sizeof(message_group), page->group);
     memcpy(image_ids, page->images, sizeof(image_ids));
     image_count = page->image_count;
     page_offset = page->offset;
     page_next = page->next;
-    message_total = page->total;
-    view_page = page_tail && !page->image_only ? pp_ui_previous(body, strlen(body)) : 0;
+    view_page = 0;
     view_next = 0;
     message_origin = page->user ? "你说的" : "回复";
     message_streaming = false;
     view = PP_UI_REPLY;
-    set_status(!pp_net_connected() ? "本地缓存" : browsing ? "历史记录" : "回复");
-    if (page->image_only && page->image_count)
-        open_image(0);
+    set_status(browsing ? "历史记录" : "回复");
 }
-static void request_page(const char *id, unsigned offset, bool tail) {
-    page_tail = tail;
-    pp_text(requested_page, sizeof(requested_page), id);
-    requested_offset = offset;
+static bool read_history(pp_cache_seek_t seek, unsigned offset) {
+    if (page_pending && history_seek == seek && seek == PP_SEEK_LATEST)
+        return false;
+    if (!pp_history_cache_read(message_id, message_revision, message_legacy, offset, seek)) {
+        set_status("读取忙，请重试");
+        return false;
+    }
+    history_seek = seek;
+    joining_history = false;
+    previous_goal = 0;
     page_pending = true;
-    if (pp_history_cache_page(id, offset))
-        set_status(pp_net_connected() ? "正在读取" : "正在读取本地记录");
-    else {
-        page_pending = false;
-        set_status("读取忙，请稍后重试");
+    return true;
+}
+
+/* Flash keys address storage blocks. Screen bookmarks address the first unconsumed
+ * source character and are valid for one message revision and one font size. */
+static void show_history_page(const pp_history_page_t *page, bool append, bool local) {
+    if (!append) {
+        if (!close_image())
+            return;
+        if (!local || history_seek != PP_SEEK_EXACT || bookmark_font != settings.text_size ||
+            message_revision != page->revision || strcmp(message_id, page->id)) {
+            memset(recent_starts, 0, sizeof(recent_starts));
+            bookmark_slot = 0;
+        }
+        bookmark_font = settings.text_size;
+        history_metadata(page);
+        history_layout = (pp_layout_cursor_t){0};
+    } else if (strcmp(message_id, page->id) || message_revision != page->revision ||
+               page_offset + history_layout.characters != page->offset) {
+        set_status("本地记录不连续");
+        return;
     }
-}
-static void request_index(const char *cursor, int direction) {
-    cJSON *j = command("history.index");
-    cJSON_AddNumberToObject(j, "limit", PP_TIMELINE_ENTRIES);
-    if (cursor)
-        cJSON_AddStringToObject(j, direction < 0 ? "before" : "after", cursor);
-    if (!pp_net_send(j)) {
-        index_direction = 0;
-        set_status("无法读取历史，请联网后重试");
+    if (!page->complete) {
+        pp_text_suffix(body, sizeof(body), page->text);
+        return;
     }
+    const char *text = page->text;
+    for (;;) {
+        pp_text_layout_t result;
+        if (!pp_ui_history_feed(&history_layout, body, sizeof(body), text, settings.text_size, &result)) {
+            set_status("排版忙，请重试");
+            return;
+        }
+        if (result.more) {
+            page_next = page_offset + history_layout.characters;
+            if (!previous_goal || page_next >= previous_goal)
+                break;
+            // Rebuild older bookmarks locally when the requested screen left the ring.
+            recent_starts[bookmark_slot++ % HISTORY_BOOKMARKS] = page_offset;
+            page_offset = page_next;
+            text += result.next;
+            history_layout = (pp_layout_cursor_t){0};
+            continue;
+        }
+        page_next = page->next;
+        if (page->local_excerpt)
+            set_status("仅显示已保存的部分");
+        if (page_next && local) {
+            unsigned goal = previous_goal;
+            if (read_history(PP_SEEK_EXACT, page_next)) {
+                joining_history = true;
+                previous_goal = goal;
+            }
+            return;
+        }
+        break;
+    }
+    previous_goal = 0;
+    recent_starts[bookmark_slot++ % HISTORY_BOOKMARKS] = page_offset;
+    if (page->complete && settings.show_images && image_count && !page_next && !body[0])
+        open_image(local && history_seek == PP_SEEK_PREVIOUS ? image_count - 1 : 0);
 }
-static void request_latest_index(void) {
-    index_direction = INDEX_LATEST;
-    request_index(NULL, 0);
+static void previous_history_page(void) {
+    unsigned start = 0, goal = page_offset;
+    if (bookmark_font == settings.text_size) {
+        for (size_t i = 0; i < HISTORY_BOOKMARKS; i++)
+            if (recent_starts[i] < goal && recent_starts[i] > start)
+                start = recent_starts[i];
+    }
+    if (read_history(PP_SEEK_EXACT, start))
+        previous_goal = goal;
 }
-static void request_recent_history(void) {
-    if (settings.offline_cache && pp_history_cache_recent())
-        set_status("正在读取最近缓存记录");
-    else
-        set_status(settings.offline_cache ? "本地读取忙，请稍后重试" : "离线缓存已关闭");
+static void history_page_read(pp_cache_status_t result, const pp_history_page_t *page) {
+    if (!page_pending)
+        return;
+    page_pending = false;
+    bool append = joining_history;
+    joining_history = false;
+    if (page) {
+        show_history_page(page, append, true);
+    } else if (result != PP_CACHE_MISSING) {
+        ESP_LOGW("pp_history", "local read seek=%u status=%u", (unsigned)history_seek, (unsigned)result);
+        if (result == PP_CACHE_BUSY || result == PP_CACHE_NO_MEMORY) {
+            set_status(result == PP_CACHE_BUSY ? "历史读取暂忙，请再翻一次" : "可用内存不足，请再翻一次");
+        } else if (append && body[0]) {
+            page_next = 0;
+            set_status("后续内容无法读取");
+        } else if (close_image()) {
+            unreadable_page = true;
+            image_count = page_offset = page_next = view_page = view_next = 0;
+            view = PP_UI_REPLY;
+            pp_text(body, sizeof(body), "此条记录无法读取，上下键可继续翻页");
+            set_status(result == PP_CACHE_CORRUPT ? "记录校验失败" : "存储读取异常");
+        }
+    } else if (history_seek == PP_SEEK_EXACT) {
+        page_next = 0;
+        set_status("此页未保存");
+    } else if (history_seek == PP_SEEK_LATEST) {
+        body[0] = message_id[0] = 0;
+        image_count = page_offset = page_next = view_page = view_next = 0;
+        view = PP_UI_REPLY;
+        set_status("暂无本地记录");
+    } else {
+        set_status(history_seek == PP_SEEK_PREVIOUS ? "已到最早记录" : "已到最新记录");
+    }
 }
 static void jump_to_latest(void) {
-    if (navigation.screen == PP_SCREEN_CHAT && message_streaming && pp_net_connected()) {
-        page_pending = false;
+    if (navigation.screen == PP_SCREEN_CHAT && message_streaming) {
         view_page = view_next = 0;
         return;
     }
     if (!close_image())
         return;
     pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
-    page_pending = new_message = false;
-    if (!pp_net_connected()) {
-        request_recent_history();
-        return;
+    new_message = false;
+    if (settings.offline_cache)
+        read_history(PP_SEEK_LATEST, 0);
+    else {
+        body[0] = message_id[0] = 0;
+        image_count = page_offset = page_next = view_page = view_next = 0;
+        view = PP_UI_REPLY;
+        set_status("历史记录已关闭");
     }
-    set_status("正在读取最新消息");
-    /* History index replies have no request ID. Finish the previous exchange
-     * before requesting the newest window, without opening its old selection. */
-    if (!index_direction)
-        request_latest_index();
-    else if (index_direction != INDEX_LATEST)
-        index_direction = INDEX_LATEST_QUEUED;
 }
 static void history_step(int direction) {
-    if (page_pending || index_direction) {
-        set_status("正在读取，请稍候");
+    if (page_pending)
         return;
-    }
-    if (!pp_net_connected()) {
-        const pp_history_entry_t *entry = pp_timeline_neighbor(&timeline, message_id, direction);
-        if (settings.offline_cache && entry) {
-            offline_skips = 0;
-            offline_direction = direction;
-            request_page(entry->id, 0, false);
-        } else
-            set_status("已到最近缓存边界，联网后查看更多");
-        return;
-    }
-    const pp_history_entry_t *next = pp_timeline_neighbor(&timeline, message_id, direction);
     pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
-    if (next) {
-        request_page(next->id, 0, direction < 0);
-        return;
-    }
-    const pp_history_entry_t *anchor = pp_timeline_entry(&timeline, message_id);
-    if (!pp_net_connected()) {
-        set_status("更早记录需联网读取");
-        return;
-    }
-    pp_text(history_anchor, sizeof(history_anchor), message_id);
-    index_direction = direction;
-    index_boundary = anchor != NULL;
-    request_index(anchor ? anchor->cursor : NULL, direction);
-}
-static void history_response(cJSON *j) {
-    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "pushed")) &&
-        (browsing || index_direction))
-        return; /* A live directory refresh cannot steal an explicit history read. */
-    if (index_direction == INDEX_LATEST_QUEUED) {
-        request_latest_index();
-        return;
-    }
-    if (!pp_timeline_index(&timeline, j)) {
-        index_direction = 0;
-        set_status("历史目录格式不匹配");
-        return;
-    }
-    if (!index_direction)
-        return;
-    if (index_direction == INDEX_LATEST) {
-        index_direction = 0;
-        if (timeline.count)
-            request_page(timeline.entries[timeline.count - 1].id, 0, false);
-        else
-            set_status("暂无对话记录");
-        return;
-    }
-    int direction = index_direction;
-    const pp_history_entry_t *next =
-        index_boundary ? NULL : pp_timeline_neighbor(&timeline, history_anchor, direction);
-    const pp_history_entry_t *anchor = pp_timeline_entry(&timeline, history_anchor);
-    if (!next && anchor && !index_boundary) {
-        index_boundary = true;
-        request_index(anchor->cursor, direction);
-        return;
-    }
-    if (!next && timeline.count)
-        next = &timeline.entries[direction < 0 ? timeline.count - 1 : 0];
-    index_direction = 0;
-    if (next)
-        request_page(next->id, 0, direction < 0);
-    else
-        set_status(direction < 0 ? "已到最早记录" : "已到最新记录");
+    read_history(direction < 0 ? PP_SEEK_PREVIOUS : PP_SEEK_NEXT, 0);
 }
 static void reset_play(void) {
     playing = false;
@@ -388,14 +397,15 @@ static void home(const char *hint) {
         pp_text(dismissed_input, sizeof(dismissed_input), request_id);
         abort_record();
     }
-    stop_play();
+    if (playing || speech_session)
+        stop_play();
     if (!close_image())
         return;
     pp_navigation_open(&navigation, PP_SCREEN_HOME);
     button_state = (pp_button_t){.wake_guard = button_state.down || button_state.wake_guard};
+    unreadable_page = false;
     dangerous_confirm = maintenance_confirmed = notice_read.pending = page_pending = false;
     notice_directory.pending = notice_directory.viewing_older = false;
-    index_direction = 0;
     review_reading = review_pending = false;
     message_streaming = false;
     view_page = view_next = 0;
@@ -456,7 +466,7 @@ static void make_id(char *out, uint8_t *raw) {
              b[14], b[15]);
 }
 static void actions(unsigned mask) {
-    if (mask & PP_STOP)
+    if ((mask & PP_STOP) && (playing || speech_session))
         stop_play();
     if (mask & PP_CAPTURE) {
         pp_objects_allow_io(false);
@@ -506,7 +516,6 @@ static void actions(unsigned mask) {
         pp_navigation_open(&navigation, PP_SCREEN_CHAT);
         new_message = false;
         page_pending = false;
-        index_direction = 0;
         body[0] = 0;
         review_choice = review_offset = review_next = 0;
         review_reading = review_pending = false;
@@ -541,16 +550,20 @@ static void actions(unsigned mask) {
             set_status(settings.queue ? "已切换排队" : "已切换引导");
     }
     if (mask & PP_MENU) {
-        stop_play();
+        if (playing || speech_session)
+            stop_play();
         if (browsing) {
             pp_navigation_open(&navigation, PP_SCREEN_CHAT);
             new_message = false;
             page_pending = false;
-            index_direction = 0;
-            if (latest_message[0])
-                request_page(latest_message, 0, false);
-            else
+            if (!close_image())
+                return;
+            if (settings.offline_cache)
+                read_history(PP_SEEK_LATEST, 0);
+            else {
                 view = PP_UI_IDLE;
+                set_status("就绪");
+            }
             return;
         }
         pp_navigation_open(&navigation, PP_SCREEN_MENU);
@@ -629,10 +642,10 @@ static void receive_hello(cJSON *j, uint32_t generation) {
     playing = false;
     speech_session = false;
     play_generation = 0;
-    page_pending = false;
-    index_direction = 0;
+    if (!browsing)
+        page_pending = false;
     pp_audio_play_stop();
-    if (!notice_list)
+    if (!notice_list && !browsing)
         set_status(audio_available ? "就绪" : "音频不可用");
     if (view != PP_UI_IMAGE && (navigation.screen == PP_SCREEN_HOME || navigation.screen == PP_SCREEN_CHAT) &&
         !dangerous_confirm && input_state.phase == PP_INPUT_IDLE) {
@@ -701,41 +714,24 @@ static void receive_input_receipt(cJSON *j) {
     }
 }
 
-static void receive_message(cJSON *j) {
-    pp_history_page_t decoded;
-    pp_text(latest_message, sizeof(latest_message), string(j, "message_id"));
-    pp_history_page_t *page = pp_timeline_decode(&decoded, j);
-    if ((view == PP_UI_IMAGE && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "restored"))) ||
-        navigation.screen != PP_SCREEN_CHAT ||
+static void receive_message(cJSON *j, pp_buffer_t *frame, bool continuation) {
+    pp_history_page_t page;
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "restored")) || !pp_timeline_decode(&page, j))
+        return;
+    if (page.complete && frame)
+        pp_history_cache_record(&page, frame);
+    if (continuation || page.user)
+        return;
+    if (navigation.screen != PP_SCREEN_CHAT ||
         (view == PP_UI_INPUT && input_state.phase != PP_INPUT_IDLE)) {
-        if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "restored")))
-            new_message = true;
+        new_message = true;
         return;
     }
-    if (!close_image()) {
-        return;
-    }
-    /* A late page read must not replace a newer live message. */
     page_pending = false;
-    view = PP_UI_REPLY;
-    view_page = view_next = 0;
-    message_streaming = !strcmp(string(j, "status"), "streaming");
-    message_origin = !strcmp(string(j, "role"), "user") ? "你说的" : "回复";
-    pp_text(message_id, sizeof(message_id), string(j, "message_id"));
-    pp_text(body, sizeof(body), string(j, "text"));
-    page_offset = number(j, "offset");
-    page_next = number(j, "next_offset");
-    message_total = number(j, "total");
-    image_count = 0;
-    if (page) {
-        memcpy(image_ids, page->images, sizeof(image_ids));
-        image_count = page->image_count;
-    }
     waiting = false;
-    set_status("回复");
-    /* Auto-open follows live chat. Only explicit browsing pins a history page. */
-    if (page && page->image_only && image_count)
-        open_image(0);
+    previous_goal = 0;
+    show_history_page(&page, false, false);
+    message_streaming = !page.complete;
 }
 
 static void receive_notifications(cJSON *j) {
@@ -861,35 +857,13 @@ static void receive_error(cJSON *j) {
         }
         return;
     }
-    bool image_read = !strcmp(operation, "image.open") || !strcmp(operation, "image.chunk");
-    if ((!strcmp(operation, "message.page") && !page_pending) ||
-        (!strcmp(operation, "history.index") && !index_direction) ||
-        (!strcmp(operation, "notification.page") && !notice_read.pending) ||
-        (image_read && view != PP_UI_IMAGE)) {
-        return;
-    }
-    if (!strcmp(operation, "message.page"))
-        page_pending = false;
-    if (!strcmp(operation, "history.index")) {
-        if (index_direction == INDEX_LATEST_QUEUED) {
-            request_latest_index();
-            return;
-        }
-        bool latest = index_direction == INDEX_LATEST;
-        index_direction = 0;
-        if (latest) {
-            set_status("最新消息读取失败，请重试");
-            return;
-        }
-    }
     if (!strcmp(operation, "notification.page")) {
+        if (!notice_read.pending)
+            return;
         notice_read.pending = false;
         set_status("任务读取失败，请重试");
         return;
     }
-    if (!strcmp(string(j, "operation"), "image.open") ||
-        !strcmp(string(j, "operation"), "image.chunk"))
-        close_image();
     if (!pp_navigation_local(&navigation) && !dangerous_confirm) {
         view = PP_UI_INFO;
         pp_navigation_open(&navigation, PP_SCREEN_CHAT);
@@ -916,9 +890,6 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
     }
     if (generation && (!pp_net_current_frame(generation) || !pp_net_connected()))
         return;
-    if (pp_history_cache_receive(j, generation ? frame : NULL)) {
-        return;
-    }
     if ((!strcmp(type, "playback.pending") || !strcmp(type, "playback.start")) &&
         (!audio_available || !pp_navigation_audio(&navigation))) {
         unsigned incoming_generation = number(j, "generation");
@@ -935,42 +906,6 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
     } else if (!strcmp(type, "configuration")) {
         cJSON_Delete(pending_configuration);
         pending_configuration = cJSON_DetachItemFromObjectCaseSensitive(j, "fields");
-    } else if (!strcmp(type, "cache.restored")) {
-        if (!pp_net_connected() && settings.offline_cache && pp_timeline_index(&timeline, j) &&
-            timeline.count && browsing) {
-            offline_skips = 0;
-            offline_direction = -1;
-            request_page(timeline.entries[timeline.count - 1].id, 0, false);
-        }
-    } else if (!strcmp(type, "cache.unavailable")) {
-        if (page_pending && !strcmp(string(j, "message_id"), requested_page) &&
-            number(j, "offset") == requested_offset) {
-            page_pending = false;
-            if (!pp_net_connected() && !requested_offset && ++offline_skips < timeline.count) {
-                const pp_history_entry_t *entry =
-                    pp_timeline_neighbor(&timeline, requested_page, offline_direction);
-                if (entry) {
-                    request_page(entry->id, 0, false);
-                    return;
-                }
-            }
-            set_status("此处尚未缓存，联网后查看");
-        }
-    } else if (!strcmp(type, "cache.busy")) {
-        if (browsing && (!string(j, "message_id")[0] ||
-            (page_pending && !strcmp(string(j, "message_id"), requested_page) &&
-             number(j, "offset") == requested_offset))) {
-            page_pending = false;
-            set_status("读取忙，请稍后重试");
-        }
-    } else if (!strcmp(type, "cache.empty")) {
-        if (!pp_net_connected() && browsing) {
-            view = PP_UI_IDLE;
-            body[0] = 0;
-            set_status("最近记录尚未缓存，请联网同步");
-        }
-    } else if (!strcmp(type, "history.index")) {
-        history_response(j);
     } else if (pp_picture_receive(j)) {
         if (view == PP_UI_IMAGE && !pp_picture_active())
             view = PP_UI_REPLY;
@@ -1053,25 +988,14 @@ static void dispatch_message(cJSON *j, uint32_t generation, pp_buffer_t *frame) 
             view_page = view_next = 0;
             body[0] = 0;
             set_status(waiting ? processing_status : "就绪");
-        } else if (waiting && input_state.phase == PP_INPUT_IDLE && !playing)
+        } else if (!browsing && waiting && input_state.phase == PP_INPUT_IDLE && !playing)
             set_status(processing_status);
         else if (was_waiting && !waiting && navigation.screen == PP_SCREEN_CHAT &&
                  view == PP_UI_INPUT && input_state.phase == PP_INPUT_IDLE &&
                  !strcmp(status, processing_status))
             set_status("就绪");
-    } else if (!strcmp(type, "message.page")) {
-        if (page_pending && !strcmp(string(j, "message_id"), requested_page) &&
-            number(j, "offset") == requested_offset) {
-            page_pending = false;
-            pp_history_page_t decoded;
-            pp_history_page_t *page = pp_timeline_decode(&decoded, j);
-            if (page)
-                show_history_page(page);
-            else
-                set_status("正文格式不匹配，未替换现有页面");
-        }
-    } else if (!strcmp(type, "message")) {
-        receive_message(j);
+    } else if ((!strcmp(type, "message") || !strcmp(type, "message.part")) && generation) {
+        receive_message(j, frame, !strcmp(type, "message.part"));
     } else if (!strcmp(type, "playback.stop")) {
         if (number(j, "generation") < play_generation) {
             return;
@@ -1572,45 +1496,32 @@ static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
                 set_status("等待回答");
                 return;
             }
-            pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
-            new_message = false;
-            if (!pp_net_connected()) {
-                body[0] = 0;
-                view = PP_UI_IDLE;
-                request_recent_history();
-            } else if (latest_message[0])
-                request_page(latest_message, 0, event.key == BSP_BTN_UP);
-            else {
-                message_id[0] = 0;
-                history_step(-1);
-            }
+            jump_to_latest();
+        } else if (browsing && !message_id[0]) {
+            jump_to_latest();
         } else if (navigation.screen == PP_SCREEN_QUESTION) {
             if (event.key == BSP_BTN_UP && view_page)
                 view_page = pp_ui_previous(question_text, view_page);
             else if (event.key == BSP_BTN_DOWN && view_next)
                 view_page = view_next;
-        } else if (message_id[0] || notice_view) {
+        } else if (message_id[0] || unreadable_page || notice_view) {
+            if (!notice_view && page_pending)
+                return;
             if (view == PP_UI_IMAGE) {
                 pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
-                if (pp_picture_loading()) {
-                    close_image();
-                    pp_net_send(command("image.close"));
-                }
                 if (event.key == BSP_BTN_UP) {
                     if (image_index)
                         open_image(image_index - 1);
                     else {
-                        close_image();
-                        view = PP_UI_REPLY;
-                        if (!body[0])
+                        if (body[0])
+                            close_image();
+                        else
                             history_step(-1);
                     }
                 } else if (image_index + 1 < image_count)
                     open_image(image_index + 1);
-                else {
-                    close_image();
+                else
                     history_step(1);
-                }
                 return;
             }
             if (event.key == BSP_BTN_UP && view_page) {
@@ -1633,15 +1544,17 @@ static void dispatch_key(pp_event_t event, pp_route_t route, uint32_t now) {
                 history_step(event.key == BSP_BTN_UP ? -1 : 1);
                 return;
             }
-            unsigned offset = event.key == BSP_BTN_UP
-                                  ? (page_offset < 80 ? 0 : page_offset - 80)
-                                  : page_next;
-            if (event.key != BSP_BTN_UP && !offset)
-                return;
-            if (notice_view)
-                request_notice_page(offset);
-            else {
-                request_page(message_id, offset, false);
+            if (notice_view) {
+                unsigned offset = event.key == BSP_BTN_UP ? (page_offset < 80 ? 0 : page_offset - 80)
+                                                          : page_next;
+                if (event.key == BSP_BTN_UP || offset)
+                    request_notice_page(offset);
+            } else {
+                pp_navigation_open(&navigation, PP_SCREEN_HISTORY);
+                if (event.key == BSP_BTN_UP)
+                    previous_history_page();
+                else
+                    read_history(PP_SEEK_EXACT, page_next);
             }
         }
     }
@@ -1703,21 +1616,13 @@ static void handle_link(pp_event_t event) {
             view = PP_UI_INFO;
         reset_play();
         waiting = false;
-        page_pending = false;
+        if (!browsing)
+            page_pending = false;
         notice_read.pending = false;
         notice_directory.pending = false;
-        index_direction = 0;
         bool keep_image = pp_picture_disconnected() && view == PP_UI_IMAGE;
         if (!keep_image)
             close_image();
-        if (settings.offline_cache && !keep_image) {
-            if (browsing) {
-                body[0] = 0;
-                view = PP_UI_IDLE;
-            }
-            /* Flash cache owns retention; the displayed body is an independent copy. */
-            pp_history_cache_recent();
-        }
         if (!settings.offline_cache) {
             /* Flash cache owns retention; the displayed body is an independent copy. */
             if (view == PP_UI_REPLY)
@@ -1729,7 +1634,7 @@ static void handle_link(pp_event_t event) {
     pairing_info[0] = 0;
     if (notice_list)
         set_status(notice_count ? "连接中断，显示上次列表" : "离线，暂无法读取任务");
-    else if (!pp_navigation_local(&navigation))
+    else if (!browsing && !pp_navigation_local(&navigation))
         set_status(connection_status);
 }
 
@@ -1929,30 +1834,29 @@ static void render_screen(void) {
                                 !strcmp(status, processing_status);
     pp_ui_frame_t frame = {
         .meter = status_meter(wifi_connected),
-        .view = dangerous_confirm                             ? PP_UI_INFO
-                : brightness_screen                           ? PP_UI_BRIGHTNESS
-                : menu || notice_list                         ? PP_UI_MENU
-                : (setup_card && quiet_wifi)                  ? PP_UI_IDLE
-                : setup_card || info_page || volume_screen    ? PP_UI_INFO
-                : navigation.screen == PP_SCREEN_HOME         ? PP_UI_IDLE
-                                                              : view,
-        .state =
-            (setup_card || (navigation.screen == PP_SCREEN_HOME && !pp_net_connected()))
-                ? (quiet_wifi ? "" : link_status)
-            : new_message && strcmp(status, speech_unavailable_status) &&
-                      (browsing || navigation.screen == PP_SCREEN_HOME)
-                ? "有新回复 · 上下查看"
-                : about_page ? ""
-                : preparing_record ? "准备收音"
-                : awaiting_reply ? "等待回复" : status,
+        .view = dangerous_confirm                          ? PP_UI_INFO
+                : brightness_screen                        ? PP_UI_BRIGHTNESS
+                : menu || notice_list                      ? PP_UI_MENU
+                : (setup_card && quiet_wifi)               ? PP_UI_IDLE
+                : setup_card || info_page || volume_screen ? PP_UI_INFO
+                : navigation.screen == PP_SCREEN_HOME      ? PP_UI_IDLE
+                                                           : view,
+        .state = (setup_card || (navigation.screen == PP_SCREEN_HOME && !pp_net_connected()))
+                     ? (quiet_wifi ? "" : link_status)
+                 : new_message && strcmp(status, speech_unavailable_status) &&
+                         navigation.screen == PP_SCREEN_HOME
+                     ? "有新回复 · 上下查看"
+                 : about_page       ? ""
+                 : preparing_record ? "准备收音"
+                 : awaiting_reply   ? "等待回复"
+                                    : status,
         .body = setup_card                                ? details
                 : info_page                               ? local_details
                 : navigation.screen == PP_SCREEN_QUESTION ? question_text
                                                           : body,
         .origin = setup_card                                ? "设备连接"
                   : navigation.screen == PP_SCREEN_QUESTION ? "等待回答"
-                  : menu || notice_list || notice_view || volume_screen || brightness_screen ||
-                          info_page
+                  : menu || notice_list || notice_view || volume_screen || brightness_screen || info_page
                       ? pp_navigation_title(&navigation)
                   : view == PP_UI_INFO ? status
                                        : message_origin,
@@ -1979,18 +1883,17 @@ static void render_screen(void) {
         .level = listening ? pp_audio_level() : 0,
         .elapsed = listening ? now_ms() - input_state.started : 0,
         .hint = setup_card ? (pp_net_rejected() ? "下 更换配对 · OK 菜单" : "OK 菜单")
-                : route == PP_ROUTE_REVIEW
-                    ? (review_reading ? "上下查看 · OK返回" : "上下选择 · OK确认")
-                : notice_view                             ? "OK 返回列表 · 长↑主页"
-                : menu || notice_list                     ? "OK 确认 · 长↑主页"
-                : brightness_screen                       ? "上下调整 · OK 保存"
-                : volume_screen                           ? "上下音量 · OK返回"
-                : info_page                               ? "OK 返回 · 长↑主页"
-                : listening                               ? "正在听 · 松开结束"
-                : preparing_record                        ? "继续按住 OK"
-                : speech_session                          ? "上下音量 · OK停播"
+                : route == PP_ROUTE_REVIEW ? (review_reading ? "上下查看 · OK返回" : "上下选择 · OK确认")
+                : notice_view         ? "OK 返回列表 · 长↑主页"
+                : menu || notice_list ? "OK 确认 · 长↑主页"
+                : brightness_screen   ? "上下调整 · OK 保存"
+                : volume_screen       ? "上下音量 · OK返回"
+                : info_page           ? "OK 返回 · 长↑主页"
+                : listening           ? "正在听 · 松开结束"
+                : preparing_record    ? "继续按住 OK"
+                : speech_session      ? "上下音量 · OK停播"
                 : route == PP_ROUTE_SESSION && pp_navigation_standby_hint(&navigation, now_ms()) &&
-                          sleep_available()
+                        sleep_available()
                     ? "继续长按将休眠"
                 : navigation.screen == PP_SCREEN_HOME     ? "按住说 · OK菜单"
                 : navigation.screen == PP_SCREEN_QUESTION ? "按住回答 · 长↑主页"
@@ -2047,7 +1950,7 @@ void app_main(void) {
     pp_picture_init(set_status);
     configured = pp_settings_load(&settings) == ESP_OK;
     pp_cache_init();
-    pp_history_cache_init(pp_received);
+    pp_history_cache_init(history_page_read, set_status);
     pp_history_cache_bind(settings.url, settings.device, settings.binding,
                           settings.paired && settings.offline_cache, settings.show_images);
     pp_usb_start();
@@ -2119,9 +2022,7 @@ void app_main(void) {
         if (navigation.arrow != PP_ARROW_NONE)
             handle_arrow_hold(current_route(), now_ms());
         pp_objects_allow_io(input_state.phase == PP_INPUT_IDLE && !playing && !speech_session);
-        pp_history_cache_poll(input_state.phase == PP_INPUT_IDLE && !waiting && !playing &&
-                              !speech_session && !browsing && !notice_view && !notice_list &&
-                              !pp_picture_active());
+        pp_history_cache_poll(input_state.phase == PP_INPUT_IDLE && !playing && !speech_session);
         if (view == PP_UI_IMAGE && !pp_picture_active())
             view = PP_UI_REPLY;
         const pp_route_t route = current_route();
